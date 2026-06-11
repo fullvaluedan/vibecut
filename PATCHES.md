@@ -25,3 +25,5 @@ All eight patches were authored and build-validated (`bun run build:web` exit 0)
 | `apps/web/src/timeline/components/timeline-element.tsx` | `TiledMediaContent` renders an `AudioWaveform` strip on the bottom 40% of video clips with source audio (reuses audio-clip waveform infra + cache) | 2026-06-11 | Core feature; reimplement against whatever clip renderer the rewrite ships |
 | `apps/web/src/timeline/components/timeline-toolbar.tsx` | Toolbar toggle button for video-clip waveforms (next to snapping/ripple) | 2026-06-11 | Trivial |
 | `apps/web/src/components/editor/panels/assets/views/settings/index.tsx` | Registered "AI" tab in the settings panel; content lives in `features/ai-generate/` | 2026-06-11 | 4-line hook-in; re-register against whatever settings UI the rewrite ships |
+| `apps/web/next.config.ts` | Added `transpilePackages: ["@framecut/hf-bridge"]` + `serverExternalPackages: ["hyperframes"]` (CLI is resolved at runtime, must not be bundled) | 2026-06-11 | Two lines |
+| `apps/web/package.json` | Added `@framecut/hf-bridge: workspace:*` dependency | 2026-06-11 | One line |

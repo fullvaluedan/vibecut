@@ -18,6 +18,7 @@
     "db:push:prod": "cross-env NODE_ENV=production drizzle-kit push"
   },
   "dependencies": {
+    "@framecut/hf-bridge": "workspace:*",
     "@hello-pangea/dnd": "^18.0.1",
     "@hugeicons/core-free-icons": "^3.3.0",
     "@hugeicons/react": "^1.1.6",

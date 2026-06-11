@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
 	compiler: {
 		removeConsole: process.env.NODE_ENV === "production",
 	},
+	transpilePackages: ["@framecut/hf-bridge"],
+	serverExternalPackages: ["hyperframes"],
 	reactStrictMode: true,
 	productionBrowserSourceMaps: true,
 	output: "standalone",
