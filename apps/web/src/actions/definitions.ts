@@ -152,6 +152,27 @@ export const ACTIONS = {
 
 export type TAction = keyof typeof ACTIONS;
 
+const ACTIONS_WITH_REQUIRED_ARGS: ReadonlySet<string> = new Set([
+	"remove-media-asset",
+	"remove-media-assets",
+]);
+
+/** Runtime guard: is `value` a known action identifier? */
+export function isAction(value: string): value is TAction {
+	return Object.prototype.hasOwnProperty.call(ACTIONS, value);
+}
+
+/**
+ * Runtime guard for {@link TActionWithOptionalArgs}: a known action that can be
+ * invoked without mandatory arguments (everything except the asset-removal
+ * actions, which require a payload).
+ */
+export function isActionWithOptionalArgs(
+	value: string,
+): value is TActionWithOptionalArgs {
+	return isAction(value) && !ACTIONS_WITH_REQUIRED_ARGS.has(value);
+}
+
 const ACTION_DEFAULT_SHORTCUTS = [
 	["toggle-play", ["space", "k"]],
 	["seek-forward", ["l"]],

@@ -1,5 +1,8 @@
 node_modules
+**/node_modules
 .next
+**/.next
+**/.content-collections
 .git
 .gitignore
 *.md

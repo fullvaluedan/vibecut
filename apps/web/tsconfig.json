@@ -35,5 +35,10 @@
 		"src/stores/timeline-store.ts",
 		".next/dev/types/**/*.ts"
 	],
-	"exclude": ["node_modules"]
+	"exclude": [
+		"node_modules",
+		"**/*.test.ts",
+		"**/*.test.tsx",
+		"**/__tests__/**"
+	]
 }

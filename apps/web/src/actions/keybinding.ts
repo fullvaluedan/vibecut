@@ -4,14 +4,19 @@ import type { TActionWithOptionalArgs } from "./types";
  * Alt is also regarded as macOS OPTION (⌥) key
  * Ctrl is also regarded as macOS COMMAND (⌘) key (NOTE: this differs from HTML Keyboard spec where COMMAND is Meta key!)
  */
-export type ModifierKeys =
-	| "ctrl"
-	| "alt"
-	| "shift"
-	| "ctrl+shift"
-	| "alt+shift"
-	| "ctrl+alt"
-	| "ctrl+alt+shift";
+const MODIFIERS = [
+	"ctrl",
+	"alt",
+	"shift",
+	"ctrl+shift",
+	"alt+shift",
+	"ctrl+alt",
+	"ctrl+alt+shift",
+] as const;
+
+export type ModifierKeys = (typeof MODIFIERS)[number];
+
+const MODIFIER_SET: ReadonlySet<string> = new Set(MODIFIERS);
 
 const KEYS = [
 	"a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
@@ -37,6 +42,19 @@ export type ModifierBasedShortcutKey = `${ModifierKeys}+${Key}`;
 export type SingleCharacterShortcutKey = `${Key}`;
 
 export type ShortcutKey = ModifierBasedShortcutKey | SingleCharacterShortcutKey;
+
+/**
+ * Runtime guard for {@link ShortcutKey}. Accepts either a bare key (e.g. "a",
+ * "enter") or a modifier-prefixed combo (e.g. "ctrl+shift+a"). The key is the
+ * segment after the final "+", so single keys and combos ending in "/" or "?"
+ * (e.g. "ctrl+/") validate correctly.
+ */
+export function isShortcutKey(value: string): value is ShortcutKey {
+	if (isKey(value)) return true;
+	const lastPlus = value.lastIndexOf("+");
+	if (lastPlus <= 0 || lastPlus === value.length - 1) return false;
+	return MODIFIER_SET.has(value.slice(0, lastPlus)) && isKey(value.slice(lastPlus + 1));
+}
 
 export type KeybindingConfig = {
 	[key in ShortcutKey]?: TActionWithOptionalArgs;
