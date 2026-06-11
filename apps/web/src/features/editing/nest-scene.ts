@@ -8,6 +8,7 @@
 import { toast } from "sonner";
 import type { EditorCore } from "@/core";
 import { processMediaAssets } from "@/media/processing";
+import { compositeAiOverlays } from "@/features/ai-generate/composite-export";
 import { insertMediaAsset } from "./insert-media";
 
 export async function nestSceneIntoActive({
@@ -44,7 +45,15 @@ export async function nestSceneIntoActive({
 			throw new Error(result.error ?? "Scene render failed");
 		}
 
-		const file = new File([result.buffer], `${scene.name} (nested).mp4`, {
+		// Burn in any AI overlay clips the canvas pipeline skipped.
+		const { buffer } = await compositeAiOverlays({
+			baseBuffer: result.buffer,
+			baseName: "base.mp4",
+			tracks: scene.tracks,
+			mediaAssets: editor.media.getAssets(),
+		});
+
+		const file = new File([buffer], `${scene.name} (nested).mp4`, {
 			type: "video/mp4",
 		});
 		const [processed] = await processMediaAssets({ files: [file] });

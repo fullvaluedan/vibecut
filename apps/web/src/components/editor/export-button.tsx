@@ -34,6 +34,8 @@ import {
 } from "@/components/section";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
+import { compositeAiOverlays } from "@/features/ai-generate/composite-export";
+import { toast } from "sonner";
 
 function isExportFormat(value: string): value is ExportFormat {
 	return EXPORT_FORMAT_VALUES.some((formatValue) => formatValue === value);
@@ -129,10 +131,30 @@ function ExportPopover({
 		}
 
 		if (result.success && result.buffer) {
+			// FrameCut AI overlays (alpha WebMs) are excluded from the canvas
+			// render — burn them in with local ffmpeg before downloading.
+			let buffer = result.buffer;
+			let downloadFormat = format;
+			try {
+				const composite = await compositeAiOverlays({
+					baseBuffer: result.buffer,
+					baseName: `base${getExportFileExtension({ format })}`,
+					tracks: editor.scenes.getActiveScene().tracks,
+					mediaAssets: editor.media.getAssets(),
+				});
+				buffer = composite.buffer;
+				if (composite.composited) {
+					downloadFormat = "mp4";
+				}
+			} catch (e) {
+				toast.error("Couldn't burn in AI effects", {
+					description: e instanceof Error ? e.message : String(e),
+				});
+			}
 			downloadBuffer({
-				buffer: result.buffer,
-				filename: `${activeProject.metadata.name}${getExportFileExtension({ format })}`,
-				mimeType: getExportMimeType({ format }),
+				buffer,
+				filename: `${activeProject.metadata.name}${getExportFileExtension({ format: downloadFormat })}`,
+				mimeType: getExportMimeType({ format: downloadFormat }),
 			});
 
 			editor.project.clearExportState();

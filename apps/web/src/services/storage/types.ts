@@ -30,6 +30,8 @@ export interface MediaAssetData {
 	/** False when the browser cannot decode this video (e.g. HEVC) — preview will be black. */
 	canDecode?: boolean;
 	codec?: string;
+	/** True for videos with an alpha channel (transparent WebM) — composited via the DOM/ffmpeg path. */
+	hasAlpha?: boolean;
 }
 
 export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {

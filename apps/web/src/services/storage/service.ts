@@ -318,13 +318,28 @@ class StorageService {
 			fps: mediaAsset.fps,
 			canDecode: mediaAsset.canDecode,
 			codec: mediaAsset.codec,
+			hasAlpha: mediaAsset.hasAlpha,
 		};
 
 		try {
-			await mediaAssetsAdapter.set({
-				key: mediaAsset.id,
-				value: mediaAsset.file,
-			});
+			// OPFS writes have been observed to vanish when interrupted (e.g.
+			// page reload mid-write) even after resolving. Verify the bytes
+			// landed before recording metadata; retry once on mismatch.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				await mediaAssetsAdapter.set({
+					key: mediaAsset.id,
+					value: mediaAsset.file,
+				});
+				const written = await mediaAssetsAdapter.get(mediaAsset.id);
+				if (written && written.size === mediaAsset.file.size) {
+					break;
+				}
+				if (attempt === 1) {
+					throw new Error(
+						`Media file failed to persist (${mediaAsset.name}): wrote ${mediaAsset.file.size} bytes, read back ${written?.size ?? 0}`,
+					);
+				}
+			}
 			await mediaMetadataAdapter.set({
 				key: mediaAsset.id,
 				value: metadata,
@@ -361,6 +376,15 @@ class StorageService {
 			mediaMetadataAdapter.get(id),
 		]);
 
+		if (!file && metadata) {
+			// Zombie: metadata persisted but the media file never landed (see
+			// saveMediaAsset verification). Clean it up so it doesn't linger.
+			console.warn(
+				`Media asset "${metadata.name}" (${id}) has metadata but no file — removing stale record.`,
+			);
+			await mediaMetadataAdapter.remove(id).catch(() => undefined);
+			return null;
+		}
 		if (!file || !metadata) return null;
 
 		let url: string;
@@ -395,6 +419,7 @@ class StorageService {
 			fps: metadata.fps,
 			canDecode: metadata.canDecode,
 			codec: metadata.codec,
+			hasAlpha: metadata.hasAlpha,
 		};
 	}
 

@@ -65,6 +65,17 @@ function buildTrackNodes({
 					continue;
 				}
 
+				// Alpha WebMs (AI overlays or imported transparent video) can't be
+				// decoded with transparency by WebCodecs — they'd render as opaque
+				// black. The DOM preview layer / ffmpeg export composite handles
+				// them instead (see overlay-preview-layer.tsx).
+				if (
+					element.type === "video" &&
+					(element.framecutAi || mediaAsset.hasAlpha)
+				) {
+					continue;
+				}
+
 				if (element.type === "video" && mediaAsset.type === "video") {
 					nodes.push(
 						new VideoNode({

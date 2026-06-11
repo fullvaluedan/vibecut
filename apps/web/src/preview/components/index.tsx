@@ -7,6 +7,7 @@ import { useRafLoop } from "@/hooks/use-raf-loop";
 import { useContainerSize } from "@/hooks/use-container-size";
 import { useFullscreen } from "@/hooks/use-fullscreen";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
+import { AiOverlayPreviewLayer } from "@/features/ai-generate/components/overlay-preview-layer";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
@@ -322,6 +323,17 @@ function PreviewCanvas({
 											: activeProject?.settings.background.color,
 								}}
 							/>
+							<div
+								className="pointer-events-none absolute overflow-hidden"
+								style={{
+									left: viewport.sceneLeft,
+									top: viewport.sceneTop,
+									width: viewport.sceneWidth,
+									height: viewport.sceneHeight,
+								}}
+							>
+								<AiOverlayPreviewLayer />
+							</div>
 								<PreviewOverlayLayer
 									instances={overlayInstances}
 									plane="under-interaction"

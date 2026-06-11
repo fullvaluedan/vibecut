@@ -39,6 +39,61 @@ const getStorageLimitDescription = ({
 	})} is safely available in browser storage.`;
 };
 
+/**
+ * Detects an alpha channel by drawing a frame over a magenta canvas: if the
+ * magenta survives anywhere the video must have transparency. Only meaningful
+ * for WebM (VP8/VP9 alpha) — other containers return false quickly.
+ */
+async function detectVideoAlpha({ file }: { file: File }): Promise<boolean> {
+	if (!file.type.includes("webm") && !file.name.endsWith(".webm")) {
+		return false;
+	}
+	return new Promise((resolve) => {
+		const video = document.createElement("video");
+		const url = URL.createObjectURL(file);
+		const finish = (result: boolean) => {
+			URL.revokeObjectURL(url);
+			video.remove();
+			resolve(result);
+		};
+		const timer = setTimeout(() => finish(false), 5000);
+		video.muted = true;
+		video.addEventListener("error", () => {
+			clearTimeout(timer);
+			finish(false);
+		});
+		video.addEventListener("loadeddata", () => {
+			video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+		});
+		video.addEventListener("seeked", () => {
+			clearTimeout(timer);
+			try {
+				const w = 64;
+				const h = 36;
+				const canvas = document.createElement("canvas");
+				canvas.width = w;
+				canvas.height = h;
+				const ctx = canvas.getContext("2d");
+				if (!ctx) return finish(false);
+				ctx.fillStyle = "#ff00ff";
+				ctx.fillRect(0, 0, w, h);
+				ctx.drawImage(video, 0, 0, w, h);
+				const data = ctx.getImageData(0, 0, w, h).data;
+				for (let i = 0; i < data.length; i += 4) {
+					if (data[i] > 250 && data[i + 1] < 5 && data[i + 2] > 250) {
+						return finish(true);
+					}
+				}
+				finish(false);
+			} catch {
+				finish(false);
+			}
+		});
+		video.src = url;
+		video.load();
+	});
+}
+
 async function generateImageThumbnail({
 	imageFile,
 }: {
@@ -126,6 +181,7 @@ export async function processMediaAssets({
 		let hasAudio: boolean | undefined;
 		let canDecode: boolean | undefined;
 		let codec: string | undefined;
+		let hasAlpha: boolean | undefined;
 
 		try {
 			if (fileType === "image") {
@@ -146,6 +202,7 @@ export async function processMediaAssets({
 					thumbnailUrl = videoData.thumbnailUrl ?? undefined;
 					canDecode = videoData.canDecode;
 					codec = videoData.codec ?? undefined;
+					hasAlpha = await detectVideoAlpha({ file });
 
 					if (!videoData.canDecode) {
 						toast.error(`Can't preview ${file.name}`, {
@@ -181,6 +238,7 @@ export async function processMediaAssets({
 				hasAudio,
 				canDecode,
 				codec,
+				hasAlpha,
 			});
 
 			await new Promise((resolve) => setTimeout(resolve, 0));
