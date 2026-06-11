@@ -31,11 +31,12 @@ import { dimensionToAspectRatio } from "@/utils/geometry";
 import { formatNumberForDisplay } from "@/utils/math";
 import { OcSquarePlusIcon } from "@/components/icons";
 import type { TCanvasSize } from "@/project/types";
+import { AiSettingsContent } from "@/features/ai-generate/components/ai-settings";
 
-type SettingsView = "project-info" | "background";
+type SettingsView = "project-info" | "background" | "ai";
 
 function isSettingsView(value: string): value is SettingsView {
-	return value === "project-info" || value === "background";
+	return value === "project-info" || value === "background" || value === "ai";
 }
 
 const PRESET_LABELS: Record<string, string> = {
@@ -224,6 +225,7 @@ export function SettingsView() {
 					<TabsList>
 						<TabsTrigger value="project-info">Project info</TabsTrigger>
 						<TabsTrigger value="background">Background</TabsTrigger>
+						<TabsTrigger value="ai">AI</TabsTrigger>
 					</TabsList>
 				</Tabs>
 			}
@@ -317,6 +319,7 @@ export function SettingsView() {
 				</div>
 			)}
 			{view === "background" && <BackgroundContent />}
+			{view === "ai" && <AiSettingsContent />}
 		</PanelView>
 	);
 }
