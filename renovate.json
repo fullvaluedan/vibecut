@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Only watch HyperFrames packages. Renderer determinism depends on exact pins (Hard rule 5) — PRs only, grouped, weekly, never auto-merged.",
+  "enabledManagers": ["npm"],
+  "packageRules": [
+    {
+      "matchPackageNames": ["*"],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": ["hyperframes", "@hyperframes/**"],
+      "enabled": true,
+      "groupName": "hyperframes",
+      "automerge": false,
+      "rangeStrategy": "pin",
+      "schedule": ["before 10am on monday"],
+      "prBodyNotes": [
+        "HyperFrames render output is only deterministic at a pinned version. Re-render a known comp and compare before merging (docs/BRIEF.md, Hard rule 5)."
+      ]
+    }
+  ]
+}

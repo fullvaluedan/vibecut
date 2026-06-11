@@ -1,0 +1,68 @@
+# Watches the OpenCut rewrite repo (OpenCut-app/OpenCut) for activity.
+# Our actual upstream (opencut-classic) is archived and will never change;
+# this exists so we notice when the rewrite matures enough to consider a port.
+# See docs/BRIEF.md, Amendment 2026-06-11.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: "0 1 * * 1" # Mon 09:00 Asia/Taipei (UTC+8)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check rewrite repo for new commits
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SINCE=$(date -u -d '8 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          COUNT=$(gh api "repos/OpenCut-app/OpenCut/commits?since=$SINCE&per_page=100" --jq 'length')
+          LATEST=$(gh api "repos/OpenCut-app/OpenCut/commits?per_page=1" \
+            --jq '.[0].commit.committer.date + " — " + (.[0].commit.message | split("\n")[0])')
+          RELEASES=$(gh api "repos/OpenCut-app/OpenCut/releases?per_page=1" \
+            --jq 'if length > 0 then .[0].tag_name + " (" + .[0].published_at + ")" else "none" end')
+          {
+            echo "count=$COUNT"
+            echo "latest=$LATEST"
+            echo "releases=$RELEASES"
+          } >> "$GITHUB_OUTPUT"
+          echo "New commits in last 8 days: $COUNT"
+          echo "Latest commit: $LATEST"
+
+      - name: Open tracking issue when upstream moved
+        if: steps.check.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.check.outputs.count }}
+          LATEST: ${{ steps.check.outputs.latest }}
+          RELEASES: ${{ steps.check.outputs.releases }}
+        run: |
+          TITLE="Upstream rewrite activity — $(date -u +%Y-%m-%d)"
+          BODY=$(printf 'The OpenCut rewrite repo had **%s** new commit(s) in the last 8 days.\n\nLatest commit: %s\nLatest release: %s\n\nWorth a look: https://github.com/OpenCut-app/OpenCut/commits/main\n\n_Automated by upstream-watch. See docs/BRIEF.md Amendment 2026-06-11 for why we watch instead of sync._' "$COUNT" "$LATEST" "$RELEASES")
+          gh issue create -R "${{ github.repository }}" --title "$TITLE" --body "$BODY"
+
+      - name: Telegram notification
+        # Cron: only ping when something happened. Manual runs: always ping, so the pipe is testable.
+        if: github.event_name == 'workflow_dispatch' || steps.check.outputs.count != '0'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COUNT: ${{ steps.check.outputs.count }}
+          LATEST: ${{ steps.check.outputs.latest }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not configured — skipping notification (workflow still green)."
+            exit 0
+          fi
+          TEXT="FrameCut upstream-watch: $COUNT new commit(s) on the OpenCut rewrite in the last 8 days. Latest: $LATEST — https://github.com/OpenCut-app/OpenCut/commits/main"
+          curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            --data-urlencode text="$TEXT" > /dev/null
+          echo "Telegram notification sent."
