@@ -11,6 +11,8 @@ interface TimelineStore {
 	toggleSnapping: () => void;
 	rippleEditingEnabled: boolean;
 	toggleRippleEditing: () => void;
+	videoWaveformsEnabled: boolean;
+	toggleVideoWaveforms: () => void;
 	expandedElementIds: Set<string>;
 	toggleElementExpanded: (elementId: string) => void;
 }
@@ -29,6 +31,14 @@ export const useTimelineStore = create<TimelineStore>()(
 			toggleRippleEditing: () => {
 				set((state) => ({
 					rippleEditingEnabled: !state.rippleEditingEnabled,
+				}));
+			},
+
+			videoWaveformsEnabled: true,
+
+			toggleVideoWaveforms: () => {
+				set((state) => ({
+					videoWaveformsEnabled: !state.videoWaveformsEnabled,
 				}));
 			},
 
@@ -51,6 +61,7 @@ export const useTimelineStore = create<TimelineStore>()(
 			partialize: (state) => ({
 				snappingEnabled: state.snappingEnabled,
 				rippleEditingEnabled: state.rippleEditingEnabled,
+				videoWaveformsEnabled: state.videoWaveformsEnabled,
 			}),
 		},
 	),

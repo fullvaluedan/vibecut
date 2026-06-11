@@ -16,3 +16,11 @@ Every change to a file that originally came from `OpenCut-app/opencut-classic` i
 | `docker-compose.yml` | Fixed `web` healthcheck: `curl` doesn't exist in `oven/bun:alpine` and `localhost` resolved to IPv6; now `wget` against `http://127.0.0.1:3000/api/health` | 2026-06-11 | Cosmetic — app worked, `docker ps` just showed unhealthy |
 
 All eight patches were authored and build-validated (`bun run build:web` exit 0) during the 2026-06-07 local bring-up of opencut-classic, and committed to this fork on 2026-06-11.
+
+## Feature patches (FrameCut functionality on upstream files)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/timeline/timeline-store.ts` | Added `videoWaveformsEnabled` flag (default true) + toggle, persisted | 2026-06-11 | Plain zustand UI flag; trivial to re-add |
+| `apps/web/src/timeline/components/timeline-element.tsx` | `TiledMediaContent` renders an `AudioWaveform` strip on the bottom 40% of video clips with source audio (reuses audio-clip waveform infra + cache) | 2026-06-11 | Core feature; reimplement against whatever clip renderer the rewrite ships |
+| `apps/web/src/timeline/components/timeline-toolbar.tsx` | Toolbar toggle button for video-clip waveforms (next to snapping/ripple) | 2026-06-11 | Trivial |

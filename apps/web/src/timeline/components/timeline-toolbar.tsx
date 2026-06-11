@@ -29,6 +29,7 @@ import { cn } from "@/utils/ui";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+	AudioWave01Icon,
 	Bookmark02Icon,
 	Delete02Icon,
 	SnowIcon,
@@ -277,8 +278,12 @@ function ToolbarRightSection({
 }) {
 	const snappingEnabled = useTimelineStore((s) => s.snappingEnabled);
 	const rippleEditingEnabled = useTimelineStore((s) => s.rippleEditingEnabled);
+	const videoWaveformsEnabled = useTimelineStore(
+		(s) => s.videoWaveformsEnabled,
+	);
 	const toggleSnapping = useTimelineStore((s) => s.toggleSnapping);
 	const toggleRippleEditing = useTimelineStore((s) => s.toggleRippleEditing);
+	const toggleVideoWaveforms = useTimelineStore((s) => s.toggleVideoWaveforms);
 
 	return (
 		<div className="flex items-center gap-1">
@@ -295,6 +300,13 @@ function ToolbarRightSection({
 					isActive={rippleEditingEnabled}
 					tooltip="Ripple editing"
 					onClick={() => toggleRippleEditing()}
+				/>
+
+				<ToolbarButton
+					icon={<HugeiconsIcon icon={AudioWave01Icon} />}
+					isActive={videoWaveformsEnabled}
+					tooltip="Audio waveforms on video clips"
+					onClick={() => toggleVideoWaveforms()}
 				/>
 			</TooltipProvider>
 

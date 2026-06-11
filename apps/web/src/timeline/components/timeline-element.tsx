@@ -1088,6 +1088,10 @@ function TiledMediaContent({
 	element: VideoElement | ImageElement;
 	track: TimelineTrack;
 }) {
+	const pixelsPerSecond = useContext(PixelsPerSecondContext);
+	const videoWaveformsEnabled = useTimelineStore(
+		(s) => s.videoWaveformsEnabled,
+	);
 	const mediaAssets = useEditor((e) => e.media.getAssets());
 
 	const mediaAsset = mediaAssets.find((asset) => asset.id === element.mediaId);
@@ -1107,6 +1111,14 @@ function TiledMediaContent({
 	const trackHeight = getTrackHeight({ type: track.type });
 	const tileWidth = trackHeight * THUMBNAIL_ASPECT_RATIO;
 
+	const videoElement = element.type === "video" ? element : null;
+	const showSourceWaveform =
+		videoWaveformsEnabled &&
+		videoElement !== null &&
+		videoElement.isSourceAudioEnabled !== false &&
+		mediaSupportsAudio({ media: mediaAsset }) &&
+		pixelsPerSecond !== null;
+
 	return (
 		<>
 			<div
@@ -1120,6 +1132,23 @@ function TiledMediaContent({
 					pointerEvents: "none",
 				}}
 			/>
+			{showSourceWaveform && videoElement && pixelsPerSecond !== null && (
+				<div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 overflow-hidden bg-linear-to-t from-black/50 to-transparent">
+					<AudioWaveform
+						sourceKey={buildWaveformSourceKey({
+							kind: "media",
+							id: videoElement.mediaId,
+						})}
+						sourceFile={mediaAsset?.file}
+						audioUrl={mediaAsset?.url}
+						pixelsPerSecond={pixelsPerSecond}
+						clipDurationSec={videoElement.duration / TICKS_PER_SECOND}
+						retime={videoElement.retime}
+						sourceStartSec={videoElement.trimStart / TICKS_PER_SECOND}
+						color={TIMELINE_TRACK_THEME.audio.waveformColor}
+					/>
+				</div>
+			)}
 			<MediaElementHeader
 				name={mediaAsset?.name}
 				leading={
