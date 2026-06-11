@@ -21,6 +21,12 @@ interface AiSettingsStore {
 	/** Active VibeStyle id — colors all new AI generations. */
 	styleId: string;
 	setStyleId: (styleId: string) => void;
+	/**
+	 * Template ids UNCHECKED in the HyperFrames panel. Stored as a deny-list
+	 * so templates added in future updates start enabled.
+	 */
+	disabledTemplateIds: string[];
+	toggleTemplate: (id: string) => void;
 }
 
 export const useAiSettingsStore = create<AiSettingsStore>()(
@@ -37,6 +43,14 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			styleId: "ember",
 			setStyleId: (styleId) => set({ styleId }),
+
+			disabledTemplateIds: [],
+			toggleTemplate: (id) =>
+				set((state) => ({
+					disabledTemplateIds: state.disabledTemplateIds.includes(id)
+						? state.disabledTemplateIds.filter((t) => t !== id)
+						: [...state.disabledTemplateIds, id],
+				})),
 		}),
 		{
 			name: "framecut-ai-settings",

@@ -33,11 +33,18 @@ const PLAN_SCHEMA = {
 function buildPlannerPrompt({
 	segments,
 	totalDurationSec,
+	allowedTemplateIds,
 }: {
 	segments: TranscriptSegment[];
 	totalDurationSec: number;
+	allowedTemplateIds?: string[];
 }): string {
-	const catalog = describeTemplateCatalog();
+	let catalog = describeTemplateCatalog();
+	if (allowedTemplateIds?.length) {
+		const allowed = new Set(allowedTemplateIds);
+		const filtered = catalog.filter((t) => allowed.has(t.id));
+		if (filtered.length) catalog = filtered;
+	}
 	const transcript = segments
 		.map((s) => `[${s.start.toFixed(1)}–${s.end.toFixed(1)}] ${s.text.trim()}`)
 		.join("\n");
@@ -142,16 +149,24 @@ function planViaClaudeCode(prompt: string): Promise<unknown> {
 }
 
 /** Validates + normalizes the raw plan against the template registry. */
-function sanitizePlan(raw: unknown, totalDurationSec: number): EffectPlan {
+function sanitizePlan(
+	raw: unknown,
+	totalDurationSec: number,
+	allowedTemplateIds?: string[],
+): EffectPlan {
 	const items = (raw as { items?: unknown[] })?.items;
 	if (!Array.isArray(items)) {
 		throw new Error("Plan has no items array");
 	}
+	const allowed = allowedTemplateIds?.length
+		? new Set(allowedTemplateIds)
+		: null;
 	const cleaned: EffectPlanItem[] = [];
 	for (const entry of items) {
 		const it = entry as Record<string, unknown>;
 		const template = getTemplate(String(it.templateId));
 		if (!template) continue;
+		if (allowed && !allowed.has(template.id)) continue;
 		const startSec = Number(it.startSec);
 		let durationSec = Number(it.durationSec);
 		if (!Number.isFinite(startSec) || !Number.isFinite(durationSec)) continue;
@@ -277,18 +292,25 @@ export async function planEffects({
 	segments,
 	totalDurationSec,
 	auth,
+	allowedTemplateIds,
 }: {
 	segments: TranscriptSegment[];
 	totalDurationSec: number;
 	auth: ClaudeAuth;
+	/** Restrict the planner to these template ids (user's panel checkboxes). */
+	allowedTemplateIds?: string[];
 }): Promise<EffectPlan> {
 	if (!segments.length) {
 		return { items: [] };
 	}
-	const prompt = buildPlannerPrompt({ segments, totalDurationSec });
+	const prompt = buildPlannerPrompt({
+		segments,
+		totalDurationSec,
+		allowedTemplateIds,
+	});
 	const raw =
 		auth.mode === "api-key"
 			? await planViaApiKeySchema(prompt, auth.apiKey, PLAN_SCHEMA)
 			: await planViaClaudeCode(prompt);
-	return sanitizePlan(raw, totalDurationSec);
+	return sanitizePlan(raw, totalDurationSec, allowedTemplateIds);
 }

@@ -25,6 +25,7 @@ import {
 import { generateUUID } from "@/utils/id";
 import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
 import { getStyleById } from "@/features/ai-generate/styles";
+import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 
 export interface RunProgress {
 	stage:
@@ -155,7 +156,17 @@ export async function runHyperframes({
 		);
 	}
 
-	// 2. Ask Claude (the director) for an effect plan.
+	// 2. Ask Claude (the director) for an effect plan, restricted to the
+	// templates checked in the HyperFrames panel.
+	const { disabledTemplateIds } = useAiSettingsStore.getState();
+	const allowedTemplateIds = describeTemplateCatalog()
+		.map((t) => t.id)
+		.filter((id) => !disabledTemplateIds.includes(id));
+	if (!allowedTemplateIds.length) {
+		throw new Error(
+			"All templates are unchecked in the HyperFrames panel — check at least one.",
+		);
+	}
 	onProgress({ stage: "planning", detail: "Claude is planning your effects..." });
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
@@ -163,6 +174,7 @@ export async function runHyperframes({
 		body: JSON.stringify({
 			segments: transcript.segments,
 			totalDurationSec,
+			allowedTemplateIds,
 		}),
 	});
 	if (!planRes.ok) {

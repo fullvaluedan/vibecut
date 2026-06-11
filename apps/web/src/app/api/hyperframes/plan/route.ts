@@ -29,15 +29,20 @@ export async function POST(req: NextRequest) {
 	const body = (await req.json()) as {
 		segments: TranscriptSegment[];
 		totalDurationSec: number;
+		allowedTemplateIds?: string[];
 	};
 	if (!Array.isArray(body.segments) || !Number.isFinite(body.totalDurationSec)) {
 		return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
 	}
+	const allowedTemplateIds = Array.isArray(body.allowedTemplateIds)
+		? body.allowedTemplateIds.filter((id) => typeof id === "string")
+		: undefined;
 	try {
 		const plan = await planEffects({
 			segments: body.segments,
 			totalDurationSec: body.totalDurationSec,
 			auth,
+			allowedTemplateIds,
 		});
 		return NextResponse.json(plan);
 	} catch (e) {

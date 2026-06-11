@@ -10,12 +10,14 @@ import { SoundsView } from "@/sounds/components/assets-view";
 import { StickersView } from "@/stickers/components/assets-view";
 import { TextView } from "@/text/components/assets-view";
 import { EffectsView } from "@/effects/components/assets-view";
+import { HyperframesPanel } from "@/features/ai-generate/components/hyperframes-panel";
 
 export function AssetsPanel() {
 	const { activeTab } = useAssetsPanelStore();
 
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
+		hyperframes: <HyperframesPanel />,
 		sounds: <SoundsView />,
 		text: <TextView />,
 		stickers: <StickersView />,
