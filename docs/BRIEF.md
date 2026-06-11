@@ -1,7 +1,21 @@
 # Project Brief: VibeCut (renamed from FrameCut, 2026-06-11, Dan's call)
 ## AI-native video editor — OpenCut fork + HyperFrames generation layer
 
-**Owner:** Dan (fullvaluedan) · **Date:** 2026-06-11 · **Status:** Phase 0 in progress
+**Owner:** Dan (fullvaluedan) · **Date:** 2026-06-11 · **Status:** Phases 0–3 v1 shipped 2026-06-11 (see Amendment 2)
+
+## ⚠️ Amendment 2 (2026-06-11, evening) — v1 of the core loop shipped; name is VibeCut
+
+Repo renamed to `fullvaluedan/vibecut` (GitHub redirects old framecut URLs). Shipped in PRs #2–#8:
+
+- **Waveforms** on video clips by default (toolbar toggle).
+- **Settings → AI**: Claude auth (Claude Code subscription default — the Anthropic-sanctioned third-party path — or API key, device-local) + render backend choice. Resolves open question #1: comp generation goes through the Claude Code CLI / Agent SDK, not raw API.
+- **`packages/hf-bridge`**: five parametrized HyperFrames templates (composition variables), Claude effect planner, local CLI renderer (pinned 0.6.91) → transparent WebM; comp sources persist under `~/.framecut/generated/`. API routes `/api/hyperframes/{plan,render,doctor}`.
+- **RUN HYPERFRAMES** (timeline toolbar): transcribe timeline (local Whisper) → Claude plans effects → local renders → clips placed on an overlay track in one undoable batch. This supersedes the old prompt-box Phase 1 — the product is transcript-driven.
+- **HyperFrames properties tab** on AI clips: swap template / edit text+accent → re-render in place (~10–15s). This is ADR-4's loop in template-variable form (no per-edit Claude call needed).
+- **Timeline gaps**: click gap + Delete, and a Close Gaps toolbar button (ripple-synced across tracks).
+- AI clips carry `framecutAi` metadata (compId/template/variables/groupId) on `VideoElement`.
+
+Still open from the original phases: HeyGen driver (Phase 5), full importer/A-B placement for arbitrary comps (Phase 2 remainder — current flow is template-scoped), canvas-gizmo editing (Phase 3 remainder — current editing is via the properties tab), taste engine (6), marketplace (7).
 
 ---
 
