@@ -32,12 +32,22 @@ export function RunHyperframesButton() {
 				editor,
 				onProgress: setProgress,
 			});
-			toast.success(
-				`HyperFrames placed ${result.placed} effect${result.placed === 1 ? "" : "s"} on the timeline`,
-				result.skipped.length
-					? { description: `${result.skipped.length} skipped — see console.` }
-					: undefined,
-			);
+			if (result.placed > 0) {
+				toast.success(
+					`HyperFrames placed ${result.placed} effect${result.placed === 1 ? "" : "s"} on the timeline`,
+					result.skipped.length
+						? {
+								description: `${result.skipped.length} skipped: ${result.skipped[0]}`,
+								duration: 10000,
+							}
+						: undefined,
+				);
+			} else {
+				toast.error("HyperFrames could not place any effects", {
+					description: result.skipped[0] ?? "Unknown reason — see console.",
+					duration: 10000,
+				});
+			}
 			if (result.skipped.length) {
 				console.warn("HyperFrames skipped effects:", result.skipped);
 			}
@@ -61,11 +71,15 @@ export function RunHyperframesButton() {
 				return 0.3;
 			case "planning":
 				return 0.45;
-			case "rendering":
-			case "placing": {
-				const i = progress.effectIndex ?? 0;
+			case "rendering": {
+				const i = progress.effectIndex ?? 1;
 				const n = Math.max(progress.effectCount ?? 1, 1);
-				return 0.5 + 0.5 * (i / n);
+				return 0.5 + 0.5 * ((i - 1) / n);
+			}
+			case "placing": {
+				const i = progress.effectIndex ?? 1;
+				const n = Math.max(progress.effectCount ?? 1, 1);
+				return 0.5 + 0.5 * ((i - 0.5) / n);
 			}
 			case "done":
 				return 1;
@@ -73,6 +87,27 @@ export function RunHyperframesButton() {
 				return 0;
 		}
 	};
+
+	const stageLabel = (() => {
+		if (!progress) return null;
+		switch (progress.stage) {
+			case "extracting":
+				return "Reading audio";
+			case "loading-model":
+				return "Loading speech model";
+			case "transcribing":
+				return "Transcribing";
+			case "planning":
+				return "Claude is planning";
+			case "rendering":
+				return `Rendering ${progress.effectIndex ?? 1}/${progress.effectCount ?? 1}`;
+			case "placing":
+				return `Placing ${progress.effectIndex ?? 1}/${progress.effectCount ?? 1}`;
+			default:
+				return null;
+		}
+	})();
+	const percent = Math.round(renderProgressFraction() * 100);
 
 	return (
 		<TooltipProvider delayDuration={300}>
@@ -83,10 +118,21 @@ export function RunHyperframesButton() {
 						size="sm"
 						disabled={isRunning}
 						onClick={handleRun}
-						className={cn("gap-1.5 rounded-sm font-semibold", isRunning && "opacity-90")}
+						className={cn(
+							"relative gap-1.5 overflow-hidden rounded-sm font-semibold",
+							isRunning && "opacity-90",
+						)}
 					>
+						{isRunning && (
+							<span
+								className="absolute inset-y-0 left-0 bg-foreground/15 transition-[width] duration-300"
+								style={{ width: `${percent}%` }}
+							/>
+						)}
 						<HugeiconsIcon icon={MagicWand05Icon} size={14} />
-						{isRunning ? "RUNNING..." : "RUN HYPERFRAMES"}
+						{isRunning && stageLabel
+							? `${stageLabel}... ${percent}%`
+							: "RUN HYPERFRAMES"}
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent className="max-w-72">

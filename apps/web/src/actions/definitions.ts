@@ -102,6 +102,10 @@ export const ACTIONS = {
 		description: "Zoom out on the timeline",
 		category: "timeline",
 	},
+	"timeline-zoom-fit": {
+		description: "Zoom to fit the entire timeline",
+		category: "timeline",
+	},
 	"toggle-ripple-editing": {
 		description: "Toggle ripple editing",
 		category: "editing",
@@ -200,6 +204,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["toggle-snapping", ["n"]],
 	["timeline-zoom-in", ["=", "+"]],
 	["timeline-zoom-out", ["-"]],
+	["timeline-zoom-fit", ["\\"]],
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],

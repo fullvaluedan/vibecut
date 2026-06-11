@@ -53,7 +53,12 @@ export function AiCutMenu() {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="secondary" size="sm" className="gap-1.5 rounded-sm" disabled={!!busy}>
+				<Button
+					variant="default"
+					size="sm"
+					className="gap-1.5 rounded-sm font-semibold data-[state=open]:bg-neutral-600 data-[state=open]:text-white"
+					disabled={!!busy}
+				>
 					{busy ? (
 						<>
 							<Spinner className="size-3.5" /> {busy}...

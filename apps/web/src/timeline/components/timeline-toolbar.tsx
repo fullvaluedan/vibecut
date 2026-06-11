@@ -77,6 +77,7 @@ export function TimelineToolbar({
 
 	useActionHandler("timeline-zoom-in", () => handleZoom({ direction: "in" }), undefined);
 	useActionHandler("timeline-zoom-out", () => handleZoom({ direction: "out" }), undefined);
+	useActionHandler("timeline-zoom-fit", () => setZoomLevel({ zoom: minZoom }), undefined);
 
 	return (
 		<ScrollArea className="scrollbar-hidden">

@@ -53,16 +53,57 @@ export interface PlannedEffect {
 	reason: string;
 }
 
-/** Finds an existing overlay video track that holds only AI-generated clips. */
-function findAiTrackId(editor: EditorCore): string | null {
+/**
+ * Placement lanes: one per AI overlay track. Each effect goes on the first
+ * lane whose time span is free; a new track is created when every lane is
+ * occupied. This guarantees inserts can never be rejected for overlapping —
+ * the silent-failure mode where assets landed in the bin but not on the
+ * timeline (e.g. re-running on the same footage).
+ */
+interface PlacementLane {
+	trackId: string;
+	addCommand: AddTrackCommand | null;
+	occupied: Array<{ start: number; end: number }>;
+}
+
+function buildAiLanes(editor: EditorCore): PlacementLane[] {
 	const tracks = editor.scenes.getActiveScene().tracks;
-	const existing = tracks.overlay.find(
-		(t) =>
-			t.type === "video" &&
-			t.elements.length > 0 &&
-			t.elements.every((el) => el.type === "video" && el.framecutAi),
+	return tracks.overlay
+		.filter(
+			(t) =>
+				t.type === "video" &&
+				t.elements.length > 0 &&
+				t.elements.every((el) => el.type === "video" && el.framecutAi),
+		)
+		.map((t) => ({
+			trackId: t.id,
+			addCommand: null,
+			occupied: t.elements.map((el) => ({
+				start: el.startTime,
+				end: el.startTime + el.duration,
+			})),
+		}));
+}
+
+function claimLane({
+	lanes,
+	start,
+	end,
+}: {
+	lanes: PlacementLane[];
+	start: number;
+	end: number;
+}): PlacementLane {
+	let lane = lanes.find(
+		(l) => !l.occupied.some((o) => start < o.end && end > o.start),
 	);
-	return existing?.id ?? null;
+	if (!lane) {
+		const addCommand = new AddTrackCommand({ type: "video", index: 0 });
+		lane = { trackId: addCommand.getTrackId(), addCommand, occupied: [] };
+		lanes.push(lane);
+	}
+	lane.occupied.push({ start, end });
+	return lane;
 }
 
 export async function runHyperframes({
@@ -145,12 +186,16 @@ export async function runHyperframes({
 	const skipped: string[] = [];
 	let placed = 0;
 
-	const existingTrackId = findAiTrackId(editor);
-	const addTrackCommand = existingTrackId
-		? null
-		: new AddTrackCommand({ type: "video", index: 0 });
-	const trackId = existingTrackId ?? addTrackCommand!.getTrackId();
-	const insertCommands: InsertElementCommand[] = [];
+	// Rendering takes minutes — the user may click around (even into another
+	// scene) while it runs. Collect everything first, place at the end.
+	const originSceneId = editor.scenes.getActiveScene().id;
+	const rendered: Array<{
+		item: PlannedEffect;
+		assetId: string;
+		compId: string;
+	}> = [];
+	// Stable packing: place earlier effects first so lanes fill predictably.
+	plan.items.sort((a, b) => a.startSec - b.startSec);
 
 	for (let i = 0; i < plan.items.length; i++) {
 		const item = plan.items[i];
@@ -186,13 +231,6 @@ export async function runHyperframes({
 				type: "video/webm",
 			});
 
-			onProgress({
-				stage: "placing",
-				detail: `Placing ${item.templateId} on the timeline...`,
-				effectIndex: i + 1,
-				effectCount: plan.items.length,
-			});
-
 			// Derive metadata + thumbnail the same way normal imports do.
 			const [processed] = await processMediaAssets({ files: [file] });
 			if (!processed) throw new Error("could not process rendered video");
@@ -205,31 +243,7 @@ export async function runHyperframes({
 			const assetId = addAsset.getAssetId();
 			if (!assetId) throw new Error("could not store rendered video");
 
-			const durationTime = mediaTimeFromSeconds({ seconds: item.durationSec });
-			insertCommands.push(
-				new InsertElementCommand({
-					element: {
-						type: "video",
-						mediaId: assetId,
-						name: `AI: ${item.templateId}`,
-						startTime: mediaTimeFromSeconds({ seconds: item.startSec }),
-						duration: durationTime,
-						trimStart: ZERO_MEDIA_TIME,
-						trimEnd: ZERO_MEDIA_TIME,
-						sourceDuration: durationTime,
-						isSourceAudioEnabled: false,
-						params: {},
-						framecutAi: {
-							compId,
-							templateId: item.templateId,
-							variables: item.variables,
-							groupId,
-						},
-					},
-					placement: { mode: "explicit", trackId },
-				}),
-			);
-			placed += 1;
+			rendered.push({ item, assetId, compId });
 		} catch (e) {
 			skipped.push(
 				`${item.templateId} @ ${item.startSec.toFixed(1)}s: ${e instanceof Error ? e.message : String(e)}`,
@@ -237,13 +251,78 @@ export async function runHyperframes({
 		}
 	}
 
-	if (insertCommands.length) {
-		const commands = addTrackCommand
-			? [addTrackCommand, ...insertCommands]
-			: insertCommands;
-		editor.command.execute({ command: new BatchCommand(commands) });
-	} else {
-		placed = 0;
+	if (rendered.length) {
+		onProgress({
+			stage: "placing",
+			detail: "Placing effects on the timeline...",
+			effectIndex: rendered.length,
+			effectCount: plan.items.length,
+		});
+
+		// If the user wandered into another scene during the run, place the
+		// effects in the scene the run started from, then come back.
+		const sceneAtPlacement = editor.scenes.getActiveScene().id;
+		if (sceneAtPlacement !== originSceneId) {
+			await editor.scenes.switchToScene({ sceneId: originSceneId });
+		}
+
+		const lanes = buildAiLanes(editor);
+		const insertCommands = rendered.map(({ item, assetId, compId }) => {
+			const durationTime = mediaTimeFromSeconds({ seconds: item.durationSec });
+			const startTime = mediaTimeFromSeconds({ seconds: item.startSec });
+			const lane = claimLane({
+				lanes,
+				start: startTime,
+				end: startTime + durationTime,
+			});
+			return new InsertElementCommand({
+				element: {
+					type: "video",
+					mediaId: assetId,
+					name: `AI: ${item.templateId}`,
+					startTime,
+					duration: durationTime,
+					trimStart: ZERO_MEDIA_TIME,
+					trimEnd: ZERO_MEDIA_TIME,
+					sourceDuration: durationTime,
+					isSourceAudioEnabled: false,
+					params: {},
+					framecutAi: {
+						compId,
+						templateId: item.templateId,
+						variables: item.variables,
+						groupId,
+					},
+				},
+				placement: { mode: "explicit", trackId: lane.trackId },
+			});
+		});
+		const addTrackCommands = lanes
+			.map((l) => l.addCommand)
+			.filter((c): c is AddTrackCommand => c !== null);
+		editor.command.execute({
+			command: new BatchCommand([...addTrackCommands, ...insertCommands]),
+		});
+
+		// Trust nothing: count what actually landed on the timeline. Anything
+		// missing is reported instead of silently claiming success.
+		const after = editor.scenes.getActiveScene().tracks;
+		const onTimeline = new Set(
+			after.overlay.flatMap((t) => t.elements.map((el) => el.id)),
+		);
+		for (const cmd of insertCommands) {
+			if (onTimeline.has(cmd.getElementId())) {
+				placed += 1;
+			} else {
+				skipped.push(
+					"a rendered effect could not be placed on the timeline (it is still in your media bin)",
+				);
+			}
+		}
+
+		if (sceneAtPlacement !== originSceneId) {
+			await editor.scenes.switchToScene({ sceneId: sceneAtPlacement });
+		}
 	}
 
 	onProgress({ stage: "done", detail: `Placed ${placed} effects.` });
