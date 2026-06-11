@@ -19,6 +19,7 @@ import { TIMELINE_ZOOM_MAX } from "@/timeline/scale";
 import { sliderToZoom, zoomToSlider } from "@/timeline/zoom-utils";
 import { ScenesView } from "@/components/editor/scenes-view";
 import { type TActionWithOptionalArgs, invokeAction } from "@/actions";
+import { useActionHandler } from "@/actions/use-action-handler";
 import {
 	canToggleSourceAudio,
 	getSourceAudioActionLabel,
@@ -71,6 +72,9 @@ export function TimelineToolbar({
 				: Math.max(minZoom, zoomLevel / TIMELINE_ZOOM_BUTTON_FACTOR);
 		setZoomLevel({ zoom: newZoomLevel });
 	};
+
+	useActionHandler("timeline-zoom-in", () => handleZoom({ direction: "in" }), undefined);
+	useActionHandler("timeline-zoom-out", () => handleZoom({ direction: "out" }), undefined);
 
 	return (
 		<ScrollArea className="scrollbar-hidden">

@@ -5,6 +5,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { ColorPicker } from "@/components/ui/color-picker";
+import { useAiSettingsStore } from "@/features/ai-generate/store";
+import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
+import { reRenderAiClip } from "@/features/ai-generate/re-render";
 import {
 	Select,
 	SelectContent,
@@ -31,6 +35,48 @@ type VariableValues = Record<string, string | number | boolean>;
 
 const CATALOG = describeTemplateCatalog();
 
+/** Looping live previews so users see what each template means. */
+export function TemplateGallery({
+	selectedId,
+	onSelect,
+}: {
+	selectedId: string;
+	onSelect: (id: string) => void;
+}) {
+	return (
+		<div className="grid grid-cols-2 gap-2">
+			{CATALOG.map((t) => (
+				<button
+					key={t.id}
+					type="button"
+					onClick={() => onSelect(t.id)}
+					title={t.description}
+					className={
+						"group flex flex-col gap-1 rounded-md border p-1 text-left transition-colors " +
+						(t.id === selectedId
+							? "border-primary ring-primary/40 ring-1"
+							: "border-border hover:border-foreground/40")
+					}
+				>
+					<div className="bg-black/60 relative aspect-video w-full overflow-hidden rounded">
+						<video
+							src={`/hf-demos/${t.id}.webm`}
+							muted
+							loop
+							autoPlay
+							playsInline
+							className="size-full object-cover"
+						/>
+					</div>
+					<span className="truncate px-0.5 text-[0.65rem] font-medium">
+						{t.name}
+					</span>
+				</button>
+			))}
+		</div>
+	);
+}
+
 export function HyperframesTab({
 	element,
 	trackId,
@@ -42,6 +88,52 @@ export function HyperframesTab({
 	const ai = element.framecutAi;
 	const [templateId, setTemplateId] = useState(ai?.templateId ?? CATALOG[0].id);
 	const [isRendering, setIsRendering] = useState(false);
+	const [isRestyling, setIsRestyling] = useState(false);
+	const styleId = useAiSettingsStore((s) => s.styleId);
+	const setStyleId = useAiSettingsStore((s) => s.setStyleId);
+
+	const applyStyleToAll = async () => {
+		setIsRestyling(true);
+		const accent = getStyleById(styleId).accent;
+		try {
+			const tracks = editor.scenes.getActiveScene().tracks;
+			const targets: { trackId: string; element: VideoElement }[] = [];
+			for (const track of tracks.overlay) {
+				if (track.type !== "video") continue;
+				for (const el of track.elements) {
+					if (el.type === "video" && el.framecutAi) {
+						targets.push({ trackId: track.id, element: el });
+					}
+				}
+			}
+			if (!targets.length) {
+				toast.info("No AI clips on the timeline to restyle");
+				return;
+			}
+			let done = 0;
+			for (const target of targets) {
+				const meta = target.element.framecutAi;
+				if (!meta) continue;
+				await reRenderAiClip({
+					editor,
+					trackId: target.trackId,
+					element: target.element,
+					templateId: meta.templateId,
+					variables: { ...meta.variables, accent },
+				});
+				done += 1;
+				toast.loading(`Restyling ${done}/${targets.length}...`, { id: "restyle" });
+			}
+			toast.success(`Restyled ${done} AI clip${done === 1 ? "" : "s"}`, { id: "restyle" });
+		} catch (e) {
+			toast.error("Restyle failed", {
+				id: "restyle",
+				description: e instanceof Error ? e.message : String(e),
+			});
+		} finally {
+			setIsRestyling(false);
+		}
+	};
 
 	const template = CATALOG.find((t) => t.id === templateId) ?? CATALOG[0];
 
@@ -151,23 +243,57 @@ export function HyperframesTab({
 	return (
 		<div className="flex flex-col">
 			<Section showTopBorder={false}>
-				<SectionHeader className="justify-between">
+				<SectionHeader>
 					<SectionTitle className="flex-1">Template</SectionTitle>
-					<Select value={template.id} onValueChange={setTemplateId}>
-						<SelectTrigger className="bg-transparent border-none p-1 h-auto">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{CATALOG.map((t) => (
-								<SelectItem key={t.id} value={t.id}>
-									{t.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
 				</SectionHeader>
-				<SectionContent className="px-3 pb-2">
+				<SectionContent className="px-3 pb-2 flex flex-col gap-2">
+					<TemplateGallery
+						selectedId={template.id}
+						onSelect={setTemplateId}
+					/>
 					<p className="text-muted-foreground text-xs">{template.description}</p>
+				</SectionContent>
+			</Section>
+
+			<Section showTopBorder={false}>
+				<SectionHeader>
+					<SectionTitle className="flex-1">Style theme</SectionTitle>
+				</SectionHeader>
+				<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+					<div className="flex flex-wrap gap-1.5">
+						{VIBE_STYLES.map((s) => (
+							<button
+								key={s.id}
+								type="button"
+								title={`${s.name} — ${s.description}`}
+								onClick={() => {
+									setStyleId(s.id);
+									setValues((prev) =>
+										"accent" in prev ? { ...prev, accent: s.accent } : prev,
+									);
+								}}
+								className={
+									"size-6 rounded-full border-2 transition-transform hover:scale-110 " +
+									(styleId === s.id ? "border-white" : "border-transparent")
+								}
+								style={{ backgroundColor: s.accent }}
+							/>
+						))}
+					</div>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={isRestyling}
+						onClick={() => void applyStyleToAll()}
+					>
+						{isRestyling ? (
+							<>
+								<Spinner className="size-3.5" /> Restyling all AI clips...
+							</>
+						) : (
+							`Apply ${getStyleById(styleId).name} to all AI clips`
+						)}
+					</Button>
 				</SectionContent>
 			</Section>
 
@@ -178,6 +304,26 @@ export function HyperframesTab({
 				<SectionContent className="px-3 pb-3 flex flex-col gap-2">
 					{template.variables.map((v) => {
 						const value = values[v.id];
+						if (v.type === "color") {
+							return (
+								<label
+									key={v.id}
+									className="flex items-center justify-between gap-2 text-xs"
+								>
+									<span className="text-muted-foreground">{v.label}</span>
+									<ColorPicker
+										className="size-6 rounded border"
+										value={String(value).replace(/^#/, "")}
+										onChangeEnd={(hex) =>
+											setValues((prev) => ({
+												...prev,
+												[v.id]: `#${hex.replace(/^#/, "")}`,
+											}))
+										}
+									/>
+								</label>
+							);
+						}
 						if (v.type === "enum" && v.options) {
 							return (
 								<label key={v.id} className="flex items-center justify-between gap-2 text-xs">

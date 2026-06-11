@@ -25,6 +25,22 @@ import { usePropertyDraft } from "../hooks/use-property-draft";
 import { KeyframeToggle } from "./keyframe-toggle";
 import { Textarea } from "@/components/ui/textarea";
 
+/** Fonts available on effectively every computer (Premiere-style quick list). */
+const COMMON_FONTS = [
+	"Arial",
+	"Helvetica",
+	"Verdana",
+	"Tahoma",
+	"Trebuchet MS",
+	"Segoe UI",
+	"Georgia",
+	"Times New Roman",
+	"Garamond",
+	"Courier New",
+	"Impact",
+	"Comic Sans MS",
+];
+
 export function PropertyParamField({
 	param,
 	value,
@@ -101,6 +117,31 @@ function ParamInput({
 	}
 
 	if (param.type === "select") {
+		// Premiere-style: short option lists render as buttons, not dropdowns.
+		if (param.options.length <= 4) {
+			return (
+				<div className="border-input bg-accent flex w-full overflow-hidden rounded-md border">
+					{param.options.map((option) => (
+						<button
+							key={option.value}
+							type="button"
+							onClick={() => {
+								onPreview(option.value);
+								onCommit();
+							}}
+							className={
+								"h-8 flex-1 text-xs transition-colors " +
+								(String(value) === option.value
+									? "bg-primary text-primary-foreground font-medium"
+									: "text-muted-foreground hover:text-foreground")
+							}
+						>
+							{option.label}
+						</button>
+					))}
+				</div>
+			);
+		}
 		return (
 			<Select
 				value={String(value)}
@@ -147,13 +188,29 @@ function ParamInput({
 	}
 
 	if (param.type === "font") {
+		const current = String(value);
+		const fonts = COMMON_FONTS.includes(current)
+			? COMMON_FONTS
+			: [current, ...COMMON_FONTS];
 		return (
-			<input
-				className="border-input bg-accent h-9 w-full rounded-md border px-3 text-sm outline-none"
-				value={String(value)}
-				onChange={(event) => onPreview(event.currentTarget.value)}
-				onBlur={onCommit}
-			/>
+			<Select
+				value={current}
+				onValueChange={(selected) => {
+					onPreview(selected);
+					onCommit();
+				}}
+			>
+				<SelectTrigger className="w-full">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{fonts.map((font) => (
+						<SelectItem key={font} value={font}>
+							<span style={{ fontFamily: font }}>{font}</span>
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 		);
 	}
 
@@ -208,17 +265,47 @@ function NumberParamField({
 	};
 
 	return (
-		<NumberField
-			icon={param.shortLabel}
-			value={draft.displayValue}
-			dragSensitivity="slow"
-			isDefault={value === param.default}
-			onFocus={draft.onFocus}
-			onChange={draft.onChange}
-			onBlur={draft.onBlur}
-			onScrub={previewFromDisplay}
-			onScrubEnd={onCommit}
-			onReset={handleReset}
-		/>
+		<div className="flex w-full items-center gap-1">
+			<div className="min-w-0 flex-1">
+				<NumberField
+					icon={param.shortLabel}
+					value={draft.displayValue}
+					dragSensitivity="slow"
+					isDefault={value === param.default}
+					onFocus={draft.onFocus}
+					onChange={draft.onChange}
+					onBlur={draft.onBlur}
+					onScrub={previewFromDisplay}
+					onScrubEnd={onCommit}
+					onReset={handleReset}
+				/>
+			</div>
+			{param.key === "fontSize" && (
+				<div className="flex flex-col">
+					<button
+						type="button"
+						aria-label="Increase"
+						className="text-muted-foreground hover:text-foreground flex h-4 w-5 items-center justify-center text-[0.6rem] leading-none"
+						onClick={() => {
+							previewFromDisplay(displayValue + (step || 1));
+							onCommit();
+						}}
+					>
+						▲
+					</button>
+					<button
+						type="button"
+						aria-label="Decrease"
+						className="text-muted-foreground hover:text-foreground flex h-4 w-5 items-center justify-center text-[0.6rem] leading-none"
+						onClick={() => {
+							previewFromDisplay(displayValue - (step || 1));
+							onCommit();
+						}}
+					>
+						▼
+					</button>
+				</div>
+			)}
+		</div>
 	);
 }

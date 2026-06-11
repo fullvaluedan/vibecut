@@ -196,9 +196,19 @@ export const useKeybindingsStore = create<KeybindingsState>()(
 				const typedEntries = entries as Array<
 					[ShortcutKey, TActionWithOptionalArgs]
 				>;
+				const merged = new Map(typedEntries);
+				// Adopt defaults for actions added after this map was persisted:
+				// a default is merged in when its key is free AND its action has
+				// no binding at all (so user remaps/removals stay respected).
+				const boundActions = new Set(merged.values());
+				for (const [key, action] of getDefaultShortcuts()) {
+					if (!merged.has(key) && !boundActions.has(action)) {
+						merged.set(key, action);
+					}
+				}
 				return {
 					...current,
-					keybindings: new Map(typedEntries),
+					keybindings: merged,
 					isCustomized: persisted.isCustomized,
 				};
 			},

@@ -94,6 +94,14 @@ export const ACTIONS = {
 		description: "Toggle snapping",
 		category: "editing",
 	},
+	"timeline-zoom-in": {
+		description: "Zoom in on the timeline",
+		category: "timeline",
+	},
+	"timeline-zoom-out": {
+		description: "Zoom out on the timeline",
+		category: "timeline",
+	},
 	"toggle-ripple-editing": {
 		description: "Toggle ripple editing",
 		category: "editing",
@@ -190,6 +198,8 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["copy-selected", ["ctrl+c"]],
 	["paste-copied", ["ctrl+v"]],
 	["toggle-snapping", ["n"]],
+	["timeline-zoom-in", ["=", "+"]],
+	["timeline-zoom-out", ["-"]],
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],

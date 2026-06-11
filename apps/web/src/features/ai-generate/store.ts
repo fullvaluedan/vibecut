@@ -18,6 +18,9 @@ interface AiSettingsStore {
 	setAnthropicApiKey: (key: string) => void;
 	backend: AiBackend;
 	setBackend: (backend: AiBackend) => void;
+	/** Active VibeStyle id — colors all new AI generations. */
+	styleId: string;
+	setStyleId: (styleId: string) => void;
 }
 
 export const useAiSettingsStore = create<AiSettingsStore>()(
@@ -31,6 +34,9 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			backend: "local",
 			setBackend: (backend) => set({ backend }),
+
+			styleId: "ember",
+			setStyleId: (styleId) => set({ styleId }),
 		}),
 		{
 			name: "framecut-ai-settings",

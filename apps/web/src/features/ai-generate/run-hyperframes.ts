@@ -23,7 +23,8 @@ import {
 	mediaTimeFromSeconds,
 } from "@/wasm";
 import { generateUUID } from "@/utils/id";
-import { buildAiAuthHeaders } from "@/features/ai-generate/store";
+import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
+import { getStyleById } from "@/features/ai-generate/styles";
 
 export interface RunProgress {
 	stage:
@@ -133,6 +134,13 @@ export async function runHyperframes({
 	}
 
 	// 3. Render each effect locally, then place all clips in one batch.
+	// The active style theme colors every effect unless the planner chose one.
+	const themeAccent = getStyleById(useAiSettingsStore.getState().styleId).accent;
+	for (const item of plan.items) {
+		if (item.variables.accent === undefined) {
+			item.variables.accent = themeAccent;
+		}
+	}
 	const groupId = generateUUID();
 	const skipped: string[] = [];
 	let placed = 0;
