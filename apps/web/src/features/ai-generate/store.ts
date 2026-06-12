@@ -16,6 +16,12 @@ interface AiSettingsStore {
 	setAuthMode: (mode: AiAuthMode) => void;
 	anthropicApiKey: string;
 	setAnthropicApiKey: (key: string) => void;
+	/** HeyGen API key — unlocks music & SFX search in the Sounds panel. */
+	heygenApiKey: string;
+	setHeygenApiKey: (key: string) => void;
+	/** SerpAPI key — unlocks "find b-roll" in the assistant prompt box. */
+	serpApiKey: string;
+	setSerpApiKey: (key: string) => void;
 	backend: AiBackend;
 	setBackend: (backend: AiBackend) => void;
 	/** Active VibeStyle id — colors all new AI generations. */
@@ -55,6 +61,12 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			anthropicApiKey: "",
 			setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
+
+			heygenApiKey: "",
+			setHeygenApiKey: (heygenApiKey) => set({ heygenApiKey }),
+
+			serpApiKey: "",
+			setSerpApiKey: (serpApiKey) => set({ serpApiKey }),
 
 			backend: "local",
 			setBackend: (backend) => set({ backend }),

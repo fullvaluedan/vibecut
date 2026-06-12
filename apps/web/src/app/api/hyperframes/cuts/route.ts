@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
 	}
 	const body = (await req.json()) as {
 		segments: TranscriptSegment[];
-		mode?: "repeats" | "cleanup";
+		mode?: "repeats" | "cleanup" | "youtube";
 		preferences?: string[];
 	};
 	if (!Array.isArray(body.segments)) {
@@ -38,7 +38,10 @@ export async function POST(req: NextRequest) {
 		const cuts = await planRepeatCuts({
 			segments: body.segments,
 			auth,
-			mode: body.mode === "cleanup" ? "cleanup" : "repeats",
+			mode:
+				body.mode === "cleanup" || body.mode === "youtube"
+					? body.mode
+					: "repeats",
 			preferences: Array.isArray(body.preferences)
 				? body.preferences
 						.filter((p) => typeof p === "string")

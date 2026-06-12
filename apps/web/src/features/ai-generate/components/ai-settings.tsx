@@ -125,8 +125,78 @@ export function AiSettingsContent() {
 				</SectionContent>
 			</Section>
 
+			<IntegrationsSection />
+
 			<SelfLearningSection />
 		</div>
+	);
+}
+
+function KeyInput({
+	value,
+	onChange,
+	placeholder,
+}: {
+	value: string;
+	onChange: (value: string) => void;
+	placeholder: string;
+}) {
+	const [isVisible, setIsVisible] = useState(false);
+	return (
+		<div className="flex items-center gap-1">
+			<Input
+				type={isVisible ? "text" : "password"}
+				placeholder={placeholder}
+				value={value}
+				onChange={(e) => onChange(e.target.value)}
+				autoComplete="off"
+				spellCheck={false}
+			/>
+			<Button variant="text" size="sm" onClick={() => setIsVisible((v) => !v)}>
+				{isVisible ? "Hide" : "Show"}
+			</Button>
+		</div>
+	);
+}
+
+function IntegrationsSection() {
+	const heygenApiKey = useAiSettingsStore((s) => s.heygenApiKey);
+	const setHeygenApiKey = useAiSettingsStore((s) => s.setHeygenApiKey);
+	const serpApiKey = useAiSettingsStore((s) => s.serpApiKey);
+	const setSerpApiKey = useAiSettingsStore((s) => s.setSerpApiKey);
+
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader>
+				<SectionTitle>Integrations</SectionTitle>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-3">
+				<div className="flex flex-col gap-1.5">
+					<p className="text-xs font-medium">HeyGen API key</p>
+					<KeyInput
+						value={heygenApiKey}
+						onChange={setHeygenApiKey}
+						placeholder="HeyGen API key"
+					/>
+					<p className="text-muted-foreground text-xs">
+						Unlocks Music & SFX search in the Sounds panel and "add music"
+						in the AI prompt box. Keys stay on this device.
+					</p>
+				</div>
+				<div className="flex flex-col gap-1.5">
+					<p className="text-xs font-medium">SerpAPI key</p>
+					<KeyInput
+						value={serpApiKey}
+						onChange={setSerpApiKey}
+						placeholder="SerpAPI key"
+					/>
+					<p className="text-muted-foreground text-xs">
+						Unlocks "find b-roll" in the AI prompt box (image search via
+						serpapi.com). Keys stay on this device.
+					</p>
+				</div>
+			</SectionContent>
+		</Section>
 	);
 }
 

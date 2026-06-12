@@ -17,13 +17,12 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 
-export function ShortcutsDialog({
-	isOpen,
-	onOpenChange,
-}: {
-	isOpen: boolean;
-	onOpenChange: (open: boolean) => void;
-}) {
+/**
+ * The hotkey editor itself — list of every action grouped by category,
+ * click a key to re-record it. Used by the Shortcuts dialog AND embedded
+ * in Settings → Hotkeys.
+ */
+export function ShortcutsEditor() {
 	const [recordingShortcut, setRecordingShortcut] =
 		useState<KeyboardShortcut | null>(null);
 
@@ -34,7 +33,6 @@ export function ShortcutsDialog({
 		validateKeybinding,
 		getKeybindingsForAction,
 		setIsRecording,
-		resetToDefaults,
 		isRecording,
 	} = useKeybindingsStore();
 
@@ -107,6 +105,40 @@ export function ShortcutsDialog({
 	};
 
 	return (
+		<div className="flex flex-col gap-6">
+			{categories.map((category) => (
+				<div key={category} className="flex flex-col gap-1">
+					<h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+						{category}
+					</h3>
+					<div className="flex flex-col gap-1">
+						{shortcuts
+							.filter((shortcut) => shortcut.category === category)
+							.map((shortcut) => (
+								<ShortcutItem
+									key={shortcut.action}
+									shortcut={shortcut}
+									isRecording={shortcut.action === recordingShortcut?.action}
+									onStartRecording={() => handleStartRecording(shortcut)}
+								/>
+							))}
+					</div>
+				</div>
+			))}
+		</div>
+	);
+}
+
+export function ShortcutsDialog({
+	isOpen,
+	onOpenChange,
+}: {
+	isOpen: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { resetToDefaults } = useKeybindingsStore();
+
+	return (
 		<Dialog open={isOpen} onOpenChange={onOpenChange}>
 			<DialogContent className="flex max-h-[80vh] max-w-2xl flex-col p-0">
 				<DialogHeader>
@@ -114,29 +146,7 @@ export function ShortcutsDialog({
 				</DialogHeader>
 
 				<DialogBody className="scrollbar-thin grow overflow-y-auto">
-					<div className="flex flex-col gap-6">
-						{categories.map((category) => (
-							<div key={category} className="flex flex-col gap-1">
-								<h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-									{category}
-								</h3>
-								<div className="flex flex-col gap-1">
-									{shortcuts
-										.filter((shortcut) => shortcut.category === category)
-										.map((shortcut) => (
-											<ShortcutItem
-												key={shortcut.action}
-												shortcut={shortcut}
-												isRecording={
-													shortcut.action === recordingShortcut?.action
-												}
-												onStartRecording={() => handleStartRecording(shortcut)}
-											/>
-										))}
-								</div>
-							</div>
-						))}
-					</div>
+					<ShortcutsEditor />
 				</DialogBody>
 				<DialogFooter>
 					<Button variant="destructive" onClick={resetToDefaults}>
@@ -176,6 +186,21 @@ function ShortcutItem({
 				<span className="text-sm">{shortcut.description}</span>
 			</div>
 			<div className="flex items-center gap-2">
+				{displayKeys.length === 0 && (
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={(e) => {
+							e.preventDefault();
+							e.stopPropagation();
+							onStartRecording({ shortcut });
+						}}
+						title="Click to record a shortcut"
+						className="text-muted-foreground"
+					>
+						{isRecording ? "Press keys..." : "Not set"}
+					</Button>
+				)}
 				{displayKeys.map((key: string, index: number) => (
 					<div key={key} className="flex items-center gap-2">
 						<div className="flex items-center gap-1">

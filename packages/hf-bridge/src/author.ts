@@ -271,13 +271,15 @@ export interface RepeatCut {
 	reason: string;
 }
 
+export type CutsMode = "repeats" | "cleanup" | "youtube";
+
 function buildCutsPrompt({
 	segments,
 	mode,
 	preferences,
 }: {
 	segments: TranscriptSegment[];
-	mode: "repeats" | "cleanup";
+	mode: CutsMode;
 	preferences?: string[];
 }): string {
 	const transcript = segments
@@ -289,7 +291,18 @@ function buildCutsPrompt({
 
 Rules:
 - Only cut clear repeats/restarts of the same content. Do not cut intentional repetition for emphasis.`
-			: `This is a FULL CLEANUP pass. The goal is a tight, high-quality video. Return cut ranges that remove:
+			: mode === "youtube"
+				? `You are editing this footage into a HIGH-RETENTION YOUTUBE VIDEO. First read the whole transcript and infer what the video is about and who it is for. Then return cut ranges that remove:
+1. RETAKES — repeated/restarted sentences; the LAST attempt is always the keeper.
+2. STUTTERS & FALSE STARTS — stumbles, abandoned fragments, contentless filler runs ("um, uh, so, like" chains).
+3. OFF-TOPIC TANGENTS — anything that does not serve the video's subject (asides, technical interruptions, "where was I" moments).
+4. DEAD WEIGHT — rambling intros before the speaker gets to the point, over-long wind-ups, redundant restatements of something already said, and weak outro rambling. YouTube viewers leave in the first 30 seconds: the strongest hook line should end up as close to the start as the cuts allow.
+
+Rules:
+- Pacing beats completeness: prefer the tighter edit when a passage adds little, but NEVER cut content the video's point depends on.
+- Keep the speaker's personality — don't sand off every aside, only the ones that stall the video.
+- Do not cut intentional repetition for emphasis.`
+				: `This is a FULL CLEANUP pass. The goal is a tight, high-quality video. Return cut ranges that remove:
 1. RETAKES — repeated/restarted sentences; the LAST attempt is always the keeper.
 2. STUTTERS & FALSE STARTS — stumbles, abandoned sentence fragments, long filler runs ("um, uh, so, like" chains that carry no content).
 3. OFF-TOPIC TANGENTS — passages clearly irrelevant to the video's main subject (asides to someone off-camera, technical interruptions, "where was I" moments). Infer the main subject from the transcript as a whole.
@@ -309,6 +322,24 @@ ${buildPreferencesBlock(preferences)}
 Respond with ONLY JSON: {"cuts": [{"startSec", "endSec", "reason"}, ...]}.`;
 }
 
+/**
+ * Generic schema-constrained Claude call — same auth paths as the planners.
+ * Used by the assistant prompt box and any future one-shot JSON asks.
+ */
+export async function planJson({
+	prompt,
+	auth,
+	schema,
+}: {
+	prompt: string;
+	auth: ClaudeAuth;
+	schema: object;
+}): Promise<{ raw: unknown; usage: TokenUsage | null }> {
+	return auth.mode === "api-key"
+		? planViaApiKeySchema(prompt, auth.apiKey, schema)
+		: planViaClaudeCode(prompt);
+}
+
 export async function planRepeatCuts({
 	segments,
 	auth,
@@ -317,8 +348,8 @@ export async function planRepeatCuts({
 }: {
 	segments: TranscriptSegment[];
 	auth: ClaudeAuth;
-	/** "repeats" = retakes only; "cleanup" = retakes + stutters + tangents. */
-	mode?: "repeats" | "cleanup";
+	/** "repeats" = retakes; "cleanup" adds stutters + tangents; "youtube" adds pacing/hook editing. */
+	mode?: CutsMode;
 	/** Self-learning notes from the user's past edits. */
 	preferences?: string[];
 }): Promise<RepeatCut[]> {
