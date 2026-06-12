@@ -1,8 +1,10 @@
-export * from "./types";
+﻿export * from "./types";
 export { HF_TEMPLATES, getTemplate, describeTemplateCatalog } from "./templates/index";
 export {
 	planEffects,
 	planRepeatCuts,
+	planJson,
+	type CutsMode,
 	type RepeatCut,
 	type TokenUsage,
 } from "./author";

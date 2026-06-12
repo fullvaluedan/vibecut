@@ -15,6 +15,7 @@ import { runRemoveSilences } from "@/features/editing/remove-silences";
 import {
 	runFullCleanup,
 	runRemoveRepeats,
+	runYouTubeCut,
 } from "@/features/editing/remove-repeats";
 import { runAutocut } from "@/features/editing/autocut";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
@@ -47,8 +48,11 @@ export function AiCutMenu() {
 				onProgress: setStage,
 				signal: controller.signal,
 			});
-			// Self-learning: a quick Ctrl+Z after this run counts against it.
-			usePreferenceStore.getState().noteCutRun(label);
+			// Self-learning: a quick Ctrl+Z counts against this run, and the
+			// post-cut duration is the baseline the export diff compares to.
+			usePreferenceStore.getState().noteCutRun(label, {
+				durationTicks: editor.timeline.getTotalDuration() as number,
+			});
 			if (cuts === 0) {
 				toast.info(`${label}: nothing to cut`, { id: toastId });
 			} else {
@@ -96,6 +100,15 @@ export function AiCutMenu() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
+					<DropdownMenuItem
+						onClick={() =>
+							void run("AI Cut", ({ onProgress, signal }) =>
+								runYouTubeCut({ editor, onProgress, signal }),
+							)
+						}
+					>
+						AI Cut — assemble + edit like a YouTube video
+					</DropdownMenuItem>
 					<DropdownMenuItem
 						onClick={() =>
 							void run("Remove silences", () => runRemoveSilences({ editor }))

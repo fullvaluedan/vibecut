@@ -35,6 +35,7 @@ import {
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
 import { compositeAiOverlays } from "@/features/ai-generate/composite-export";
+import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { toast } from "sonner";
 
 function isExportFormat(value: string): value is ExportFormat {
@@ -131,6 +132,11 @@ function ExportPopover({
 		}
 
 		if (result.success && result.buffer) {
+			// Self-learning: compare what's being exported against the last
+			// AI Cut: did the user keep it, restore content, or trim more?
+			usePreferenceStore.getState().noteExport({
+				durationTicks: editor.timeline.getTotalDuration() as number,
+			});
 			// FrameCut AI overlays (alpha WebMs) are excluded from the canvas
 			// render â€” burn them in with local ffmpeg before downloading.
 			let buffer = result.buffer;

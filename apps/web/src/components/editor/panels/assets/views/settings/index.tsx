@@ -32,11 +32,20 @@ import { formatNumberForDisplay } from "@/utils/math";
 import { OcSquarePlusIcon } from "@/components/icons";
 import type { TCanvasSize } from "@/project/types";
 import { AiSettingsContent } from "@/features/ai-generate/components/ai-settings";
+import { ShortcutsEditor } from "@/actions/components/shortcuts-dialog";
+import { useKeybindingsStore } from "@/actions/keybindings-store";
+import { HelpContent } from "./help";
 
-type SettingsView = "project-info" | "background" | "ai";
+type SettingsView = "project-info" | "background" | "ai" | "hotkeys" | "help";
 
 function isSettingsView(value: string): value is SettingsView {
-	return value === "project-info" || value === "background" || value === "ai";
+	return (
+		value === "project-info" ||
+		value === "background" ||
+		value === "ai" ||
+		value === "hotkeys" ||
+		value === "help"
+	);
 }
 
 const PRESET_LABELS: Record<string, string> = {
@@ -226,6 +235,8 @@ export function SettingsView() {
 						<TabsTrigger value="project-info">Project info</TabsTrigger>
 						<TabsTrigger value="background">Background</TabsTrigger>
 						<TabsTrigger value="ai">AI</TabsTrigger>
+						<TabsTrigger value="hotkeys">Hotkeys</TabsTrigger>
+						<TabsTrigger value="help">Help</TabsTrigger>
 					</TabsList>
 				</Tabs>
 			}
@@ -320,7 +331,30 @@ export function SettingsView() {
 			)}
 			{view === "background" && <BackgroundContent />}
 			{view === "ai" && <AiSettingsContent />}
+			{view === "hotkeys" && <HotkeysContent />}
+			{view === "help" && <HelpContent />}
 		</PanelView>
+	);
+}
+
+function HotkeysContent() {
+	const resetToDefaults = useKeybindingsStore((s) => s.resetToDefaults);
+	return (
+		<div className="flex flex-col gap-4 p-3">
+			<p className="text-muted-foreground text-xs">
+				Click any key to record a new binding — press the combination you
+				want. Conflicting keys are rejected with a warning.
+			</p>
+			<ShortcutsEditor />
+			<Button
+				variant="outline"
+				size="sm"
+				className="self-start"
+				onClick={resetToDefaults}
+			>
+				Reset all to defaults
+			</Button>
+		</div>
 	);
 }
 

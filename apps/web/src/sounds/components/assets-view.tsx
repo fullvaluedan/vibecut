@@ -24,6 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { useSoundSearch } from "@/sounds/use-sound-search";
 import { useSoundsStore } from "@/sounds/sounds-store";
+import { HeygenSoundsView } from "@/sounds/components/heygen-sounds";
 import type { SavedSound, SoundEffect } from "@/sounds/types";
 import { cn } from "@/utils/ui";
 import {
@@ -42,6 +43,7 @@ export function SoundsView() {
 				<div className="px-3 pt-4 pb-0">
 					<TabsList>
 						<TabsTrigger value="sound-effects">Sound effects</TabsTrigger>
+						<TabsTrigger value="heygen">Music & SFX</TabsTrigger>
 						<TabsTrigger value="saved">Saved</TabsTrigger>
 					</TabsList>
 				</div>
@@ -51,6 +53,12 @@ export function SoundsView() {
 					className="mt-0 flex min-h-0 flex-1 flex-col p-5 pt-0"
 				>
 					<SoundEffectsView />
+				</TabsContent>
+				<TabsContent
+					value="heygen"
+					className="mt-0 flex min-h-0 flex-1 flex-col p-5 pt-0"
+				>
+					<HeygenSoundsView />
 				</TabsContent>
 				<TabsContent
 					value="saved"

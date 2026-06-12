@@ -25,18 +25,33 @@ interface CutStat {
 	undone: number;
 }
 
+/** What the user did between an AI Cut and hitting Export. */
+interface ExportDiffStats {
+	/** Exported at ~the AI Cut's duration: the edit was accepted as-is. */
+	kept: number;
+	/** Exported meaningfully LONGER: the user put content back. */
+	restored: number;
+	/** Exported meaningfully SHORTER: the user cut even more. */
+	trimmedMore: number;
+}
+
 interface PreferenceState {
 	selfLearningEnabled: boolean;
 	templateStats: Record<string, TemplateStat>;
 	cutStats: Record<string, CutStat>;
+	exportDiff: ExportDiffStats;
 	/** Last AI CUT run, so a quick undo can be attributed to it. */
 	lastCutRun: { mode: string; at: number } | null;
+	/** Timeline duration right after the last AI Cut — export compares to it. */
+	lastCutSnapshot: { mode: string; at: number; durationTicks: number } | null;
 
 	setSelfLearningEnabled: (enabled: boolean) => void;
 	noteTemplatesPlaced: (templateIds: string[]) => void;
 	noteTemplatesDeleted: (templateIds: string[]) => void;
-	noteCutRun: (mode: string) => void;
+	noteCutRun: (mode: string, extra?: { durationTicks: number }) => void;
 	noteUndo: () => void;
+	/** Call when the user exports: diffs the timeline against the AI Cut. */
+	noteExport: (args: { durationTicks: number }) => void;
 	clearLearning: () => void;
 	buildPreferenceNotes: () => string[];
 }
@@ -47,7 +62,9 @@ export const usePreferenceStore = create<PreferenceState>()(
 			selfLearningEnabled: true,
 			templateStats: {},
 			cutStats: {},
+			exportDiff: { kept: 0, restored: 0, trimmedMore: 0 },
 			lastCutRun: null,
+			lastCutSnapshot: null,
 
 			setSelfLearningEnabled: (enabled) =>
 				set({ selfLearningEnabled: enabled }),
@@ -72,12 +89,21 @@ export const usePreferenceStore = create<PreferenceState>()(
 					return { templateStats };
 				}),
 
-			noteCutRun: (mode) =>
+			noteCutRun: (mode, extra) =>
 				set((state) => {
 					const stat = state.cutStats[mode] ?? { runs: 0, undone: 0 };
 					return {
 						cutStats: { ...state.cutStats, [mode]: { ...stat, runs: stat.runs + 1 } },
 						lastCutRun: { mode, at: Date.now() },
+						...(extra
+							? {
+									lastCutSnapshot: {
+										mode,
+										at: Date.now(),
+										durationTicks: extra.durationTicks,
+									},
+								}
+							: {}),
 					};
 				}),
 
@@ -95,14 +121,35 @@ export const usePreferenceStore = create<PreferenceState>()(
 						[lastCutRun.mode]: { ...stat, undone: stat.undone + 1 },
 					},
 					lastCutRun: null,
+					// An undone AI Cut is no baseline for the export diff.
+					lastCutSnapshot: null,
+				});
+			},
+
+			noteExport: ({ durationTicks }) => {
+				const { lastCutSnapshot, exportDiff } = get();
+				if (!lastCutSnapshot || lastCutSnapshot.durationTicks <= 0) return;
+				const ratio = durationTicks / lastCutSnapshot.durationTicks;
+				const bucket: keyof ExportDiffStats =
+					ratio > 1.03 ? "restored" : ratio < 0.97 ? "trimmedMore" : "kept";
+				set({
+					exportDiff: { ...exportDiff, [bucket]: exportDiff[bucket] + 1 },
+					lastCutSnapshot: null,
 				});
 			},
 
 			clearLearning: () =>
-				set({ templateStats: {}, cutStats: {}, lastCutRun: null }),
+				set({
+					templateStats: {},
+					cutStats: {},
+					exportDiff: { kept: 0, restored: 0, trimmedMore: 0 },
+					lastCutRun: null,
+					lastCutSnapshot: null,
+				}),
 
 			buildPreferenceNotes: () => {
-				const { selfLearningEnabled, templateStats, cutStats } = get();
+				const { selfLearningEnabled, templateStats, cutStats, exportDiff } =
+					get();
 				if (!selfLearningEnabled) return [];
 				const notes: string[] = [];
 				for (const [id, stat] of Object.entries(templateStats)) {
@@ -119,6 +166,19 @@ export const usePreferenceStore = create<PreferenceState>()(
 						);
 					}
 				}
+				const diffTotal =
+					exportDiff.kept + exportDiff.restored + exportDiff.trimmedMore;
+				if (diffTotal >= 2) {
+					if (exportDiff.restored / diffTotal >= 0.5) {
+						notes.push(
+							`Before exporting, the user usually puts back some of what AI Cut removed (${exportDiff.restored} of ${diffTotal} exports) — cut more conservatively.`,
+						);
+					} else if (exportDiff.trimmedMore / diffTotal >= 0.5) {
+						notes.push(
+							`Before exporting, the user usually trims even more than AI Cut did (${exportDiff.trimmedMore} of ${diffTotal} exports) — cut more aggressively.`,
+						);
+					}
+				}
 				return notes;
 			},
 		}),
@@ -128,6 +188,8 @@ export const usePreferenceStore = create<PreferenceState>()(
 				selfLearningEnabled: state.selfLearningEnabled,
 				templateStats: state.templateStats,
 				cutStats: state.cutStats,
+				exportDiff: state.exportDiff,
+				lastCutSnapshot: state.lastCutSnapshot,
 			}),
 		},
 	),

@@ -23,8 +23,8 @@ export async function runRemoveRepeats({
 	editor: EditorCore;
 	onProgress?: (detail: string) => void;
 	signal?: AbortSignal;
-	/** "repeats" = retakes only; "cleanup" = retakes + stutters + tangents. */
-	mode?: "repeats" | "cleanup";
+	/** "repeats" = retakes; "cleanup" adds stutters+tangents; "youtube" adds pacing/hook editing. */
+	mode?: "repeats" | "cleanup" | "youtube";
 }): Promise<{ cuts: number; removedSec: number }> {
 	const abortable = <T>(promise: Promise<T>): Promise<T> => {
 		if (!signal) return promise;
@@ -112,6 +112,41 @@ export async function runRemoveRepeats({
 	return {
 		cuts: cuts.length,
 		removedSec: cuts.reduce((acc, c) => acc + (c.endSec - c.startSec), 0),
+	};
+}
+
+/**
+ * The flagship AI Cut: assemble every bin asset onto the timeline, strip
+ * silences, then have Claude edit the transcript like a YouTube editor —
+ * retakes, stutters, tangents, AND pacing (slow intros, dead weight, weak
+ * outros) — using the whole transcript for context.
+ */
+export async function runYouTubeCut({
+	editor,
+	onProgress,
+	signal,
+}: {
+	editor: EditorCore;
+	onProgress?: (detail: string) => void;
+	signal?: AbortSignal;
+}): Promise<{ cuts: number; removedSec: number }> {
+	onProgress?.("Assembling your footage...");
+	const { assembleBinToTimeline } = await import("./assemble");
+	assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	if (signal?.aborted) throw new Error("Cancelled");
+	onProgress?.("Removing silences...");
+	const { runRemoveSilences } = await import("./remove-silences");
+	const silences = await runRemoveSilences({ editor });
+	if (signal?.aborted) throw new Error("Cancelled");
+	const content = await runRemoveRepeats({
+		editor,
+		onProgress,
+		signal,
+		mode: "youtube",
+	});
+	return {
+		cuts: silences.cuts + content.cuts,
+		removedSec: silences.removedSec + content.removedSec,
 	};
 }
 
