@@ -23,7 +23,7 @@ import {
 	GridViewIcon,
 	LeftToRightListDashIcon,
 } from "@hugeicons/core-free-icons";
-import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+import { usePanelMaximizeStore } from "@/editor/panel-maximize-store";
 import { cn } from "@/utils/ui";
 
 interface RegistryAsset {
@@ -135,6 +135,9 @@ function Preview({
 	className?: string;
 }) {
 	const [hovered, setHovered] = useState(false);
+	// Some registry posters 404 — fall through to the gradient tile instead
+	// of the browser's broken-image icon.
+	const [posterFailed, setPosterFailed] = useState(false);
 	const base = cn("bg-black/40 overflow-hidden rounded", className);
 	if (item.demoSrc) {
 		return (
@@ -152,7 +155,11 @@ function Preview({
 		return (
 			<video
 				src={item.previewVideo}
-				poster={item.previewPoster ?? undefined}
+				poster={
+					item.previewPoster && !posterFailed
+						? item.previewPoster
+						: undefined
+				}
 				className={cn(base, "object-cover")}
 				autoPlay
 				loop
@@ -162,7 +169,7 @@ function Preview({
 			/>
 		);
 	}
-	if (item.previewPoster) {
+	if (item.previewPoster && !posterFailed) {
 		return (
 			// eslint-disable-next-line @next/next/no-img-element -- remote registry preview, unknown domains
 			<img
@@ -170,7 +177,22 @@ function Preview({
 				alt={item.title}
 				loading="lazy"
 				className={cn(base, "object-cover")}
+				onError={() => setPosterFailed(true)}
 				onMouseEnter={item.previewVideo ? () => setHovered(true) : undefined}
+			/>
+		);
+	}
+	if (item.previewVideo) {
+		// No (working) poster but a video exists: show it directly.
+		return (
+			<video
+				src={item.previewVideo}
+				className={cn(base, "object-cover")}
+				muted
+				playsInline
+				loop
+				onMouseEnter={(e) => void e.currentTarget.play().catch(() => undefined)}
+				onMouseLeave={(e) => e.currentTarget.pause()}
 			/>
 		);
 	}
@@ -284,9 +306,11 @@ export function HyperframesPanel() {
 				description: a.description,
 				checked: !disabledHfAssets.includes(a.name),
 				onToggle: () => toggleHfAsset(a.name),
-				previewVideo: a.previewVideo,
-				// Example styles publish no preview media — we bake posters
-				// locally from real renders (public/hf-demos/styles/).
+				// Example styles publish no preview media — we bake posters and
+				// short hover clips locally from real renders (hf-demos/styles/).
+				previewVideo:
+					a.previewVideo ??
+					(kind === "example" ? `/hf-demos/styles/${a.name}.mp4` : null),
 				previewPoster:
 					a.previewPoster ??
 					(kind === "example" ? `/hf-demos/styles/${a.name}.png` : null),
@@ -314,7 +338,7 @@ export function HyperframesPanel() {
 						variant="ghost"
 						title="Maximize this panel (` or double-click the header)"
 						onClick={() =>
-							useAssetsPanelStore.getState().toggleMaximized()
+							usePanelMaximizeStore.getState().toggleMaximized("assets")
 						}
 					>
 						<HugeiconsIcon icon={FullScreenIcon} />

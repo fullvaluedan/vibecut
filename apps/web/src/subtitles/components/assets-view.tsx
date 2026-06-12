@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { CaptionStyles } from "./caption-styles";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import {
 	Select,
@@ -332,6 +333,7 @@ export function Captions() {
 							</ul>
 						</div>
 					)}
+					<CaptionStyles />
 				</SectionContent>
 			</Section>
 		</PanelView>

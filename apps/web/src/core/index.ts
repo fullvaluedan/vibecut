@@ -55,8 +55,14 @@ export class EditorCore {
 			const tracks = activeScene.tracks;
 			const prunedTracks = {
 				...tracks,
-				overlay: tracks.overlay.filter((track) => track.elements.length > 0),
-				audio: tracks.audio.filter((track) => track.elements.length > 0),
+				// User-created tracks (keepWhenEmpty) persist like Premiere's;
+				// only implicitly created tracks are cleaned up when emptied.
+				overlay: tracks.overlay.filter(
+					(track) => track.elements.length > 0 || track.keepWhenEmpty,
+				),
+				audio: tracks.audio.filter(
+					(track) => track.elements.length > 0 || track.keepWhenEmpty,
+				),
 			};
 			if (
 				prunedTracks.overlay.length !== tracks.overlay.length ||

@@ -31,6 +31,11 @@ export type TrackType = "video" | "text" | "audio" | "graphic" | "effect";
 interface BaseTrack {
 	id: string;
 	name: string;
+	/**
+	 * Premiere-style user-created tracks: survive the empty-track pruning
+	 * reactor so an explicitly added track stays until deleted.
+	 */
+	keepWhenEmpty?: boolean;
 }
 
 export interface VideoTrack extends BaseTrack {

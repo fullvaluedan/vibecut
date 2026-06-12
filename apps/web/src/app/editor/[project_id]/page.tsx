@@ -15,6 +15,12 @@ import { EditorProvider } from "@/components/providers/editor-provider";
 import { Onboarding } from "@/components/editor/onboarding";
 import { MigrationDialog } from "@/project/components/migration-dialog";
 import { usePanelStore } from "@/editor/panel-store";
+import {
+	usePanelMaximizeStore,
+	type EditorPanelId,
+} from "@/editor/panel-maximize-store";
+import { useActionHandler } from "@/actions/use-action-handler";
+import { useEffect } from "react";
 import { usePasteMedia } from "@/media/use-paste-media";
 import { MobileGate } from "@/components/editor/mobile-gate";
 import { useMemo, useState } from "react";
@@ -164,7 +170,9 @@ function EditorLayout() {
 						maxSize={40}
 						className="min-w-0"
 					>
-						<AssetsPanel />
+						<MaximizablePanel id="assets">
+							<AssetsPanel />
+						</MaximizablePanel>
 					</ResizablePanel>
 
 					<ResizableHandle withHandle />
@@ -174,11 +182,13 @@ function EditorLayout() {
 						minSize={30}
 						className="min-h-0 min-w-0 flex-1"
 					>
-						<PreviewPanel
-							overlayControls={overlayControls}
-							overlayInstances={overlaySource.instances}
-							onOverlayVisibilityChange={setOverlayVisibility}
-						/>
+						<MaximizablePanel id="preview">
+							<PreviewPanel
+								overlayControls={overlayControls}
+								overlayInstances={overlaySource.instances}
+								onOverlayVisibilityChange={setOverlayVisibility}
+							/>
+						</MaximizablePanel>
 					</ResizablePanel>
 
 					<ResizableHandle withHandle />
@@ -189,7 +199,9 @@ function EditorLayout() {
 						maxSize={40}
 						className="min-w-0"
 					>
-						<PropertiesPanel />
+						<MaximizablePanel id="properties">
+							<PropertiesPanel />
+						</MaximizablePanel>
 					</ResizablePanel>
 				</ResizablePanelGroup>
 			</ResizablePanel>
@@ -202,8 +214,62 @@ function EditorLayout() {
 				maxSize={70}
 				className="min-h-0 px-3 pb-3"
 			>
-				<Timeline />
+				<MaximizablePanel id="timeline">
+					<Timeline />
+				</MaximizablePanel>
 			</ResizablePanel>
 		</ResizablePanelGroup>
+	);
+}
+
+/**
+ * Premiere's ` behavior: the panel under the cursor fills the screen when
+ * ` is pressed; Esc / ` again restores. Double-click handlers and panel
+ * maximize buttons route here too.
+ */
+function MaximizablePanel({
+	id,
+	children,
+}: {
+	id: EditorPanelId;
+	children: React.ReactNode;
+}) {
+	const setHovered = usePanelMaximizeStore((s) => s.setHovered);
+	const maximized = usePanelMaximizeStore((s) => s.maximized);
+	const setMaximized = usePanelMaximizeStore((s) => s.setMaximized);
+	const isMaximized = maximized === id;
+
+	useActionHandler(
+		"toggle-panel-maximize",
+		() => {
+			const state = usePanelMaximizeStore.getState();
+			if (state.maximized) {
+				if (state.maximized === id) state.setMaximized(null);
+				return;
+			}
+			if ((state.hovered ?? "assets") === id) state.setMaximized(id);
+		},
+		undefined,
+	);
+	useEffect(() => {
+		if (!isMaximized) return;
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setMaximized(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [isMaximized, setMaximized]);
+
+	return (
+		<div
+			className={
+				isMaximized
+					? "bg-background fixed inset-2 z-50 shadow-2xl"
+					: "size-full"
+			}
+			onMouseEnter={() => setHovered(id)}
+		>
+			{children}
+		</div>
 	);
 }

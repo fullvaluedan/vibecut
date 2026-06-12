@@ -14,18 +14,23 @@ export class AddTrackCommand extends Command {
 	constructor({
 		type,
 		index,
+		keepWhenEmpty,
 	}: {
 		type: TrackType;
 		index?: number;
+		/** Premiere-style: the track persists even while empty. */
+		keepWhenEmpty?: boolean;
 	}) {
 		super();
 		this.type = type;
 		this.index = index;
+		this.keepWhenEmpty = keepWhenEmpty;
 		this.trackId = generateUUID();
 	}
 
 	private type: TrackType;
 	private index?: number;
+	private keepWhenEmpty?: boolean;
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
@@ -44,12 +49,14 @@ export class AddTrackCommand extends Command {
 						tracks: this.savedState,
 						insertIndex,
 						trackId: this.trackId,
+						keepWhenEmpty: this.keepWhenEmpty,
 					})
 				: buildOverlayTrackState({
 						tracks: this.savedState,
 						insertIndex,
 						trackId: this.trackId,
 						trackType: this.type,
+						keepWhenEmpty: this.keepWhenEmpty,
 					});
 
 		editor.timeline.updateTracks(updatedTracks);
@@ -72,16 +79,18 @@ function buildAudioTrackState({
 	tracks,
 	insertIndex,
 	trackId,
+	keepWhenEmpty,
 }: {
 	tracks: SceneTracks;
 	insertIndex: number;
 	trackId: string;
+	keepWhenEmpty?: boolean;
 }): SceneTracks {
 	const audioInsertIndex = Math.max(0, insertIndex - tracks.overlay.length - 1);
-	const newTrack = buildEmptyTrack({
-		id: trackId,
-		type: "audio",
-	});
+	const newTrack = {
+		...buildEmptyTrack({ id: trackId, type: "audio" }),
+		...(keepWhenEmpty ? { keepWhenEmpty } : {}),
+	};
 	return {
 		...tracks,
 		audio: [
@@ -97,14 +106,16 @@ function buildOverlayTrackState({
 	insertIndex,
 	trackId,
 	trackType,
+	keepWhenEmpty,
 }: {
 	tracks: SceneTracks;
 	insertIndex: number;
 	trackId: string;
 	trackType: Exclude<TrackType, "audio">;
+	keepWhenEmpty?: boolean;
 }): SceneTracks {
 	const overlayInsertIndex = Math.min(insertIndex, tracks.overlay.length);
-	const newTrack =
+	const baseTrack =
 		trackType === "video"
 			? buildEmptyTrack({ id: trackId, type: "video" })
 			: trackType === "text"
@@ -112,6 +123,10 @@ function buildOverlayTrackState({
 				: trackType === "graphic"
 					? buildEmptyTrack({ id: trackId, type: "graphic" })
 					: buildEmptyTrack({ id: trackId, type: "effect" });
+	const newTrack = {
+		...baseTrack,
+		...(keepWhenEmpty ? { keepWhenEmpty } : {}),
+	};
 	return {
 		...tracks,
 		overlay: [

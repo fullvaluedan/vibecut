@@ -18,6 +18,7 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useTimelineZoom } from "@/timeline/hooks/use-timeline-zoom";
@@ -35,6 +36,8 @@ import type { ElementDragView, DropTarget } from "@/timeline";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { TimelineToolRail } from "./tool-rail";
+import { AddTrackCommand } from "@/commands/timeline";
+import { MoveTrackCommand } from "@/commands/timeline/track/move-track";
 import { SelectionBox } from "@/selection/selection-box";
 import { useBoxSelect } from "@/selection/hooks/use-box-select";
 import { SnapIndicator } from "./snap-indicator";
@@ -788,6 +791,7 @@ function TimelineTrackRows({
 	dropTarget: DropTarget | null;
 }) {
 	const timeline = useEditor((e) => e.timeline);
+	const editor = useEditor();
 	const scene = useEditor((e) => e.scenes.getActiveSceneOrNull());
 	const tracks = useMemo<TimelineTrack[]>(
 		() =>
@@ -903,17 +907,76 @@ function TimelineTrackRows({
 								? "Show track"
 								: "Hide track"}
 						</ContextMenuItem>
+						<ContextMenuSeparator />
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={TaskAdd02Icon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								editor.command.execute({
+									command: new AddTrackCommand({
+										type: "video",
+										index: 0,
+										keepWhenEmpty: true,
+									}),
+								});
+							}}
+						>
+							Add video track
+						</ContextMenuItem>
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={TaskAdd02Icon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								editor.command.execute({
+									command: new AddTrackCommand({
+										type: "audio",
+										index: Number.MAX_SAFE_INTEGER,
+										keepWhenEmpty: true,
+									}),
+								});
+							}}
+						>
+							Add audio track
+						</ContextMenuItem>
 						{track.id !== mainTrackId && (
-							<ContextMenuItem
-								icon={<HugeiconsIcon icon={Delete02Icon} />}
-								onClick={(event: React.MouseEvent) => {
-									event.stopPropagation();
-									timeline.removeTrack({ trackId: track.id });
-								}}
-								variant="destructive"
-							>
-								Delete track
-							</ContextMenuItem>
+							<>
+								<ContextMenuItem
+									onClick={(event: React.MouseEvent) => {
+										event.stopPropagation();
+										editor.command.execute({
+											command: new MoveTrackCommand({
+												trackId: track.id,
+												direction: "up",
+											}),
+										});
+									}}
+								>
+									Move track up
+								</ContextMenuItem>
+								<ContextMenuItem
+									onClick={(event: React.MouseEvent) => {
+										event.stopPropagation();
+										editor.command.execute({
+											command: new MoveTrackCommand({
+												trackId: track.id,
+												direction: "down",
+											}),
+										});
+									}}
+								>
+									Move track down
+								</ContextMenuItem>
+								<ContextMenuItem
+									icon={<HugeiconsIcon icon={Delete02Icon} />}
+									onClick={(event: React.MouseEvent) => {
+										event.stopPropagation();
+										timeline.removeTrack({ trackId: track.id });
+									}}
+									variant="destructive"
+								>
+									Delete track
+								</ContextMenuItem>
+							</>
 						)}
 					</ContextMenuContent>
 				</ContextMenu>

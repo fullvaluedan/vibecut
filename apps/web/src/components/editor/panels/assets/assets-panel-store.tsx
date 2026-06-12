@@ -91,10 +91,6 @@ export type MediaSortOrder = "asc" | "desc";
 interface AssetsPanelStore {
 	activeTab: Tab;
 	setActiveTab: (tab: Tab) => void;
-	/** Premiere's ` behavior: the panel temporarily fills the screen. */
-	isMaximized: boolean;
-	toggleMaximized: () => void;
-	setMaximized: (isMaximized: boolean) => void;
 	highlightMediaId: string | null;
 	requestRevealMedia: (mediaId: string) => void;
 	clearHighlight: () => void;
@@ -112,9 +108,6 @@ export const useAssetsPanelStore = create<AssetsPanelStore>()(
 		(set) => ({
 			activeTab: "media",
 			setActiveTab: (tab) => set({ activeTab: tab }),
-			isMaximized: false,
-			toggleMaximized: () => set((s) => ({ isMaximized: !s.isMaximized })),
-			setMaximized: (isMaximized) => set({ isMaximized }),
 			highlightMediaId: null,
 			requestRevealMedia: (mediaId) =>
 				set({ activeTab: "media", highlightMediaId: mediaId }),
