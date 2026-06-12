@@ -13,6 +13,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { AssistantPrompt } from "./assistant-prompt";
+import { Slider } from "@/components/ui/slider";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -37,7 +38,10 @@ export function PreviewToolbar({
 	return (
 		<div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 pb-3 pt-5 px-5">
 			<TimecodeDisplay />
-			<PlayPauseButton />
+			<div className="flex items-center gap-2">
+				<PlayPauseButton />
+				<PlaybackSpeedSlider />
+			</div>
 			<div className="justify-self-end flex w-full items-center justify-end gap-2.5">
 				<AssistantPrompt />
 				<Separator orientation="vertical" className="h-4" />
@@ -162,5 +166,40 @@ function PlayPauseButton() {
 		>
 			<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
 		</Button>
+	);
+}
+
+/**
+ * Preview speed: 0.5x–3x. Audio keeps playing (faster = higher pitch, like
+ * a video player); double-click the label to snap back to 1x. Preview-only —
+ * exports are never affected.
+ */
+function PlaybackSpeedSlider() {
+	const editor = useEditor();
+	const rate = useEditor((e) => e.playback.getPlaybackRate());
+
+	return (
+		<div
+			className="flex items-center gap-1.5"
+			title="Playback speed (preview only) — double-click the label to reset to 1x"
+		>
+			<Slider
+				className="w-20"
+				min={0.5}
+				max={3}
+				step={0.25}
+				value={[rate]}
+				onValueChange={([value]) =>
+					editor.playback.setPlaybackRate({ rate: value })
+				}
+			/>
+			<button
+				type="button"
+				className="text-muted-foreground hover:text-foreground w-8 text-left font-mono text-[10px]"
+				onDoubleClick={() => editor.playback.setPlaybackRate({ rate: 1 })}
+			>
+				{rate.toFixed(2).replace(/\.?0+$/, "")}x
+			</button>
+		</div>
 	);
 }

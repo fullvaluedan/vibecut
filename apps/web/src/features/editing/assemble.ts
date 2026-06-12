@@ -17,15 +17,32 @@ export function assembleBinToTimeline({
 	editor: EditorCore;
 	assets: MediaAsset[];
 }): { added: number; skipped: number } {
-	const usable = assets.filter((a) => !a.ephemeral);
+	const tracks = editor.scenes.getActiveScene().tracks;
+	// Assets already placed ANYWHERE on the timeline (any track — users often
+	// drop footage on V2) must not be assembled again: doubling a long video
+	// stacks its audio over itself and wrecks every transcript-based AI pass.
+	const usedMediaIds = new Set(
+		[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+			track.elements.flatMap((el) =>
+				"mediaId" in el && el.mediaId ? [el.mediaId] : [],
+			),
+		),
+	);
+	const usable = assets.filter((a) => !a.ephemeral && !usedMediaIds.has(a.id));
 	if (!usable.length) {
 		return { added: 0, skipped: 0 };
 	}
 
-	const tracks = editor.scenes.getActiveScene().tracks;
 	const mainTrackId = tracks.main.id;
-	let cursorSec = tracks.main.elements.reduce(
-		(end, el) => Math.max(end, (el.startTime + el.duration) / TICKS_PER_SECOND),
+	// Start after existing content on ANY track, not just main — appending at
+	// 0 under footage that lives on V2 overlaps it in time.
+	let cursorSec = [tracks.main, ...tracks.overlay, ...tracks.audio].reduce(
+		(end, track) =>
+			track.elements.reduce(
+				(trackEnd, el) =>
+					Math.max(trackEnd, (el.startTime + el.duration) / TICKS_PER_SECOND),
+				end,
+			),
 		0,
 	);
 

@@ -42,10 +42,15 @@ export function AiCutMenu() {
 		abortRef.current = controller;
 		setBusy(label);
 		setStage("Starting...");
+		// Remember the last stage so a failure can say WHERE it died.
+		const lastStage = { current: "starting" };
 		const toastId = toast.loading(`${label}...`);
 		try {
 			const { cuts, removedSec } = await fn({
-				onProgress: setStage,
+				onProgress: (detail) => {
+					lastStage.current = detail;
+					setStage(detail);
+				},
 				signal: controller.signal,
 			});
 			// Self-learning: a quick Ctrl+Z counts against this run, and the
@@ -66,9 +71,11 @@ export function AiCutMenu() {
 			if (message === "Cancelled" || controller.signal.aborted) {
 				toast.info(`${label} stopped`, { id: toastId });
 			} else {
+				console.error(`${label} failed during "${lastStage.current}"`, e);
 				toast.error(`${label} failed`, {
 					id: toastId,
-					description: message,
+					duration: 15000,
+					description: `While "${lastStage.current}": ${message}`,
 				});
 			}
 		} finally {

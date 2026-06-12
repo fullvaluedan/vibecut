@@ -26,6 +26,8 @@ export class AudioManager {
 	private masterGain: GainNode | null = null;
 	private playbackStartTime = 0;
 	private playbackStartContextTime = 0;
+	/** Preview speed for this play session (timeline seconds per wall second). */
+	private sessionRate = 1;
 	private scheduleTimer: number | null = null;
 	private lookaheadSeconds = 2;
 	private scheduleIntervalMs = 500;
@@ -143,7 +145,16 @@ export class AudioManager {
 		if (!this.audioContext) return this.playbackStartTime;
 		const elapsed =
 			this.audioContext.currentTime - this.playbackStartContextTime;
-		return this.playbackStartTime + elapsed;
+		return this.playbackStartTime + elapsed * this.sessionRate;
+	}
+
+	/** Maps a timeline timestamp to an AudioContext timestamp at session rate. */
+	private toContextTime(timelineTime: number): number {
+		return (
+			this.playbackStartContextTime +
+			this.playbackLatencyCompensationSeconds +
+			(timelineTime - this.playbackStartTime) / this.sessionRate
+		);
 	}
 
 	private async startPlayback({ time }: { time: number }): Promise<void> {
@@ -169,6 +180,7 @@ export class AudioManager {
 
 		this.playbackStartTime = time;
 		this.playbackStartContextTime = audioContext.currentTime;
+		this.sessionRate = this.editor.playback.getPlaybackRate();
 
 		this.scheduleUpcomingClips();
 
@@ -283,24 +295,27 @@ export class AudioManager {
 
 			const node = audioContext.createBufferSource();
 			node.buffer = buffer;
-			if (clip.retime) {
-				node.playbackRate.value = clampRetimeRate({ rate: clip.retime.rate });
+			// Clip retime × preview speed: both compress/stretch the source.
+			const combinedRate =
+				(clip.retime ? clampRetimeRate({ rate: clip.retime.rate }) : 1) *
+				this.sessionRate;
+			if (combinedRate !== 1) {
+				node.playbackRate.value = combinedRate;
 			}
 			const clipGain = audioContext.createGain();
 			clipGain.gain.value = clip.volume;
 			node.connect(clipGain);
 			clipGain.connect(this.masterGain ?? audioContext.destination);
 
-			const startTimestamp =
-				this.playbackStartContextTime +
-				this.playbackLatencyCompensationSeconds +
-				(timelineTime - this.playbackStartTime);
+			const startTimestamp = this.toContextTime(timelineTime);
 
 			if (startTimestamp >= audioContext.currentTime) {
 				node.start(startTimestamp);
 				consecutiveDroppedBufferCount = 0;
 			} else {
-				const offset = audioContext.currentTime - startTimestamp;
+				const lateContextSeconds = audioContext.currentTime - startTimestamp;
+				// Context-seconds late = that much × rate of SOURCE already gone by.
+				const offset = lateContextSeconds * combinedRate;
 				if (offset < buffer.duration) {
 					node.start(audioContext.currentTime, offset);
 					consecutiveDroppedBufferCount = 0;
@@ -309,7 +324,7 @@ export class AudioManager {
 					if (consecutiveDroppedBufferCount >= 5) {
 						const nextCompensationSeconds = Math.max(
 							this.playbackLatencyCompensationSeconds,
-							Math.min(0.25, offset + 0.01),
+							Math.min(0.25, lateContextSeconds + 0.01),
 						);
 						if (
 							nextCompensationSeconds >
@@ -379,14 +394,14 @@ export class AudioManager {
 
 		const node = audioContext.createBufferSource();
 		node.buffer = buffer;
+		if (this.sessionRate !== 1) {
+			node.playbackRate.value = this.sessionRate;
+		}
 		const clipGain = audioContext.createGain();
 		node.connect(clipGain);
 		clipGain.connect(this.masterGain ?? audioContext.destination);
 
-		const startTimestamp =
-			this.playbackStartContextTime +
-			this.playbackLatencyCompensationSeconds +
-			(effectiveStartTime - this.playbackStartTime);
+		const startTimestamp = this.toContextTime(effectiveStartTime);
 		const clipOffset = effectiveStartTime - clipStart;
 		let actualStartTimestamp = startTimestamp;
 		let actualClipOffset = clipOffset;
@@ -394,7 +409,8 @@ export class AudioManager {
 		if (startTimestamp >= audioContext.currentTime) {
 			node.start(startTimestamp, clipOffset);
 		} else {
-			const lateOffset = audioContext.currentTime - startTimestamp;
+			const lateOffset =
+				(audioContext.currentTime - startTimestamp) * this.sessionRate;
 			actualStartTimestamp = audioContext.currentTime;
 			actualClipOffset = clipOffset + lateOffset;
 			node.start(actualStartTimestamp, actualClipOffset);

@@ -11,6 +11,7 @@ import {
 export class PlaybackManager {
 	private isPlaying = false;
 	private currentTime: MediaTime = ZERO_MEDIA_TIME;
+	private playbackRate = 1;
 	private volume = 1;
 	private muted = false;
 	private previousVolume = 1;
@@ -115,6 +116,24 @@ export class PlaybackManager {
 		return this.isPlaying;
 	}
 
+	getPlaybackRate(): number {
+		return this.playbackRate;
+	}
+
+	/**
+	 * Preview playback speed (0.25–4; the UI offers 0.5–3). Restarting the
+	 * play session rebases the clock and the audio scheduler in one move.
+	 */
+	setPlaybackRate({ rate }: { rate: number }): void {
+		const clamped = Math.max(0.25, Math.min(4, rate));
+		if (clamped === this.playbackRate) return;
+		const wasPlaying = this.isPlaying;
+		if (wasPlaying) this.pause();
+		this.playbackRate = clamped;
+		if (wasPlaying) this.play();
+		this.notify();
+	}
+
 	getCurrentTime(): MediaTime {
 		return this.currentTime;
 	}
@@ -215,7 +234,8 @@ export class PlaybackManager {
 
 		const fps = this.editor.project.getActive()?.settings.fps;
 		const elapsedSeconds =
-			(performance.now() - this.playbackStartWallTime) / 1000;
+			((performance.now() - this.playbackStartWallTime) / 1000) *
+			this.playbackRate;
 		const rawTime = addMediaTime({
 			a: this.playbackStartTime,
 			b: mediaTimeFromSeconds({ seconds: elapsedSeconds }),
