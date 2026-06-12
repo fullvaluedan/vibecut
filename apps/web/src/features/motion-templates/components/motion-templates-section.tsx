@@ -38,8 +38,24 @@ export function MotionTemplatesSection() {
 		const template = getMotionTemplate(templateId);
 		if (!template) return;
 		const canvasSize = editor.project.getActive().settings.canvasSize;
+		// Clicking the same card twice shouldn't stack two copies on top of
+		// each other: if this template already starts at the playhead, the new
+		// one lands right after it instead.
+		let startTime = editor.playback.getCurrentTime();
+		const tracks = editor.scenes.getActiveScene().tracks;
+		for (const track of [...tracks.overlay, tracks.main, ...tracks.audio]) {
+			for (const el of track.elements) {
+				if (
+					el.type === "text" &&
+					el.motionTemplate?.templateId === templateId &&
+					el.startTime === startTime
+				) {
+					startTime = (el.startTime + el.duration) as typeof startTime;
+				}
+			}
+		}
 		const elements = template.build({
-			startTime: editor.playback.getCurrentTime(),
+			startTime,
 			durationSec: template.defaultDurationSec,
 			variables: {},
 			accent,
@@ -65,7 +81,27 @@ export function MotionTemplatesSection() {
 		const tracks = editor.scenes.getActiveScene().tracks;
 		const canvasSize = editor.project.getActive().settings.canvasSize;
 		const { width, height } = canvasSize;
+		const k = height / 1080;
 		const now = editor.playback.getCurrentTime();
+
+		// Applying twice stacks two grids + two sets of key points on top of
+		// each other (looks like giant doubled text) — guard against it.
+		const existingGrid = [...tracks.overlay, tracks.main].some((track) =>
+			track.elements.some(
+				(el) =>
+					el.type === "graphic" &&
+					el.definitionId === "swiss-grid" &&
+					now >= el.startTime &&
+					now < el.startTime + el.duration,
+			),
+		);
+		if (existingGrid) {
+			toast.info("Swiss grid is already applied here", {
+				description:
+					"Edit the existing plate/key points, or undo first to re-apply.",
+			});
+			return;
+		}
 		const mainVideo = tracks.main.elements.find(
 			(el) =>
 				el.type === "video" &&
@@ -106,7 +142,7 @@ export function MotionTemplatesSection() {
 					duration: mediaTimeFromSeconds({ seconds: durationSec }),
 					params: {
 						content: copy,
-						fontSize: 40,
+						fontSize: Math.round(40 * k),
 						fontWeight: "bold",
 						color: "#ffffff",
 						textAlign: "left",
@@ -118,6 +154,7 @@ export function MotionTemplatesSection() {
 						groupId,
 						variables: { text: copy },
 					},
+					linkId: groupId,
 				},
 				startTime: now,
 			});
@@ -127,7 +164,7 @@ export function MotionTemplatesSection() {
 					durationSec,
 					baseX: x,
 					baseY: y,
-					fromDx: -50,
+					fromDx: -50 * k,
 					delaySec: 0.25 + index * 0.18,
 				}),
 			});
@@ -281,6 +318,91 @@ function TemplatePreview({
 						style={{ backgroundColor: accent }}
 					>
 						Next chapter
+					</span>
+				</div>
+			);
+		case "title-subtitle":
+			return (
+				<div className={`${base} flex flex-col items-center justify-center gap-0.5`}>
+					<span className="text-[11px] font-black text-white">Big idea</span>
+					<span className="text-[7px] text-white/70">the smaller detail</span>
+				</div>
+			);
+		case "quote-card":
+			return (
+				<div className={`${base} flex flex-col items-center justify-center gap-0.5`}>
+					<span className="text-[9px] italic text-white">“Quote here”</span>
+					<span
+						className="rounded-full px-1.5 text-[6px] font-bold text-black"
+						style={{ backgroundColor: accent }}
+					>
+						— Author
+					</span>
+				</div>
+			);
+		case "social-handle":
+			return (
+				<div className={base}>
+					<span
+						className="absolute bottom-1.5 left-1.5 rounded-full bg-[#0b0d12] px-2 py-0.5 text-[8px] font-bold"
+						style={{ color: accent }}
+					>
+						@you
+					</span>
+				</div>
+			);
+		case "stat-bar":
+			return (
+				<div className={`${base} flex items-center justify-center`}>
+					<span
+						className="rounded-[2px] px-2.5 py-0.5 text-[8px] font-bold text-black"
+						style={{ backgroundColor: accent }}
+					>
+						Watch time +43%
+					</span>
+				</div>
+			);
+		case "bullet-list":
+			return (
+				<div className={`${base} flex flex-col justify-center gap-0.5 pl-2`}>
+					{["First", "Second", "Third"].map((t) => (
+						<span key={t} className="text-[7px] font-bold text-white">
+							<span style={{ color: accent }}>●</span> {t} point
+						</span>
+					))}
+				</div>
+			);
+		case "location-tag":
+			return (
+				<div className={base}>
+					<span
+						className="absolute top-1.5 left-1.5 rounded-full bg-[#0b0d12] px-2 py-0.5 text-[8px] font-bold"
+						style={{ color: accent }}
+					>
+						▼ Tokyo
+					</span>
+				</div>
+			);
+		case "banner":
+			return (
+				<div className={base}>
+					<div
+						className="absolute right-0 bottom-1 left-0 py-0.5 text-center text-[7px] font-bold text-black"
+						style={{ backgroundColor: accent }}
+					>
+						Breaking: big news
+					</div>
+				</div>
+			);
+		case "end-card":
+			return (
+				<div className={`${base} flex flex-col items-center justify-center gap-1`}>
+					<span className="text-[9px] font-black text-white">Thanks!</span>
+					<span
+						className="rounded px-2 text-[7px] font-bold tracking-wider text-black"
+						style={{ backgroundColor: accent }}
+					>
+						SUBSCRIBE
 					</span>
 				</div>
 			);

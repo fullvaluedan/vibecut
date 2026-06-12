@@ -13,7 +13,9 @@ export const usePropertiesStore = create<PropertiesState>()((set) => ({
 		set((state) => ({
 			activeTabPerType: { ...state.activeTabPerType, [elementType]: tabId },
 		})),
-	isTransformScaleLocked: false,
+	// Premiere's Motion effect defaults Uniform Scale ON — height and width
+	// scale together until the user unchecks it.
+	isTransformScaleLocked: true,
 	setTransformScaleLocked: ({ locked }) =>
 		set({ isTransformScaleLocked: locked }),
 }));

@@ -107,3 +107,5 @@ All eight patches were authored and build-validated (`bun run build:web` exit 0)
 | `apps/web/src/timeline/components/timeline-toolbar.tsx` | Chain-link toggle button for linked selection | 2026-06-13 | One ToolbarButton |
 | `apps/web/src/timeline/components/timeline-element.tsx` | Amber `⚠ Nf` A/V-sync badge on clips whose audio/video partner has drifted (computeAvSyncOffset, ours) | 2026-06-13 | One overlay component |
 | `apps/web/src/core/index.ts` | Dev-only `window.__vibeEditor` for console inspection (stripped in production builds) | 2026-06-13 | Gated on NODE_ENV |
+| `apps/web/src/components/editor/panels/properties/stores/properties-store.ts` | Uniform Scale defaults ON (Premiere Motion default) — uncheck to scale H/W independently | 2026-06-13 | One default flip |
+| `apps/web/src/timeline/element-utils.ts` | buildTextElement passes `linkId` through (template groups + linked A/V share the field) | 2026-06-13 | One spread line |

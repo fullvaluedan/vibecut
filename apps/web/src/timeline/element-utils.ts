@@ -118,6 +118,7 @@ export function buildTextElement({
 		...(t.animations ? { animations: t.animations } : {}),
 		...(t.motionTemplate ? { motionTemplate: t.motionTemplate } : {}),
 		...(t.hidden ? { hidden: true } : {}),
+		...(t.linkId ? { linkId: t.linkId } : {}),
 		params: {
 			...buildDefaultElementParams({ type: "text" }),
 			...(t.params ?? {}),

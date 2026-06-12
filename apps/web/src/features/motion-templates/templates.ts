@@ -81,6 +81,15 @@ function str(variables: TemplateVariables, key: string, fallback: string): strin
 	return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+/**
+ * Scale factor for canvas-proportional sizing: every px value in template
+ * builders is authored against a 1080p frame and multiplied by this, so a
+ * 720p or 4K project gets the same visual proportions.
+ */
+function canvasScale(canvasSize: { width: number; height: number }): number {
+	return canvasSize.height / 1080;
+}
+
 function buildTemplateText({
 	args,
 	templateId,
@@ -99,6 +108,7 @@ function buildTemplateText({
 	/** Stable-count templates create some elements hidden until used. */
 	hidden?: boolean;
 }): CreateTimelineElement {
+	const groupId = args.groupId ?? generateUUID();
 	const base = buildTextElement({
 		raw: {
 			name: `${args.fromAi ? "AI: " : ""}${label}`,
@@ -107,9 +117,12 @@ function buildTemplateText({
 			params,
 			motionTemplate: {
 				templateId,
-				groupId: args.groupId ?? generateUUID(),
+				groupId,
 				variables: args.variables,
 			},
+			// MOGRT behavior: every element of one template instance shares a
+			// linkId, so linked selection moves/trims/deletes them as one clip.
+			linkId: groupId,
 		},
 		startTime: args.startTime,
 	});
@@ -170,14 +183,19 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 		],
 		build: (args) => {
 			const { width, height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
 			const corner = String(args.variables.corner ?? "top-right");
-			const x = corner.includes("left") ? -(width / 2 - 320) : width / 2 - 320;
-			const y = corner.includes("bottom") ? height / 2 - 130 : -(height / 2 - 130);
+			const x = corner.includes("left")
+				? -(width / 2 - 320 * k)
+				: width / 2 - 320 * k;
+			const y = corner.includes("bottom")
+				? height / 2 - 130 * k
+				: -(height / 2 - 130 * k);
 			const channels = fadeSlide({
 				durationSec: args.durationSec,
 				baseX: x,
 				baseY: y,
-				fromDy: corner.includes("bottom") ? 40 : -40,
+				fromDy: (corner.includes("bottom") ? 40 : -40) * k,
 			});
 			const element = buildTemplateText({
 				args,
@@ -186,7 +204,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "text", "Callout"),
-					fontSize: 34,
+					fontSize: Math.round(34 * k),
 					fontWeight: "bold",
 					color: str(args.variables, "accent", args.accent),
 					textAlign: "center",
@@ -195,8 +213,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 					"background.enabled": true,
 					"background.color": DARK_PILL,
 					"background.cornerRadius": 50,
-					"background.paddingX": 28,
-					"background.paddingY": 14,
+					"background.paddingX": Math.round(28 * k),
+					"background.paddingY": Math.round(14 * k),
 				},
 				channels,
 			});
@@ -214,6 +232,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			{ key: "color", label: "Text color", type: "color", default: "#ffffff" },
 		],
 		build: (args) => {
+			const k = canvasScale(args.canvasSize);
 			const channels = popIn({ durationSec: args.durationSec });
 			const element = buildTemplateText({
 				args,
@@ -222,7 +241,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "text", "TITLE").toUpperCase(),
-					fontSize: 110,
+					fontSize: Math.round(110 * k),
 					fontWeight: "bold",
 					color: str(args.variables, "color", "#ffffff"),
 					textAlign: "center",
@@ -253,12 +272,13 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 		],
 		build: (args) => {
 			const { width, height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
 			const align = String(args.variables.align ?? "left");
 			const sign = align === "right" ? 1 : -1;
-			const x = sign * (width / 2 - 380);
-			const titleY = height / 2 - 190;
-			const subY = height / 2 - 120;
-			const slide = sign * -60;
+			const x = sign * (width / 2 - 380 * k);
+			const titleY = height / 2 - 190 * k;
+			const subY = height / 2 - 120 * k;
+			const slide = sign * -60 * k;
 			const groupId = args.groupId ?? generateUUID();
 			const shared = { ...args, groupId };
 			const titleChannels = fadeSlide({
@@ -281,7 +301,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "title", "Name"),
-					fontSize: 44,
+					fontSize: Math.round(44 * k),
 					fontWeight: "bold",
 					color: "#0b0d12",
 					textAlign: align === "right" ? "right" : "left",
@@ -290,8 +310,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 					"background.enabled": true,
 					"background.color": str(args.variables, "accent", args.accent),
 					"background.cornerRadius": 8,
-					"background.paddingX": 22,
-					"background.paddingY": 10,
+					"background.paddingX": Math.round(22 * k),
+					"background.paddingY": Math.round(10 * k),
 				},
 				channels: titleChannels,
 			});
@@ -302,7 +322,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "subtitle", "Subtitle"),
-					fontSize: 28,
+					fontSize: Math.round(28 * k),
 					color: "#ffffff",
 					textAlign: align === "right" ? "right" : "left",
 					"transform.positionX": x,
@@ -310,8 +330,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 					"background.enabled": true,
 					"background.color": DARK_PILL,
 					"background.cornerRadius": 8,
-					"background.paddingX": 18,
-					"background.paddingY": 8,
+					"background.paddingX": Math.round(18 * k),
+					"background.paddingY": Math.round(8 * k),
 				},
 				channels: subChannels,
 			});
@@ -330,14 +350,15 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			{ key: "accent", label: "Number color", type: "color" },
 		],
 		build: (args) => {
+			const k = canvasScale(args.canvasSize);
 			const groupId = args.groupId ?? generateUUID();
 			const shared = { ...args, groupId };
 			const valueChannels = popIn({ durationSec: args.durationSec });
 			const labelChannels = fadeSlide({
 				durationSec: args.durationSec,
 				baseX: 0,
-				baseY: 110,
-				fromDy: 30,
+				baseY: 110 * k,
+				fromDy: 30 * k,
 				delaySec: 0.15,
 			});
 			const value = buildTemplateText({
@@ -347,11 +368,11 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "value", "100%"),
-					fontSize: 130,
+					fontSize: Math.round(130 * k),
 					fontWeight: "bold",
 					color: str(args.variables, "accent", args.accent),
 					textAlign: "center",
-					"transform.positionY": -30,
+					"transform.positionY": -30 * k,
 				},
 				channels: valueChannels,
 			});
@@ -362,10 +383,10 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "label", "Label"),
-					fontSize: 30,
+					fontSize: Math.round(30 * k),
 					color: "#ffffff",
 					textAlign: "center",
-					"transform.positionY": 110,
+					"transform.positionY": 110 * k,
 				},
 				channels: labelChannels,
 			});
@@ -389,6 +410,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			{ key: "accent", label: "Bar color", type: "color" },
 		],
 		build: (args) => {
+			const k = canvasScale(args.canvasSize);
 			const groupId = args.groupId ?? generateUUID();
 			const shared = { ...args, groupId };
 			const out = Math.max(0.5, args.durationSec - 0.4);
@@ -405,8 +427,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				],
 				"background.paddingX": [
 					{ atSec: 0, value: 0 },
-					{ atSec: 0.45, value: 60 },
-					{ atSec: out, value: 60 },
+					{ atSec: 0.45, value: Math.round(60 * k) },
+					{ atSec: out, value: Math.round(60 * k) },
 					{ atSec: end, value: 0 },
 				],
 			};
@@ -418,15 +440,15 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "text", "Next chapter"),
-					fontSize: 64,
+					fontSize: Math.round(64 * k),
 					fontWeight: "bold",
 					color: "#0b0d12",
 					textAlign: "center",
 					"background.enabled": true,
 					"background.color": str(args.variables, "accent", args.accent),
 					"background.cornerRadius": 4,
-					"background.paddingX": 60,
-					"background.paddingY": 18,
+					"background.paddingX": Math.round(60 * k),
+					"background.paddingY": Math.round(18 * k),
 				},
 				channels: mainChannels,
 			});
@@ -436,8 +458,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			const kickerChannels = fadeSlide({
 				durationSec: args.durationSec,
 				baseX: 0,
-				baseY: -110,
-				fromDy: -24,
+				baseY: -110 * k,
+				fromDy: -24 * k,
 				delaySec: 0.1,
 			});
 			const kickerElement = buildTemplateText({
@@ -448,15 +470,465 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				hidden: !kicker,
 				params: {
 					content: (kicker || "Kicker").toUpperCase(),
-					fontSize: 26,
+					fontSize: Math.round(26 * k),
 					color: "#ffffff",
 					textAlign: "center",
 					letterSpacing: 6,
-					"transform.positionY": -110,
+					"transform.positionY": -110 * k,
 				},
 				channels: kickerChannels,
 			});
 			return [main, kickerElement];
+		},
+	},
+	{
+		id: "title-subtitle",
+		name: "Title + subtitle",
+		description: "Centered title with a smaller line under it",
+		defaultDurationSec: 3.5,
+		durationRange: { min: 1, max: 12 },
+		fields: [
+			{ key: "title", label: "Title", type: "text", default: "Big idea" },
+			{
+				key: "subtitle",
+				label: "Subtitle",
+				type: "text",
+				default: "the smaller detail",
+			},
+			{ key: "color", label: "Title color", type: "color", default: "#ffffff" },
+		],
+		build: (args) => {
+			const k = canvasScale(args.canvasSize);
+			const groupId = args.groupId ?? generateUUID();
+			const shared = { ...args, groupId };
+			const title = buildTemplateText({
+				args: shared,
+				templateId: "title-subtitle",
+				label: "Title + subtitle",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "title", "Big idea"),
+					fontSize: Math.round(84 * k),
+					fontWeight: "bold",
+					color: str(args.variables, "color", "#ffffff"),
+					textAlign: "center",
+					"transform.positionY": -36 * k,
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: -36 * k,
+					fromDy: 36 * k,
+				}),
+			});
+			const subtitle = buildTemplateText({
+				args: shared,
+				templateId: "title-subtitle",
+				label: "Subtitle",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "subtitle", "the smaller detail"),
+					fontSize: Math.round(34 * k),
+					color: "#ffffffcc",
+					textAlign: "center",
+					"transform.positionY": 48 * k,
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: 48 * k,
+					fromDy: 26 * k,
+					delaySec: 0.15,
+				}),
+			});
+			return [title, subtitle];
+		},
+	},
+	{
+		id: "quote-card",
+		name: "Quote card",
+		description: "Big quote with attribution pill",
+		defaultDurationSec: 4.5,
+		durationRange: { min: 2, max: 15 },
+		fields: [
+			{
+				key: "quote",
+				label: "Quote",
+				type: "text",
+				default: "The best way out is always through.",
+			},
+			{ key: "author", label: "Author", type: "text", default: "Robert Frost" },
+			{ key: "accent", label: "Author pill color", type: "color" },
+		],
+		build: (args) => {
+			const k = canvasScale(args.canvasSize);
+			const groupId = args.groupId ?? generateUUID();
+			const shared = { ...args, groupId };
+			const quote = buildTemplateText({
+				args: shared,
+				templateId: "quote-card",
+				label: "Quote card",
+				durationSec: args.durationSec,
+				params: {
+					content: `“${str(args.variables, "quote", "The best way out is always through.")}”`,
+					fontSize: Math.round(56 * k),
+					fontStyle: "italic",
+					color: "#ffffff",
+					textAlign: "center",
+					"transform.positionY": -30 * k,
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: -30 * k,
+					fromDy: 30 * k,
+				}),
+			});
+			const author = buildTemplateText({
+				args: shared,
+				templateId: "quote-card",
+				label: "Quote author",
+				durationSec: args.durationSec,
+				params: {
+					content: `— ${str(args.variables, "author", "Robert Frost")}`,
+					fontSize: Math.round(28 * k),
+					fontWeight: "bold",
+					color: "#0b0d12",
+					textAlign: "center",
+					"transform.positionY": 90 * k,
+					"background.enabled": true,
+					"background.color": str(args.variables, "accent", args.accent),
+					"background.cornerRadius": 50,
+					"background.paddingX": Math.round(22 * k),
+					"background.paddingY": Math.round(8 * k),
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: 90 * k,
+					fromDy: 24 * k,
+					delaySec: 0.2,
+				}),
+			});
+			return [quote, author];
+		},
+	},
+	{
+		id: "social-handle",
+		name: "Social handle",
+		description: "@handle pill, bottom-left",
+		defaultDurationSec: 4,
+		durationRange: { min: 1.5, max: 20 },
+		fields: [
+			{ key: "handle", label: "Handle", type: "text", default: "@yourchannel" },
+			{ key: "accent", label: "Handle color", type: "color" },
+		],
+		build: (args) => {
+			const { width, height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
+			const x = -(width / 2 - 280 * k);
+			const y = height / 2 - 90 * k;
+			const element = buildTemplateText({
+				args,
+				templateId: "social-handle",
+				label: "Social handle",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "handle", "@yourchannel"),
+					fontSize: Math.round(30 * k),
+					fontWeight: "bold",
+					color: str(args.variables, "accent", args.accent),
+					textAlign: "center",
+					"transform.positionX": x,
+					"transform.positionY": y,
+					"background.enabled": true,
+					"background.color": DARK_PILL,
+					"background.cornerRadius": 50,
+					"background.paddingX": Math.round(24 * k),
+					"background.paddingY": Math.round(10 * k),
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: x,
+					baseY: y,
+					fromDx: -40 * k,
+				}),
+			});
+			return [element];
+		},
+	},
+	{
+		id: "stat-bar",
+		name: "Stat bar",
+		description: "Label whose bar grows in behind it",
+		defaultDurationSec: 3.5,
+		durationRange: { min: 1.5, max: 10 },
+		fields: [
+			{ key: "text", label: "Stat", type: "text", default: "Watch time +43%" },
+			{ key: "accent", label: "Bar color", type: "color" },
+		],
+		build: (args) => {
+			const { height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
+			const y = height / 2 - 150 * k;
+			const out = Math.max(0.6, args.durationSec - 0.4);
+			const end = Math.max(out + 0.05, args.durationSec - 0.05);
+			const channels: TemplateChannels = {
+				opacity: [
+					{ atSec: 0, value: 0 },
+					{ atSec: 0.15, value: 1 },
+					{ atSec: out, value: 1 },
+					{ atSec: end, value: 0 },
+				],
+				"background.paddingX": [
+					{ atSec: 0, value: 0 },
+					{ atSec: 0.5, value: Math.round(40 * k) },
+					{ atSec: out, value: Math.round(40 * k) },
+					{ atSec: end, value: 0 },
+				],
+			};
+			const element = buildTemplateText({
+				args,
+				templateId: "stat-bar",
+				label: "Stat bar",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "text", "Watch time +43%"),
+					fontSize: Math.round(38 * k),
+					fontWeight: "bold",
+					color: "#0b0d12",
+					textAlign: "center",
+					"transform.positionY": y,
+					"background.enabled": true,
+					"background.color": str(args.variables, "accent", args.accent),
+					"background.cornerRadius": 6,
+					"background.paddingX": Math.round(40 * k),
+					"background.paddingY": Math.round(12 * k),
+				},
+				channels,
+			});
+			return [element];
+		},
+	},
+	{
+		id: "bullet-list",
+		name: "Bullet list",
+		description: "Three lines revealed one by one",
+		defaultDurationSec: 5,
+		durationRange: { min: 2, max: 20 },
+		fields: [
+			{ key: "item1", label: "Line 1", type: "text", default: "First point" },
+			{ key: "item2", label: "Line 2", type: "text", default: "Second point" },
+			{ key: "item3", label: "Line 3", type: "text", default: "Third point" },
+			{ key: "accent", label: "Bullet color", type: "color" },
+		],
+		build: (args) => {
+			const { width } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
+			const groupId = args.groupId ?? generateUUID();
+			const shared = { ...args, groupId };
+			const x = -(width / 2 - 480 * k);
+			const lines = ["item1", "item2", "item3"].map((key, index) => {
+				const y = (-90 + index * 90) * k;
+				const text = str(
+					args.variables,
+					key,
+					["First point", "Second point", "Third point"][index],
+				);
+				return buildTemplateText({
+					args: shared,
+					templateId: "bullet-list",
+					label: index === 0 ? "Bullet list" : `Bullet ${index + 1}`,
+					durationSec: args.durationSec,
+					params: {
+						content: `●  ${text}`,
+						fontSize: Math.round(40 * k),
+						fontWeight: "bold",
+						color: "#ffffff",
+						textAlign: "left",
+						"transform.positionX": x,
+						"transform.positionY": y,
+						"background.enabled": true,
+						"background.color": DARK_PILL,
+						"background.cornerRadius": 8,
+						"background.paddingX": Math.round(20 * k),
+						"background.paddingY": Math.round(8 * k),
+					},
+					channels: fadeSlide({
+						durationSec: args.durationSec,
+						baseX: x,
+						baseY: y,
+						fromDx: -50 * k,
+						delaySec: 0.2 + index * 0.35,
+					}),
+				});
+			});
+			return lines;
+		},
+	},
+	{
+		id: "location-tag",
+		name: "Location tag",
+		description: "Place pill, top-left",
+		defaultDurationSec: 3.5,
+		durationRange: { min: 1.5, max: 15 },
+		fields: [
+			{
+				key: "place",
+				label: "Location",
+				type: "text",
+				default: "Tokyo, Japan",
+			},
+			{ key: "accent", label: "Pin color", type: "color" },
+		],
+		build: (args) => {
+			const { width, height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
+			const x = -(width / 2 - 300 * k);
+			const y = -(height / 2 - 90 * k);
+			const element = buildTemplateText({
+				args,
+				templateId: "location-tag",
+				label: "Location tag",
+				durationSec: args.durationSec,
+				params: {
+					content: `▼ ${str(args.variables, "place", "Tokyo, Japan")}`,
+					fontSize: Math.round(28 * k),
+					fontWeight: "bold",
+					color: str(args.variables, "accent", args.accent),
+					textAlign: "center",
+					"transform.positionX": x,
+					"transform.positionY": y,
+					"background.enabled": true,
+					"background.color": DARK_PILL,
+					"background.cornerRadius": 50,
+					"background.paddingX": Math.round(22 * k),
+					"background.paddingY": Math.round(10 * k),
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: x,
+					baseY: y,
+					fromDy: -36 * k,
+				}),
+			});
+			return [element];
+		},
+	},
+	{
+		id: "banner",
+		name: "Banner",
+		description: "Full-width strip along the bottom",
+		defaultDurationSec: 4,
+		durationRange: { min: 1.5, max: 20 },
+		fields: [
+			{
+				key: "text",
+				label: "Banner text",
+				type: "text",
+				default: "Breaking: something big just happened",
+			},
+			{ key: "accent", label: "Strip color", type: "color" },
+		],
+		build: (args) => {
+			const { height } = args.canvasSize;
+			const k = canvasScale(args.canvasSize);
+			const y = height / 2 - 70 * k;
+			const element = buildTemplateText({
+				args,
+				templateId: "banner",
+				label: "Banner",
+				durationSec: args.durationSec,
+				params: {
+					content: str(
+						args.variables,
+						"text",
+						"Breaking: something big just happened",
+					),
+					fontSize: Math.round(34 * k),
+					fontWeight: "bold",
+					color: "#0b0d12",
+					textAlign: "center",
+					"transform.positionY": y,
+					"background.enabled": true,
+					"background.color": str(args.variables, "accent", args.accent),
+					"background.cornerRadius": 0,
+					"background.paddingX": Math.round(900 * k),
+					"background.paddingY": Math.round(14 * k),
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: y,
+					fromDy: 80 * k,
+				}),
+			});
+			return [element];
+		},
+	},
+	{
+		id: "end-card",
+		name: "End card",
+		description: "Outro: thanks + subscribe pill",
+		defaultDurationSec: 5,
+		durationRange: { min: 2, max: 15 },
+		fields: [
+			{
+				key: "title",
+				label: "Headline",
+				type: "text",
+				default: "Thanks for watching",
+			},
+			{ key: "cta", label: "Button text", type: "text", default: "SUBSCRIBE" },
+			{ key: "accent", label: "Button color", type: "color" },
+		],
+		build: (args) => {
+			const k = canvasScale(args.canvasSize);
+			const groupId = args.groupId ?? generateUUID();
+			const shared = { ...args, groupId };
+			const title = buildTemplateText({
+				args: shared,
+				templateId: "end-card",
+				label: "End card",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "title", "Thanks for watching"),
+					fontSize: Math.round(72 * k),
+					fontWeight: "bold",
+					color: "#ffffff",
+					textAlign: "center",
+					"transform.positionY": -60 * k,
+				},
+				channels: popIn({ durationSec: args.durationSec }),
+			});
+			const cta = buildTemplateText({
+				args: shared,
+				templateId: "end-card",
+				label: "End card button",
+				durationSec: args.durationSec,
+				params: {
+					content: str(args.variables, "cta", "SUBSCRIBE"),
+					fontSize: Math.round(34 * k),
+					fontWeight: "bold",
+					color: "#0b0d12",
+					textAlign: "center",
+					letterSpacing: 3,
+					"transform.positionY": 70 * k,
+					"background.enabled": true,
+					"background.color": str(args.variables, "accent", args.accent),
+					"background.cornerRadius": 12,
+					"background.paddingX": Math.round(36 * k),
+					"background.paddingY": Math.round(14 * k),
+				},
+				channels: fadeSlide({
+					durationSec: args.durationSec,
+					baseX: 0,
+					baseY: 70 * k,
+					fromDy: 36 * k,
+					delaySec: 0.25,
+				}),
+			});
+			return [title, cta];
 		},
 	},
 ];
