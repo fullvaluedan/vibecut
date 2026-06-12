@@ -285,7 +285,11 @@ export function HyperframesPanel() {
 				checked: !disabledHfAssets.includes(a.name),
 				onToggle: () => toggleHfAsset(a.name),
 				previewVideo: a.previewVideo,
-				previewPoster: a.previewPoster,
+				// Example styles publish no preview media — we bake posters
+				// locally from real renders (public/hf-demos/styles/).
+				previewPoster:
+					a.previewPoster ??
+					(kind === "example" ? `/hf-demos/styles/${a.name}.png` : null),
 			}));
 
 	return (

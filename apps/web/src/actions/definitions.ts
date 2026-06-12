@@ -210,6 +210,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["timeline-zoom-out", ["-"]],
 	["timeline-zoom-fit", ["\\"]],
 	["toggle-panel-maximize", ["`"]],
+	["toggle-bookmark", ["m"]],
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],

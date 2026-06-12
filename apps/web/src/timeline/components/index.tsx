@@ -34,6 +34,7 @@ import type { MediaTime } from "@/wasm";
 import type { ElementDragView, DropTarget } from "@/timeline";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
+import { TimelineToolRail } from "./tool-rail";
 import { SelectionBox } from "@/selection/selection-box";
 import { useBoxSelect } from "@/selection/hooks/use-box-select";
 import { SnapIndicator } from "./snap-indicator";
@@ -448,6 +449,7 @@ export function Timeline() {
 			/>
 
 			<div className="relative flex flex-1 overflow-hidden" ref={timelineRef}>
+				<TimelineToolRail />
 				<TrackLabelsPanel
 					trackLabelsRef={trackLabelsRef}
 					trackLabelsScrollRef={trackLabelsScrollRef}
@@ -639,6 +641,32 @@ function TrackLabelsPanel({
 		[tracks, expandedElementIds],
 	);
 
+	// Premiere-style track names: main = V1, video overlays count upward
+	// (V2, V3...), audio counts downward (A1, A2...). Other overlay kinds get
+	// their own series (T1, G1, FX1).
+	const trackBadges = useMemo(() => {
+		const badges = new Map<string, string>();
+		if (!scene) return badges;
+		badges.set(scene.tracks.main.id, "V1");
+		let videoNumber = 1;
+		const counters: Record<string, number> = {};
+		for (const track of [...scene.tracks.overlay].reverse()) {
+			if (track.type === "video") {
+				videoNumber += 1;
+				badges.set(track.id, `V${videoNumber}`);
+				continue;
+			}
+			const prefix =
+				track.type === "text" ? "T" : track.type === "effect" ? "FX" : "G";
+			counters[prefix] = (counters[prefix] ?? 0) + 1;
+			badges.set(track.id, `${prefix}${counters[prefix]}`);
+		}
+		scene.tracks.audio.forEach((track, index) => {
+			badges.set(track.id, `A${index + 1}`);
+		});
+		return badges;
+	}, [scene]);
+
 	return (
 		<div
 			className="flex shrink-0 flex-col border-r"
@@ -675,6 +703,9 @@ function TrackLabelsPanel({
 											className="flex shrink-0 items-center justify-end gap-2 px-3"
 											style={{ height: `${baseHeight}px` }}
 										>
+											<span className="bg-foreground/10 text-foreground/70 mr-auto rounded px-1 text-[0.6rem] font-semibold">
+												{trackBadges.get(track.id) ?? ""}
+											</span>
 											{canTrackHaveAudio(track) && (
 												<TrackToggleIcon
 													isOff={track.muted}
