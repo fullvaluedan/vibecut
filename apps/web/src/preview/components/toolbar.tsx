@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useEditor } from "@/editor/use-editor";
 import { formatTimecode } from "opencut-wasm";
 import { invokeAction } from "@/actions";
@@ -9,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import {
 	FullScreenIcon,
 	PauseIcon,
+	PenTool03Icon,
 	PlayIcon,
 	TextIcon,
 } from "@hugeicons/core-free-icons";
@@ -39,6 +46,7 @@ export function PreviewToolbar({
 			<PlayPauseButton />
 			<div className="justify-self-end flex items-center gap-2.5">
 				<TextToolButton />
+				<ShapeToolButton />
 				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
@@ -159,6 +167,76 @@ function TextToolButton() {
 		>
 			<HugeiconsIcon icon={TextIcon} />
 		</Button>
+	);
+}
+
+const FLYOUT_HOLD_MS = 350;
+const FLYOUT_SHAPES = [
+	{ definitionId: "rectangle", label: "Rectangle" },
+	{ definitionId: "ellipse", label: "Ellipse" },
+	{ definitionId: "polygon", label: "Polygon" },
+	{ definitionId: "star", label: "Star" },
+];
+
+/**
+ * Premiere-style pen tool button: click to draw a custom shape on the
+ * preview (click points, double-click to close); click-and-HOLD to fly out
+ * the preset shapes.
+ */
+function ShapeToolButton() {
+	const tool = usePlaceToolStore((s) => s.tool);
+	const setTool = usePlaceToolStore((s) => s.setTool);
+	const [flyoutOpen, setFlyoutOpen] = useState(false);
+	const holdTimer = useRef<number | null>(null);
+	const openedByHold = useRef(false);
+	const isActive = tool?.kind === "pen" || tool?.kind === "shape";
+
+	const onPointerDown = () => {
+		openedByHold.current = false;
+		holdTimer.current = window.setTimeout(() => {
+			openedByHold.current = true;
+			setFlyoutOpen(true);
+		}, FLYOUT_HOLD_MS);
+	};
+	const onPointerUp = () => {
+		if (holdTimer.current !== null) {
+			window.clearTimeout(holdTimer.current);
+			holdTimer.current = null;
+		}
+		if (!openedByHold.current) {
+			setTool(tool?.kind === "pen" ? null : { kind: "pen" });
+		}
+	};
+
+	return (
+		<DropdownMenu open={flyoutOpen} onOpenChange={setFlyoutOpen}>
+			<DropdownMenuTrigger asChild>
+				<Button
+					variant={isActive ? "secondary" : "text"}
+					size="icon"
+					title="Pen tool — click to draw a custom shape; hold for preset shapes"
+					onPointerDown={onPointerDown}
+					onPointerUp={onPointerUp}
+				>
+					<HugeiconsIcon icon={PenTool03Icon} />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end">
+				<DropdownMenuItem onClick={() => setTool({ kind: "pen" })}>
+					Pen — draw a custom shape
+				</DropdownMenuItem>
+				{FLYOUT_SHAPES.map((shape) => (
+					<DropdownMenuItem
+						key={shape.definitionId}
+						onClick={() =>
+							setTool({ kind: "shape", definitionId: shape.definitionId })
+						}
+					>
+						{shape.label}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 

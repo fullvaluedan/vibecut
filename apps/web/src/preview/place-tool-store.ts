@@ -7,7 +7,8 @@ import { create } from "zustand";
 
 export type PlaceTool =
 	| { kind: "text" }
-	| { kind: "shape"; definitionId: string };
+	| { kind: "shape"; definitionId: string }
+	| { kind: "pen" };
 
 interface PlaceToolStore {
 	tool: PlaceTool | null;
