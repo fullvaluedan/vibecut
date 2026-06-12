@@ -59,6 +59,8 @@ export interface DragDropConfig {
 		elementId: string;
 		effectType: string;
 	}) => void;
+	/** Premiere-style: split a dropped video's audio onto its own track. */
+	separateSourceAudio?: (args: { trackId: string; elementId: string }) => void;
 }
 
 export interface DragDropConfigRef {
@@ -324,31 +326,52 @@ export class DragDropController {
 		element: CreateTimelineElement;
 		target: DropTarget;
 		trackType: TrackType;
-	}): void {
+	}): { elementId: string | null; trackId: string | null } {
 		if (target.isNewTrack) {
 			const addTrackCmd = new AddTrackCommand({
 				type: trackType,
 				index: target.trackIndex,
 			});
-			this.config.executeCommand(
-				new BatchCommand([
-					addTrackCmd,
-					new InsertElementCommand({
-						element,
-						placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
-					}),
-				]),
-			);
-			return;
+			const insertCmd = new InsertElementCommand({
+				element,
+				placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
+			});
+			this.config.executeCommand(new BatchCommand([addTrackCmd, insertCmd]));
+			return {
+				elementId: insertCmd.getElementId(),
+				trackId: addTrackCmd.getTrackId(),
+			};
 		}
 
 		const tracks = orderedTracks({ sceneTracks: this.config.getSceneTracks() });
 		const track = tracks[target.trackIndex];
-		if (!track) return;
-		this.config.insertElement({
-			placement: { mode: "explicit", trackId: track.id },
+		if (!track) return { elementId: null, trackId: null };
+		const insertCmd = new InsertElementCommand({
 			element,
+			placement: { mode: "explicit", trackId: track.id },
 		});
+		this.config.executeCommand(insertCmd);
+		return { elementId: insertCmd.getElementId(), trackId: track.id };
+	}
+
+	/** After a video lands, peel its audio off onto an audio track. */
+	private maybeSeparateAudio({
+		asset,
+		elementId,
+		trackId,
+	}: {
+		asset: { type: string; hasAudio?: boolean };
+		elementId: string | null;
+		trackId: string | null;
+	}): void {
+		if (
+			asset.type === "video" &&
+			asset.hasAudio !== false &&
+			elementId &&
+			trackId
+		) {
+			this.config.separateSourceAudio?.({ trackId, elementId });
+		}
 	}
 
 	private executeAssetDrop({
@@ -451,7 +474,8 @@ export class DragDropController {
 			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
 			startTime: target.xPosition,
 		});
-		this.insertAtTarget({ element, target, trackType });
+		const inserted = this.insertAtTarget({ element, target, trackType });
+		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
 	}
 
 	private executeEffectDrop({
@@ -533,7 +557,7 @@ export class DragDropController {
 							: null;
 
 					if (reuseMainTrackId) {
-						this.config.insertElement({
+						const insertCmd = new InsertElementCommand({
 							placement: { mode: "explicit", trackId: reuseMainTrackId },
 							element: buildElementFromMedia({
 								mediaId: createdAsset.id,
@@ -542,6 +566,12 @@ export class DragDropController {
 								duration,
 								startTime: currentTime,
 							}),
+						});
+						this.config.executeCommand(insertCmd);
+						this.maybeSeparateAudio({
+							asset: createdAsset,
+							elementId: insertCmd.getElementId(),
+							trackId: reuseMainTrackId,
 						});
 						continue;
 					}
@@ -560,7 +590,7 @@ export class DragDropController {
 
 					const trackType: TrackType =
 						createdAsset.type === "audio" ? "audio" : "video";
-					this.insertAtTarget({
+					const inserted = this.insertAtTarget({
 						element: buildElementFromMedia({
 							mediaId: createdAsset.id,
 							mediaType: createdAsset.type,
@@ -571,6 +601,7 @@ export class DragDropController {
 						target: dropTarget,
 						trackType,
 					});
+					this.maybeSeparateAudio({ asset: createdAsset, ...inserted });
 				}
 
 				return {

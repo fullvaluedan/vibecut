@@ -29,6 +29,9 @@ import {
 	ContextMenuContent,
 	ContextMenuItem,
 	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import type { SelectionBoxBounds } from "@/selection/types";
@@ -74,7 +77,14 @@ import {
 	Exchange01Icon,
 	KeyframeIcon,
 	MagicWand05Icon,
+	Layers01Icon,
+	EraserIcon,
 } from "@hugeicons/core-free-icons";
+import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
+import {
+	removeAllKeyframes,
+	removeAttributes,
+} from "@/features/editing/remove-attributes";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
 import { useMemo, type ComponentProps, type ReactNode } from "react";
@@ -231,6 +241,7 @@ export function TimelineElement({
 	isDropTarget = false,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
+	const editor = useEditor();
 	const { selectedElements } = useElementSelection();
 	const requestRevealMedia = useAssetsPanelStore((s) => s.requestRevealMedia);
 	const { renderElement } = useElementPreview({
@@ -498,6 +509,86 @@ export function TimelineElement({
 							</ContextMenuItem>
 						</>
 					)}
+					<ContextMenuSeparator />
+					<ContextMenuItem
+						icon={<HugeiconsIcon icon={Layers01Icon} />}
+						onClick={(event: React.MouseEvent) => {
+							event.stopPropagation();
+							void nestSelectionIntoNewScene({ editor }).catch(() => undefined);
+						}}
+					>
+						Nest selection...
+					</ContextMenuItem>
+					<ContextMenuSub>
+						<ContextMenuSubTrigger
+							icon={<HugeiconsIcon icon={EraserIcon} />}
+						>
+							Remove attributes
+						</ContextMenuSubTrigger>
+						<ContextMenuSubContent className="w-44">
+							<ContextMenuItem
+								onClick={(event: React.MouseEvent) => {
+									event.stopPropagation();
+									removeAttributes({
+										editor,
+										trackId: track.id,
+										element,
+										groups: ["motion"],
+									});
+								}}
+							>
+								Motion
+							</ContextMenuItem>
+							<ContextMenuItem
+								onClick={(event: React.MouseEvent) => {
+									event.stopPropagation();
+									removeAttributes({
+										editor,
+										trackId: track.id,
+										element,
+										groups: ["opacity"],
+									});
+								}}
+							>
+								Opacity
+							</ContextMenuItem>
+							<ContextMenuItem
+								onClick={(event: React.MouseEvent) => {
+									event.stopPropagation();
+									removeAttributes({
+										editor,
+										trackId: track.id,
+										element,
+										groups: ["audio"],
+									});
+								}}
+							>
+								Audio
+							</ContextMenuItem>
+							<ContextMenuItem
+								onClick={(event: React.MouseEvent) => {
+									event.stopPropagation();
+									removeAllKeyframes({ editor, trackId: track.id, element });
+								}}
+							>
+								All keyframes
+							</ContextMenuItem>
+							<ContextMenuSeparator />
+							<ContextMenuItem
+								onClick={(event: React.MouseEvent) => {
+									event.stopPropagation();
+									removeAttributes({
+										editor,
+										trackId: track.id,
+										element,
+										groups: ["motion", "opacity", "audio"],
+									});
+								}}
+							>
+								Everything
+							</ContextMenuItem>
+						</ContextMenuSubContent>
+					</ContextMenuSub>
 					<ContextMenuSeparator />
 					<DeleteMenuItem
 						isMultipleSelected={selectedElements.length > 1}
