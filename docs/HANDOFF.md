@@ -3,7 +3,7 @@
 > Read this first in a new session, together with `docs/BRIEF.md` (product brief) and
 > `PATCHES.md` (every upstream file we've modified). This file is the working memory:
 > goals, state, architecture, mistakes, and the rules that keep rounds shipping cleanly.
-> Last updated: 2026-06-13, after round 19 (bake library v1).
+> Last updated: 2026-06-13, after round 20 phase 1 (template editability fixes).
 
 ## 1. What this is
 
@@ -105,6 +105,22 @@ work end-to-end, not just that code compiles.*
   inapplicable template swap. Blocks render at NATIVE dims (placed scalable);
   components/styles are not baked yet (see Queued). Lane placement was extracted
   to `features/ai-generate/placement.ts` (shared by RUN HYPERFRAMES + bake drop).
+- **Template fixes (R20 phase 1):** from Dan's real-footage testing. (1) **Group-aware
+  properties panel** — `properties/index.tsx` now detects when a multi-selection is
+  ONE motion-template group (all text pieces sharing a registered template's
+  `motionTemplate.groupId`) and opens its Template Controls instead of the "N
+  selected" placeholder (`singleTemplateGroupRepresentative`); this was why templates
+  felt un-editable (linked-selection grabs all pieces → multi-select → placeholder).
+  (2) **Scale control** — Template Controls gains a Size field; a `scale` (default 1)
+  threads through `MotionTemplateArgs`→`canvasScale`=(h/1080)×scale so the whole
+  template resizes uniformly; persisted on `motionTemplate.scale`. (3) **Proportional
+  animation timing** — `keyframes.ts resolveEnterExit` = clamp(dur×0.18, 0.45, 0.9)
+  replaces the fixed 0.4s enter/exit (popIn overshoot times scale with it; section-break
+  + stat-bar inline channels refactored). (4) **Canvas-fit for baked blocks** —
+  `bake-block.ts` reads the `x-framecut-dims` header and places blocks with a
+  contain-fit transform (min(canvasW/blockW, canvasH/blockH), centered) so they never
+  overflow. (5) **Per-item groupId** in RUN HYPERFRAMES native branch (was one run-wide
+  id → group-aware panel would've treated a whole run as one template).
 
 ## 4. Architecture map (where things live)
 
@@ -195,6 +211,28 @@ work end-to-end, not just that code compiles.*
 
 ## 7. Queued / next steps (in rough priority)
 
+0. **Round 20 Phase 2/3 (in-flight, plan approved).** Phase 1 shipped (PR #40).
+   Remaining from Dan's template feedback:
+   - **Phase 2 — independent retiming of multi-point layouts.** Decouple `linkId`
+     (move-together) from `motionTemplate.groupId` (edit-style-together): add
+     `linkPieces?:boolean` (default true) to `buildTemplateText`; keep cohesive
+     templates (lower-third) linked, but register `swiss-grid-keypoint` as a real
+     `MOTION_TEMPLATES` entry and have `applySwissGrid` build it with
+     `linkPieces:false` so each keypoint drags to its own moment while still
+     restyling as a group. Teach Template Controls `apply()` to preserve each
+     sibling's own startTime for `multiPoint` templates (extract a shared
+     `swiss-grid-layout.ts`). Answers Dan's "can't time the points to different
+     moments."
+   - **Phase 3 — manual insertion at quality.** Extract `insertTemplate` (in
+     `motion-templates-section.tsx`) into `features/motion-templates/insert-template.ts`
+     and add "Add" buttons to the HyperFrames panel Templates section + a new all-14
+     "Motion templates" gallery section (the panel already has AddButton/Section infra
+     from R19 blocks). Native, instant, auto-selects → opens the now-fixed Template
+     Controls. Answers "no way to bring in HyperFrames templates manually."
+   - **Phase 4 (stretch):** RUN HYPERFRAMES auto-times swiss keypoints from the
+     planner's `key-points` moments; drag-a-template-to-a-track. Also: a background-
+     color field + fade-timing slider in Template Controls (deferred from Phase 1).
+   - Full plan: `C:\Users\danom\.claude\plans\there-are-quite-a-wise-teapot.md`.
 1. **Bake library — beyond blocks.** R19 shipped the bake path for registry
    **blocks** (gallery-drop, cached). Still to do for "pre-bake EVERY element":
    (a) **components** (snippets like grain-overlay, caption styles — need a host
