@@ -3,7 +3,7 @@
 > Read this first in a new session, together with `docs/BRIEF.md` (product brief) and
 > `PATCHES.md` (every upstream file we've modified). This file is the working memory:
 > goals, state, architecture, mistakes, and the rules that keep rounds shipping cleanly.
-> Last updated: 2026-06-13, after round 20 phase 1 (template editability fixes).
+> Last updated: 2026-06-13, after round 21 (template sizing root cause + Swiss grid rebuild).
 
 ## 1. What this is
 
@@ -121,6 +121,19 @@ work end-to-end, not just that code compiles.*
   contain-fit transform (min(canvasW/blockW, canvasH/blockH), centered) so they never
   overflow. (5) **Per-item groupId** in RUN HYPERFRAMES native branch (was one run-wide
   id → group-aware panel would've treated a whole run as one template).
+- **Template sizing ROOT CAUSE + Swiss grid (R21):** the recurring oversizing was a
+  fontSize UNIT bug (see §4: fontSize is /90-relative, ~15 normal; templates authored
+  it as px ×height/1080 → ~5× too big, quadratic on big canvases — and we'd only ever
+  checked fontSize VALUES, never rendered px). Fixed: new `fontScale(scale)` for fontSize
+  (no height term), `canvasScale` kept for positions; re-authored all 14 templates'
+  fontSize to the relative unit (kinetic 110→25, etc.). The R20 Scale control now works
+  on a correct base. **Swiss grid rebuilt** (Dan chose "rebuild properly"): the V1 video
+  reframe is now KEYFRAMED to revert to full-frame at the segment end (was a permanent
+  base-param mutation → stayed shrunk forever); `swiss-grid-keypoint` registered as a
+  real `internal`+`multiPoint` `MotionTemplate` (keypoints editable in Template Controls,
+  built with `linkPieces:false` → shared groupId but no linkId → each times independently).
+  Verified by MEASURING rendered px: kinetic-title 27.8% of height (was 122%), keypoints
+  7.8% (was ~44%), reframe full-frame again at 12s.
 
 ## 4. Architecture map (where things live)
 
@@ -138,6 +151,17 @@ work end-to-end, not just that code compiles.*
   `upsertPathKeyframe` + `resolveAnimationTarget` (timeline/animation-targets.ts) are
   the canonical write path. **fontSize animation does NOT render** (text measurement
   reads base params) — animate transform.scale instead.
+- **Text fontSize is a /90-RELATIVE unit, NOT pixels** (`text/primitives.ts`: rendered
+  px = `fontSize × canvasHeight/90`; `FONT_SIZE_SCALE_REFERENCE=90` in
+  `text/typography.ts`; default text = 15 → 180px on 1080; rendered fraction of canvas
+  height = `fontSize/90`). So native templates author fontSize via `fontScale(scale)`
+  (the user scale ONLY — the /90 already makes text canvas-proportional); POSITIONS use
+  `canvasScale` (×height/1080 × scale). Authoring fontSize as raw px AND ×height/1080
+  = ~5× oversize + QUADRATIC on big canvases — this was the recurring R16–R20 oversizing
+  bug, root-caused and fixed in R21. **When changing template sizes, VERIFY by measuring
+  rendered px / canvas-height fraction (measureTextElement / `__vibeEditor`), never by
+  reading fontSize values** — checking values (which looked plausible) is exactly how the
+  bug survived three rounds.
 - Update pipeline: `timeline/update-pipeline.ts` — rules on element patches (retime
   derive, template re-time, keyframe clamp, startTime clamp).
 - AI: `features/ai-generate/` (run-hyperframes orchestrator, store with keys/engine/
@@ -211,28 +235,22 @@ work end-to-end, not just that code compiles.*
 
 ## 7. Queued / next steps (in rough priority)
 
-0. **Round 20 Phase 2/3 (in-flight, plan approved).** Phase 1 shipped (PR #40).
-   Remaining from Dan's template feedback:
-   - **Phase 2 — independent retiming of multi-point layouts.** Decouple `linkId`
-     (move-together) from `motionTemplate.groupId` (edit-style-together): add
-     `linkPieces?:boolean` (default true) to `buildTemplateText`; keep cohesive
-     templates (lower-third) linked, but register `swiss-grid-keypoint` as a real
-     `MOTION_TEMPLATES` entry and have `applySwissGrid` build it with
-     `linkPieces:false` so each keypoint drags to its own moment while still
-     restyling as a group. Teach Template Controls `apply()` to preserve each
-     sibling's own startTime for `multiPoint` templates (extract a shared
-     `swiss-grid-layout.ts`). Answers Dan's "can't time the points to different
-     moments."
-   - **Phase 3 — manual insertion at quality.** Extract `insertTemplate` (in
-     `motion-templates-section.tsx`) into `features/motion-templates/insert-template.ts`
-     and add "Add" buttons to the HyperFrames panel Templates section + a new all-14
-     "Motion templates" gallery section (the panel already has AddButton/Section infra
-     from R19 blocks). Native, instant, auto-selects → opens the now-fixed Template
-     Controls. Answers "no way to bring in HyperFrames templates manually."
-   - **Phase 4 (stretch):** RUN HYPERFRAMES auto-times swiss keypoints from the
-     planner's `key-points` moments; drag-a-template-to-a-track. Also: a background-
-     color field + fade-timing slider in Template Controls (deferred from Phase 1).
-   - Full plan: `C:\Users\danom\.claude\plans\there-are-quite-a-wise-teapot.md`.
+0. **Template work — what's left after R21.** R20 P1 (group-aware panel, per-item
+   groupId, canvas-fit blocks, proportional timing) + R21 (sizing root cause + Swiss
+   grid rebuild: reverting reframe, registered editable keypoints, independent timing)
+   are shipped. Remaining:
+   - **Manual insertion at quality.** Extract `insertTemplate` (in
+     `motion-templates-section.tsx`) into `features/motion-templates/insert-template.ts`;
+     add "Add" buttons to the HyperFrames panel Templates section + an all-14 "Motion
+     templates" gallery section (panel already has AddButton/Section infra from R19).
+     Native, instant, auto-selects → opens Template Controls. Answers "no way to bring
+     in HyperFrames templates manually." (`swiss-grid-keypoint` is `internal:true` —
+     exclude internal templates from the gallery.)
+   - **RUN HYPERFRAMES auto-times the Swiss key points** from the planner's
+     `key-points` moments (each keypoint placed at its spoken time; they're already
+     independently-timed unlinked elements). Drag-a-template-to-a-track.
+   - **Background-color field + fade-timing slider** in Template Controls (deferred).
+   - Plan: `C:\Users\danom\.claude\plans\there-are-quite-a-wise-teapot.md`.
 1. **Bake library — beyond blocks.** R19 shipped the bake path for registry
    **blocks** (gallery-drop, cached). Still to do for "pre-bake EVERY element":
    (a) **components** (snippets like grain-overlay, caption styles — need a host
