@@ -104,6 +104,7 @@ export async function nestSelectionIntoNewScene({
 			baseName: "base.mp4",
 			tracks: synthetic,
 			mediaAssets: editor.media.getAssets(),
+			canvasSize: editor.project.getActive().settings.canvasSize,
 		});
 
 		// 3. Replace the selection with the nested clip.
@@ -176,6 +177,7 @@ export async function nestSceneIntoActive({
 			baseName: "base.mp4",
 			tracks: scene.tracks,
 			mediaAssets: editor.media.getAssets(),
+			canvasSize: editor.project.getActive().settings.canvasSize,
 		});
 
 		const file = new File([buffer], `${scene.name} (nested).mp4`, {

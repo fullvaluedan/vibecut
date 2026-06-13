@@ -45,6 +45,13 @@ interface OverlaySpec {
 	startSec: number;
 	durationSec: number;
 	trimStartSec: number;
+	/** Rendered rect in canvas pixels (top-left x/y + size), matching the
+	 *  preview. Older callers may omit these → fall back to full-frame. */
+	x?: number;
+	y?: number;
+	w?: number;
+	h?: number;
+	opacity?: number;
 }
 
 /**
@@ -87,11 +94,24 @@ export async function POST(req: NextRequest) {
 			args.push("-c:v", "libvpx-vp9", "-i", ovPath);
 			const start = Math.max(0, spec.startSec);
 			const end = start + spec.durationSec;
-			const trimmed = `[${inputIndex}:v]trim=start=${spec.trimStartSec}:duration=${spec.durationSec},setpts=PTS-STARTPTS+${start}/TB[ov${inputIndex}]`;
+			// Scale + position the overlay to its rendered rect so the burn-in
+			// matches the preview exactly (contain-fit + transform). Omitted
+			// (older callers) → native size, top-left (the previous behavior).
+			const scale =
+				typeof spec.w === "number" && typeof spec.h === "number"
+					? `,scale=${spec.w}:${spec.h}`
+					: "";
+			const fade =
+				typeof spec.opacity === "number" && spec.opacity < 1
+					? `,format=rgba,colorchannelmixer=aa=${spec.opacity}`
+					: "";
+			const x = typeof spec.x === "number" ? spec.x : 0;
+			const y = typeof spec.y === "number" ? spec.y : 0;
+			const trimmed = `[${inputIndex}:v]trim=start=${spec.trimStartSec}:duration=${spec.durationSec},setpts=PTS-STARTPTS+${start}/TB${scale}${fade}[ov${inputIndex}]`;
 			const outLabel = `[v${inputIndex}]`;
 			filters.push(trimmed);
 			filters.push(
-				`${prevLabel}[ov${inputIndex}]overlay=eof_action=pass:enable='between(t,${start},${end})'${outLabel}`,
+				`${prevLabel}[ov${inputIndex}]overlay=${x}:${y}:eof_action=pass:enable='between(t,${start},${end})'${outLabel}`,
 			);
 			prevLabel = outLabel;
 			inputIndex += 1;

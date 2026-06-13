@@ -5,21 +5,32 @@
  * using <video> elements. The browser's media stack decodes VP9 alpha
  * correctly, unlike the WebCodecs path the canvas compositor uses — those
  * clips are excluded from the render tree (see scene-builder.ts) and shown
- * here instead. Exports composite them server-side with ffmpeg.
+ * here instead. Each <video> is positioned to match the compositor's
+ * transform exactly (contain-fit + scale + position, see overlay-rect.ts), so
+ * the preview matches the export. The mount div is sized to the canvas rect in
+ * display px, so canvas-pixel rects map to it as simple percentages.
  */
 
 import { useEffect, useMemo, useRef } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { TICKS_PER_SECOND } from "@/wasm";
+import type { ElementAnimations } from "@/animation/types";
+import type { ParamValues } from "@/params";
 import type { VideoElement } from "@/timeline";
+import { computeOverlayRect } from "@/features/ai-generate/overlay-rect";
 
 interface AiOverlayClip {
 	id: string;
 	url: string;
 	startSec: number;
 	endSec: number;
+	startTimeTicks: number;
 	trimStartSec: number;
 	hidden: boolean;
+	params: ParamValues;
+	animations: ElementAnimations | undefined;
+	mediaW: number;
+	mediaH: number;
 }
 
 const SYNC_TOLERANCE_SEC = 0.08;
@@ -47,8 +58,13 @@ export function AiOverlayPreviewLayer() {
 					url: asset.url,
 					startSec: video.startTime / TICKS_PER_SECOND,
 					endSec: (video.startTime + video.duration) / TICKS_PER_SECOND,
+					startTimeTicks: video.startTime,
 					trimStartSec: video.trimStart / TICKS_PER_SECOND,
 					hidden: !!video.hidden || !!track.hidden,
+					params: video.params,
+					animations: video.animations,
+					mediaW: asset.width ?? 0,
+					mediaH: asset.height ?? 0,
 				});
 			}
 		}
@@ -57,8 +73,10 @@ export function AiOverlayPreviewLayer() {
 
 	useEffect(() => {
 		const sync = () => {
-			const tSec = editor.playback.getCurrentTime() / TICKS_PER_SECOND;
+			const nowTicks = editor.playback.getCurrentTime();
+			const tSec = nowTicks / TICKS_PER_SECOND;
 			const isPlaying = editor.playback.getIsPlaying();
+			const canvas = editor.project.getActive()?.settings.canvasSize;
 			for (const clip of clips) {
 				const video = videoRefs.current.get(clip.id);
 				if (!video) continue;
@@ -68,6 +86,26 @@ export function AiOverlayPreviewLayer() {
 				if (!within) {
 					if (!video.paused) video.pause();
 					continue;
+				}
+				// Position to match the compositor (contain-fit + transform).
+				if (canvas && canvas.width > 0 && canvas.height > 0) {
+					const rect = computeOverlayRect({
+						params: clip.params,
+						animations: clip.animations,
+						localTimeTicks: Math.max(0, nowTicks - clip.startTimeTicks),
+						mediaW: clip.mediaW,
+						mediaH: clip.mediaH,
+						canvasW: canvas.width,
+						canvasH: canvas.height,
+					});
+					video.style.left = `${(rect.x / canvas.width) * 100}%`;
+					video.style.top = `${(rect.y / canvas.height) * 100}%`;
+					video.style.width = `${(rect.w / canvas.width) * 100}%`;
+					video.style.height = `${(rect.h / canvas.height) * 100}%`;
+					video.style.transform = `rotate(${rect.rotation}deg) scale(${
+						rect.flipX ? -1 : 1
+					}, ${rect.flipY ? -1 : 1})`;
+					video.style.opacity = String(rect.opacity);
 				}
 				const localT = tSec - clip.startSec + clip.trimStartSec;
 				if (isPlaying) {
@@ -112,7 +150,7 @@ export function AiOverlayPreviewLayer() {
 					muted
 					playsInline
 					preload="auto"
-					className="pointer-events-none absolute inset-0 size-full"
+					className="pointer-events-none absolute"
 					style={{ visibility: "hidden", objectFit: "fill" }}
 				/>
 			))}

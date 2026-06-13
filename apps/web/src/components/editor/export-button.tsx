@@ -147,6 +147,7 @@ function ExportPopover({
 					baseName: `base${getExportFileExtension({ format })}`,
 					tracks: editor.scenes.getActiveScene().tracks,
 					mediaAssets: editor.media.getAssets(),
+					canvasSize: editor.project.getActive().settings.canvasSize,
 				});
 				buffer = composite.buffer;
 				if (composite.composited) {

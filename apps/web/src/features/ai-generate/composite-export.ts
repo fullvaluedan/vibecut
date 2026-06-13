@@ -8,6 +8,7 @@
 import type { SceneTracks, VideoElement } from "@/timeline";
 import type { MediaAsset } from "@/media/types";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { computeOverlayRect } from "@/features/ai-generate/overlay-rect";
 
 export function collectAiOverlayClips({
 	tracks,
@@ -39,11 +40,13 @@ export async function compositeAiOverlays({
 	baseName,
 	tracks,
 	mediaAssets,
+	canvasSize,
 }: {
 	baseBuffer: ArrayBuffer;
 	baseName: string;
 	tracks: SceneTracks;
 	mediaAssets: MediaAsset[];
+	canvasSize: { width: number; height: number };
 }): Promise<{ buffer: ArrayBuffer; composited: boolean }> {
 	const clips = collectAiOverlayClips({ tracks, mediaAssets });
 	if (!clips.length) {
@@ -57,6 +60,12 @@ export async function compositeAiOverlays({
 		startSec: number;
 		durationSec: number;
 		trimStartSec: number;
+		/** Rendered rect in canvas pixels (matches the preview/compositor). */
+		x: number;
+		y: number;
+		w: number;
+		h: number;
+		opacity: number;
 	}[] = [];
 	let index = 0;
 	for (const clip of clips) {
@@ -64,11 +73,27 @@ export async function compositeAiOverlays({
 		if (!asset?.file) continue;
 		const field = `overlay_${index}`;
 		form.append(field, asset.file);
+		// Same contain-fit + transform math the preview and compositor use, so
+		// the burned-in overlay lands exactly where it shows in the preview.
+		const rect = computeOverlayRect({
+			params: clip.params,
+			animations: clip.animations,
+			localTimeTicks: 0,
+			mediaW: asset.width ?? 0,
+			mediaH: asset.height ?? 0,
+			canvasW: canvasSize.width,
+			canvasH: canvasSize.height,
+		});
 		manifest.push({
 			field,
 			startSec: clip.startTime / TICKS_PER_SECOND,
 			durationSec: clip.duration / TICKS_PER_SECOND,
 			trimStartSec: clip.trimStart / TICKS_PER_SECOND,
+			x: Math.round(rect.x),
+			y: Math.round(rect.y),
+			w: Math.max(2, Math.round(rect.w)),
+			h: Math.max(2, Math.round(rect.h)),
+			opacity: rect.opacity,
 		});
 		index += 1;
 	}
