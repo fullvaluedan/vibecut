@@ -140,6 +140,7 @@ export async function runHyperframes({
 		);
 	}
 	onProgress({ stage: "planning", detail: "Claude is planning your effects..." });
+	const activeLook = getStyleById(useAiSettingsStore.getState().styleId);
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
 		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
@@ -150,6 +151,8 @@ export async function runHyperframes({
 			allowedTemplateIds,
 			direction: hfDirection,
 			preferences: usePreferenceStore.getState().buildPreferenceNotes(),
+			// Bias the planner toward templates/pacing that fit the chosen look.
+			look: { name: activeLook.name, description: activeLook.description },
 		}),
 	});
 	if (!planRes.ok) {
@@ -171,8 +174,10 @@ export async function runHyperframes({
 	}
 
 	// 3. Render each effect locally, then place all clips in one batch.
-	// The active style theme colors every effect unless the planner chose one.
-	const themeAccent = getStyleById(useAiSettingsStore.getState().styleId).accent;
+	// The active style/look colors and sets the typeface of every effect
+	// (unless the planner chose its own accent).
+	const themeStyle = getStyleById(useAiSettingsStore.getState().styleId);
+	const themeAccent = themeStyle.accent;
 	for (const item of plan.items) {
 		if (item.variables.accent === undefined) {
 			item.variables.accent = themeAccent;
@@ -207,6 +212,7 @@ export async function runHyperframes({
 				durationSec: item.durationSec,
 				variables: item.variables,
 				accent: String(item.variables.accent ?? themeAccent),
+				fontFamily: themeStyle.fontFamily,
 				canvasSize,
 				// One edit-group PER planned effect — sharing the run-wide id would
 				// make Template Controls treat the whole run as a single template.

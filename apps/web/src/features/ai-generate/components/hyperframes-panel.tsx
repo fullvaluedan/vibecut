@@ -16,7 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
-import { VIBE_STYLES } from "@/features/ai-generate/styles";
+import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
 import { bakeAndPlaceBlock } from "@/features/ai-generate/bake-block";
 import { useEditor } from "@/editor/use-editor";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -630,7 +630,7 @@ export function HyperframesPanel() {
 				)}
 
 				<div className="pt-2">
-					<h3 className="text-xs font-semibold">Style theme</h3>
+					<h3 className="text-xs font-semibold">Look</h3>
 					<div className="mt-2 flex flex-wrap gap-1.5">
 						{VIBE_STYLES.map((style) => (
 							<button
@@ -644,10 +644,23 @@ export function HyperframesPanel() {
 										? "scale-110 border-foreground"
 										: "border-transparent hover:scale-105",
 								)}
-								style={{ backgroundColor: style.accent }}
-							/>
+								style={{
+									backgroundColor: style.accent,
+									fontFamily: style.fontFamily,
+								}}
+							>
+								<span className="text-[0.7rem] font-bold text-black/70">
+									Aa
+								</span>
+							</button>
 						))}
 					</div>
+					<p className="text-muted-foreground mt-1.5 text-[0.65rem]">
+						<span className="text-foreground">{getStyleById(styleId).name}</span>
+						{" — "}
+						{getStyleById(styleId).fontFamily} type + accent.
+						Sets every template&apos;s font + color and biases RUN HYPERFRAMES.
+					</p>
 				</div>
 
 				<div className="pt-2">

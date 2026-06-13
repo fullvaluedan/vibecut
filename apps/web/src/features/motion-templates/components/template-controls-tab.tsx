@@ -100,6 +100,8 @@ export function TemplateControlsTab({
 			typeof nextVariables.accent === "string" && nextVariables.accent
 				? nextVariables.accent
 				: accentFallback;
+		// Preserve the look's font the element was created with across rebuilds.
+		const existingFont = siblings[0].element.params?.fontFamily;
 		const built = template.build({
 			startTime: siblings[0].element.startTime,
 			durationSec: nextDurationSec,
@@ -109,6 +111,7 @@ export function TemplateControlsTab({
 			groupId: marker.groupId,
 			fromAi: siblings[0].element.name.startsWith("AI:"),
 			scale: nextScale,
+			fontFamily: typeof existingFont === "string" ? existingFont : undefined,
 		});
 		const count = Math.min(built.length, siblings.length);
 		const updates = [];

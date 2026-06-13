@@ -26,7 +26,8 @@ import { mediaTimeFromSeconds, TICKS_PER_SECOND } from "@/wasm";
 
 export function MotionTemplatesSection() {
 	const editor = useEditor();
-	const accent = useAiSettingsStore((s) => getStyleById(s.styleId).accent);
+	const look = useAiSettingsStore((s) => getStyleById(s.styleId));
+	const accent = look.accent;
 
 	const insertTemplate = (templateId: string) => {
 		const template = getMotionTemplate(templateId);
@@ -53,6 +54,7 @@ export function MotionTemplatesSection() {
 			durationSec: template.defaultDurationSec,
 			variables: {},
 			accent,
+			fontFamily: look.fontFamily,
 			canvasSize,
 		});
 		editor.command.execute({
@@ -136,6 +138,7 @@ export function MotionTemplatesSection() {
 				durationSec,
 				variables: {},
 				accent,
+				fontFamily: look.fontFamily,
 				canvasSize,
 				groupId: generateUUID(),
 			});

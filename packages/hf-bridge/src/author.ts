@@ -48,12 +48,14 @@ function buildPlannerPrompt({
 	allowedTemplateIds,
 	direction,
 	preferences,
+	look,
 }: {
 	segments: TranscriptSegment[];
 	totalDurationSec: number;
 	allowedTemplateIds?: string[];
 	direction?: string;
 	preferences?: string[];
+	look?: { name: string; description: string };
 }): string {
 	let catalog = describeTemplateCatalog();
 	if (allowedTemplateIds?.length) {
@@ -83,7 +85,11 @@ ${JSON.stringify(catalog, null, 1)}
 
 TRANSCRIPT:
 ${transcript}
-${buildPreferencesBlock(preferences)}${
+${
+	look?.name
+		? `\nVISUAL LOOK: "${look.name}" — ${look.description}. Favor templates and pacing that fit this aesthetic (e.g. an editorial/documentary look prefers section-breaks + lower-thirds and slower, restrained effects; a loud/high-energy look leans on number-pops and kinetic titles).\n`
+		: ""
+}${buildPreferencesBlock(preferences)}${
 	direction?.trim()
 		? `\nUSER DIRECTION (the editor's own instructions — follow them even when they override the rules above):\n${direction.trim()}\n`
 		: ""
@@ -385,6 +391,7 @@ export async function planEffects({
 	allowedTemplateIds,
 	direction,
 	preferences,
+	look,
 }: {
 	segments: TranscriptSegment[];
 	totalDurationSec: number;
@@ -395,6 +402,8 @@ export async function planEffects({
 	direction?: string;
 	/** Self-learning notes from the user's past edits. */
 	preferences?: string[];
+	/** Active look (name + aesthetic) — biases template/pacing choices. */
+	look?: { name: string; description: string };
 }): Promise<EffectPlan & { usage: TokenUsage | null }> {
 	if (!segments.length) {
 		return { items: [], usage: null };
@@ -405,6 +414,7 @@ export async function planEffects({
 		allowedTemplateIds,
 		direction,
 		preferences,
+		look,
 	});
 	const { raw, usage } =
 		auth.mode === "api-key"

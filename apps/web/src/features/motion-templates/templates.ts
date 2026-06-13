@@ -42,6 +42,8 @@ export interface MotionTemplateArgs {
 	fromAi?: boolean;
 	/** User size multiplier on top of canvas-proportional sizing (default 1). */
 	scale?: number;
+	/** The active look's typeface, applied to all of this template's text. */
+	fontFamily?: string;
 }
 
 /** One editable field surfaced in the Template Controls panel. */
@@ -147,7 +149,11 @@ function buildTemplateText({
 			name: `${args.fromAi ? "AI: " : ""}${label}`,
 			duration: mediaTimeFromSeconds({ seconds: durationSec }),
 			...(hidden ? { hidden: true } : {}),
-			params,
+			// The look's font applies to every template's text; a template can
+			// still override fontFamily in its own params (none do today).
+			params: args.fontFamily
+				? { fontFamily: args.fontFamily, ...params }
+				: params,
 			motionTemplate: {
 				templateId,
 				groupId,
