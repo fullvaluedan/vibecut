@@ -1,8 +1,10 @@
 # VibeCut — Session Handoff
 
-> Read this first in a new session, together with `docs/BRIEF.md` (product brief) and
-> `PATCHES.md` (every upstream file we've modified). This file is the working memory:
-> goals, state, architecture, mistakes, and the rules that keep rounds shipping cleanly.
+> Read this first in a new session, together with `docs/BRIEF.md` (product brief),
+> `PATCHES.md` (every upstream file we've modified), and `docs/QUALITY-PLAYBOOK.md`
+> (the hardening patterns + keep-it-alive checklist distilled from rounds 1–24).
+> This file is the working memory: goals, state, architecture, mistakes, and the rules
+> that keep rounds shipping cleanly.
 > Last updated: 2026-06-13, after round 21 (template sizing root cause + Swiss grid rebuild).
 
 ## 1. What this is
@@ -282,3 +284,55 @@ cached under `~/.framecut/baked/` — safe to keep (the cache is the point). Dan
 real projects live in his own Chrome profile — untouched by preview-browser resets.
 Self-learning store was cleared after synthetic tests in R12; R18/R19 testing added
 no learning data (no undo-attributed runs; bake drops aren't template placements).
+
+## 9. Round 25 (2026-06-14) — HyperFrames skill-as-producer + editor reliability
+
+**The big shift: "the HyperFrames panel is a PROMPT GENERATOR."** Panel selections +
+picked registry assets (new ★ allow-list) + the clip/whole-video transcript + the
+active look + the direction box compile into a brief; Claude AUTHORS a custom
+HyperFrames composition (HTML, via `claude -p` text output — it never writes files,
+the product does), which is rendered to a transparent overlay and placed on a NEW
+track (non-destructive). Verified end-to-end live (the "Aurora" and "Q4 RESULTS"
+overlays). Both entry points now use this author path:
+- **Right-click a clip → "Run through HyperFrames"** (`run-hyperframes-scoped.ts`
+  `runHyperframesOnClip`) → graphic over that segment.
+- **RUN HYPERFRAMES + the new "Authored" engine** (`runHyperframesWholeTimeline`) →
+  one composition for the whole video on a new track at t=0.
+
+New files: `packages/hf-bridge/src/author-composition.ts` (`authorComposition` —
+claude-code spawn OR api-key, strip-to-HTML, write comp dir, render), API route
+`app/api/hyperframes/author/route.ts`, `features/ai-generate/{compile-hyperframes-prompt,
+place-hyperframes-render,run-hyperframes-scoped,run-log-store}.ts` + `run-log-panel.tsx`,
+`assets/media-preview-dialog.tsx`.
+
+Also shipped this round (all tsc-clean, most live-verified): editor-correctness fixes
+from a 26-agent audit — ripple-delete track-scoping (Shift+Del on an overlay no longer
+rips the footage under it), drag→V1 (was V2), Transform Effect-Controls always shown for
+paired/multi selection, V=Selection tool, honest RUN HYPERFRAMES placement count; export
+rotation/flip for alpha overlays (preview==export, verified via ffmpeg); transcription
+inFlight progress broadcast (fixed frozen "Reading audio 5%"); a live "Log" terminal next
+to RUN; Stop/cancel; transcript-on-demand (audio-guarded); launch-video showcase presets;
+double-click asset → preview modal. Plus a HyperFrames RELIABILITY sweep (45-agent
+adversarial audit, 22 confirmed) — fixed 7: missing-claude-CLI → actionable error,
+right-click re-entrancy guard, authored-engine token counter, no-speech transcript cache
+hit (was re-running Whisper), transcription 'error' status wired, plan-response JSON guard,
+encoder-cache demotion.
+
+**IMMEDIATE NEXT STEPS (in order):**
+1. **Server-side CANCEL** (HIGH — Cancel is currently cosmetic): thread `req.signal`
+   through `app/api/hyperframes/author/route.ts` → `authorComposition` → kill the
+   `claude -p` child on abort (spawn uses shell:true → kill the process group), and
+   forward the signal into `ensureTimelineTranscript`; add a post-fetch abort re-check
+   in `run-hyperframes-scoped.ts` before placement.
+2. **Self-learning** (HIGH): currently a rule-based loop in `features/ai-generate/preference-store.ts`
+   (templates placed/deleted + AI-Cut runs/undone + export diff → notes injected into
+   the planner/cut prompts). Extend it to learn b-roll/music/graphics taste and to feed
+   the AUTHOR brief (not just the template planner).
+3. LLM-connection settings (let users connect Claude / Hermes / an API key) — HIGH.
+4. Low/later: automatic transcript-driven b-roll (SerpAPI images + HyperFrames graphics +
+   auto-using fitting standalone footage from the bin); punch-in/auto-zoom centered on
+   the speaker's eyes; the remaining reliability fixes (placement undo atomicity = 3 history
+   entries → BatchCommand; concurrent-author back-pressure; orphaned comp-dir cleanup);
+   the structural overlay-into-compositor fix (collapses z-order/snapshot/animated-export).
+
+Per-increment detail + gotchas are in the `vibecut.md` auto-memory (read at session start).

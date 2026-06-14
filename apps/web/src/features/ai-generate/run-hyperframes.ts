@@ -159,10 +159,13 @@ export async function runHyperframes({
 		const err = (await planRes.json().catch(() => null)) as { error?: string } | null;
 		throw new Error(err?.error ?? `Planning failed (${planRes.status})`);
 	}
-	const plan = (await planRes.json()) as {
-		items: PlannedEffect[];
+	const plan = (await planRes.json().catch(() => null)) as {
+		items?: PlannedEffect[];
 		usage?: { inputTokens: number; outputTokens: number } | null;
-	};
+	} | null;
+	if (!plan || !Array.isArray(plan.items)) {
+		throw new Error("Planning returned an unexpected response — try again.");
+	}
 	const tokensUsed = plan.usage
 		? plan.usage.inputTokens + plan.usage.outputTokens
 		: 0;
@@ -226,11 +229,32 @@ export async function runHyperframes({
 			}
 			placedTemplateIds.push(item.templateId);
 		}
+		let nativePlaced = 0;
 		if (commands.length) {
 			editor.command.execute({ command: new BatchCommand(commands) });
+			// Trust nothing: count what ACTUALLY landed on the timeline instead of
+			// the number of templates we tried to build. Returning the attempted
+			// count made a no-op look like success ("Placed N") with nothing added.
+			const after = editor.scenes.getActiveScene().tracks;
+			const onTimeline = new Set(
+				[after.main, ...after.overlay, ...after.audio].flatMap((t) =>
+					t.elements.map((el) => el.id),
+				),
+			);
+			nativePlaced = commands.filter((c) =>
+				onTimeline.has(c.getElementId() ?? ""),
+			).length;
 		}
 		usePreferenceStore.getState().noteTemplatesPlaced(placedTemplateIds);
-		return { placed: placedTemplateIds.length, skipped, tokensUsed };
+		// Never fail silently: if nothing landed, say why.
+		if (nativePlaced === 0 && skipped.length === 0) {
+			skipped.push(
+				plan.items.length === 0
+					? "the planner found no moments that fit a template"
+					: "the planner returned effects but none could be placed on the timeline",
+			);
+		}
+		return { placed: nativePlaced, skipped, tokensUsed };
 	}
 
 	// Rendering takes minutes — the user may click around (even into another

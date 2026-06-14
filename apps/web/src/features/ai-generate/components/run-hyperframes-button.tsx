@@ -18,6 +18,10 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MagicWand05Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/utils/ui";
+import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
+import { RunLogPanel } from "@/features/ai-generate/components/run-log-panel";
+import { runHyperframesWholeTimeline } from "@/features/ai-generate/run-hyperframes-scoped";
+import { useAiSettingsStore } from "@/features/ai-generate/store";
 
 export function RunHyperframesButton() {
 	const editor = useEditor();
@@ -30,12 +34,34 @@ export function RunHyperframesButton() {
 		if (isRunning) return;
 		const controller = new AbortController();
 		abortRef.current = controller;
+		useRunLogStore.getState().setOpen(true);
+		logRun("▶ RUN HYPERFRAMES started");
 		try {
-			const result = await runHyperframes({
-				editor,
-				onProgress: setProgress,
-				signal: controller.signal,
-			});
+			const onProgress = (p: RunProgress) => {
+				setProgress(p);
+				const pct =
+					p.progress != null ? ` (${Math.round(p.progress * 100)}%)` : "";
+				logRun(`${p.stage}: ${p.detail}${pct}`);
+			};
+			const engine = useAiSettingsStore.getState().hfEngine;
+			const result =
+				engine === "authored"
+					? await runHyperframesWholeTimeline({
+							editor,
+							onProgress,
+							signal: controller.signal,
+						})
+					: await runHyperframes({
+							editor,
+							onProgress,
+							signal: controller.signal,
+						});
+			logRun(
+				result.placed > 0
+					? `✓ placed ${result.placed} effect(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ""}`
+					: `✗ ${result.skipped[0] ?? "nothing placed"}`,
+				result.placed > 0 ? "info" : "warn",
+			);
 			if (result.placed > 0) {
 				const tokenNote = result.tokensUsed
 					? `Used ~${result.tokensUsed.toLocaleString()} Claude tokens.`
@@ -64,12 +90,14 @@ export function RunHyperframesButton() {
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			if (message === "Cancelled" || abortRef.current?.signal.aborted) {
+				logRun("■ run stopped by user", "warn");
 				toast.info("HyperFrames run stopped", {
 					description:
 						"Anything already rendered is in your media bin; nothing was placed.",
 				});
 				setProgress(null);
 			} else {
+				logRun(`✗ failed: ${message}`, "error");
 				toast.error("HyperFrames run failed", { description: message });
 				setProgress({ stage: "error", detail: message });
 			}
@@ -131,6 +159,7 @@ export function RunHyperframesButton() {
 	const percent = Math.round(renderProgressFraction() * 100);
 
 	return (
+		<div className="flex items-center gap-1">
 		<TooltipProvider delayDuration={300}>
 			<Tooltip>
 				<TooltipTrigger asChild>
@@ -179,5 +208,7 @@ export function RunHyperframesButton() {
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
+			<RunLogPanel />
+		</div>
 	);
 }

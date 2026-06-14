@@ -15,6 +15,10 @@ export {
 	generatedRoot,
 } from "./renderer";
 export {
+	authorComposition,
+	type AuthoredComposition,
+} from "./author-composition";
+export {
 	bakeRegistryBlock,
 	bakedRoot,
 	type BakeJob,

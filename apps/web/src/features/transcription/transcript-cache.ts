@@ -130,6 +130,24 @@ export function getCachedTranscript(
 let inFlight: Promise<TranscriptSegmentLite[]> | null = null;
 let inFlightHash: string | null = null;
 
+// Every caller that joins the same in-flight transcription subscribes here, so
+// progress reaches ALL of them — not just whoever started the run. Without this,
+// clicking RUN HYPERFRAMES while the background transcriber's NO-progress run
+// was already in flight made the button JOIN that promise and receive zero
+// callbacks, freezing the bar at "Reading audio 5%" for the whole run.
+const progressSubscribers = new Set<(p: TranscribeProgress) => void>();
+let lastProgress: TranscribeProgress | null = null;
+function broadcastProgress(p: TranscribeProgress): void {
+	lastProgress = p;
+	for (const sub of progressSubscribers) {
+		try {
+			sub(p);
+		} catch {
+			// a throwing subscriber must not break transcription
+		}
+	}
+}
+
 /**
  * The single transcription pipeline. Cache hit → instant. Otherwise extract
  * → decode → transcribe with honest staged progress (including a live
@@ -147,7 +165,10 @@ export async function ensureTimelineTranscript({
 	signal?: AbortSignal;
 }): Promise<{ segments: TranscriptSegmentLite[]; fromCache: boolean }> {
 	const cached = getCachedTranscript(editor);
-	if (cached?.length) {
+	// A hash match is a hit even when the transcript is EMPTY (a silent /
+	// music-only timeline) — `[]` is a valid cached result. `cached?.length`
+	// treated empty as a miss and re-ran Whisper on every consumer.
+	if (cached) {
 		return { segments: cached, fromCache: true };
 	}
 
@@ -166,9 +187,21 @@ export async function ensureTimelineTranscript({
 		]);
 	};
 
+	// Subscribe to live progress whether we START the run or JOIN one already in
+	// flight, and replay the latest stage immediately so a joiner's bar jumps to
+	// the real current stage instead of freezing at whatever it last set.
+	if (onProgress) {
+		progressSubscribers.add(onProgress);
+		if (lastProgress) onProgress(lastProgress);
+	}
+
 	if (inFlight && inFlightHash === hash) {
-		const segments = await abortable(inFlight);
-		return { segments, fromCache: false };
+		try {
+			const segments = await abortable(inFlight);
+			return { segments, fromCache: false };
+		} finally {
+			if (onProgress) progressSubscribers.delete(onProgress);
+		}
 	}
 
 	const run = async (): Promise<TranscriptSegmentLite[]> => {
@@ -176,7 +209,7 @@ export async function ensureTimelineTranscript({
 		if (totalDuration / TICKS_PER_SECOND < 1) {
 			throw new Error("Add some footage to the timeline first.");
 		}
-		onProgress?.({
+		broadcastProgress({
 			phase: "extracting",
 			detail: "Extracting timeline audio...",
 		});
@@ -209,13 +242,13 @@ export async function ensureTimelineTranscript({
 								initStartedAt = Date.now();
 								initTicker = setInterval(() => {
 									const sec = Math.round((Date.now() - initStartedAt) / 1000);
-									onProgress?.({
+									broadcastProgress({
 										phase: "initializing-model",
 										detail: `Initializing speech model — ${sec}s elapsed (first run can take about a minute; later runs are instant)...`,
 										progress: 1,
 									});
 								}, 1000);
-								onProgress?.({
+								broadcastProgress({
 									phase: "initializing-model",
 									detail:
 										"Speech model downloaded — initializing (first run can take about a minute)...",
@@ -223,7 +256,7 @@ export async function ensureTimelineTranscript({
 								});
 							}
 						} else {
-							onProgress?.({
+							broadcastProgress({
 								phase: "downloading-model",
 								detail: `Downloading speech model (one-time, ~40 MB): ${Math.round(p.progress)}%`,
 								progress: p.progress / 100,
@@ -231,7 +264,7 @@ export async function ensureTimelineTranscript({
 						}
 					} else if (p.status === "transcribing") {
 						stopTicker();
-						onProgress?.({
+						broadcastProgress({
 							phase: "transcribing",
 							detail: "Listening to your video...",
 						});
@@ -251,8 +284,13 @@ export async function ensureTimelineTranscript({
 	inFlight = run().finally(() => {
 		inFlight = null;
 		inFlightHash = null;
+		lastProgress = null;
 	});
 	inFlightHash = hash;
-	const segments = await abortable(inFlight);
-	return { segments, fromCache: false };
+	try {
+		const segments = await abortable(inFlight);
+		return { segments, fromCache: false };
+	} finally {
+		if (onProgress) progressSubscribers.delete(onProgress);
+	}
 }

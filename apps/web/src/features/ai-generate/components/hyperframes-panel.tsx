@@ -66,6 +66,9 @@ interface BrowserItem {
 	/** Bake library: when present, an "Add" action drops this onto the timeline. */
 	onAdd?: () => void;
 	adding?: boolean;
+	/** Allow-list pick: when present, a star toggles this into the author brief. */
+	pinned?: boolean;
+	onPin?: () => void;
 }
 
 /** "Add to timeline" button shown on bakeable items (registry blocks). */
@@ -86,6 +89,34 @@ function AddButton({ item }: { item: BrowserItem }) {
 		>
 			{item.adding ? <Spinner className="size-3" /> : "Add"}
 		</Button>
+	);
+}
+
+/** Star toggle: pick this registry asset into the RUN HYPERFRAMES brief. */
+function PinButton({ item }: { item: BrowserItem }) {
+	if (!item.onPin) return null;
+	return (
+		<button
+			type="button"
+			className={cn(
+				"shrink-0 rounded px-1 text-sm leading-none",
+				item.pinned
+					? "text-yellow-400"
+					: "text-muted-foreground hover:text-foreground",
+			)}
+			title={
+				item.pinned
+					? "Picked for the RUN HYPERFRAMES brief — click to remove"
+					: "Use this asset in the RUN HYPERFRAMES brief"
+			}
+			onClick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				item.onPin?.();
+			}}
+		>
+			{item.pinned ? "★" : "☆"}
+		</button>
 	);
 }
 
@@ -269,6 +300,7 @@ function GridCard({ item }: { item: BrowserItem }) {
 				<Checkbox checked={item.checked} onCheckedChange={item.onToggle} />
 				<span className="truncate text-xs">{item.title}</span>
 				<span className="ml-auto" />
+				<PinButton item={item} />
 				<AddButton item={item} />
 			</div>
 		</label>
@@ -294,6 +326,7 @@ function ListRow({ item }: { item: BrowserItem }) {
 					</div>
 				)}
 			</div>
+			<PinButton item={item} />
 			<AddButton item={item} />
 		</label>
 	);
@@ -345,6 +378,38 @@ const SHOWCASE_PRESETS: {
 		direction:
 			"Add ONE lower-third introducing the speaker near the start (infer the name/role from the transcript; use a fitting description if unnamed). Then pull the 2-4 most quotable lines as callout pills, verbatim.",
 	},
+	{
+		id: "product-launch",
+		title: "Product launch",
+		description: "Big title, features as pills, specs pop.",
+		templateIds: ["kinetic-title", "callout-pill", "number-pop"],
+		direction:
+			"This is a PRODUCT LAUNCH video. Open with ONE kinetic-title naming the product the moment it's introduced. Name the 2-4 standout features as callout pills as they're described. Pop every price, spec, or number with number-pop, exactly as spoken. Keep it punchy.",
+	},
+	{
+		id: "feature-announcement",
+		title: "Feature announcement",
+		description: "Announce it, name it, list the benefits.",
+		templateIds: ["kinetic-title", "lower-third", "callout-pill"],
+		direction:
+			"This is a FEATURE ANNOUNCEMENT. Lead with ONE kinetic-title on the headline feature. Add a lower-third naming the feature when it's first shown. Pull the 2-3 concrete benefits as callout pills, in the speaker's words. Nothing else.",
+	},
+	{
+		id: "hype-teaser",
+		title: "Hype teaser",
+		description: "High-energy: bold titles, every number pops.",
+		templateIds: ["kinetic-title", "number-pop", "section-break"],
+		direction:
+			"This is a high-energy TEASER. Put a bold kinetic-title on each of the punchiest lines (use sparingly — at most one per ~15s). Pop EVERY number. Mark each beat change with a section-break. Fast and loud.",
+	},
+	{
+		id: "explainer",
+		title: "Explainer / demo",
+		description: "Chaptered walkthrough with labelled steps.",
+		templateIds: ["section-break", "lower-third", "callout-pill"],
+		direction:
+			"This is an EXPLAINER / product demo. Mark each step or section with a section-break naming it in 2-4 words. Use a lower-third to label the tool or screen being shown. Reinforce one key takeaway per step with a callout pill. Calm and clear.",
+	},
 ];
 
 function ShowcaseSection({
@@ -392,8 +457,9 @@ function EngineSection() {
 			<div className="bg-foreground/5 flex rounded-md p-0.5">
 				{(
 					[
-						["native", "Instant (native)"],
-						["cinematic", "Cinematic (render)"],
+						["native", "Instant"],
+						["cinematic", "Cinematic"],
+						["authored", "Authored"],
 					] as const
 				).map(([value, label]) => (
 					<button
@@ -414,7 +480,9 @@ function EngineSection() {
 			<p className="text-muted-foreground text-[10px] leading-snug">
 				{engine === "native"
 					? "Places editable motion-template elements instantly — exports at full speed."
-					: "Renders each effect with HyperFrames (~real time per effect) and burns them in at export."}
+					: engine === "cinematic"
+						? "Renders each effect with HyperFrames (~real time per effect) and burns them in at export."
+						: "Claude AUTHORS one custom composition for the whole video from your selections + picks + transcript, on a new track. Slower, fully bespoke."}
 			</p>
 		</div>
 	);
@@ -425,6 +493,8 @@ export function HyperframesPanel() {
 	const toggleTemplate = useAiSettingsStore((s) => s.toggleTemplate);
 	const disabledHfAssets = useAiSettingsStore((s) => s.disabledHfAssets);
 	const toggleHfAsset = useAiSettingsStore((s) => s.toggleHfAsset);
+	const promptHfAssets = useAiSettingsStore((s) => s.promptHfAssets);
+	const togglePromptHfAsset = useAiSettingsStore((s) => s.togglePromptHfAsset);
 	const styleId = useAiSettingsStore((s) => s.styleId);
 	const setStyleId = useAiSettingsStore((s) => s.setStyleId);
 	const hfDirection = useAiSettingsStore((s) => s.hfDirection);
@@ -501,6 +571,8 @@ export function HyperframesPanel() {
 				description: a.description,
 				checked: !disabledHfAssets.includes(a.name),
 				onToggle: () => toggleHfAsset(a.name),
+				pinned: promptHfAssets.includes(a.name),
+				onPin: () => togglePromptHfAsset(a.name),
 				// Example styles publish no preview media — we bake posters and
 				// short hover clips locally from real renders (hf-demos/styles/).
 				previewVideo:

@@ -30,8 +30,8 @@ interface AiSettingsStore {
 	 * motion-template elements; "cinematic" renders each effect with the
 	 * HyperFrames CLI (slower, burned in at export).
 	 */
-	hfEngine: "native" | "cinematic";
-	setHfEngine: (engine: "native" | "cinematic") => void;
+	hfEngine: "native" | "cinematic" | "authored";
+	setHfEngine: (engine: "native" | "cinematic" | "authored") => void;
 	backend: AiBackend;
 	setBackend: (backend: AiBackend) => void;
 	/** Active VibeStyle id — colors all new AI generations. */
@@ -49,6 +49,13 @@ interface AiSettingsStore {
 	 */
 	disabledHfAssets: string[];
 	toggleHfAsset: (name: string) => void;
+	/**
+	 * Registry asset names the user explicitly PICKED to feed the RUN
+	 * HYPERFRAMES authoring brief (an ALLOW-list — distinct from the disabled
+	 * deny-list). Lets a user say "author something using swiss-grid / us-map".
+	 */
+	promptHfAssets: string[];
+	togglePromptHfAsset: (name: string) => void;
 	/** Bulk check/uncheck for a whole browser section. */
 	setTemplatesEnabled: (ids: string[], enabled: boolean) => void;
 	setHfAssetsEnabled: (names: string[], enabled: boolean) => void;
@@ -105,6 +112,14 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 					disabledHfAssets: state.disabledHfAssets.includes(name)
 						? state.disabledHfAssets.filter((n) => n !== name)
 						: [...state.disabledHfAssets, name],
+				})),
+
+			promptHfAssets: [],
+			togglePromptHfAsset: (name) =>
+				set((state) => ({
+					promptHfAssets: state.promptHfAssets.includes(name)
+						? state.promptHfAssets.filter((n) => n !== name)
+						: [...state.promptHfAssets, name],
 				})),
 			setTemplatesEnabled: (ids, enabled) =>
 				set((state) => ({

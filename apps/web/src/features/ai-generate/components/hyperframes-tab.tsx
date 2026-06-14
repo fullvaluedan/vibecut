@@ -129,6 +129,13 @@ function RegistryBlockTab({
 			const assetId = addAsset.getAssetId();
 			if (!assetId) throw new Error("Could not store the baked block");
 
+			// A re-baked block can be a different length than before; update the
+			// clip's duration so it doesn't play stale (was left unchanged).
+			const newDuration =
+				processed.duration != null
+					? mediaTimeFromSeconds({ seconds: processed.duration })
+					: element.duration;
+
 			editor.command.execute({
 				command: new UpdateElementsCommand({
 					updates: [
@@ -137,6 +144,8 @@ function RegistryBlockTab({
 							elementId: element.id,
 							patch: {
 								mediaId: assetId,
+								duration: newDuration,
+								sourceDuration: newDuration,
 								framecutAi: {
 									...element.framecutAi,
 									compId: bakeKey,
@@ -272,7 +281,14 @@ export function HyperframesTab({
 			for (const track of tracks.overlay) {
 				if (track.type !== "video") continue;
 				for (const el of track.elements) {
-					if (el.type === "video" && el.framecutAi) {
+					// Baked registry blocks have framecutAi but no native template
+					// (templateId "registry:<name>"); reRenderAiClip can't restyle
+					// them and threw, aborting the whole batch. Skip them.
+					if (
+						el.type === "video" &&
+						el.framecutAi &&
+						!el.framecutAi.registryBlock
+					) {
 						targets.push({ trackId: track.id, element: el });
 					}
 				}

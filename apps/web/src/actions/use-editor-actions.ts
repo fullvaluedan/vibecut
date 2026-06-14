@@ -535,9 +535,14 @@ export function useEditorActions() {
 			const withTracks = editor.timeline.getElementsWithTracks({
 				elements: selectedElements,
 			});
-			const ranges = withTracks.map(({ element }) => ({
+			// Scope each ripple to the selected clip's OWN track. Without this, the
+			// cut span was extracted from every track — so ripple-deleting an
+			// overlay/HyperFrames block sliced out the footage beneath it. A
+			// linked A/V pair selects both halves, so both their tracks ripple.
+			const ranges = withTracks.map(({ element, track }) => ({
 				start: element.startTime as number,
 				end: (element.startTime + element.duration) as number,
+				trackId: track.id,
 			}));
 			if (!ranges.length) return;
 			editor.command.execute({
@@ -581,6 +586,16 @@ export function useEditorActions() {
 					? null
 					: { kind: "track-select-forward" },
 			);
+		},
+		undefined,
+	);
+
+	// Premiere V: the Selection (arrow) tool — clears any armed place tool so
+	// the default move/trim cursor is active.
+	useActionHandler(
+		"activate-selection-tool",
+		() => {
+			usePlaceToolStore.getState().setTool(null);
 		},
 		undefined,
 	);

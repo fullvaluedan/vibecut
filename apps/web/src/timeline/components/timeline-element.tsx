@@ -81,6 +81,7 @@ import {
 	EraserIcon,
 } from "@hugeicons/core-free-icons";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
+import { runHyperframesOnClip } from "@/features/ai-generate/run-hyperframes-scoped";
 import {
 	removeAllKeyframes,
 	removeAttributes,
@@ -512,6 +513,20 @@ export function TimelineElement({
 						</>
 					)}
 					<ContextMenuSeparator />
+					{element.type === "video" && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={MagicWand05Icon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								void runHyperframesOnClip({
+									editor,
+									element: element as VideoElement,
+								}).catch(() => undefined);
+							}}
+						>
+							Run through HyperFrames
+						</ContextMenuItem>
+					)}
 					<ContextMenuItem
 						icon={<HugeiconsIcon icon={Layers01Icon} />}
 						onClick={(event: React.MouseEvent) => {

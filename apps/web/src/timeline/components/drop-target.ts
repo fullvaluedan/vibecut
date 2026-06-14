@@ -173,7 +173,10 @@ export function computeDropTarget({
 				type: "preferIndex",
 				trackIndex: isAboveAllTracks ? 0 : orderedTracks.length - 1,
 				hoverDirection: isAboveAllTracks ? "above" : "below",
-				createNewTrackOnly: true,
+				// Dropping ABOVE all tracks intentionally makes a new top track.
+				// Dropping into the empty lane area BELOW should reuse the lowest
+				// free video track (V1/main) — Premiere parity — not spawn a V2.
+				createNewTrackOnly: isAboveAllTracks,
 			},
 		});
 		const outOfBoundsResult =

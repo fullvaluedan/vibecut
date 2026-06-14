@@ -131,6 +131,10 @@ export const ACTIONS = {
 			"Track Select Forward tool — click the timeline to select everything to the right (Shift+click: one track)",
 		category: "editing",
 	},
+	"activate-selection-tool": {
+		description: "Selection tool (arrow) — the default move/trim tool",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -231,6 +235,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["ripple-delete", ["shift+delete", "shift+backspace"]],
 	["select-clip-at-playhead", ["d"]],
 	["track-select-forward", ["a"]],
+	["activate-selection-tool", ["v"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],

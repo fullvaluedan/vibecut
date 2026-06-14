@@ -81,17 +81,17 @@ export function PropertiesPanel() {
 	// than showing the bare "N selected" placeholder.
 	const groupRep = singleTemplateGroupRepresentative(elementsWithTracks);
 
-	if (selectedElements.length > 1 && !groupRep) {
-		return (
-			<div className="panel bg-background flex h-full flex-col items-center justify-center overflow-hidden rounded-sm border">
-				<p className="text-muted-foreground text-sm">
-					{selectedElements.length} elements selected.
-				</p>
-			</div>
-		);
-	}
-
-	const elementWithTrack = groupRep ?? elementsWithTracks[0];
+	// Effect Controls (Transform) must ALWAYS be available — even for a paired
+	// (linked video+audio) clip or a multi-selection. A linked clip selects as
+	// TWO elements, so the old `length > 1` early-return hid Transform whenever
+	// you clicked a paired clip. Drive the panel from a representative: the
+	// template group, else the first transformable visual (so a V/A pair shows
+	// the VIDEO's Transform, not the audio half), else the first selected.
+	const TRANSFORMABLE = ["video", "image", "sticker", "graphic", "text"];
+	const visualRep = elementsWithTracks.find((e) =>
+		TRANSFORMABLE.includes(e.element.type),
+	);
+	const elementWithTrack = groupRep ?? visualRep ?? elementsWithTracks[0];
 
 	if (!elementWithTrack) return null;
 

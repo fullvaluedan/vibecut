@@ -36,7 +36,8 @@ export function BackgroundTranscriber() {
 			setStatus("idle");
 			return;
 		}
-		if (getCachedTranscript(editor)?.length) {
+		if (getCachedTranscript(editor)) {
+			// A hash match (even an empty/no-speech transcript) is ready.
 			setStatus("ready");
 			return;
 		}
@@ -45,7 +46,12 @@ export function BackgroundTranscriber() {
 			setStatus("transcribing");
 			ensureTimelineTranscript({ editor })
 				.then(() => setStatus("ready"))
-				.catch(() => setStatus("idle"));
+				.catch((err) => {
+					// Surface real failures (the 'error' status was dead code);
+					// a genuine cancellation just goes back to idle.
+					const msg = String((err as Error)?.message ?? err);
+					setStatus(/cancel/i.test(msg) ? "idle" : "error");
+				});
 		}, SETTLE_MS);
 		return () => clearTimeout(timer);
 	}, [hash, enabled, editor, setStatus]);

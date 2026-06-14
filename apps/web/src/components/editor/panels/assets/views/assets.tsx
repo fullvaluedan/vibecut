@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { MediaDragOverlay } from "@/components/editor/panels/assets/drag-overlay";
 import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
+import {
+	MediaPreviewDialog,
+	useMediaPreviewStore,
+} from "@/components/editor/panels/assets/media-preview-dialog";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
@@ -191,6 +195,7 @@ export function MediaView() {
 	return (
 		<>
 			<input {...fileInputProps} />
+			<MediaPreviewDialog />
 
 			<PanelView
 				title="Assets"
@@ -331,6 +336,7 @@ function MediaAssetDraggable({
 			onAddToTimeline={({ currentTime }) =>
 				addElementAtTime({ asset: item, startTime: currentTime })
 			}
+			onDoubleClick={() => useMediaPreviewStore.getState().open(item)}
 			variant={variant}
 			isRounded={isRounded}
 		/>
