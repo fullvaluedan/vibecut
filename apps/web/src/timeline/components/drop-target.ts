@@ -86,6 +86,37 @@ function getTrackAtY({
 
 const EMPTY_TARGET_ELEMENT = null;
 
+// Premiere-style: a clip dropped within a few pixels of the timeline start
+// snaps to 0:00 instead of leaving a tiny gap. Only applies to mouse-derived
+// drops (not external-file drops, which land at the playhead).
+const SNAP_TO_START_PX = 10;
+
+function dropXPosition({
+	startTimeOverride,
+	isExternalDrop,
+	playheadTime,
+	mouseX,
+	pixelsPerSecond,
+	zoomLevel,
+}: {
+	startTimeOverride: MediaTime | undefined;
+	isExternalDrop: boolean;
+	playheadTime: MediaTime;
+	mouseX: number;
+	pixelsPerSecond: number;
+	zoomLevel: number;
+}): MediaTime {
+	if (startTimeOverride !== undefined) return startTimeOverride;
+	if (isExternalDrop) return playheadTime;
+	const pxToTicks = (px: number) =>
+		(Math.max(0, px) / (pixelsPerSecond * zoomLevel)) * TICKS_PER_SECOND;
+	const rawTicks = pxToTicks(mouseX);
+	const snapThresholdTicks = pxToTicks(SNAP_TO_START_PX);
+	return mediaTime({
+		ticks: Math.round(rawTicks <= snapThresholdTicks ? 0 : rawTicks),
+	});
+}
+
 function fallbackNewTrackDropTarget({
 	xPosition,
 }: {
@@ -116,18 +147,14 @@ export function computeDropTarget({
 	targetElementTypes,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
-	const mainTrackIndex = tracks.overlay.length;
-	const xPosition =
-		startTimeOverride !== undefined
-			? startTimeOverride
-			: isExternalDrop
-				? playheadTime
-				: mediaTime({
-						ticks: Math.round(
-							Math.max(0, mouseX / (pixelsPerSecond * zoomLevel)) *
-								TICKS_PER_SECOND,
-						),
-					});
+	const xPosition = dropXPosition({
+		startTimeOverride,
+		isExternalDrop,
+		playheadTime,
+		mouseX,
+		pixelsPerSecond,
+		zoomLevel,
+	});
 
 	if (orderedTracks.length === 0) {
 		const placementResult = resolveTrackPlacement({
