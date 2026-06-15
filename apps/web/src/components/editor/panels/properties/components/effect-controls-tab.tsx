@@ -52,6 +52,8 @@ import { cn } from "@/utils/ui";
 
 const POSITION_X = "transform.positionX";
 const POSITION_Y = "transform.positionY";
+const ANCHOR_X = "transform.anchorX";
+const ANCHOR_Y = "transform.anchorY";
 const SCALE_X = "transform.scaleX";
 const SCALE_Y = "transform.scaleY";
 const ROTATE = "transform.rotate";
@@ -736,6 +738,125 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 }
 
 /**
+ * Anchor Point: X and Y side by side, one stopwatch for both channels — the
+ * pivot for scale/rotation, in element-local pixels offset from the center.
+ * Mirrors PositionRow; (0,0) is the default (center) and is export-safe.
+ */
+function AnchorRow({ ctx }: { ctx: RowContext }) {
+	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
+	const editor = useEditor();
+	const paramX = findParam(element, ANCHOR_X);
+	const paramY = findParam(element, ANCHOR_Y);
+
+	const resolve = (key: string, param: ElementParamDefinition | null) => {
+		const base =
+			(param ? readElementParamValue({ element, param }) : null) ??
+			param?.default ??
+			0;
+		const value = resolveAnimationPathValueAtTime({
+			animations: element.animations,
+			propertyPath: key,
+			localTime,
+			fallbackValue: base,
+		});
+		return typeof value === "number" ? value : 0;
+	};
+	const x = resolve(ANCHOR_X, paramX);
+	const y = resolve(ANCHOR_Y, paramY);
+
+	const previewAxis = (
+		param: ElementParamDefinition,
+		key: AnimationPath,
+		value: number,
+	) => {
+		const animatedChannel =
+			hasKeyframesForPath({
+				animations: element.animations,
+				propertyPath: key,
+			}) && isPlayheadWithinElementRange;
+		if (animatedChannel) {
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							animations: upsertPathKeyframe({
+								animations: element.animations,
+								propertyPath: key,
+								time: localTime,
+								value,
+								channelLayout: getParamChannelLayout({ param }),
+								coerceValue: ({ value: next }) =>
+									coerceParamValue({ param, value: next }),
+							}),
+						},
+					},
+				],
+			});
+			return;
+		}
+		editor.timeline.previewElements({
+			updates: [
+				{
+					trackId,
+					elementId: element.id,
+					updates: writeElementParamValue({ element, param, value }),
+				},
+			],
+		});
+	};
+
+	const commit = () => editor.timeline.commitPreview();
+	const kfGroup = useKfGroup({
+		ctx,
+		entries: [
+			{ path: ANCHOR_X, value: x },
+			{ path: ANCHOR_Y, value: y },
+		],
+	});
+
+	if (!paramX || !paramY) return null;
+
+	return (
+		<Row
+			label="Anchor Point"
+			stopwatch={<Stopwatch group={kfGroup} label="anchor point" />}
+		>
+			<KfNav group={kfGroup} />
+			<ValueField
+				resolved={x}
+				factor={1}
+				decimals={1}
+				iconLabel="X"
+				{...paramRange(paramX)}
+				isDefault={x === paramX.default}
+				onPreviewModel={(v) => previewAxis(paramX, ANCHOR_X, v)}
+				onCommit={commit}
+				onResetModel={() => {
+					previewAxis(paramX, ANCHOR_X, Number(paramX.default) || 0);
+					commit();
+				}}
+			/>
+			<ValueField
+				resolved={y}
+				factor={1}
+				decimals={1}
+				iconLabel="Y"
+				{...paramRange(paramY)}
+				isDefault={y === paramY.default}
+				onPreviewModel={(v) => previewAxis(paramY, ANCHOR_Y, v)}
+				onCommit={commit}
+				onResetModel={() => {
+					previewAxis(paramY, ANCHOR_Y, Number(paramY.default) || 0);
+					commit();
+				}}
+			/>
+		</Row>
+	);
+}
+
+/**
  * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
  * drives both axes; unchecked → separate Scale Height / Scale Width rows.
  */
@@ -1019,6 +1140,7 @@ export function EffectControlsTab({
 					suffix="°"
 					iconLabel="∠"
 				/>
+				<AnchorRow ctx={ctx} />
 			</FxGroup>
 			<FxGroup title="Opacity">
 				<SingleRow

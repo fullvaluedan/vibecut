@@ -9,6 +9,7 @@ const defaultTransform: Transform = {
 	scaleY: 1,
 	position: { x: 0, y: 0 },
 	rotate: 0,
+	anchor: { x: 0, y: 0 },
 };
 
 const defaultOpacity = 1;
@@ -58,6 +59,8 @@ const defaultTextElement: Omit<TextElement, "id"> = {
 		"transform.scaleX": defaultTransform.scaleX,
 		"transform.scaleY": defaultTransform.scaleY,
 		"transform.rotate": defaultTransform.rotate,
+		"transform.anchorX": defaultTransform.anchor.x,
+		"transform.anchorY": defaultTransform.anchor.y,
 		opacity: defaultOpacity,
 		blendMode: defaultBlendMode,
 	},

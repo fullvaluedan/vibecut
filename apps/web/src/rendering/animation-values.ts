@@ -45,5 +45,19 @@ export function resolveTransformAtTime({
 			localTime: safeLocalTime,
 			fallbackValue: baseTransform.rotate,
 		}),
+		anchor: {
+			x: resolveAnimationPathValueAtTime({
+				animations,
+				propertyPath: "transform.anchorX",
+				localTime: safeLocalTime,
+				fallbackValue: baseTransform.anchor.x,
+			}),
+			y: resolveAnimationPathValueAtTime({
+				animations,
+				propertyPath: "transform.anchorY",
+				localTime: safeLocalTime,
+				fallbackValue: baseTransform.anchor.y,
+			}),
+		},
 	};
 }

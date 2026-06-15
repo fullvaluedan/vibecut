@@ -26,6 +26,7 @@ import type {
 	TextureUploadDescriptor,
 } from "./types";
 import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics";
+import { anchorCenterOffset } from "./anchor-offset";
 
 export async function buildFrameDescriptor({
 	node,
@@ -344,9 +345,21 @@ function computeVisualTransform({
 	const absWidth = Math.abs(scaledWidth);
 	const absHeight = Math.abs(scaledHeight);
 
+	// Pivot scale/rotation about the anchor instead of the quad center by
+	// displacing the center. A default (center) anchor returns {0,0}, so output
+	// stays byte-identical to a no-anchor build.
+	const anchorOffset = anchorCenterOffset({
+		anchor: resolved.transform.anchor,
+		scaleX: resolved.transform.scaleX,
+		scaleY: resolved.transform.scaleY,
+		rotateDeg: resolved.transform.rotate,
+	});
+
 	return {
-		centerX: renderer.width / 2 + resolved.transform.position.x,
-		centerY: renderer.height / 2 + resolved.transform.position.y,
+		centerX:
+			renderer.width / 2 + resolved.transform.position.x + anchorOffset.dx,
+		centerY:
+			renderer.height / 2 + resolved.transform.position.y + anchorOffset.dy,
 		width: absWidth,
 		height: absHeight,
 		rotationDegrees: resolved.transform.rotate,

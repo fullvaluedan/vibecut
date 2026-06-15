@@ -8,6 +8,15 @@ export interface Transform {
 		y: number;
 	};
 	rotate: number;
+	/**
+	 * Pivot for scale/rotation, in element-local pixels offset from the
+	 * element center. Default (0,0) keeps the pivot at the center, which is
+	 * byte-identical to having no anchor at all.
+	 */
+	anchor: {
+		x: number;
+		y: number;
+	};
 }
 
 export type BlendMode =
@@ -42,6 +51,10 @@ export function buildTransformFromParams({
 			y: readNumberParam({ params, key: "transform.positionY", fallback: 0 }),
 		},
 		rotate: readNumberParam({ params, key: "transform.rotate", fallback: 0 }),
+		anchor: {
+			x: readNumberParam({ params, key: "transform.anchorX", fallback: 0 }),
+			y: readNumberParam({ params, key: "transform.anchorY", fallback: 0 }),
+		},
 	};
 }
 
