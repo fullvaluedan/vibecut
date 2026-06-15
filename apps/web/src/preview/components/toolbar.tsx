@@ -27,6 +27,7 @@ import { PREVIEW_ZOOM_PRESETS } from "@/preview/zoom";
 import { usePreviewViewport } from "./preview-viewport";
 import { GridPopover } from "./guide-popover";
 import { usePreviewStore } from "@/preview/preview-store";
+import { AudioMeter } from "./audio-meter";
 import type { MediaTime } from "@/wasm";
 
 export function PreviewToolbar({
@@ -43,6 +44,8 @@ export function PreviewToolbar({
 				<PlaybackSpeedSlider />
 			</div>
 			<div className="justify-self-end flex w-full items-center justify-end gap-2.5">
+				<AudioMeter />
+				<Separator orientation="vertical" className="h-4" />
 				<AssistantPrompt />
 				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />

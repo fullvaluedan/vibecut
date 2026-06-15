@@ -32,7 +32,14 @@ export function createAudioMasteringChain({
 	audioContext: AudioContext | OfflineAudioContext;
 	destination: AudioNode;
 }): {
+	/** Post-fader / pre-limiter master input. Per-clip sources connect here. */
 	input: GainNode;
+	/**
+	 * Post-limiter true-output node. This is the last node before the
+	 * destination — the correct place for an observe-only meter tap so the
+	 * meter reflects what the listener actually hears (after limiting).
+	 */
+	outputGain: GainNode;
 } {
 	const input = audioContext.createGain();
 	const limiter = audioContext.createDynamicsCompressor();
@@ -49,7 +56,7 @@ export function createAudioMasteringChain({
 	limiter.connect(outputGain);
 	outputGain.connect(destination);
 
-	return { input };
+	return { input, outputGain };
 }
 
 export async function applyAudioMasteringToBuffer({
