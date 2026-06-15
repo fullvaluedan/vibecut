@@ -22,6 +22,11 @@ gap selection, markers, and zoom hotkeys.
 - **#4 — video prefers V1.** New pure helper `preferMainTrackIndex` (`timeline/placement/prefer-main-track.ts`, unit-tested in `placement/__tests__/prefer-main-track.test.ts`) redirects a video/image drop from an overlay (V2+) lane to the main track when V1 can hold the clip at the drop time. Deliberate higher placement still works: when V1 is occupied at the drop time the clip bumps up, and dropping above all tracks makes a new top track. Wired into `computeDropTarget`; `resolve.ts` stays a pure executor. **Accepted tradeoff:** hovering a *free* V2 now lands on V1 — honoring an explicit, squarely-over-an-existing-overlay hover is a deferred refinement.
 - **#2 — track-tool group move.** `selectForwardFrom` (`timeline/components/timeline-track.tsx`) now disarms back to the Selection tool after selecting (`setTool(null)`), so the freshly-selected group is immediately draggable through the existing selection-driven move controller (no controller change). This is the low-risk **Option A**; the fuller-fidelity **Option B** (tool stays armed and the group drags directly, like Premiere) is a follow-up — see backlog.
 - **Snapping (R4).** Clip **move** (`group-move/snap.ts`) and **trim** (`controllers/resize-controller.ts`) now snap to **markers** (bookmarks) and the **sequence start (0:00)**, on top of the existing clip-edge / playhead / keyframe snapping. A bookmarks getter was threaded through both controllers' config (mirroring `playhead-controller`). Edge snapping was already cross-track. Both paths still honor the snapping toggle + Shift-to-suppress.
+- **Asset metadata.** The media bin list view now shows per-asset **resolution · fps · duration**, and the double-click preview dialog shows resolution/fps/duration/codec/audio. (Data was already persisted; only duration was rendered.)
+
+## Beyond the timeline — the panel/inspector surface
+
+A second audit covered everything **outside** the timeline (Effect Controls, asset metadata, sequence settings, clip speed/duration, Source Monitor, audio meters, markers/info/history panels). Key finding: **frame-rate change and clip-speed change already exist** (Assets → Settings tab; `Ctrl+R` → Speed tab) and the Effect Controls surface exists as the **Transform** tab — they were under-surfaced, not missing. The full exists/partial/missing map and a ranked build program live in **`docs/plans/2026-06-15-002-feat-premiere-panel-parity-plan.md`**.
 
 ## Ranked parity backlog (grounded in Premiere research)
 
@@ -37,7 +42,7 @@ Ranked by value × bounded-risk. Each item should graduate to its own `ce-plan` 
 8. **Source patching vs track targeting vs sync lock** — Premiere's three-layer track-header model governing where inserts land and what ripples.
 9. **J-K-L shuttle** with repeat-press speed ramps.
 10. **Three-/four-point editing + Source Monitor** — largest scope, lowest daily-use urgency for a simplified-Premiere web editor.
-11. **Assets list metadata** (resolution / duration / fps) — queued chip; polish, not timeline.
+11. **Assets list metadata** (resolution / duration / fps) — ✅ **shipped** (bin list + preview dialog). Follow-ups (sortable detail columns, Video Usage) tracked in the panel-parity plan.
 
 ## Notes for future work
 
