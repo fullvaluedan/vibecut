@@ -339,6 +339,9 @@ function MediaAssetDraggable({
 			onDoubleClick={() => useMediaPreviewStore.getState().open(item)}
 			variant={variant}
 			isRounded={isRounded}
+			meta={
+				variant === "compact" ? formatMediaMeta({ item }) || undefined : undefined
+			}
 		/>
 	);
 }
@@ -477,6 +480,19 @@ function formatDuration({ duration }: { duration: number }) {
 	const min = Math.floor(duration / 60);
 	const sec = Math.floor(duration % 60);
 	return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Premiere-style bin metadata for list view: resolution · fps · duration.
+ * Each part is omitted when the asset doesn't carry it (e.g. audio has no
+ * resolution/fps, images have no duration).
+ */
+function formatMediaMeta({ item }: { item: MediaAsset }) {
+	const parts: string[] = [];
+	if (item.width && item.height) parts.push(`${item.width}×${item.height}`);
+	if (item.fps) parts.push(`${Math.round(item.fps)} fps`);
+	if (item.duration) parts.push(formatDuration({ duration: item.duration }));
+	return parts.join(" · ");
 }
 
 function MediaDurationBadge({ duration }: { duration?: number }) {

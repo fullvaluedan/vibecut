@@ -23,6 +23,8 @@ export interface DraggableItemProps {
 	onAddToTimeline?: ({ currentTime }: { currentTime: MediaTime }) => void;
 	/** Double-click the tile — opens a preview (standard in every NLE). */
 	onDoubleClick?: () => void;
+	/** Compact (list) variant: a right-aligned metadata line, e.g. resolution · fps · duration. */
+	meta?: ReactNode;
 	aspectRatio?: number;
 	className?: string;
 	containerClassName?: string;
@@ -40,6 +42,7 @@ export function DraggableItem({
 	onDragStart,
 	onAddToTimeline,
 	onDoubleClick,
+	meta,
 	aspectRatio = 16 / 9,
 	className = "",
 	containerClassName,
@@ -163,9 +166,14 @@ export function DraggableItem({
 						<div className="size-6 shrink-0 overflow-hidden rounded-sm">
 							{preview}
 						</div>
-						<span className="w-full flex-1 truncate text-sm text-left">
+						<span className="min-w-0 flex-1 truncate text-sm text-left">
 							{name}
 						</span>
+						{meta && (
+							<span className="text-muted-foreground shrink-0 text-[0.7rem] tabular-nums">
+								{meta}
+							</span>
+						)}
 					</button>
 				</div>
 			)}
