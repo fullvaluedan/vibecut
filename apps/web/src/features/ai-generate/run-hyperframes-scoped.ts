@@ -16,6 +16,7 @@ import {
 	useAiSettingsStore,
 	buildAiAuthHeaders,
 } from "@/features/ai-generate/store";
+import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 import {
@@ -28,9 +29,16 @@ import {
 } from "@/features/ai-generate/compile-hyperframes-prompt";
 import {
 	placeHyperframesRender,
+	placeHyperframesRenders,
 	type HyperframesRenderScope,
 } from "@/features/ai-generate/place-hyperframes-render";
 import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
+import { runWithConcurrency } from "@/features/ai-generate/concurrency";
+import {
+	planAuthorChunks,
+	VARIANT_CHUNK_SEC,
+	type AuthorChunk,
+} from "@/features/ai-generate/chunk-plan";
 import type { RunProgress } from "@/features/ai-generate/run-hyperframes";
 
 /** Enabled native templates → selection hints for the author brief. */
@@ -127,15 +135,20 @@ async function gatherClipTranscript(
 	editor: EditorCore,
 	startSec: number,
 	endSec: number,
+	signal?: AbortSignal,
 ): Promise<string> {
 	if (timelineHasAudio(editor)) {
 		try {
 			const { segments } = await ensureTimelineTranscript({
 				editor,
 				onProgress: (p) => logRun(`${p.phase}: ${p.detail}`),
+				signal,
 			});
 			return scopeSegments(segments, startSec, endSec);
 		} catch (e) {
+			// A user cancel during transcription must abort the whole run — only
+			// a genuine transcript failure falls through to best-effort cache.
+			if (signal?.aborted) throw e;
 			logRun(
 				`(transcript skipped: ${e instanceof Error ? e.message : String(e)})`,
 				"warn",
@@ -188,7 +201,12 @@ export async function runHyperframesOnClip({
 	useRunLogStore.getState().setOpen(true);
 	logRun(`▶ Run through HyperFrames on "${scope.label}"`);
 	try {
-		const transcript = await gatherClipTranscript(editor, startSec, endSec);
+		const transcript = await gatherClipTranscript(
+			editor,
+			startSec,
+			endSec,
+			controller.signal,
+		);
 		const registrySelections = await pickedRegistrySelections();
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
@@ -202,6 +220,9 @@ export async function runHyperframesOnClip({
 			scope: { kind: "clip", label: `clip "${scope.label}"`, startSec, endSec },
 			transcript,
 			canvas: { width, height, fps },
+			preferenceNotes: usePreferenceStore
+				.getState()
+				.buildPreferenceNotes("graphics"),
 		});
 		logRun("Authoring a custom graphic with Claude (this can take ~30–60s)…");
 		const res = await fetch("/api/hyperframes/author", {
@@ -225,6 +246,10 @@ export async function runHyperframesOnClip({
 			type: "video/webm",
 		});
 
+		// The fetch can resolve a hair before the abort lands (cancel clicked as
+		// the bytes arrive); re-check so we don't place a graphic the user cancelled.
+		if (controller.signal.aborted) throw new Error("Cancelled");
+
 		const placed = await placeHyperframesRender({
 			editor,
 			file,
@@ -233,6 +258,9 @@ export async function runHyperframesOnClip({
 			templateId: `authored:${compId ?? "clip"}`,
 			name: `HyperFrames: ${scope.label}`,
 		});
+		// Self-learning: an authored graphic landed — a later delete is the
+		// "didn't like it" signal that balances this against the keep count.
+		usePreferenceStore.getState().noteGraphicsPlaced();
 
 		logRun(
 			`✓ landed on a new track over "${scope.label}" at ${placed.startSec.toFixed(1)}s`,
@@ -266,12 +294,170 @@ export async function runHyperframesOnClip({
 	}
 }
 
+// --- Chunked authoring: cover the WHOLE video, one short composition per
+// segment, so a long video gets graphics throughout (not one sparse opener)
+// and each `claude -p` call stays small/fast. Renders serialize globally in
+// the bridge (one headless browser at a time). Chunk math lives in the pure
+// chunk-plan module so it's unit-testable without editor deps. ---
+
+interface SharedAuthorInputs {
+	segments: { start: number; end: number; text: string }[];
+	selections: HfSelectionAsset[];
+	look: { name: string; description: string; accent?: string; fontFamily?: string };
+	direction: string;
+	canvas: { width: number; height: number; fps: number };
+	preferenceNotes: string[];
+}
+
+/** Transcribe once + gather the selections/look/direction shared by every chunk. */
+async function buildSharedInputs({
+	editor,
+	totalSec,
+	signal,
+}: {
+	editor: EditorCore;
+	totalSec: number;
+	signal?: AbortSignal;
+}): Promise<SharedAuthorInputs> {
+	const project = editor.project.getActive();
+	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
+	const { width, height } = project.settings.canvasSize;
+	// Warm the transcript cache once; chunks slice from it via scopeSegments.
+	await gatherClipTranscript(editor, 0, totalSec, signal);
+	const segments = getCachedTranscript(editor) ?? [];
+	const registrySelections = await pickedRegistrySelections();
+	const { styleId, hfDirection } = useAiSettingsStore.getState();
+	const look = getStyleById(styleId);
+	return {
+		segments,
+		selections: [...enabledSelections(), ...registrySelections],
+		look: {
+			name: look.name,
+			description: look.description,
+			accent: look.accent,
+			fontFamily: look.fontFamily,
+		},
+		direction: hfDirection,
+		canvas: { width, height, fps },
+		preferenceNotes: usePreferenceStore.getState().buildPreferenceNotes("graphics"),
+	};
+}
+
+interface AuthoredChunkRender {
+	chunk: AuthorChunk;
+	file: File;
+	compId?: string;
+}
+
+/** Author every chunk (bounded concurrency); local renders serialize in the bridge. */
+async function authorChunks({
+	chunks,
+	shared,
+	angle,
+	concurrency,
+	signal,
+	labelPrefix,
+	onChunkDone,
+}: {
+	chunks: AuthorChunk[];
+	shared: SharedAuthorInputs;
+	/** A distinct creative angle appended to the brief (variant mode). */
+	angle?: string;
+	concurrency: number;
+	signal?: AbortSignal;
+	labelPrefix?: string;
+	onChunkDone?: (done: number, total: number) => void;
+}): Promise<{
+	rendered: AuthoredChunkRender[];
+	skipped: string[];
+	tokensUsed: number;
+}> {
+	const rendered: AuthoredChunkRender[] = [];
+	const skipped: string[] = [];
+	let tokensUsed = 0;
+	let done = 0;
+	const pre = labelPrefix ? `${labelPrefix} ` : "";
+
+	await runWithConcurrency(chunks, concurrency, async (chunk) => {
+		if (signal?.aborted) throw new Error("Cancelled");
+		const chunkLen = chunk.endSec - chunk.startSec;
+		const transcript = scopeSegments(shared.segments, chunk.startSec, chunk.endSec);
+		const direction = angle
+			? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
+			: shared.direction;
+		const prompt = compileHyperframesPrompt({
+			selections: shared.selections,
+			look: shared.look,
+			direction,
+			scope: {
+				kind: "timeline",
+				label: `segment ${chunk.label}`,
+				startSec: 0,
+				endSec: chunkLen,
+			},
+			transcript,
+			canvas: shared.canvas,
+			preferenceNotes: shared.preferenceNotes,
+			densityHint: `Aim for ~${Math.max(1, Math.round(chunkLen / 15))} timed graphics across this ${Math.round(chunkLen)}s segment — spread them out, at least one early.`,
+		});
+		try {
+			logRun(`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label})…`);
+			const res = await fetch("/api/hyperframes/author", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				body: JSON.stringify({
+					prompt,
+					fps: shared.canvas.fps,
+					width: shared.canvas.width,
+					height: shared.canvas.height,
+					durationSec: chunkLen,
+				}),
+				signal,
+			});
+			if (!res.ok) {
+				const err = (await res.json().catch(() => null)) as {
+					error?: string;
+				} | null;
+				throw new Error(err?.error ?? `Author failed (${res.status})`);
+			}
+			const compId = res.headers.get("x-framecut-comp-id") ?? undefined;
+			tokensUsed += Number(res.headers.get("x-framecut-tokens")) || 0;
+			const blob = await res.blob();
+			rendered.push({
+				chunk,
+				compId,
+				file: new File([blob], `hf-authored-${chunk.index}.webm`, {
+					type: "video/webm",
+				}),
+			});
+			logRun(`${pre}✓ segment ${chunk.index + 1}/${chunks.length} ready`);
+		} catch (e) {
+			// A user cancel aborts the whole run; a single bad segment is skipped.
+			if (signal?.aborted) throw e;
+			const msg = e instanceof Error ? e.message : String(e);
+			skipped.push(`segment ${chunk.label}: ${msg}`);
+			logRun(`${pre}✗ segment ${chunk.label}: ${msg}`, "warn");
+		} finally {
+			done++;
+			onChunkDone?.(done, chunks.length);
+		}
+	});
+
+	rendered.sort((a, b) => a.chunk.startSec - b.chunk.startSec);
+	return { rendered, skipped, tokensUsed };
+}
+
+/** claude-code spawns a local CLI per call → 1; hosted endpoints parallelize → 2. */
+function authorConcurrency(): number {
+	return useAiSettingsStore.getState().authMode === "claude-code" ? 1 : 2;
+}
+
 /**
- * RUN HYPERFRAMES "authored" engine: author ONE custom composition for the
- * WHOLE video — Claude times multiple graphics inside it from the full
- * transcript — and place it on a NEW video track at the start (never
- * overwriting). Shares the button's progress/result shape with runHyperframes
- * so the toolbar button can call either.
+ * RUN HYPERFRAMES "authored" engine: split the video into ~90s segments, author
+ * a graphic-rich composition for each, and place them across the WHOLE timeline
+ * on one new overlay track. Renders run one-at-a-time (bridge render queue) so a
+ * long video stays light on the machine. Same progress/result shape as
+ * runHyperframes so the toolbar button can call either.
  */
 export async function runHyperframesWholeTimeline({
 	editor,
@@ -282,83 +468,157 @@ export async function runHyperframesWholeTimeline({
 	onProgress: (p: RunProgress) => void;
 	signal?: AbortSignal;
 }): Promise<{ placed: number; skipped: string[]; tokensUsed: number }> {
-	const project = editor.project.getActive();
-	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
-	const { width, height } = project.settings.canvasSize;
 	const totalSec = editor.timeline.getTotalDuration() / TICKS_PER_SECOND;
 	if (totalSec < 1) {
 		throw new Error("Add some footage to the timeline first.");
 	}
-	const durationSec = Math.min(totalSec, 300);
-	const { styleId, hfDirection } = useAiSettingsStore.getState();
-	const look = getStyleById(styleId);
+	const chunks = planAuthorChunks(totalSec);
 
 	useRunLogStore.getState().setOpen(true);
-	logRun("▶ RUN HYPERFRAMES — authoring custom graphics for the whole video");
+	logRun(
+		`▶ RUN HYPERFRAMES — authoring graphics across the whole video (${chunks.length} segment${chunks.length === 1 ? "" : "s"})`,
+	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
-	const transcript = await gatherClipTranscript(editor, 0, totalSec);
-	const registrySelections = await pickedRegistrySelections();
-	const prompt = compileHyperframesPrompt({
-		selections: [...enabledSelections(), ...registrySelections],
-		look: {
-			name: look.name,
-			description: look.description,
-			accent: look.accent,
-			fontFamily: look.fontFamily,
-		},
-		direction: hfDirection,
-		scope: {
-			kind: "timeline",
-			label: "the whole video",
-			startSec: 0,
-			endSec: totalSec,
-		},
-		transcript,
-		canvas: { width, height, fps },
-	});
+	const shared = await buildSharedInputs({ editor, totalSec, signal });
 
 	onProgress({
 		stage: "rendering",
-		detail: "Claude is authoring the graphics…",
+		detail: `Authoring graphics segment 1/${chunks.length}…`,
 		effectIndex: 1,
-		effectCount: 1,
+		effectCount: chunks.length,
 	});
-	logRun("Authoring graphics with Claude (this can take ~30–90s)…");
-	const res = await fetch("/api/hyperframes/author", {
-		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-		body: JSON.stringify({ prompt, fps, width, height, durationSec }),
+	const { rendered, skipped, tokensUsed } = await authorChunks({
+		chunks,
+		shared,
+		concurrency: authorConcurrency(),
 		signal,
+		onChunkDone: (doneCount) =>
+			onProgress({
+				stage: "rendering",
+				detail: `Authored ${doneCount}/${chunks.length} segments…`,
+				effectIndex: Math.min(doneCount + 1, chunks.length),
+				effectCount: chunks.length,
+			}),
 	});
-	if (!res.ok) {
-		const err = (await res.json().catch(() => null)) as { error?: string } | null;
-		throw new Error(err?.error ?? `Author failed (${res.status})`);
-	}
-	const compId = res.headers.get("x-framecut-comp-id") ?? undefined;
-	const tokens = Number(res.headers.get("x-framecut-tokens")) || 0;
-	if (tokens > 0) useAiSettingsStore.getState().addTokensUsed(tokens);
+	if (tokensUsed > 0) useAiSettingsStore.getState().addTokensUsed(tokensUsed);
+	if (signal?.aborted) throw new Error("Cancelled");
 
 	onProgress({
 		stage: "placing",
-		detail: "Placing on a new track…",
-		effectIndex: 1,
-		effectCount: 1,
+		detail: "Placing graphics on a new track…",
+		effectIndex: chunks.length,
+		effectCount: chunks.length,
 	});
-	logRun("Composition rendered. Placing on a new video track at the start…");
-	const blob = await res.blob();
-	const file = new File([blob], "hf-authored-timeline.webm", {
-		type: "video/webm",
-	});
-	await placeHyperframesRender({
+	const placed = await placeHyperframesRenders({
 		editor,
-		file,
-		scope: { kind: "timeline", label: "the whole video", startSec: 0 },
-		compId,
-		templateId: `authored:${compId ?? "timeline"}`,
-		name: "HyperFrames: whole video",
+		renders: rendered.map((r) => ({
+			file: r.file,
+			startSec: r.chunk.startSec,
+			compId: r.compId,
+			templateId: `authored:${r.compId ?? r.chunk.index}`,
+			name: `HyperFrames: ${r.chunk.label}`,
+		})),
 	});
-	logRun("✓ landed on a new video track at 0.0s");
-	onProgress({ stage: "done", detail: "Placed 1 authored graphic." });
-	return { placed: 1, skipped: [], tokensUsed: tokens };
+	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
+	logRun(`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`);
+	onProgress({
+		stage: "done",
+		detail: `Placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video.`,
+	});
+	return { placed, skipped, tokensUsed };
+}
+
+/** Distinct creative angles for the variant picker (one whole-video pass each). */
+const VARIANT_ANGLES = [
+	"bold / high-energy — punchy kinetic titles, strong accent color, fast moves",
+	"restrained / editorial — calm lower-thirds and section breaks, minimal motion",
+	"minimal / typographic — clean type, lots of negative space, subtle fades",
+	"playful / dynamic — lively pills and number pops, energetic but tasteful",
+	"data-forward — emphasize numbers, stats, and labeled callouts",
+];
+
+export interface AuthoredVersion {
+	index: number;
+	angle: string;
+	renders: AuthoredChunkRender[];
+	skipped: string[];
+}
+
+/**
+ * Variant picker: author N distinct whole-video passes (coarser chunks to bound
+ * total renders), each with its own creative angle. Renders still go one-at-a-time
+ * through the bridge queue. Returns the versions WITHOUT placing — the caller
+ * shows a picker and places the chosen one via placeHyperframesRenders.
+ */
+export async function runHyperframesVariants({
+	editor,
+	count = 3,
+	onProgress,
+	signal,
+}: {
+	editor: EditorCore;
+	count?: number;
+	onProgress: (p: RunProgress) => void;
+	signal?: AbortSignal;
+}): Promise<{ versions: AuthoredVersion[]; tokensUsed: number }> {
+	const totalSec = editor.timeline.getTotalDuration() / TICKS_PER_SECOND;
+	if (totalSec < 1) {
+		throw new Error("Add some footage to the timeline first.");
+	}
+	const n = Math.min(Math.max(count, 1), VARIANT_ANGLES.length);
+	const chunks = planAuthorChunks(totalSec, VARIANT_CHUNK_SEC);
+
+	useRunLogStore.getState().setOpen(true);
+	logRun(
+		`▶ RUN HYPERFRAMES — generating ${n} versions (${chunks.length} segment${chunks.length === 1 ? "" : "s"} each, rendered one at a time)`,
+	);
+
+	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
+	const shared = await buildSharedInputs({ editor, totalSec, signal });
+
+	const versions: AuthoredVersion[] = [];
+	let tokensUsed = 0;
+	const totalUnits = n * chunks.length;
+	let unitsDone = 0;
+
+	// Versions run sequentially for clear progress + bounded model load; the
+	// render queue serializes the heavy local work regardless.
+	for (let i = 0; i < n; i++) {
+		if (signal?.aborted) throw new Error("Cancelled");
+		const angle = VARIANT_ANGLES[i];
+		logRun(`— Version ${i + 1}/${n}: ${angle.split(" — ")[0]}`);
+		const { rendered, skipped, tokensUsed: t } = await authorChunks({
+			chunks,
+			shared,
+			angle,
+			concurrency: authorConcurrency(),
+			signal,
+			labelPrefix: `v${i + 1}`,
+			onChunkDone: () => {
+				unitsDone++;
+				onProgress({
+					stage: "rendering",
+					detail: `Version ${i + 1}/${n} — ${unitsDone}/${totalUnits} segments…`,
+					effectIndex: unitsDone,
+					effectCount: totalUnits,
+				});
+			},
+		});
+		tokensUsed += t;
+		versions.push({ index: i, angle, renders: rendered, skipped });
+	}
+	if (tokensUsed > 0) useAiSettingsStore.getState().addTokensUsed(tokensUsed);
+	if (signal?.aborted) throw new Error("Cancelled");
+
+	const usable = versions.filter((v) => v.renders.length > 0);
+	if (!usable.length) {
+		throw new Error("No versions could be generated — check the run log.");
+	}
+	logRun(`✓ ${usable.length} version(s) ready — pick one to place`);
+	onProgress({
+		stage: "done",
+		detail: `${usable.length} version${usable.length === 1 ? "" : "s"} ready — pick one.`,
+	});
+	return { versions: usable, tokensUsed };
 }

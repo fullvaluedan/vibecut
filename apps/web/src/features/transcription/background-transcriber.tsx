@@ -10,6 +10,7 @@
 import { useEffect } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
+import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import {
 	computeTimelineAudioHash,
 	ensureTimelineTranscript,
@@ -21,7 +22,11 @@ const SETTLE_MS = 5000;
 
 export function BackgroundTranscriber() {
 	const editor = useEditor();
-	const enabled = useAiSettingsStore((s) => s.backgroundTranscriptionEnabled);
+	const enabledSetting = useAiSettingsStore((s) => s.backgroundTranscriptionEnabled);
+	const lowPowerMode = useAiSettingsStore((s) => s.lowPowerMode);
+	// Don't run Whisper while a HyperFrames / AI CUT run is using the machine.
+	const aiBusy = useAiActivityStore((s) => s.busy);
+	const enabled = enabledSetting && !lowPowerMode && !aiBusy;
 	const setStatus = useTranscriptStatusStore((s) => s.setStatus);
 	const hash = useEditor((e) => {
 		try {

@@ -20,13 +20,22 @@ import { MagicWand05Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/utils/ui";
 import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
 import { RunLogPanel } from "@/features/ai-generate/components/run-log-panel";
-import { runHyperframesWholeTimeline } from "@/features/ai-generate/run-hyperframes-scoped";
+import {
+	runHyperframesWholeTimeline,
+	runHyperframesVariants,
+} from "@/features/ai-generate/run-hyperframes-scoped";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
+import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
+import {
+	VariantPickerDialog,
+	useVariantPickerStore,
+} from "@/features/ai-generate/components/variant-picker-dialog";
 
 export function RunHyperframesButton() {
 	const editor = useEditor();
 	const [progress, setProgress] = useState<RunProgress | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
+	const engine = useAiSettingsStore((s) => s.hfEngine);
 	const isRunning =
 		progress !== null && progress.stage !== "done" && progress.stage !== "error";
 
@@ -34,6 +43,7 @@ export function RunHyperframesButton() {
 		if (isRunning) return;
 		const controller = new AbortController();
 		abortRef.current = controller;
+		useAiActivityStore.getState().setBusy(true);
 		useRunLogStore.getState().setOpen(true);
 		logRun("▶ RUN HYPERFRAMES started");
 		try {
@@ -103,6 +113,45 @@ export function RunHyperframesButton() {
 			}
 		} finally {
 			abortRef.current = null;
+			useAiActivityStore.getState().setBusy(false);
+			setTimeout(() => setProgress(null), 1500);
+		}
+	};
+
+	const handleRunVersions = async () => {
+		if (isRunning) return;
+		const controller = new AbortController();
+		abortRef.current = controller;
+		useAiActivityStore.getState().setBusy(true);
+		useRunLogStore.getState().setOpen(true);
+		logRun("▶ RUN HYPERFRAMES — generating 3 versions");
+		try {
+			const onProgress = (p: RunProgress) => {
+				setProgress(p);
+				logRun(`${p.stage}: ${p.detail}`);
+			};
+			const { versions } = await runHyperframesVariants({
+				editor,
+				count: 3,
+				onProgress,
+				signal: controller.signal,
+			});
+			useVariantPickerStore.getState().open(versions);
+			toast.success(`${versions.length} version${versions.length === 1 ? "" : "s"} ready — pick one`);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (message === "Cancelled" || abortRef.current?.signal.aborted) {
+				logRun("■ versions run stopped by user", "warn");
+				toast.info("HyperFrames versions stopped");
+				setProgress(null);
+			} else {
+				logRun(`✗ failed: ${message}`, "error");
+				toast.error("Could not generate versions", { description: message });
+				setProgress({ stage: "error", detail: message });
+			}
+		} finally {
+			abortRef.current = null;
+			useAiActivityStore.getState().setBusy(false);
 			setTimeout(() => setProgress(null), 1500);
 		}
 	};
@@ -208,7 +257,30 @@ export function RunHyperframesButton() {
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
+			{engine === "authored" && (
+				<TooltipProvider delayDuration={300}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={isRunning}
+								onClick={handleRunVersions}
+								className="rounded-sm"
+							>
+								Versions ×3
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							Generate 3 distinct versions of the whole video and pick the one
+							you like. Renders one at a time (light on your machine) — slower
+							than a single run, but easy on resources.
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			)}
 			<RunLogPanel />
+			<VariantPickerDialog />
 		</div>
 	);
 }

@@ -138,3 +138,109 @@ export async function placeHyperframesRender({
 		splitAudio,
 	};
 }
+
+export interface ChunkRenderInput {
+	/** The rendered transparent WebM for this segment. */
+	file: File;
+	/** Where it lands on the timeline, in seconds. */
+	startSec: number;
+	compId?: string;
+	templateId?: string;
+	name?: string;
+}
+
+/**
+ * Place MANY HyperFrames renders (the chunked authored engine: one composition
+ * per ~90s segment) on ONE shared new video track, each at its segment offset.
+ * Chunks are sequential + non-overlapping, so a single explicit track holds
+ * them all with no lane logic. One BatchCommand = one undo step for the whole
+ * run. Returns how many actually landed. Authored overlays are transparent
+ * (no audio), so no source-audio split here.
+ */
+export async function placeHyperframesRenders({
+	editor,
+	renders,
+	trackName = "HyperFrames",
+}: {
+	editor: EditorCore;
+	renders: ChunkRenderInput[];
+	trackName?: string;
+}): Promise<number> {
+	if (!renders.length) return 0;
+	const project = editor.project.getActive();
+
+	// Import each render to a media asset first (eager, same as the singular fn).
+	const assets: {
+		assetId: string;
+		startSec: number;
+		durationSec: number;
+		hasAudio: boolean;
+		compId?: string;
+		templateId?: string;
+		name?: string;
+	}[] = [];
+	for (const r of renders) {
+		const [processed] = await processMediaAssets({ files: [r.file] });
+		if (!processed) continue; // skip a bad render, keep the rest
+		const addAsset = new AddMediaAssetCommand({
+			projectId: project.metadata.id,
+			asset: processed,
+		});
+		editor.command.execute({ command: addAsset });
+		const assetId = addAsset.getAssetId();
+		if (!assetId) continue;
+		assets.push({
+			assetId,
+			startSec: Math.max(0, r.startSec),
+			durationSec: processed.duration ?? 5,
+			hasAudio: processed.hasAudio !== false,
+			compId: r.compId,
+			templateId: r.templateId,
+			name: r.name,
+		});
+	}
+	if (!assets.length) return 0;
+
+	const addTrack = new AddTrackCommand({ type: "video", index: 0 });
+	const trackId = addTrack.getTrackId(); // stable pre-execute
+	const inserts = assets.map(
+		(a) =>
+			new InsertElementCommand({
+				element: {
+					type: "video",
+					mediaId: a.assetId,
+					name: a.name ?? `${trackName}: ${a.startSec.toFixed(1)}s`,
+					startTime: mediaTimeFromSeconds({ seconds: a.startSec }),
+					duration: mediaTimeFromSeconds({ seconds: a.durationSec }),
+					trimStart: ZERO_MEDIA_TIME,
+					trimEnd: ZERO_MEDIA_TIME,
+					sourceDuration: mediaTimeFromSeconds({ seconds: a.durationSec }),
+					isSourceAudioEnabled: a.hasAudio,
+					params: {},
+					framecutAi: {
+						compId: a.compId ?? generateUUID(),
+						templateId: a.templateId ?? "authored:chunk",
+						variables: {},
+						groupId: generateUUID(),
+					},
+				},
+				placement: { mode: "explicit", trackId },
+			}),
+	);
+	// One new track + all clips on it = a single undo step.
+	editor.command.execute({ command: new BatchCommand([addTrack, ...inserts]) });
+
+	const after = editor.scenes.getActiveScene().tracks;
+	const onTimeline = new Set(
+		[after.main, ...after.overlay].flatMap((t) => t.elements.map((e) => e.id)),
+	);
+	const placedEls: { trackId: string; elementId: string }[] = [];
+	for (const ins of inserts) {
+		const id = ins.getElementId();
+		if (id && onTimeline.has(id)) placedEls.push({ trackId, elementId: id });
+	}
+	if (placedEls.length) {
+		editor.selection.setSelectedElements({ elements: placedEls });
+	}
+	return placedEls.length;
+}

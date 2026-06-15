@@ -56,6 +56,17 @@ export interface CompileHyperframesPromptInput {
 	/** Transcript of the targeted segment, timestamps in seconds, segment-relative. */
 	transcript: string;
 	canvas: { width: number; height: number; fps: number };
+	/**
+	 * Plain-language taste learned from how the user edited past AI output
+	 * (self-learning store). SOFT guidance — secondary to the explicit direction.
+	 */
+	preferenceNotes?: string[];
+	/**
+	 * How many timed graphics to fit in this scope (chunked runs derive this
+	 * from the segment length). Without it the model decides on its own — which
+	 * is how a whole-video run used to yield a single graphic.
+	 */
+	densityHint?: string;
 }
 
 function secs(n: number): string {
@@ -93,7 +104,8 @@ function renderSelectionGroup(assets: HfSelectionAsset[]): string {
 export function compileHyperframesPrompt(
 	input: CompileHyperframesPromptInput,
 ): string {
-	const { selections, look, direction, scope, transcript, canvas } = input;
+	const { selections, look, direction, scope, transcript, canvas, preferenceNotes, densityHint } =
+		input;
 	const durationSec = Math.max(0, scope.endSec - scope.startSec);
 
 	const lines: string[] = [];
@@ -108,6 +120,9 @@ export function compileHyperframesPrompt(
 	lines.push(
 		`RENDER TARGET: ${canvas.width}x${canvas.height} @ ${canvas.fps}fps, total duration ${secs(durationSec)}s. Author every animation seekable and within [0, ${secs(durationSec)}]s — the editor places this composition at ${secs(scope.startSec)}s on ${scope.label}.`,
 	);
+	if (densityHint?.trim()) {
+		lines.push(`DENSITY: ${densityHint.trim()}`);
+	}
 
 	// Selections — grouped by kind, framed as preferences.
 	lines.push("");
@@ -150,6 +165,17 @@ export function compileHyperframesPrompt(
 		lines.push(
 			`USER DIRECTION (follow this even when it overrides the defaults): ${direction.trim()}`,
 		);
+	}
+
+	// Learned preferences — taste inferred from past edits. Soft guidance, and
+	// explicitly subordinate to the user's direction above.
+	const notes = (preferenceNotes ?? []).filter((n) => n.trim());
+	if (notes.length) {
+		lines.push("");
+		lines.push(
+			`LEARNED PREFERENCES (inferred from how the user edited past AI graphics — apply as SOFT guidance, and let the USER DIRECTION above win any conflict):`,
+		);
+		for (const note of notes) lines.push(`  - ${note.trim()}`);
 	}
 
 	// Transcript.

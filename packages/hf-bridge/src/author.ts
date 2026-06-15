@@ -192,6 +192,67 @@ function planViaClaudeCode(
 	});
 }
 
+/** OpenAI-compatible chat-completions URL from a user-supplied base URL. */
+export function customChatUrl(baseUrl: string): string {
+	return baseUrl.replace(/\/+$/, "") + "/chat/completions";
+}
+
+/**
+ * Plan via a user-supplied OpenAI-compatible endpoint (Ollama, LM Studio, a
+ * self-hosted model, etc.). Asks for JSON via response_format where supported;
+ * extractJson is the fallback for servers that ignore it.
+ */
+async function planViaCustomSchema(
+	prompt: string,
+	conn: { baseUrl: string; apiKey?: string; model: string },
+): Promise<{ raw: unknown; usage: TokenUsage | null }> {
+	const res = await fetch(customChatUrl(conn.baseUrl), {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			...(conn.apiKey ? { authorization: `Bearer ${conn.apiKey}` } : {}),
+		},
+		body: JSON.stringify({
+			model: conn.model,
+			messages: [{ role: "user", content: prompt }],
+			temperature: 0.4,
+			response_format: { type: "json_object" },
+		}),
+	});
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`Custom model error ${res.status}: ${body.slice(0, 500)}`);
+	}
+	const data = (await res.json()) as {
+		choices?: { message?: { content?: string } }[];
+		usage?: { prompt_tokens?: number; completion_tokens?: number };
+	};
+	const text = data.choices?.[0]?.message?.content ?? "";
+	const usage = data.usage
+		? {
+				inputTokens: data.usage.prompt_tokens ?? 0,
+				outputTokens: data.usage.completion_tokens ?? 0,
+			}
+		: null;
+	return { raw: extractJson(text), usage };
+}
+
+/** Route a schema-constrained JSON ask to the connected backend. */
+function planDispatch(
+	prompt: string,
+	auth: ClaudeAuth,
+	schema: object,
+): Promise<{ raw: unknown; usage: TokenUsage | null }> {
+	switch (auth.mode) {
+		case "api-key":
+			return planViaApiKeySchema(prompt, auth.apiKey, schema);
+		case "custom":
+			return planViaCustomSchema(prompt, auth);
+		default:
+			return planViaClaudeCode(prompt);
+	}
+}
+
 /** Validates + normalizes the raw plan against the template registry. */
 function sanitizePlan(
 	raw: unknown,
@@ -341,9 +402,7 @@ export async function planJson({
 	auth: ClaudeAuth;
 	schema: object;
 }): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	return auth.mode === "api-key"
-		? planViaApiKeySchema(prompt, auth.apiKey, schema)
-		: planViaClaudeCode(prompt);
+	return planDispatch(prompt, auth, schema);
 }
 
 export async function planRepeatCuts({
@@ -361,10 +420,7 @@ export async function planRepeatCuts({
 }): Promise<RepeatCut[]> {
 	if (!segments.length) return [];
 	const prompt = buildCutsPrompt({ segments, mode, preferences });
-	const { raw } =
-		auth.mode === "api-key"
-			? await planViaApiKeySchema(prompt, auth.apiKey, CUTS_SCHEMA)
-			: await planViaClaudeCode(prompt);
+	const { raw } = await planDispatch(prompt, auth, CUTS_SCHEMA);
 	const cuts = (raw as { cuts?: unknown[] })?.cuts;
 	if (!Array.isArray(cuts)) return [];
 	return cuts
@@ -416,9 +472,6 @@ export async function planEffects({
 		preferences,
 		look,
 	});
-	const { raw, usage } =
-		auth.mode === "api-key"
-			? await planViaApiKeySchema(prompt, auth.apiKey, PLAN_SCHEMA)
-			: await planViaClaudeCode(prompt);
+	const { raw, usage } = await planDispatch(prompt, auth, PLAN_SCHEMA);
 	return { ...sanitizePlan(raw, totalDurationSec, allowedTemplateIds), usage };
 }

@@ -19,6 +19,7 @@ import {
 } from "@/features/editing/remove-repeats";
 import { runAutocut } from "@/features/editing/autocut";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
+import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScissorIcon } from "@hugeicons/core-free-icons";
 
@@ -41,6 +42,8 @@ export function AiCutMenu() {
 		const controller = new AbortController();
 		abortRef.current = controller;
 		setBusy(label);
+		// Pause the background transcriber while AI CUT works the machine.
+		useAiActivityStore.getState().setBusy(true);
 		setStage("Starting...");
 		// Remember the last stage so a failure can say WHERE it died.
 		const lastStage = { current: "starting" };
@@ -81,6 +84,7 @@ export function AiCutMenu() {
 		} finally {
 			abortRef.current = null;
 			setBusy(null);
+			useAiActivityStore.getState().setBusy(false);
 			setStage(null);
 		}
 	};

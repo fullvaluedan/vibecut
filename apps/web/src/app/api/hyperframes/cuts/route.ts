@@ -1,28 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-	planRepeatCuts,
-	type ClaudeAuth,
-	type TranscriptSegment,
-} from "@framecut/hf-bridge";
+import { planRepeatCuts, type TranscriptSegment } from "@framecut/hf-bridge";
+import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function resolveAuth(req: NextRequest): ClaudeAuth | null {
-	const mode = req.headers.get("x-framecut-auth-mode");
-	if (mode === "api-key") {
-		const apiKey = req.headers.get("x-framecut-anthropic-key");
-		if (!apiKey) return null;
-		return { mode: "api-key", apiKey };
-	}
-	return { mode: "claude-code" };
-}
-
 export async function POST(req: NextRequest) {
-	const auth = resolveAuth(req);
+	const auth = resolveAiAuth(req);
 	if (!auth) {
 		return NextResponse.json(
-			{ error: "API key mode selected but no key provided. Add one in Settings → AI." },
+			{ error: "Your AI connection isn't fully configured. Check Settings → AI." },
 			{ status: 401 },
 		);
 	}

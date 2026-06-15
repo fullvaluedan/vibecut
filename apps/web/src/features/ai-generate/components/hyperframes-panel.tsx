@@ -9,13 +9,17 @@
  * styles/components are saved for releases that render them directly.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
-import { useAiSettingsStore } from "@/features/ai-generate/store";
+import {
+	useAiSettingsStore,
+	MAX_HF_PRESETS,
+	type HfPreset,
+} from "@/features/ai-generate/store";
 import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
 import { bakeAndPlaceBlock } from "@/features/ai-generate/bake-block";
 import { useEditor } from "@/editor/use-editor";
@@ -446,6 +450,182 @@ function ShowcaseSection({
 	);
 }
 
+/** One-line summary of what a saved preset will re-apply. */
+function presetSummary(p: HfPreset): string {
+	const templateCount = describeTemplateCatalog().filter(
+		(t) => !p.disabledTemplateIds.includes(t.id),
+	).length;
+	const parts = [`${templateCount} template${templateCount === 1 ? "" : "s"}`];
+	if (p.promptHfAssets.length) {
+		parts.push(
+			`${p.promptHfAssets.length} pick${p.promptHfAssets.length === 1 ? "" : "s"}`,
+		);
+	}
+	parts.push(getStyleById(p.styleId).name);
+	if (p.hfDirection.trim()) parts.push("direction");
+	return parts.join(" · ");
+}
+
+function PresetAction({
+	label,
+	title,
+	onClick,
+}: {
+	label: string;
+	title: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			title={title}
+			onClick={onClick}
+			className="text-muted-foreground hover:text-foreground rounded px-1 text-[10px]"
+		>
+			{label}
+		</button>
+	);
+}
+
+/**
+ * User-saved HyperFrames presets ("Custom Template 1–5"): snapshot the current
+ * templates + pinned picks + look + direction, then re-apply them in one click.
+ * The active preset is highlighted and clears the moment a selection diverges.
+ */
+function CustomPresetsSection() {
+	const presets = useAiSettingsStore((s) => s.hfPresets);
+	const activeId = useAiSettingsStore((s) => s.activeHfPresetId);
+	const savePreset = useAiSettingsStore((s) => s.saveHfPreset);
+	const loadPreset = useAiSettingsStore((s) => s.loadHfPreset);
+	const renamePreset = useAiSettingsStore((s) => s.renameHfPreset);
+	const deletePreset = useAiSettingsStore((s) => s.deleteHfPreset);
+
+	const [editingId, setEditingId] = useState<string | null>(null);
+	const [draftName, setDraftName] = useState("");
+	const renameInputRef = useRef<HTMLInputElement>(null);
+
+	// Focus the rename field when it opens (avoids the autoFocus prop, which
+	// the a11y lint forbids, and the re-focus-every-keystroke of a callback ref).
+	useEffect(() => {
+		if (editingId) renameInputRef.current?.focus();
+	}, [editingId]);
+
+	const startRename = (p: HfPreset) => {
+		setEditingId(p.id);
+		setDraftName(p.name);
+	};
+	const commitRename = () => {
+		if (editingId) renamePreset(editingId, draftName);
+		setEditingId(null);
+	};
+
+	const atCap = presets.length >= MAX_HF_PRESETS;
+
+	return (
+		<div className="flex flex-col gap-1.5 px-3 pt-1 pb-2">
+			<div className="flex items-center justify-between">
+				<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+					Custom templates
+				</p>
+				<span className="text-muted-foreground text-[10px]">
+					{presets.length}/{MAX_HF_PRESETS}
+				</span>
+			</div>
+			{presets.length === 0 ? (
+				<p className="text-muted-foreground text-[10px] leading-snug">
+					Save the current templates, pinned picks, look, and direction as a
+					reusable preset — then load it before any RUN HYPERFRAMES.
+				</p>
+			) : (
+				<div className="flex flex-col gap-1">
+					{presets.map((p) => {
+						const active = p.id === activeId;
+						return (
+							<div
+								key={p.id}
+								className={cn(
+									"flex items-center gap-1 rounded-md px-2 py-1.5 ring-1 transition-colors",
+									active
+										? "bg-primary/10 ring-primary/50"
+										: "bg-foreground/5 hover:bg-foreground/10 ring-transparent",
+								)}
+							>
+								{editingId === p.id ? (
+									<input
+										ref={renameInputRef}
+										value={draftName}
+										onChange={(e) => setDraftName(e.target.value)}
+										onBlur={commitRename}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") commitRename();
+											if (e.key === "Escape") setEditingId(null);
+										}}
+										className="border-input bg-background min-w-0 flex-1 rounded border px-1 py-0.5 text-xs outline-none"
+									/>
+								) : (
+									<button
+										type="button"
+										className="min-w-0 flex-1 text-left"
+										title="Load this preset's selections"
+										onClick={() => loadPreset(p.id)}
+									>
+										<span className="flex items-center gap-1.5">
+											<span className="truncate text-xs font-medium">
+												{p.name}
+											</span>
+											{active && (
+												<span className="text-primary text-[9px] tracking-wide uppercase">
+													active
+												</span>
+											)}
+										</span>
+										<span className="text-muted-foreground block truncate text-[10px]">
+											{presetSummary(p)}
+										</span>
+									</button>
+								)}
+								{editingId !== p.id && (
+									<div className="flex shrink-0 items-center gap-0.5">
+										<PresetAction
+											label="Update"
+											title="Overwrite this preset with the current selection"
+											onClick={() => savePreset(p.id)}
+										/>
+										<PresetAction
+											label="Rename"
+											title="Rename this preset"
+											onClick={() => startRename(p)}
+										/>
+										<PresetAction
+											label="Delete"
+											title="Delete this preset"
+											onClick={() => deletePreset(p.id)}
+										/>
+									</div>
+								)}
+							</div>
+						);
+					})}
+				</div>
+			)}
+			<Button
+				size="sm"
+				variant="secondary"
+				className="h-7 self-start text-xs"
+				disabled={atCap}
+				title={
+					atCap
+						? `You can save up to ${MAX_HF_PRESETS} presets — delete one first.`
+						: "Save the current templates, picks, look, and direction as a new preset"
+				}
+				onClick={() => savePreset()}
+			>
+				+ Save current selection
+			</Button>
+		</div>
+	);
+}
+
 function EngineSection() {
 	const engine = useAiSettingsStore((s) => s.hfEngine);
 	const setEngine = useAiSettingsStore((s) => s.setHfEngine);
@@ -635,6 +815,7 @@ export function HyperframesPanel() {
 						});
 					}}
 				/>
+				<CustomPresetsSection />
 				<Section
 					title="Templates"
 					subtitle="used by RUN HYPERFRAMES"

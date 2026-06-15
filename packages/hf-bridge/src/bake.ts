@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { resolveHyperframesCli, runNode } from "./renderer";
+import { enqueueRender, resolveHyperframesCli, runNode } from "./renderer";
 
 /**
  * The "bake library": registry BLOCKS are full standalone HyperFrames
@@ -154,20 +154,22 @@ export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
 	);
 
 	const cli = resolveHyperframesCli();
-	const { code, output } = await runNode(
-		[
-			cli,
-			"render",
-			"--format",
-			"webm",
-			"--quality",
-			"standard",
-			"--fps",
-			String(fps),
-			"--output",
-			outPath,
-		],
-		compDir,
+	const { code, output } = await enqueueRender(() =>
+		runNode(
+			[
+				cli,
+				"render",
+				"--format",
+				"webm",
+				"--quality",
+				"standard",
+				"--fps",
+				String(fps),
+				"--output",
+				outPath,
+			],
+			compDir,
+		),
 	);
 	if (code !== 0 || !existsSync(outPath)) {
 		throw new Error(
