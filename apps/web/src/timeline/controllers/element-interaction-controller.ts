@@ -25,6 +25,7 @@ import { useTimelineStore } from "@/timeline/timeline-store";
 import { expandSelectionWithLinks } from "@/timeline/link-elements";
 import type { SnapPoint } from "@/timeline/snapping";
 import type {
+	Bookmark,
 	DropTarget,
 	ElementRef,
 	ElementDragView,
@@ -50,6 +51,7 @@ export interface InputAdapter {
 
 export interface SceneReader {
 	getTracks: () => SceneTracks;
+	getBookmarks: () => Bookmark[];
 	getActiveFps: () => FrameRate | null;
 }
 
@@ -490,6 +492,7 @@ export class ElementInteractionController {
 			group,
 			anchorStartTime: frameSnappedTime,
 			tracks: scene.getTracks(),
+			bookmarks: scene.getBookmarks(),
 			playheadTime: playback.getCurrentTime(),
 			zoomLevel: viewport.getZoomLevel(),
 		});

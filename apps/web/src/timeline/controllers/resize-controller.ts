@@ -8,6 +8,7 @@ import {
 	minMediaTime,
 	subMediaTime,
 	TICKS_PER_SECOND,
+	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import {
 	computeGroupResize,
@@ -24,9 +25,11 @@ import {
 } from "@/timeline/snapping";
 import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
+import { getBookmarkSnapPoints } from "@/timeline/bookmarks/snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
 	isRetimableElement,
+	type Bookmark,
 	type SceneTracks,
 	type TimelineElement,
 	type TimelineTrack,
@@ -54,6 +57,7 @@ export interface ResizeConfig {
 	snappingEnabled: boolean;
 	isShiftHeld: () => boolean;
 	getSceneTracks: () => SceneTracks;
+	getSceneBookmarks: () => Bookmark[];
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
 	selectedElements: ElementRef[];
@@ -285,6 +289,9 @@ export class ResizeController {
 			sources: [
 				() => getElementEdgeSnapPoints({ tracks, excludeElementIds }),
 				() => getPlayheadSnapPoints({ playheadTime }),
+				() => getBookmarkSnapPoints({ bookmarks: this.config.getSceneBookmarks() }),
+				// Premiere parity (R4): trim edges snap to the sequence start (0:00).
+				() => [{ time: ZERO_MEDIA_TIME, type: "sequence-start" }],
 				() =>
 					getAnimationKeyframeSnapPointsForTimeline({
 						tracks,

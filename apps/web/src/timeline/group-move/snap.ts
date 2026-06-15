@@ -1,4 +1,4 @@
-import type { SceneTracks } from "@/timeline";
+import type { Bookmark, SceneTracks } from "@/timeline";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
@@ -7,20 +7,28 @@ import {
 } from "@/timeline/snapping";
 import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
+import { getBookmarkSnapPoints } from "@/timeline/bookmarks/snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import type { MoveGroup } from "./types";
-import { addMediaTime, type MediaTime, subMediaTime } from "@/wasm";
+import {
+	addMediaTime,
+	type MediaTime,
+	subMediaTime,
+	ZERO_MEDIA_TIME,
+} from "@/wasm";
 
 export function snapGroupEdges({
 	group,
 	anchorStartTime,
 	tracks,
+	bookmarks,
 	playheadTime,
 	zoomLevel,
 }: {
 	group: MoveGroup;
 	anchorStartTime: MediaTime;
 	tracks: SceneTracks;
+	bookmarks: Bookmark[];
 	playheadTime: MediaTime;
 	zoomLevel: number;
 }): {
@@ -34,6 +42,9 @@ export function snapGroupEdges({
 		sources: [
 			() => getElementEdgeSnapPoints({ tracks, excludeElementIds }),
 			() => getPlayheadSnapPoints({ playheadTime }),
+			() => getBookmarkSnapPoints({ bookmarks }),
+			// Premiere parity (R4): clips snap to the sequence start (0:00).
+			() => [{ time: ZERO_MEDIA_TIME, type: "sequence-start" }],
 			() =>
 				getAnimationKeyframeSnapPointsForTimeline({
 					tracks,
