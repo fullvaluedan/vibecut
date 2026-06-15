@@ -3,14 +3,22 @@ import type { ElementType, SceneTracks } from "@/timeline";
 import type { PlacementTimeSpan } from "@/timeline/placement";
 import { preferMainTrackIndex } from "../prefer-main-track";
 
-// These helpers build minimal track/span shapes. `preferMainTrackIndex` only
-// reads `tracks.overlay.length`, `tracks.main.elements`, and span start/dur, so
-// we avoid importing `@/wasm` (which fails to init under bun) by using plain
-// numbers cast to the branded MediaTime types.
+// `preferMainTrackIndex` only reads `tracks.overlay.length`,
+// `tracks.main.elements`, and span start/duration as numbers. MediaTime is a
+// branded number whose constructor lives in `@/wasm` (which fails to init under
+// bun), so fixtures are built as plain objects and cast at the boundary.
 type El = { startTime: number; duration: number };
 
-function mkTrack(id: string, type: string, elements: El[] = []) {
-	return { id, type, name: id, elements } as unknown;
+function mkTrack({
+	id,
+	type,
+	elements,
+}: {
+	id: string;
+	type: string;
+	elements: El[];
+}) {
+	return { id, type, name: id, elements };
 }
 
 function mkScene(opts: {
@@ -18,19 +26,29 @@ function mkScene(opts: {
 	main?: El[];
 	audio?: El[][];
 }): SceneTracks {
-	return {
-		overlay: (opts.overlay ?? []).map((els, i) =>
-			mkTrack(`overlay-${i}`, "video", els),
+	const scene: unknown = {
+		overlay: (opts.overlay ?? []).map((elements, i) =>
+			mkTrack({ id: `overlay-${i}`, type: "video", elements }),
 		),
-		main: mkTrack("video-main", "video", opts.main ?? []),
-		audio: (opts.audio ?? []).map((els, i) =>
-			mkTrack(`audio-${i}`, "audio", els),
+		main: mkTrack({ id: "video-main", type: "video", elements: opts.main ?? [] }),
+		audio: (opts.audio ?? []).map((elements, i) =>
+			mkTrack({ id: `audio-${i}`, type: "audio", elements }),
 		),
-	} as unknown as SceneTracks;
+	};
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- branded-MediaTime fixture (see note above); the real constructor lives in @/wasm, unusable under bun
+	return scene as SceneTracks;
 }
 
-function span(startTime: number, duration: number): PlacementTimeSpan[] {
-	return [{ startTime, duration } as unknown as PlacementTimeSpan];
+function spans({
+	startTime,
+	duration,
+}: {
+	startTime: number;
+	duration: number;
+}): PlacementTimeSpan[] {
+	const list: unknown = [{ startTime, duration }];
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- branded-MediaTime fixture (see note above); the real constructor lives in @/wasm, unusable under bun
+	return list as PlacementTimeSpan[];
 }
 
 describe("preferMainTrackIndex", () => {
@@ -41,7 +59,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "video",
 				hoveredTrackIndex: 0,
-				timeSpans: span(3, 2),
+				timeSpans: spans({ startTime: 3, duration: 2 }),
 			}),
 		).toBe(1);
 	});
@@ -53,7 +71,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "image",
 				hoveredTrackIndex: 0,
-				timeSpans: span(0, 5),
+				timeSpans: spans({ startTime: 0, duration: 5 }),
 			}),
 		).toBe(1);
 	});
@@ -66,7 +84,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "video",
 				hoveredTrackIndex: 0,
-				timeSpans: span(3, 2),
+				timeSpans: spans({ startTime: 3, duration: 2 }),
 			}),
 		).toBe(0);
 	});
@@ -79,7 +97,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "video",
 				hoveredTrackIndex: 0,
-				timeSpans: span(5, 2),
+				timeSpans: spans({ startTime: 5, duration: 2 }),
 			}),
 		).toBe(1);
 	});
@@ -91,7 +109,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "audio",
 				hoveredTrackIndex: 2,
-				timeSpans: span(0, 1),
+				timeSpans: spans({ startTime: 0, duration: 1 }),
 			}),
 		).toBe(2);
 	});
@@ -103,20 +121,21 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "video",
 				hoveredTrackIndex: 1,
-				timeSpans: span(0, 2),
+				timeSpans: spans({ startTime: 0, duration: 2 }),
 			}),
 		).toBe(1);
 	});
 
 	test("leaves graphic and text overlay drops untouched", () => {
 		const tracks = mkScene({ overlay: [[]] });
-		for (const elementType of ["graphic", "text"] as ElementType[]) {
+		const overlayTypes: ElementType[] = ["graphic", "text"];
+		for (const elementType of overlayTypes) {
 			expect(
 				preferMainTrackIndex({
 					tracks,
 					elementType,
 					hoveredTrackIndex: 0,
-					timeSpans: span(0, 2),
+					timeSpans: spans({ startTime: 0, duration: 2 }),
 				}),
 			).toBe(0);
 		}
@@ -129,7 +148,7 @@ describe("preferMainTrackIndex", () => {
 				tracks,
 				elementType: "video",
 				hoveredTrackIndex: 0,
-				timeSpans: span(0, 2),
+				timeSpans: spans({ startTime: 0, duration: 2 }),
 			}),
 		).toBe(0);
 	});
