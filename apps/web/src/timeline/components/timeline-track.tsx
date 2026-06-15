@@ -79,6 +79,13 @@ export function TimelineTrackContent({
 				.map((el) => ({ trackId: t.id, elementId: el.id })),
 		);
 		editor.selection.setSelectedElements({ elements: refs });
+		// Premiere parity (#2): the track-select gesture is momentary — hand
+		// control back to the Selection tool so the freshly-selected group can be
+		// dragged immediately (the move controller is selection-driven, not
+		// tool-gated). Without this the armed tool keeps swallowing the drag
+		// (the isForwardTool gate on element mousedown), so the selection looks
+		// stuck.
+		usePlaceToolStore.getState().setTool(null);
 	};
 
 	// Premiere gap selection: a click between two clips selects the GAP.
