@@ -1,6 +1,6 @@
 import type { TimelineTrack, TimelineElement } from "@/timeline";
 import type { ComputeDropTargetParams, DropTarget } from "@/timeline";
-import { resolveTrackPlacement } from "@/timeline/placement";
+import { preferMainTrackIndex, resolveTrackPlacement } from "@/timeline/placement";
 import { TIMELINE_TRACK_GAP_PX } from "./layout";
 import { getTrackHeight } from "./track-layout";
 import {
@@ -221,7 +221,17 @@ export function computeDropTarget({
 		};
 	}
 
-	const { trackIndex, relativeY } = trackAtMouse;
+	const { relativeY } = trackAtMouse;
+	// Premiere parity (#4): a video/image drop prefers the main track (V1) when
+	// it fits, instead of the overlay lane the cursor happens to be over.
+	const trackIndex = preferMainTrackIndex({
+		tracks,
+		elementType,
+		hoveredTrackIndex: trackAtMouse.trackIndex,
+		timeSpans: [
+			{ startTime: xPosition, duration: elementDuration, excludeElementId },
+		],
+	});
 	const track = orderedTracks[trackIndex];
 
 	if (targetElementTypes && targetElementTypes.length > 0) {
