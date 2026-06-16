@@ -160,6 +160,11 @@ export const ACTIONS = {
 			"Slip tool — drag a clip's interior to slide its source window without moving the clip",
 		category: "editing",
 	},
+	"slide-tool": {
+		description:
+			"Slide tool — drag a clip's interior to move it between its neighbours, which absorb the move",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -265,6 +270,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["rate-stretch-tool", ["r"]],
 	["ripple-tool", ["b"]],
 	["slip-tool", ["y"]],
+	["slide-tool", ["u"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],

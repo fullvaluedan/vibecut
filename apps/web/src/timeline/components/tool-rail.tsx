@@ -12,6 +12,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	ArrowExpand02Icon,
 	ArrowLeftRightIcon,
+	ArrowMoveDownRightIcon,
 	ArrowRight04Icon,
 	Bookmark02Icon,
 	Cursor01Icon,
@@ -104,6 +105,14 @@ export function TimelineToolRail() {
 				active: tool?.kind === "slip",
 				onClick: () =>
 					setTool(tool?.kind === "slip" ? null : { kind: "slip" }),
+			})}
+			{railButton({
+				title:
+					"Slide (U) — drag a clip's interior to move it between its neighbours, which absorb the move",
+				icon: ArrowMoveDownRightIcon,
+				active: tool?.kind === "slide",
+				onClick: () =>
+					setTool(tool?.kind === "slide" ? null : { kind: "slide" }),
 			})}
 			{railButton({
 				title:

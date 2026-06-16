@@ -25,6 +25,10 @@ import { useTimelineStore } from "@/timeline/timeline-store";
 import { expandSelectionWithLinks } from "@/timeline/link-elements";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { computeSlipTarget } from "@/timeline/trim-tools/slip";
+import {
+	computeSlideTarget,
+	type SlideNeighbor,
+} from "@/timeline/trim-tools/slide";
 import { isRetimableElement } from "@/timeline";
 import type { SnapPoint } from "@/timeline/snapping";
 import type {
@@ -79,6 +83,21 @@ export interface SlipTrimPatch {
 	trimEnd: MediaTime;
 }
 
+/**
+ * A full position+trim patch the Slide body-drag emits. Slide moves the clip
+ * (startTime) and reshapes both neighbours (startTime + duration + trim), so —
+ * unlike Slip's trim-only patch — each field is optional and only the changed
+ * ones are set per element.
+ */
+export interface SlidePatch {
+	trackId: string;
+	elementId: string;
+	startTime?: MediaTime;
+	duration?: MediaTime;
+	trimStart?: MediaTime;
+	trimEnd?: MediaTime;
+}
+
 export interface TimelineOps {
 	moveElements: (args: Pick<GroupMoveResult, "moves" | "createTracks">) => void;
 	// Slip body-drag preview/commit path (mirrors the resize-controller's). Slip
@@ -86,6 +105,12 @@ export interface TimelineOps {
 	previewSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
 	discardSlipPreview: () => void;
 	commitSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
+	// Slide body-drag preview/commit path (reuses the U2 seam). Slide changes the
+	// clip's position and both neighbours' position/duration/trim, so these carry
+	// full position+trim patches.
+	previewSlide: (args: { patches: readonly SlidePatch[] }) => void;
+	discardSlidePreview: () => void;
+	commitSlide: (args: { patches: readonly SlidePatch[] }) => void;
 }
 
 export interface SnapConfig {
@@ -109,13 +134,14 @@ export interface ElementInteractionDepsRef {
 
 // --- Session ---
 
-// An interior body-drag is a plain clip MOVE (default) or a SLIP (Y armed): the
-// mode is latched once at mousedown from the armed place tool, so a mid-drag tool
-// change can't flip the gesture's behaviour underneath the user (mirrors the
-// resize-controller's ResizeMode latch). Slip slides the SOURCE window under each
-// dragged clip while its timeline position + duration stay fixed; it routes
-// through its own preview/commit path and never builds a MoveGroup.
-type MoveMode = "move" | "slip";
+// An interior body-drag is a plain clip MOVE (default), a SLIP (Y armed), or a
+// SLIDE (U armed): the mode is latched once at mousedown from the armed place
+// tool, so a mid-drag tool change can't flip the gesture's behaviour underneath
+// the user (mirrors the resize-controller's ResizeMode latch). Slip slides the
+// SOURCE window under each dragged clip; Slide moves the clip ALONG the timeline
+// between its neighbours, which absorb the move. Both route through their own
+// preview/commit path and never build a MoveGroup.
+type MoveMode = "move" | "slip" | "slide";
 
 type Point = { readonly x: number; readonly y: number };
 
@@ -147,6 +173,24 @@ interface SlipProgress {
 	patches: readonly SlipTrimPatch[];
 }
 
+// The frozen original state of the slid clip plus its two immediate neighbours on
+// the SAME track, captured at mousedown so the preview can be re-derived from
+// scratch every mousemove (idempotent). A neighbour is null when the clip sits at
+// a track edge (a gap on that side) — the slide is then bounded by the other side.
+interface SlideCaptured {
+	readonly trackId: string;
+	readonly clip: { readonly startTimeTicks: number; readonly durationTicks: number };
+	readonly clipElementId: string;
+	readonly left: (SlideNeighbor & { readonly elementId: string }) | null;
+	readonly right: (SlideNeighbor & { readonly elementId: string }) | null;
+	readonly minDurationTicks: number;
+}
+
+interface SlideProgress {
+	readonly captured: SlideCaptured;
+	patches: readonly SlidePatch[];
+}
+
 interface DragProgress {
 	moveGroup: MoveGroup;
 	// Pre-minted per member so the identity of any "new track" created by
@@ -167,7 +211,8 @@ type Session =
 	| { kind: "idle" }
 	| { kind: "pending"; mousedown: MousedownSnapshot }
 	| { kind: "dragging"; mousedown: MousedownSnapshot; drag: DragProgress }
-	| { kind: "slipping"; mousedown: MousedownSnapshot; slip: SlipProgress };
+	| { kind: "slipping"; mousedown: MousedownSnapshot; slip: SlipProgress }
+	| { kind: "sliding"; mousedown: MousedownSnapshot; slide: SlideProgress };
 
 const IDLE_VIEW: ElementDragView = { kind: "idle" };
 
@@ -286,6 +331,127 @@ function slipPatchesForDelta({
 			},
 		];
 	});
+}
+
+/**
+ * Snapshot the slid clip plus its two immediate neighbours on the SAME track for
+ * a Slide gesture. Neighbours are resolved by exact-tick adjacency: the left
+ * neighbour ends exactly at the clip's start, the right neighbour starts exactly
+ * at the clip's end. A side with no adjacent clip (a gap / the track edge) is
+ * null — the slide is then bounded by the present side only. Returns null when
+ * the clip isn't found or BOTH sides are empty (nothing can absorb a slide).
+ */
+function buildSlideCaptured({
+	tracks,
+	anchorRef,
+	minDurationTicks,
+}: {
+	tracks: SceneTracks;
+	anchorRef: ElementRef;
+	minDurationTicks: number;
+}): SlideCaptured | null {
+	const track = orderedTracks(tracks).find((t) => t.id === anchorRef.trackId);
+	const clipEl = track?.elements.find((el) => el.id === anchorRef.elementId);
+	if (!track || !clipEl) return null;
+
+	const clipStart = clipEl.startTime as number;
+	const clipEnd = (clipEl.startTime + clipEl.duration) as number;
+
+	const toNeighbor = (
+		element: TimelineElement,
+	): SlideNeighbor & { elementId: string } => ({
+		elementId: element.id,
+		startTimeTicks: element.startTime as number,
+		durationTicks: element.duration as number,
+		trimStartTicks: element.trimStart as number,
+		trimEndTicks: element.trimEnd as number,
+		sourceDurationTicks:
+			element.sourceDuration == null
+				? undefined
+				: (element.sourceDuration as number),
+		rate: rateOfElement(element),
+	});
+
+	const leftEl = track.elements.find(
+		(el) =>
+			el.id !== clipEl.id &&
+			(el.startTime + el.duration) === clipStart,
+	);
+	const rightEl = track.elements.find(
+		(el) => el.id !== clipEl.id && (el.startTime as number) === clipEnd,
+	);
+
+	if (!leftEl && !rightEl) return null;
+
+	return {
+		trackId: track.id,
+		clipElementId: clipEl.id,
+		clip: { startTimeTicks: clipStart, durationTicks: clipEl.duration as number },
+		left: leftEl ? toNeighbor(leftEl) : null,
+		right: rightEl ? toNeighbor(rightEl) : null,
+		minDurationTicks,
+	};
+}
+
+/**
+ * Turn a horizontal pixel delta into Slide patches via the pure
+ * `computeSlideTarget`: a startTime patch for the clip plus a position/trim patch
+ * for each present neighbour. Returns [] when the slide is a no-op (zero clamped
+ * delta — the clip and neighbours unchanged) so a no-op gesture commits nothing.
+ */
+function slidePatchesForDelta({
+	captured,
+	deltaPx,
+	zoomLevel,
+}: {
+	captured: SlideCaptured;
+	deltaPx: number;
+	zoomLevel: number;
+}): SlidePatch[] {
+	const deltaTicks = Math.round(
+		(deltaPx / (BASE_TIMELINE_PIXELS_PER_SECOND * zoomLevel)) *
+			TICKS_PER_SECOND,
+	);
+	const target = computeSlideTarget({
+		clip: captured.clip,
+		left: captured.left,
+		right: captured.right,
+		deltaTicks,
+		minDurationTicks: captured.minDurationTicks,
+	});
+	// No slideable result, or the clamp pinned the clip in place: commit nothing.
+	if (!target || target.startTimeTicks === captured.clip.startTimeTicks) {
+		return [];
+	}
+
+	const patches: SlidePatch[] = [
+		{
+			trackId: captured.trackId,
+			elementId: captured.clipElementId,
+			startTime: mediaTime({ ticks: target.startTimeTicks }),
+		},
+	];
+	if (captured.left && target.left) {
+		patches.push({
+			trackId: captured.trackId,
+			elementId: captured.left.elementId,
+			startTime: mediaTime({ ticks: target.left.startTimeTicks }),
+			duration: mediaTime({ ticks: target.left.durationTicks }),
+			trimStart: mediaTime({ ticks: target.left.trimStartTicks }),
+			trimEnd: mediaTime({ ticks: target.left.trimEndTicks }),
+		});
+	}
+	if (captured.right && target.right) {
+		patches.push({
+			trackId: captured.trackId,
+			elementId: captured.right.elementId,
+			startTime: mediaTime({ ticks: target.right.startTimeTicks }),
+			duration: mediaTime({ ticks: target.right.durationTicks }),
+			trimStart: mediaTime({ ticks: target.right.trimStartTicks }),
+			trimEnd: mediaTime({ ticks: target.right.trimEndTicks }),
+		});
+	}
+	return patches;
 }
 
 function movedPastDragThreshold({
@@ -522,12 +688,13 @@ export class ElementInteractionController {
 					})
 				: baseSelected;
 
-		// Latch the body-drag mode ONCE here from the armed place tool (Y = Slip),
-		// mirroring the resize-controller's ResizeMode latch. A mid-drag tool change
-		// can't flip move <-> slip after this point. Defaults to "move" whenever Slip
-		// isn't armed, so the normal move path is the fall-through.
+		// Latch the body-drag mode ONCE here from the armed place tool (Y = Slip,
+		// U = Slide), mirroring the resize-controller's ResizeMode latch. A mid-drag
+		// tool change can't flip the gesture after this point. Defaults to "move"
+		// whenever neither is armed, so the normal move path is the fall-through.
+		const armedKind = usePlaceToolStore.getState().tool?.kind;
 		const mode: MoveMode =
-			usePlaceToolStore.getState().tool?.kind === "slip" ? "slip" : "move";
+			armedKind === "slip" ? "slip" : armedKind === "slide" ? "slide" : "move";
 
 		this.session = {
 			kind: "pending",
@@ -606,10 +773,13 @@ export class ElementInteractionController {
 	}
 
 	private finishSession(): void {
-		// A live slip preview is committed on mouseup; any OTHER exit (cancel /
+		// A live slip/slide preview is committed on mouseup; any OTHER exit (cancel /
 		// Escape / a sub-threshold release) must roll the preview overlay back.
 		if (this.session.kind === "slipping") {
 			this.deps.timeline.discardSlipPreview();
+		}
+		if (this.session.kind === "sliding") {
+			this.deps.timeline.discardSlidePreview();
 		}
 		this.session = { kind: "idle" };
 		this.deactivate();
@@ -699,10 +869,18 @@ export class ElementInteractionController {
 		if (!scrollContainer) return;
 
 		if (this.session.kind === "pending") {
-			// Slip (Y armed) takes a wholly separate path — it slides the source
-			// window and never builds a MoveGroup. Move (the default) is unchanged.
+			// Slip (Y armed) and Slide (U armed) each take a wholly separate path and
+			// never build a MoveGroup. Move (the default) is unchanged.
 			if (this.session.mousedown.mode === "slip") {
 				this.beginSlipFromPending({
+					mousedown: this.session.mousedown,
+					clientX,
+					clientY,
+				});
+				return;
+			}
+			if (this.session.mousedown.mode === "slide") {
+				this.beginSlideFromPending({
 					mousedown: this.session.mousedown,
 					clientX,
 					clientY,
@@ -732,6 +910,14 @@ export class ElementInteractionController {
 		if (this.session.kind === "slipping") {
 			this.updateActiveSlip({
 				slip: this.session.slip,
+				clientX,
+			});
+			return;
+		}
+
+		if (this.session.kind === "sliding") {
+			this.updateActiveSlide({
+				slide: this.session.slide,
 				clientX,
 			});
 		}
@@ -929,11 +1115,90 @@ export class ElementInteractionController {
 		this.deps.timeline.previewSlip({ patches: slip.patches });
 	}
 
-	/** The mousedown X of the active session (slip uses raw pixel delta). */
+	/** The mousedown X of the active session (slip/slide use raw pixel delta). */
 	private sessionOriginX(): number {
 		return this.session.kind === "idle"
 			? 0
 			: this.session.mousedown.origin.x;
+	}
+
+	// --- Slide body-drag (U armed) — reuses the U2 seam ---
+
+	private beginSlideFromPending({
+		mousedown,
+		clientX,
+		clientY,
+	}: {
+		mousedown: MousedownSnapshot;
+		clientX: number;
+		clientY: number;
+	}): void {
+		if (
+			!movedPastDragThreshold({
+				current: { x: clientX, y: clientY },
+				origin: mousedown.origin,
+			})
+		) {
+			return;
+		}
+
+		const fps = this.deps.scene.getActiveFps();
+		if (!fps) {
+			this.finishSession();
+			return;
+		}
+		const minDurationTicks = Math.round(
+			(TICKS_PER_SECOND * fps.denominator) / fps.numerator,
+		);
+
+		const captured = buildSlideCaptured({
+			tracks: this.deps.scene.getTracks(),
+			anchorRef: {
+				trackId: mousedown.trackId,
+				elementId: mousedown.elementId,
+			},
+			minDurationTicks,
+		});
+		// No neighbour on either side (clip at both track edges): slide is a no-op —
+		// abandon the gesture rather than latching an empty slide session.
+		if (!captured) {
+			this.finishSession();
+			return;
+		}
+
+		const slide: SlideProgress = { captured, patches: [] };
+		this.session = { kind: "sliding", mousedown, slide };
+		this.lastGestureWasDrag = true;
+
+		this.applySlidePreview({ slide, clientX });
+		this.notify();
+	}
+
+	private updateActiveSlide({
+		slide,
+		clientX,
+	}: {
+		slide: SlideProgress;
+		clientX: number;
+	}): void {
+		this.applySlidePreview({ slide, clientX });
+		this.notify();
+	}
+
+	private applySlidePreview({
+		slide,
+		clientX,
+	}: {
+		slide: SlideProgress;
+		clientX: number;
+	}): void {
+		const deltaPx = clientX - this.sessionOriginX();
+		slide.patches = slidePatchesForDelta({
+			captured: slide.captured,
+			deltaPx,
+			zoomLevel: this.deps.viewport.getZoomLevel(),
+		});
+		this.deps.timeline.previewSlide({ patches: slide.patches });
 	}
 
 	private handleMouseUp = ({ clientX, clientY }: MouseEvent): void => {
@@ -957,6 +1222,33 @@ export class ElementInteractionController {
 				// history-backed path so the whole slip is ONE undo step.
 				this.deps.timeline.discardSlipPreview();
 				this.deps.timeline.commitSlip({ patches: slip.patches });
+				// Mark idle WITHOUT a second discard (already discarded above).
+				this.session = { kind: "idle" };
+				this.deactivate();
+				this.deps.snap.onChange?.(null);
+				this.notify();
+				return;
+			}
+			this.lastGestureWasDrag = false;
+			this.finishSession();
+			return;
+		}
+
+		if (this.session.kind === "sliding") {
+			const { mousedown, slide } = this.session;
+			// A sub-threshold release is a cancel (the user nudged then returned);
+			// finishSession discards the live preview. Otherwise commit the slide.
+			if (
+				movedPastDragThreshold({
+					current: { x: clientX, y: clientY },
+					origin: mousedown.origin,
+				}) &&
+				slide.patches.length > 0
+			) {
+				// Roll back the live preview, then commit through the history-backed
+				// path so the whole slide (clip + neighbours) is ONE undo step.
+				this.deps.timeline.discardSlidePreview();
+				this.deps.timeline.commitSlide({ patches: slide.patches });
 				// Mark idle WITHOUT a second discard (already discarded above).
 				this.session = { kind: "idle" };
 				this.deactivate();

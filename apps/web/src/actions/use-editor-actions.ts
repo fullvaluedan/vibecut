@@ -657,6 +657,19 @@ export function useEditorActions() {
 		undefined,
 	);
 
+	// Premiere U: arms the Slide TOOL — drag a clip's interior to move it along the
+	// timeline between its two neighbours, which absorb the move (the clip's own
+	// content stays fixed). Sticky: stays armed until V (selection) or Escape (the
+	// Escape disarm is handled centrally via STICKY_TIMELINE_TOOLS above).
+	useActionHandler(
+		"slide-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "slide" ? null : { kind: "slide" });
+		},
+		undefined,
+	);
+
 	// Premiere V: the Selection (arrow) tool — clears any armed place tool so
 	// the default move/trim cursor is active.
 	useActionHandler(

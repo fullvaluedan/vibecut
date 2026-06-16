@@ -93,6 +93,28 @@ export function useElementInteraction({
 						patch: { trimStart, trimEnd },
 					})),
 				}),
+			// Slide body-drag: preview/commit a full position+trim patch per element
+			// (the clip's startTime + each neighbour's startTime/duration/trim). Each
+			// field is optional, so only the changed ones are merged.
+			previewSlide: ({ patches }) =>
+				editor.timeline.previewElements({
+					updates: patches.map(
+						({ trackId, elementId, ...changes }) => ({
+							trackId,
+							elementId,
+							updates: changes,
+						}),
+					),
+				}),
+			discardSlidePreview: () => editor.timeline.discardPreview(),
+			commitSlide: ({ patches }) =>
+				editor.timeline.updateElements({
+					updates: patches.map(({ trackId, elementId, ...changes }) => ({
+						trackId,
+						elementId,
+						patch: changes,
+					})),
+				}),
 		},
 		snap: {
 			isEnabled: () => snappingEnabled,

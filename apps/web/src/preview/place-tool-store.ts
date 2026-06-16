@@ -32,7 +32,12 @@ export type PlaceTool =
 	// it while the clip's timeline position + duration stay fixed (the footage
 	// shifts; the clip doesn't move). A body-drag tool. Sticky — stays armed until
 	// V / Escape.
-	| { kind: "slip" };
+	| { kind: "slip" }
+	// Premiere's Slide (U): drag a clip's INTERIOR to move it along the timeline
+	// between its two neighbours, which absorb the move (the clip's content is
+	// unchanged; the neighbours' tail/head are trimmed). A body-drag tool. Sticky —
+	// stays armed until V / Escape.
+	| { kind: "slide" };
 
 // The sticky timeline tools: armed tools that act on the TIMELINE (not the
 // preview canvas) and stay armed for repeated use until V (selection) or Escape.
@@ -44,11 +49,20 @@ export type StickyTimelineToolKind =
 	| "rate-stretch"
 	| "ripple"
 	| "roll"
-	| "slip";
+	| "slip"
+	| "slide";
 
 export const STICKY_TIMELINE_TOOLS: ReadonlySet<PlaceTool["kind"]> = new Set<
 	StickyTimelineToolKind
->(["track-select-forward", "razor", "rate-stretch", "ripple", "roll", "slip"]);
+>([
+	"track-select-forward",
+	"razor",
+	"rate-stretch",
+	"ripple",
+	"roll",
+	"slip",
+	"slide",
+]);
 
 /**
  * Type-guard wrapper over `STICKY_TIMELINE_TOOLS.has` so callers that early-out
