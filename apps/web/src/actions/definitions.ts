@@ -155,6 +155,11 @@ export const ACTIONS = {
 			"Roll Edit tool — drag the cut between two clips to move the edit point",
 		category: "editing",
 	},
+	"slip-tool": {
+		description:
+			"Slip tool — drag a clip's interior to slide its source window without moving the clip",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -259,6 +264,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["razor-tool", ["c"]],
 	["rate-stretch-tool", ["r"]],
 	["ripple-tool", ["b"]],
+	["slip-tool", ["y"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],

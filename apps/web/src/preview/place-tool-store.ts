@@ -27,7 +27,12 @@ export type PlaceTool =
 	// Premiere's Roll Edit: drag the cut between two adjacent clips to move the
 	// edit point (one grows, the other shrinks; no ripple). Sticky — stays armed
 	// until V / Escape. (No default key — Premiere's N is taken by snapping.)
-	| { kind: "roll" };
+	| { kind: "roll" }
+	// Premiere's Slip (Y): drag a clip's INTERIOR to slide the source window under
+	// it while the clip's timeline position + duration stay fixed (the footage
+	// shifts; the clip doesn't move). A body-drag tool. Sticky — stays armed until
+	// V / Escape.
+	| { kind: "slip" };
 
 // The sticky timeline tools: armed tools that act on the TIMELINE (not the
 // preview canvas) and stay armed for repeated use until V (selection) or Escape.
@@ -38,11 +43,12 @@ export type StickyTimelineToolKind =
 	| "razor"
 	| "rate-stretch"
 	| "ripple"
-	| "roll";
+	| "roll"
+	| "slip";
 
 export const STICKY_TIMELINE_TOOLS: ReadonlySet<PlaceTool["kind"]> = new Set<
 	StickyTimelineToolKind
->(["track-select-forward", "razor", "rate-stretch", "ripple", "roll"]);
+>(["track-select-forward", "razor", "rate-stretch", "ripple", "roll", "slip"]);
 
 /**
  * Type-guard wrapper over `STICKY_TIMELINE_TOOLS.has` so callers that early-out

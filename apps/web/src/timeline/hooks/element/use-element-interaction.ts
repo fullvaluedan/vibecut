@@ -74,6 +74,25 @@ export function useElementInteraction({
 		},
 		timeline: {
 			moveElements: (args) => editor.timeline.moveElements(args),
+			// Slip body-drag: preview/commit a trim-only patch (source window slides;
+			// startTime/duration untouched), mirroring use-timeline-resize's wiring.
+			previewSlip: ({ patches }) =>
+				editor.timeline.previewElements({
+					updates: patches.map(({ trackId, elementId, trimStart, trimEnd }) => ({
+						trackId,
+						elementId,
+						updates: { trimStart, trimEnd },
+					})),
+				}),
+			discardSlipPreview: () => editor.timeline.discardPreview(),
+			commitSlip: ({ patches }) =>
+				editor.timeline.updateElements({
+					updates: patches.map(({ trackId, elementId, trimStart, trimEnd }) => ({
+						trackId,
+						elementId,
+						patch: { trimStart, trimEnd },
+					})),
+				}),
 		},
 		snap: {
 			isEnabled: () => snappingEnabled,

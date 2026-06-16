@@ -644,6 +644,19 @@ export function useEditorActions() {
 		undefined,
 	);
 
+	// Premiere Y: arms the Slip TOOL — drag a clip's interior to slide its source
+	// window under the fixed timeline position (the footage shifts; the clip
+	// stays put). Sticky: stays armed until V (selection) or Escape (the Escape
+	// disarm is handled centrally via STICKY_TIMELINE_TOOLS above).
+	useActionHandler(
+		"slip-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "slip" ? null : { kind: "slip" });
+		},
+		undefined,
+	);
+
 	// Premiere V: the Selection (arrow) tool — clears any armed place tool so
 	// the default move/trim cursor is active.
 	useActionHandler(

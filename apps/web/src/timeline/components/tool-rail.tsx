@@ -16,6 +16,7 @@ import {
 	Bookmark02Icon,
 	Cursor01Icon,
 	DashboardSpeed02Icon,
+	DragDropHorizontalIcon,
 	PenTool03Icon,
 	ScissorIcon,
 	TextIcon,
@@ -95,6 +96,14 @@ export function TimelineToolRail() {
 				active: tool?.kind === "roll",
 				onClick: () =>
 					setTool(tool?.kind === "roll" ? null : { kind: "roll" }),
+			})}
+			{railButton({
+				title:
+					"Slip (Y) — drag a clip's interior to slide its source window; the clip stays put",
+				icon: DragDropHorizontalIcon,
+				active: tool?.kind === "slip",
+				onClick: () =>
+					setTool(tool?.kind === "slip" ? null : { kind: "slip" }),
 			})}
 			{railButton({
 				title:

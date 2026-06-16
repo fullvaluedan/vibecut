@@ -23,6 +23,9 @@ import { getMouseTimeFromClientX } from "@/timeline/drag-utils";
 import { generateUUID } from "@/utils/id";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { expandSelectionWithLinks } from "@/timeline/link-elements";
+import { usePlaceToolStore } from "@/preview/place-tool-store";
+import { computeSlipTarget } from "@/timeline/trim-tools/slip";
+import { isRetimableElement } from "@/timeline";
 import type { SnapPoint } from "@/timeline/snapping";
 import type {
 	Bookmark,
@@ -68,8 +71,21 @@ export interface PlaybackReader {
 	getCurrentTime: () => MediaTime;
 }
 
+/** A trim-only patch the Slip body-drag emits (startTime/duration unchanged). */
+export interface SlipTrimPatch {
+	trackId: string;
+	elementId: string;
+	trimStart: MediaTime;
+	trimEnd: MediaTime;
+}
+
 export interface TimelineOps {
 	moveElements: (args: Pick<GroupMoveResult, "moves" | "createTracks">) => void;
+	// Slip body-drag preview/commit path (mirrors the resize-controller's). Slip
+	// changes only the source window, so these carry trim-only patches.
+	previewSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
+	discardSlipPreview: () => void;
+	commitSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
 }
 
 export interface SnapConfig {
@@ -93,15 +109,42 @@ export interface ElementInteractionDepsRef {
 
 // --- Session ---
 
+// An interior body-drag is a plain clip MOVE (default) or a SLIP (Y armed): the
+// mode is latched once at mousedown from the armed place tool, so a mid-drag tool
+// change can't flip the gesture's behaviour underneath the user (mirrors the
+// resize-controller's ResizeMode latch). Slip slides the SOURCE window under each
+// dragged clip while its timeline position + duration stay fixed; it routes
+// through its own preview/commit path and never builds a MoveGroup.
+type MoveMode = "move" | "slip";
+
 type Point = { readonly x: number; readonly y: number };
 
 interface MousedownSnapshot {
 	readonly origin: Point;
+	readonly mode: MoveMode;
 	readonly elementId: string;
 	readonly trackId: string;
 	readonly startElementTime: MediaTime;
 	readonly clickOffsetTime: MediaTime;
 	readonly selectedElements: readonly ElementRef[];
+}
+
+// The frozen original state of one clip being slipped, captured at mousedown so a
+// preview can be re-derived from scratch every mousemove (idempotent, like the
+// resize controller re-deriving from `members`).
+interface SlipMember {
+	readonly trackId: string;
+	readonly elementId: string;
+	readonly trimStartTicks: number;
+	readonly trimEndTicks: number;
+	readonly sourceDurationTicks: number;
+	readonly durationTicks: number;
+	readonly rate: number;
+}
+
+interface SlipProgress {
+	readonly members: readonly SlipMember[];
+	patches: readonly SlipTrimPatch[];
 }
 
 interface DragProgress {
@@ -123,7 +166,8 @@ interface DragProgress {
 type Session =
 	| { kind: "idle" }
 	| { kind: "pending"; mousedown: MousedownSnapshot }
-	| { kind: "dragging"; mousedown: MousedownSnapshot; drag: DragProgress };
+	| { kind: "dragging"; mousedown: MousedownSnapshot; drag: DragProgress }
+	| { kind: "slipping"; mousedown: MousedownSnapshot; slip: SlipProgress };
 
 const IDLE_VIEW: ElementDragView = { kind: "idle" };
 
@@ -157,6 +201,91 @@ function verticalDirection({
 
 function orderedTracks(sceneTracks: SceneTracks): TimelineTrack[] {
 	return [...sceneTracks.overlay, sceneTracks.main, ...sceneTracks.audio];
+}
+
+function rateOfElement(element: TimelineElement): number {
+	return isRetimableElement(element) ? (element.retime?.rate ?? 1) : 1;
+}
+
+/**
+ * Snapshot the original trim/source/duration/rate of each clip that the Slip
+ * gesture will slide. Slip only makes sense for clips with a real source window
+ * (a `sourceDuration`), so generated elements without one are dropped — they
+ * have nothing to slip. Returns the frozen members; the controller re-derives
+ * the preview from these every mousemove.
+ */
+function buildSlipMembers({
+	tracks,
+	selectedElements,
+}: {
+	tracks: SceneTracks;
+	selectedElements: readonly ElementRef[];
+}): SlipMember[] {
+	const trackMap = new Map(
+		orderedTracks(tracks).map((track) => [track.id, track]),
+	);
+	return selectedElements.flatMap(({ trackId, elementId }) => {
+		const track = trackMap.get(trackId);
+		const element = track?.elements.find((el) => el.id === elementId);
+		if (!element || element.sourceDuration == null) return [];
+		return [
+			{
+				trackId,
+				elementId,
+				trimStartTicks: element.trimStart as number,
+				trimEndTicks: element.trimEnd as number,
+				sourceDurationTicks: element.sourceDuration as number,
+				durationTicks: element.duration as number,
+				rate: rateOfElement(element),
+			},
+		];
+	});
+}
+
+/**
+ * Turn a horizontal pixel delta into a trim-only patch per slipped clip via the
+ * pure `computeSlipTarget`. The clip's timeline position and duration never
+ * change — only its `trimStart`/`trimEnd` (the source window) slides. A member
+ * whose trim is unchanged after clamping (e.g. a fully-saturated clip, or a zero
+ * drag) is omitted, so a no-op gesture commits nothing.
+ */
+function slipPatchesForDelta({
+	members,
+	deltaPx,
+	zoomLevel,
+}: {
+	members: readonly SlipMember[];
+	deltaPx: number;
+	zoomLevel: number;
+}): SlipTrimPatch[] {
+	const deltaTicks = Math.round(
+		(deltaPx / (BASE_TIMELINE_PIXELS_PER_SECOND * zoomLevel)) *
+			TICKS_PER_SECOND,
+	);
+	return members.flatMap((member) => {
+		const target = computeSlipTarget({
+			trimStartTicks: member.trimStartTicks,
+			trimEndTicks: member.trimEndTicks,
+			sourceDurationTicks: member.sourceDurationTicks,
+			durationTicks: member.durationTicks,
+			deltaTicks,
+			rate: member.rate,
+		});
+		if (
+			target.trimStartTicks === member.trimStartTicks &&
+			target.trimEndTicks === member.trimEndTicks
+		) {
+			return [];
+		}
+		return [
+			{
+				trackId: member.trackId,
+				elementId: member.elementId,
+				trimStart: mediaTime({ ticks: target.trimStartTicks }),
+				trimEnd: mediaTime({ ticks: target.trimEndTicks }),
+			},
+		];
+	});
 }
 
 function movedPastDragThreshold({
@@ -393,10 +522,18 @@ export class ElementInteractionController {
 					})
 				: baseSelected;
 
+		// Latch the body-drag mode ONCE here from the armed place tool (Y = Slip),
+		// mirroring the resize-controller's ResizeMode latch. A mid-drag tool change
+		// can't flip move <-> slip after this point. Defaults to "move" whenever Slip
+		// isn't armed, so the normal move path is the fall-through.
+		const mode: MoveMode =
+			usePlaceToolStore.getState().tool?.kind === "slip" ? "slip" : "move";
+
 		this.session = {
 			kind: "pending",
 			mousedown: {
 				origin: { x: event.clientX, y: event.clientY },
+				mode,
 				elementId: element.id,
 				trackId: track.id,
 				startElementTime: element.startTime,
@@ -469,6 +606,11 @@ export class ElementInteractionController {
 	}
 
 	private finishSession(): void {
+		// A live slip preview is committed on mouseup; any OTHER exit (cancel /
+		// Escape / a sub-threshold release) must roll the preview overlay back.
+		if (this.session.kind === "slipping") {
+			this.deps.timeline.discardSlipPreview();
+		}
 		this.session = { kind: "idle" };
 		this.deactivate();
 		this.deps.snap.onChange?.(null);
@@ -557,6 +699,16 @@ export class ElementInteractionController {
 		if (!scrollContainer) return;
 
 		if (this.session.kind === "pending") {
+			// Slip (Y armed) takes a wholly separate path — it slides the source
+			// window and never builds a MoveGroup. Move (the default) is unchanged.
+			if (this.session.mousedown.mode === "slip") {
+				this.beginSlipFromPending({
+					mousedown: this.session.mousedown,
+					clientX,
+					clientY,
+				});
+				return;
+			}
 			this.beginDragFromPending({
 				mousedown: this.session.mousedown,
 				clientX,
@@ -573,6 +725,14 @@ export class ElementInteractionController {
 				clientX,
 				clientY,
 				scrollContainer,
+			});
+			return;
+		}
+
+		if (this.session.kind === "slipping") {
+			this.updateActiveSlip({
+				slip: this.session.slip,
+				clientX,
 			});
 		}
 	};
@@ -703,8 +863,108 @@ export class ElementInteractionController {
 		this.notify();
 	}
 
+	// --- Slip body-drag (Y armed) ---
+
+	private beginSlipFromPending({
+		mousedown,
+		clientX,
+		clientY,
+	}: {
+		mousedown: MousedownSnapshot;
+		clientX: number;
+		clientY: number;
+	}): void {
+		if (
+			!movedPastDragThreshold({
+				current: { x: clientX, y: clientY },
+				origin: mousedown.origin,
+			})
+		) {
+			return;
+		}
+
+		const members = buildSlipMembers({
+			tracks: this.deps.scene.getTracks(),
+			selectedElements: mousedown.selectedElements,
+		});
+		// No slippable clip (e.g. a generated element with no source window):
+		// abandon the gesture rather than silently latching an empty slip session.
+		if (members.length === 0) {
+			this.finishSession();
+			return;
+		}
+
+		const slip: SlipProgress = { members, patches: [] };
+		this.session = { kind: "slipping", mousedown, slip };
+		this.lastGestureWasDrag = true;
+
+		this.applySlipPreview({ slip, clientX });
+		this.notify();
+	}
+
+	private updateActiveSlip({
+		slip,
+		clientX,
+	}: {
+		slip: SlipProgress;
+		clientX: number;
+	}): void {
+		this.applySlipPreview({ slip, clientX });
+		this.notify();
+	}
+
+	private applySlipPreview({
+		slip,
+		clientX,
+	}: {
+		slip: SlipProgress;
+		clientX: number;
+	}): void {
+		const deltaPx = clientX - this.sessionOriginX();
+		slip.patches = slipPatchesForDelta({
+			members: slip.members,
+			deltaPx,
+			zoomLevel: this.deps.viewport.getZoomLevel(),
+		});
+		this.deps.timeline.previewSlip({ patches: slip.patches });
+	}
+
+	/** The mousedown X of the active session (slip uses raw pixel delta). */
+	private sessionOriginX(): number {
+		return this.session.kind === "idle"
+			? 0
+			: this.session.mousedown.origin.x;
+	}
+
 	private handleMouseUp = ({ clientX, clientY }: MouseEvent): void => {
 		if (this.session.kind === "pending") {
+			this.finishSession();
+			return;
+		}
+
+		if (this.session.kind === "slipping") {
+			const { mousedown, slip } = this.session;
+			// A sub-threshold release is a cancel (the user nudged then returned);
+			// finishSession discards the live preview. Otherwise commit the trim.
+			if (
+				movedPastDragThreshold({
+					current: { x: clientX, y: clientY },
+					origin: mousedown.origin,
+				}) &&
+				slip.patches.length > 0
+			) {
+				// Roll back the live preview, then commit the trim through the
+				// history-backed path so the whole slip is ONE undo step.
+				this.deps.timeline.discardSlipPreview();
+				this.deps.timeline.commitSlip({ patches: slip.patches });
+				// Mark idle WITHOUT a second discard (already discarded above).
+				this.session = { kind: "idle" };
+				this.deactivate();
+				this.deps.snap.onChange?.(null);
+				this.notify();
+				return;
+			}
+			this.lastGestureWasDrag = false;
 			this.finishSession();
 			return;
 		}
