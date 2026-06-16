@@ -19,13 +19,9 @@ import {
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { AudioElement, VideoElement } from "@/timeline";
 import {
-	Section,
-	SectionContent,
-	SectionField,
-	SectionFields,
-	SectionHeader,
-	SectionTitle,
-} from "@/components/section";
+	FxGroup,
+	Row,
+} from "@/components/editor/panels/properties/components/fx-group";
 import { usePropertyDraft } from "@/components/editor/panels/properties/hooks/use-property-draft";
 import {
 	formatNumberForDisplay,
@@ -182,13 +178,10 @@ export function SpeedTab({
 	});
 
 	return (
-		<Section collapsible sectionKey={`${element.id}:speed`}>
-			<SectionHeader>
-				<SectionTitle>Speed</SectionTitle>
-			</SectionHeader>
-			<SectionContent>
-				<SectionFields>
-					<SectionField label="Speed">
+		<div className="flex flex-col px-2 pt-2">
+			<FxGroup title="Speed">
+				<Row label="Speed">
+					<div className="w-[130px]">
 						<NumberField
 							icon={<HugeiconsIcon icon={DashboardSpeed02Icon} />}
 							value={speedDraft.displayValue}
@@ -211,8 +204,10 @@ export function SpeedTab({
 							}
 							isDefault={rate === DEFAULT_RETIME_RATE}
 						/>
-					</SectionField>
-					<SectionField label="Duration">
+					</div>
+				</Row>
+				<Row label="Duration">
+					<div className="w-[130px]">
 						<NumberField
 							icon={<HugeiconsIcon icon={Clock01Icon} />}
 							value={durationDraft.displayValue}
@@ -243,19 +238,18 @@ export function SpeedTab({
 							}
 							isDefault={rate === DEFAULT_RETIME_RATE}
 						/>
-					</SectionField>
-					<div className="flex items-center justify-between">
-						<span className="text-sm">Change pitch</span>
-						<Switch
-							checked={!maintainPitch}
-							disabled={!isPitchPreserveAvailable}
-							onCheckedChange={(checked) =>
-								commitRetime({ rate, maintainPitch: !checked })
-							}
-						/>
 					</div>
-				</SectionFields>
-			</SectionContent>
-		</Section>
+				</Row>
+				<Row label="Change pitch">
+					<Switch
+						checked={!maintainPitch}
+						disabled={!isPitchPreserveAvailable}
+						onCheckedChange={(checked) =>
+							commitRetime({ rate, maintainPitch: !checked })
+						}
+					/>
+				</Row>
+			</FxGroup>
+		</div>
 	);
 }
