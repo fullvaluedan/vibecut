@@ -356,9 +356,9 @@ function MediaAssetDraggable({
 				type: "media",
 				mediaType: item.type,
 				name: item.name,
-					// When this item is part of a multi-selection, carry the whole
-					// selection so the drop inserts all of them (mirrors the +/add path).
-					...(isSelected(item.id) ? { selectedIds: [...selectedIds] } : {}),
+				// When this item is part of a multi-selection, carry the whole
+				// selection so the drop inserts all of them (mirrors the +/add path).
+				...(isSelected(item.id) ? { selectedIds: [...selectedIds] } : {}),
 				...(item.type !== "audio" && {
 					targetElementTypes: [...MASKABLE_ELEMENT_TYPES],
 				}),

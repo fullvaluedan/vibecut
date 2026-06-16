@@ -108,6 +108,11 @@ describe("placement: element/track type-compatibility rule", () => {
 		expect(getTrackTypeForElementType({ elementType: "video" })).toBe("video");
 		expect(getTrackTypeForElementType({ elementType: "image" })).toBe("video");
 		expect(getTrackTypeForElementType({ elementType: "audio" })).toBe("audio");
+		expect(getTrackTypeForElementType({ elementType: "text" })).toBe("text");
+		// graphic + sticker both map to a graphic track (non-obvious — pin it)
+		expect(getTrackTypeForElementType({ elementType: "graphic" })).toBe("graphic");
+		expect(getTrackTypeForElementType({ elementType: "sticker" })).toBe("graphic");
+		expect(getTrackTypeForElementType({ elementType: "effect" })).toBe("effect");
 	});
 
 	test("a video can go on a video track but not an audio track", () => {
