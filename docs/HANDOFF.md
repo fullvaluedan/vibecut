@@ -7,6 +7,14 @@
 > that keep rounds shipping cleanly.
 > Last updated: 2026-06-13, after round 21 (template sizing root cause + Swiss grid rebuild).
 
+> **⚡ CURRENT BRANCH WORK (2026-06-17):** the active branch `feat/premiere-parity-timeline`
+> ([PR #48](https://github.com/fullvaluedan/vibecut/pull/48)) is bringing the timeline/editor to
+> Premiere/CapCut parity. Its **detailed, current handoff is `docs/HANDOFF-premiere-parity.md`** —
+> read that for the trim-tool suite (Rate-Stretch/Ripple/Roll/Slip/Slide), the overwrite/insert edit
+> model (drop+move+multi-drop), mask depth, duplicate-track, markers, panel restyle, the reusable
+> seams, and the v1 follow-ups. **Nothing gesture-level is live-verified yet — `docs/VERIFY-premiere-parity.md`
+> is the verification gate.** This (`HANDOFF.md`) section below predates that branch.
+
 ## 1. What this is
 
 **VibeCut** (formerly FrameCut) is Dan's AI-native video editor: a fork of the archived
