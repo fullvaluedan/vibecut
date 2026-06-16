@@ -159,10 +159,19 @@ function resolveNewTrackMove({
 		0,
 		Math.min(requestedBlockStart, tracks.overlay.length),
 	);
-	const audioBaseIndex = clampAudioInsertIndex({
-		tracks,
-		insertIndex: requestedBlockStart,
-	});
+	// MoveElementCommand inserts the new overlay (video) tracks before the new audio
+	// tracks (lower display index first), which grows overlay.length before the audio
+	// display index is re-derived in insertTrackAtDisplayIndex. Offset the audio base
+	// by the number of new overlay tracks so audio members keep their intended slot
+	// among existing audio tracks — without this, the new audio track lands one slot
+	// too high when audio tracks already exist (the empty-timeline case is unaffected).
+	const newOverlayTrackCount = sortedMembers.filter(
+		(member) =>
+			getTrackTypeForElementType({ elementType: member.elementType }) !== "audio",
+	).length;
+	const audioBaseIndex =
+		clampAudioInsertIndex({ tracks, insertIndex: requestedBlockStart }) +
+		newOverlayTrackCount;
 
 	let overlayOffset = 0;
 	let audioOffset = 0;
