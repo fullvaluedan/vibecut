@@ -142,38 +142,41 @@ function resolveNewTrackMove({
 		return null;
 	}
 
-	const hasAudioMember = sortedMembers.some(
-		(member) => member.trackSection === "audio",
-	);
-	const hasNonAudioMember = sortedMembers.some(
-		(member) => member.trackSection !== "audio",
-	);
-	if (hasAudioMember && hasNonAudioMember) {
-		return null;
-	}
-
 	const clampedAnchorStartTime = clampAnchorStartTime({
 		group,
 		anchorStartTime,
 	});
-	const blockStartIndex = hasAudioMember
-		? clampAudioInsertIndex({
-				tracks,
-				insertIndex: anchorInsertIndex - anchorMemberIndex,
-			})
-		: Math.max(
-				0,
-				Math.min(anchorInsertIndex - anchorMemberIndex, tracks.overlay.length),
-			);
 
+	// New tracks land per member-type region: video/overlay members go in the
+	// overlay region, audio members in the audio region. A LINKED A/V pair
+	// dragged into new-track space therefore gets BOTH a new video track and a
+	// new audio track — previously a mixed group returned null and the move was
+	// silently cancelled. `insertTrackAtDisplayIndex` (MoveElementCommand) routes
+	// each new track to its region by type, so we only need a region-appropriate
+	// base index per member; the offsets keep multiple same-region members ordered.
+	const requestedBlockStart = anchorInsertIndex - anchorMemberIndex;
+	const overlayBaseIndex = Math.max(
+		0,
+		Math.min(requestedBlockStart, tracks.overlay.length),
+	);
+	const audioBaseIndex = clampAudioInsertIndex({
+		tracks,
+		insertIndex: requestedBlockStart,
+	});
+
+	let overlayOffset = 0;
+	let audioOffset = 0;
 	const createTracks: PlannedTrackCreation[] = sortedMembers.map(
-		(member, memberIndex) => ({
-			id: newTrackIds[memberIndex],
-			type: getTrackTypeForElementType({
+		(member, memberIndex) => {
+			const type = getTrackTypeForElementType({
 				elementType: member.elementType,
-			}),
-			index: blockStartIndex + memberIndex,
-		}),
+			});
+			const index =
+				type === "audio"
+					? audioBaseIndex + audioOffset++
+					: overlayBaseIndex + overlayOffset++;
+			return { id: newTrackIds[memberIndex], type, index };
+		},
 	);
 	const moves = sortedMembers.map((member, memberIndex) => ({
 		sourceTrackId: member.trackId,
