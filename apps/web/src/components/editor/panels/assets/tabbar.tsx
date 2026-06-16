@@ -14,6 +14,11 @@ import {
 	useAssetsPanelStore,
 } from "@/components/editor/panels/assets/assets-panel-store";
 
+// Tabs that currently render only a "coming soon" placeholder are hidden from
+// the rail until the feature ships. The keys + views stay registered (easy
+// re-enable — just remove them here) but no dead tab is shown to the user.
+const HIDDEN_TABS: ReadonlySet<string> = new Set(["transitions", "adjustment"]);
+
 export function TabBar() {
 	const { activeTab, setActiveTab } = useAssetsPanelStore();
 	const [showTopFade, setShowTopFade] = useState(false);
@@ -51,7 +56,7 @@ export function TabBar() {
 				ref={scrollRef}
 				className="scrollbar-hidden relative flex size-full p-1 flex-col items-center justify-start gap-0.5 overflow-y-auto"
 			>
-				{TAB_KEYS.map((tabKey) => {
+				{TAB_KEYS.filter((tabKey) => !HIDDEN_TABS.has(tabKey)).map((tabKey) => {
 					const tab = tabs[tabKey];
 					return (
 						<Tooltip key={tabKey} delayDuration={10}>
