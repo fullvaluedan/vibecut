@@ -266,6 +266,8 @@ export function PlaceToolOverlay({
 				width: sceneWidth,
 				height: sceneHeight,
 			}}
+			onPointerDown={(event) => event.stopPropagation()}
+			onPointerUp={(event) => event.stopPropagation()}
 			onClick={handleClick}
 		>
 			{tool.kind === "pen" && penPoints.length > 0 && (
