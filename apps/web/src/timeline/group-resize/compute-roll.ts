@@ -1,6 +1,7 @@
 import { type MediaTime, mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 import { isRetimableElement } from "@/timeline";
-import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline";
+import type { SceneTracks, TimelineElement } from "@/timeline";
+import { findTrackInSceneTracks } from "@/timeline/track-element-update";
 import { computeRollTarget } from "@/timeline/trim-tools/roll";
 import type {
 	GroupResizeMember,
@@ -8,21 +9,6 @@ import type {
 	GroupResizeUpdate,
 	ResizeSide,
 } from "./types";
-
-function findTrack({
-	tracks,
-	trackId,
-}: {
-	tracks: SceneTracks;
-	trackId: string;
-}): TimelineTrack | null {
-	if (tracks.main.id === trackId) return tracks.main;
-	return (
-		tracks.overlay.find((track) => track.id === trackId) ??
-		tracks.audio.find((track) => track.id === trackId) ??
-		null
-	);
-}
 
 const EMPTY: GroupResizeResult = { deltaTime: ZERO_MEDIA_TIME, updates: [] };
 
@@ -65,7 +51,7 @@ export function computeGroupRoll({
 	const member = members[0];
 	if (!member) return EMPTY;
 
-	const track = findTrack({ tracks, trackId: member.trackId });
+	const track = findTrackInSceneTracks({ tracks, trackId: member.trackId });
 	if (!track) return EMPTY;
 
 	const dragged = track.elements.find(
@@ -114,6 +100,17 @@ export function computeGroupRoll({
 		minDurationTicks: minDuration,
 	});
 	if (!target) return EMPTY;
+
+	// The roll clamped to zero movement (fully bottlenecked, or a zero drag): the
+	// cut didn't move, so A's duration and B's start are unchanged. Emit no
+	// updates — emitting the (identical) patches anyway would register as a change
+	// in the resize controller and produce a spurious no-op undo entry.
+	if (
+		target.clipADurationTicks === (a.duration as number) &&
+		target.clipBStartTimeTicks === (b.startTime as number)
+	) {
+		return EMPTY;
+	}
 
 	const updates: GroupResizeUpdate[] = [
 		{

@@ -16,7 +16,10 @@ import type { FreeformPathMaskParams } from "@/masks/types";
 import { getVisibleElementsWithBounds } from "@/preview/element-bounds";
 import type { ElementRef, MaskableElement } from "@/timeline";
 import { generateUUID } from "@/utils/id";
-import { usePlaceToolStore } from "@/preview/place-tool-store";
+import {
+	isStickyTimelineTool,
+	usePlaceToolStore,
+} from "@/preview/place-tool-store";
 import {
 	buildGraphicElement,
 	buildTextElement,
@@ -53,15 +56,7 @@ export function PlaceToolOverlay({
 	}, [tool, editor]);
 	// Track Select Forward, Razor, Rate-Stretch, Ripple and Roll act on the
 	// timeline, not the preview canvas, so this overlay never mounts for them.
-	if (
-		!tool ||
-		tool.kind === "track-select-forward" ||
-		tool.kind === "razor" ||
-		tool.kind === "rate-stretch" ||
-		tool.kind === "ripple" ||
-		tool.kind === "roll"
-	)
-		return null;
+	if (!tool || isStickyTimelineTool(tool)) return null;
 
 	const isMaskableType = (type: string): boolean =>
 		type === "video" || type === "image" || type === "graphic";

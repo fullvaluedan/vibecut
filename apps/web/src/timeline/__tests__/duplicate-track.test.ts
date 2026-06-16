@@ -184,6 +184,21 @@ describe("cloneTrackForDuplicate", () => {
 		expect(v.linkId).not.toBeUndefined();
 	});
 
+	test("drops a linkId whose partner is on another track (no dangling group-of-one)", () => {
+		// The source track holds a SINGLE element carrying `link-cross`; its
+		// conceptual partner (the separated audio) lives on a different track that
+		// is not part of this duplicate. Re-keying it would produce a dangling
+		// group-of-one, so the clone must be unlinked instead.
+		const source = videoTrack([videoElement({ id: "v", linkId: "link-cross" })]);
+		const clone = cloneTrackForDuplicate({
+			track: source,
+			newTrackId: "new-track",
+		});
+		expect(clone.elements[0].linkId).toBeUndefined();
+		// The source is left untouched.
+		expect(source.elements[0].linkId).toBe("link-cross");
+	});
+
 	test("an unlinked element stays unlinked", () => {
 		const source = videoTrack([
 			videoElement({ id: "v", linkId: "link-1" }),

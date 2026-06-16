@@ -57,6 +57,7 @@ export {
 	hasAnimatedMaskParams,
 	isMaskParamPath,
 	MASK_PARAM_PATH_PREFIX,
+	readScalarMaskValue,
 	resolveMaskParamsAtTime,
 } from "./mask-param-channel";
 

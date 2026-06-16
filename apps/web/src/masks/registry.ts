@@ -1,4 +1,5 @@
-import { MAX_EXPAND, MAX_FEATHER } from "@/masks/feather";
+import { MAX_EXPAND } from "@/masks/expand";
+import { MAX_FEATHER } from "@/masks/feather";
 import type { ParamDefinition } from "@/params";
 import type {
 	BaseMaskParams,

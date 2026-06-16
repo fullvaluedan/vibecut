@@ -5,6 +5,10 @@
 // of the expand math so the per-renderer draw paths and the bun tests share one
 // implementation. Everything here is plain numbers — no @/wasm, no DOM.
 
+// Bound for the mask `expand` control (U8), in canvas px. Symmetric: positive
+// grows the masked region, negative shrinks it.
+export const MAX_EXPAND = 1000;
+
 export interface ExpandPoint {
 	x: number;
 	y: number;

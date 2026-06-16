@@ -10,6 +10,7 @@ import {
 } from "@/masks";
 import {
 	buildMaskParamPath,
+	readScalarMaskValue,
 	resolveAnimationPathValueAtTime,
 	type AnimatableMaskScalarKey,
 } from "@/animation";
@@ -815,7 +816,7 @@ function MaskScalarInput({
 	const propertyPath = buildMaskParamPath({ paramKey });
 	const currentMask = renderMasks[maskIndex] ?? element.masks?.[maskIndex];
 	const rawValue = currentMask
-		? readOptionalMaskNumber({ params: currentMask.params, key: paramKey })
+		? readScalarMaskValue({ params: currentMask.params, key: paramKey })
 		: undefined;
 	const staticValue = rawValue ?? param.default;
 	const resolvedValue = resolveAnimationPathValueAtTime({
@@ -899,22 +900,6 @@ function getMaskNumber<
 	}
 
 	return value;
-}
-
-/**
- * Reads a possibly-absent numeric mask param (e.g. `scale` is not on every mask
- * type) without throwing. Returns undefined when the key is missing or not a
- * number so callers can fall back to the param default.
- */
-function readOptionalMaskNumber({
-	params,
-	key,
-}: {
-	params: Mask["params"];
-	key: AnimatableMaskScalarKey;
-}): number | undefined {
-	const value = Object.entries(params).find(([entryKey]) => entryKey === key)?.[1];
-	return typeof value === "number" ? value : undefined;
 }
 
 function MaskNumberField({

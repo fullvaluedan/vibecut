@@ -135,12 +135,17 @@ export function resolveMaskParamsAtTime<TParams extends BaseMaskParams>({
  * Reads a scalar mask param that may be absent on a given mask type (e.g. a
  * split mask has no `scale`). Returns undefined when missing or non-numeric, so
  * the resolver only animates fields the mask actually carries.
+ *
+ * `params` is typed as a plain object so this works for both the renderer's
+ * `BaseMaskParams`-shaped params and the editor's discriminated `Mask["params"]`
+ * union — any record-like params object is acceptable; only string-keyed scalar
+ * reads are performed.
  */
-function readScalarMaskValue({
+export function readScalarMaskValue({
 	params,
 	key,
 }: {
-	params: BaseMaskParams;
+	params: object;
 	key: AnimatableMaskScalarKey;
 }): number | undefined {
 	const value = Object.entries(params).find(

@@ -29,6 +29,31 @@ export type PlaceTool =
 	// until V / Escape. (No default key — Premiere's N is taken by snapping.)
 	| { kind: "roll" };
 
+// The sticky timeline tools: armed tools that act on the TIMELINE (not the
+// preview canvas) and stay armed for repeated use until V (selection) or Escape.
+// Centralized so the Escape/cancel handler and the place-tool overlay's
+// early-return share one source of truth (de-risks adding Slip/Slide).
+export type StickyTimelineToolKind =
+	| "track-select-forward"
+	| "razor"
+	| "rate-stretch"
+	| "ripple"
+	| "roll";
+
+export const STICKY_TIMELINE_TOOLS: ReadonlySet<PlaceTool["kind"]> = new Set<
+	StickyTimelineToolKind
+>(["track-select-forward", "razor", "rate-stretch", "ripple", "roll"]);
+
+/**
+ * Type-guard wrapper over `STICKY_TIMELINE_TOOLS.has` so callers that early-out
+ * on a sticky tool also narrow `tool` to the non-sticky (canvas-place) members.
+ */
+export function isStickyTimelineTool(
+	tool: PlaceTool,
+): tool is Extract<PlaceTool, { kind: StickyTimelineToolKind }> {
+	return STICKY_TIMELINE_TOOLS.has(tool.kind);
+}
+
 interface PlaceToolStore {
 	tool: PlaceTool | null;
 	setTool: (tool: PlaceTool | null) => void;

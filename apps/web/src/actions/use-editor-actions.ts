@@ -24,7 +24,10 @@ import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { toast } from "sonner";
 import { useGapSelectionStore } from "@/timeline/gap-selection-store";
-import { usePlaceToolStore } from "@/preview/place-tool-store";
+import {
+	STICKY_TIMELINE_TOOLS,
+	usePlaceToolStore,
+} from "@/preview/place-tool-store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { canToggleSourceAudio } from "@/timeline/audio-separation";
 import {
@@ -414,11 +417,8 @@ export function useEditorActions() {
 			}
 			const toolStore = usePlaceToolStore.getState();
 			if (
-				toolStore.tool?.kind === "track-select-forward" ||
-				toolStore.tool?.kind === "razor" ||
-				toolStore.tool?.kind === "rate-stretch" ||
-				toolStore.tool?.kind === "ripple" ||
-				toolStore.tool?.kind === "roll"
+				toolStore.tool &&
+				STICKY_TIMELINE_TOOLS.has(toolStore.tool.kind)
 			) {
 				toolStore.setTool(null);
 				return;
