@@ -74,6 +74,8 @@ export function useElementInteraction({
 		},
 		timeline: {
 			moveElements: (args) => editor.timeline.moveElements(args),
+			// U4: single-clip overwrite/insert MOVE onto an occupied existing track.
+			commitMoveOverwrite: (args) => editor.timeline.moveOverwrite(args),
 			// Slip body-drag: preview/commit a trim-only patch (source window slides;
 			// startTime/duration untouched), mirroring use-timeline-resize's wiring.
 			previewSlip: ({ patches }) =>

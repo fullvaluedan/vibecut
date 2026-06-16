@@ -19,6 +19,9 @@ import {
 import { TIMELINE_DRAG_THRESHOLD_PX } from "@/timeline/components/interaction";
 import type { FrameRate } from "opencut-wasm";
 import { computeDropTarget } from "@/timeline/components/drop-target";
+import { buildMoveCarveInputs } from "@/timeline/overwrite/move-overwrite-plan";
+import type { DropMode } from "@/timeline/overwrite/overwrite-plan";
+import { canElementGoOnTrack } from "@/timeline/placement";
 import { getMouseTimeFromClientX } from "@/timeline/drag-utils";
 import { generateUUID } from "@/utils/id";
 import { useTimelineStore } from "@/timeline/timeline-store";
@@ -100,6 +103,16 @@ export interface SlidePatch {
 
 export interface TimelineOps {
 	moveElements: (args: Pick<GroupMoveResult, "moves" | "createTracks">) => void;
+	// Single-clip overwrite/insert MOVE (U4): relocate the moved clip onto an
+	// OCCUPIED region of an existing track, carving it like a bin drop. Only called
+	// when the controller's conservative carve gate passes; ordinary moves use
+	// moveElements.
+	commitMoveOverwrite: (args: {
+		elementId: string;
+		targetTrackId: string;
+		newStartTime: MediaTime;
+		mode: DropMode;
+	}) => void;
 	// Slip body-drag preview/commit path (mirrors the resize-controller's). Slip
 	// changes only the source window, so these carry trim-only patches.
 	previewSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
@@ -191,6 +204,16 @@ interface SlideProgress {
 	patches: readonly SlidePatch[];
 }
 
+// The resolved single-clip carve-move for the current drop position, recomputed
+// every mousemove alongside the drop target. Present ONLY when the conservative
+// gate holds (single clip, existing type-compatible track, actual overlap); null
+// otherwise, so the ordinary move path is the default. Committed on mouseup.
+interface MoveCarvePlan {
+	elementId: string;
+	targetTrackId: string;
+	newStartTime: MediaTime;
+}
+
 interface DragProgress {
 	moveGroup: MoveGroup;
 	// Pre-minted per member so the identity of any "new track" created by
@@ -205,6 +228,9 @@ interface DragProgress {
 	currentMouseY: number;
 	groupMoveResult: GroupMoveResult | null;
 	dropTarget: DropTarget | null;
+	// Set when this drop position is a single-clip carve-move (overwrite/insert onto
+	// an occupied existing track). Takes precedence over groupMoveResult at commit.
+	moveCarve: MoveCarvePlan | null;
 }
 
 type Session =
@@ -586,6 +612,67 @@ function resolveGroupMoveForDrop({
 	);
 }
 
+/**
+ * Conservative single-clip carve-move gate (U4). Returns a carve plan ONLY when ALL
+ * hold, mirroring the DROP path's `computeDropTarget` editMode gating:
+ *   - a SINGLE clip is being moved (not a multi-selection),
+ *   - it lands on an EXISTING track row (not a new-track drop),
+ *   - that track is TYPE-COMPATIBLE with the moved element, and
+ *   - the moved clip's new span ACTUALLY OVERLAPS another clip on that track
+ *     (the moved clip itself excluded — it is the incoming element).
+ * Otherwise returns null and the caller falls through to the ordinary move
+ * resolution UNCHANGED. Strictly additive: no normal move can reach a non-null
+ * result, because a non-overlapping move fails the overlap test.
+ */
+function resolveMoveCarve({
+	group,
+	tracks,
+	anchorStartTime,
+	anchorDropTarget,
+}: {
+	group: MoveGroup;
+	tracks: SceneTracks;
+	anchorStartTime: MediaTime;
+	anchorDropTarget: DropTarget;
+}): MoveCarvePlan | null {
+	// Single clip only — multi-clip-move carve is a follow-up (U5 sibling).
+	if (group.members.length !== 1) return null;
+	// Must land on an existing track row, not a new-track drop.
+	if (anchorDropTarget.isNewTrack) return null;
+
+	const movedMember = group.members[0];
+	const targetTrack = orderedTracks(tracks)[anchorDropTarget.trackIndex];
+	if (!targetTrack) return null;
+
+	// Type-compatible target only (e.g. don't carve a video clip onto an audio track).
+	if (
+		!canElementGoOnTrack({
+			elementType: movedMember.elementType,
+			trackType: targetTrack.type,
+		})
+	) {
+		return null;
+	}
+
+	const { overlaps } = buildMoveCarveInputs({
+		targetTrackElements: targetTrack.elements.map((element) => ({
+			id: element.id,
+			startTime: element.startTime as number,
+			duration: element.duration as number,
+		})),
+		movedElementId: movedMember.elementId,
+		newStart: anchorStartTime as number,
+		newDuration: movedMember.duration as number,
+	});
+	if (!overlaps) return null;
+
+	return {
+		elementId: movedMember.elementId,
+		targetTrackId: targetTrack.id,
+		newStartTime: anchorStartTime,
+	};
+}
+
 // --- Controller ---
 
 export class ElementInteractionController {
@@ -847,19 +934,37 @@ export class ElementInteractionController {
 			}),
 		});
 
-		const nextGroupMoveResult = anchorDropTarget
-			? resolveGroupMoveForDrop({
+		// U4: a single clip landing on an OCCUPIED existing track carves it. Resolve
+		// this BEFORE the ordinary group-move — `resolveGroupMove` rejects same-track
+		// overlaps (returns null), which would otherwise flip the drop into a spurious
+		// new-track. When a carve is active we keep the drop target as the hovered
+		// EXISTING track (no new-track line) so the preview matches the carve.
+		const nextMoveCarve = anchorDropTarget
+			? resolveMoveCarve({
 					group: drag.moveGroup,
 					tracks,
 					anchorStartTime: snappedTime,
-					dropTarget: anchorDropTarget,
-					reservedNewTrackIds: drag.reservedNewTrackIds,
+					anchorDropTarget,
 				})
 			: null;
 
+		const nextGroupMoveResult =
+			anchorDropTarget && !nextMoveCarve
+				? resolveGroupMoveForDrop({
+						group: drag.moveGroup,
+						tracks,
+						anchorStartTime: snappedTime,
+						dropTarget: anchorDropTarget,
+						reservedNewTrackIds: drag.reservedNewTrackIds,
+					})
+				: null;
+
+		drag.moveCarve = nextMoveCarve;
 		drag.groupMoveResult = nextGroupMoveResult;
-		drag.dropTarget =
-			anchorDropTarget && (anchorDropTarget.isNewTrack || !nextGroupMoveResult)
+		drag.dropTarget = nextMoveCarve
+			? anchorDropTarget
+			: anchorDropTarget &&
+					(anchorDropTarget.isNewTrack || !nextGroupMoveResult)
 				? { ...anchorDropTarget, isNewTrack: true }
 				: null;
 	}
@@ -988,6 +1093,7 @@ export class ElementInteractionController {
 			currentMouseY: clientY,
 			groupMoveResult: null,
 			dropTarget: null,
+			moveCarve: null,
 		};
 
 		this.session = { kind: "dragging", mousedown, drag };
@@ -1201,7 +1307,7 @@ export class ElementInteractionController {
 		this.deps.timeline.previewSlide({ patches: slide.patches });
 	}
 
-	private handleMouseUp = ({ clientX, clientY }: MouseEvent): void => {
+	private handleMouseUp = ({ clientX, clientY, ctrlKey }: MouseEvent): void => {
 		if (this.session.kind === "pending") {
 			this.finishSession();
 			return;
@@ -1279,7 +1385,22 @@ export class ElementInteractionController {
 			return;
 		}
 
-		const { moveGroup, groupMoveResult } = drag;
+		// U4: a single-clip carve-move (overwrite default / Ctrl = insert) takes
+		// precedence over the ordinary group move. `moveCarve` is set ONLY when the
+		// conservative gate held during the drag (single clip, existing
+		// type-compatible track, actual overlap), so a normal move never lands here.
+		const { moveGroup, groupMoveResult, moveCarve } = drag;
+		if (moveCarve) {
+			this.deps.timeline.commitMoveOverwrite({
+				elementId: moveCarve.elementId,
+				targetTrackId: moveCarve.targetTrackId,
+				newStartTime: moveCarve.newStartTime,
+				mode: ctrlKey ? "insert" : "overwrite",
+			});
+			this.finishSession();
+			return;
+		}
+
 		if (!groupMoveResult) {
 			this.finishSession();
 			return;

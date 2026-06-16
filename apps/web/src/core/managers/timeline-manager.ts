@@ -33,6 +33,7 @@ import { BatchCommand } from "@/commands";
 import {
 	AddTrackCommand,
 	DuplicateTrackCommand,
+	MoveOverwriteCommand,
 	RemoveTrackCommand,
 	ToggleTrackMuteCommand,
 	ToggleTrackVisibilityCommand,
@@ -62,6 +63,7 @@ import {
 	ToggleSourceAudioSeparationCommand,
 } from "@/commands/timeline";
 import type { InsertElementParams } from "@/commands/timeline/element/insert-element";
+import type { DropMode } from "@/timeline/overwrite/overwrite-plan";
 import type {
 	PlannedElementMove,
 	PlannedTrackCreation,
@@ -179,6 +181,33 @@ export class TimelineManager {
 		const command = new MoveElementCommand({
 			moves,
 			createTracks,
+		});
+		this.editor.command.execute({ command });
+	}
+
+	/**
+	 * Premiere overwrite/insert MOVE (U4): relocate a single existing clip onto an
+	 * OCCUPIED region of its target track, carving it (overwrite default / Ctrl =
+	 * insert) like a bin drop. The controller only calls this after its conservative
+	 * gate (single clip, existing type-compatible track, actual overlap); ordinary
+	 * non-overlapping moves go through `moveElements` unchanged.
+	 */
+	moveOverwrite({
+		elementId,
+		targetTrackId,
+		newStartTime,
+		mode,
+	}: {
+		elementId: string;
+		targetTrackId: string;
+		newStartTime: MediaTime;
+		mode: DropMode;
+	}): void {
+		const command = new MoveOverwriteCommand({
+			elementId,
+			targetTrackId,
+			newStartTime,
+			mode,
 		});
 		this.editor.command.execute({ command });
 	}
