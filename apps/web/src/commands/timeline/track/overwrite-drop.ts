@@ -9,6 +9,7 @@ import {
 	planClipDrop,
 	type DropMode,
 } from "@/timeline/overwrite/overwrite-plan";
+import { buildMultiDropSpan } from "@/timeline/overwrite/multi-drop-span";
 import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
 import type {
 	CreateTimelineElement,
@@ -34,28 +35,37 @@ function findTrack({
 	);
 }
 
+function durationTicks(element: CreateTimelineElement): number {
+	return (element.duration ?? DEFAULT_NEW_ELEMENT_DURATION) as number;
+}
+
 /**
- * Premiere-style overwrite/insert drop of a single clip onto an occupied region
+ * Premiere-style overwrite/insert drop of ONE OR MORE clips onto an occupied region
  * of an existing track (OQ7 edit model). A single atomic command:
  *
- *   1. Splits clips straddling the drop boundaries via `SplitElementsCommand`,
- *      which keeps each fragment's source window / retime / animations correct.
+ *   1. Computes the COMBINED back-to-back span of the incoming clips
+ *      `[A, A + sum(durations))` (a single clip is the N=1 case) and splits clips
+ *      straddling its boundaries via `SplitElementsCommand`, which keeps each
+ *      fragment's source window / retime / animations correct.
  *   2. Carves the drop zone in one state replacement — OVERWRITE deletes the
- *      fragments inside `[A, B)` (leaving a hole); INSERT ripples every clip from
- *      A rightward by the incoming span (opening the gap, deleting nothing).
- *   3. Drops the incoming clip into the opened zone at `[A, B)`.
+ *      fragments inside the combined span (leaving a hole); INSERT ripples every clip
+ *      from A rightward by the combined span (opening the gap, deleting nothing).
+ *   3. Drops the incoming clips into the opened zone, laid out back-to-back from A in
+ *      the order supplied (U5: multi-selection drops place the whole set in one carve).
  *
- * The geometry comes from the pure, exhaustively-tested `planClipDrop`; this
- * command only applies it to real elements. Undo restores the pre-drop snapshot
- * in one step. Inserting via a direct track transform (rather than
- * InsertElementCommand) guarantees the clip lands exactly in the carved hole,
- * bypassing the normal overlap-avoidance placement.
+ * The geometry comes from the pure, exhaustively-tested `planClipDrop` (fed the
+ * combined span via `buildMultiDropSpan`); this command only applies it to real
+ * elements. Undo restores the pre-drop snapshot in one step. Inserting via a direct
+ * track transform (rather than InsertElementCommand) guarantees each clip lands
+ * exactly in the carved hole, bypassing the normal overlap-avoidance placement.
  */
 export class OverwriteDropCommand extends Command {
 	private savedState: SceneTracks | null = null;
-	private readonly elementId = generateUUID();
 	private readonly trackId: string;
-	private readonly incoming: CreateTimelineElement;
+	/** Incoming clips in placement order; a single drop is a one-element array. */
+	private readonly incoming: CreateTimelineElement[];
+	/** One fresh id per incoming clip, index-aligned with `incoming`. */
+	private readonly elementIds: string[];
 	private readonly mode: DropMode;
 
 	constructor({
@@ -64,27 +74,41 @@ export class OverwriteDropCommand extends Command {
 		mode,
 	}: {
 		trackId: string;
-		incoming: CreateTimelineElement;
+		/** A single clip, or an ordered multi-selection placed back-to-back. */
+		incoming: CreateTimelineElement | CreateTimelineElement[];
 		mode: DropMode;
 	}) {
 		super();
 		this.trackId = trackId;
-		this.incoming = incoming;
+		this.incoming = Array.isArray(incoming) ? incoming : [incoming];
+		this.elementIds = this.incoming.map(() => generateUUID());
 		this.mode = mode;
 	}
 
+	/** The first incoming clip's id — the single-clip case's stable id. */
 	getElementId(): string {
-		return this.elementId;
+		return this.elementIds[0];
+	}
+
+	/** All incoming clip ids, index-aligned with the supplied order. */
+	getElementIds(): string[] {
+		return [...this.elementIds];
 	}
 
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.scenes.getActiveScene().tracks;
 
-		const startTicks = this.incoming.startTime as number;
-		const durationTicks = (this.incoming.duration ??
-			DEFAULT_NEW_ELEMENT_DURATION) as number;
-		const endTicks = startTicks + durationTicks;
+		if (this.incoming.length === 0) return;
+
+		const startTicks = this.incoming[0].startTime as number;
+		// Combined back-to-back span: a single clip is the N=1 case (end == its end).
+		const span = buildMultiDropSpan({
+			clips: this.incoming.map((element) => ({
+				duration: durationTicks(element),
+			})),
+			start: startTicks,
+		});
 
 		const targetTrack = findTrack({
 			tracks: this.savedState,
@@ -97,8 +121,8 @@ export class OverwriteDropCommand extends Command {
 				startTime: element.startTime as number,
 				duration: element.duration as number,
 			})),
-			incomingStart: startTicks,
-			incomingEnd: endTicks,
+			incomingStart: span.start,
+			incomingEnd: span.end,
 			mode: this.mode,
 		});
 
@@ -121,10 +145,12 @@ export class OverwriteDropCommand extends Command {
 			}).execute();
 		}
 
-		// 2. + 3. Carve the drop zone and drop the incoming clip, in one replace.
+		// 2. + 3. Carve the drop zone and drop the incoming clips, in one replace.
 		const tracksAfterSplit = editor.scenes.getActiveScene().tracks;
-		const incomingElement = this.buildIncoming();
-		const delta = mediaTime({ ticks: durationTicks });
+		const incomingElements = this.buildIncoming({ offsets: span.offsets });
+		// Ripple opens a gap the size of the WHOLE combined span (overwrite never
+		// ripples; the delta is only consumed on insert).
+		const delta = mediaTime({ ticks: span.end - span.start });
 
 		const carveTrack = <T extends TimelineTrack>(track: T): T => {
 			if (track.id !== this.trackId) return track;
@@ -153,10 +179,10 @@ export class OverwriteDropCommand extends Command {
 				);
 			}
 
-			const next = [...elements, incomingElement].sort(
+			const next = [...elements, ...incomingElements].sort(
 				(a, b) => (a.startTime as number) - (b.startTime as number),
 			);
-			// The incoming element matches the target track's media type (gated by
+			// Each incoming element matches the target track's media type (gated by
 			// canElementGoOnTrack at the drop site); the widened array is sound here.
 			return { ...track, elements: next } as T;
 		};
@@ -167,9 +193,12 @@ export class OverwriteDropCommand extends Command {
 			audio: tracksAfterSplit.audio.map(carveTrack),
 		});
 
-		return createElementSelectionResult([
-			{ trackId: this.trackId, elementId: this.elementId },
-		]);
+		return createElementSelectionResult(
+			this.elementIds.map((elementId) => ({
+				trackId: this.trackId,
+				elementId,
+			})),
+		);
 	}
 
 	undo(): void {
@@ -178,14 +207,24 @@ export class OverwriteDropCommand extends Command {
 		}
 	}
 
-	private buildIncoming(): TimelineElement {
-		return {
-			...this.incoming,
-			id: this.elementId,
-			startTime: this.incoming.startTime,
-			trimStart: this.incoming.trimStart ?? ZERO_MEDIA_TIME,
-			trimEnd: this.incoming.trimEnd ?? ZERO_MEDIA_TIME,
-			duration: this.incoming.duration ?? DEFAULT_NEW_ELEMENT_DURATION,
-		} as TimelineElement;
+	/**
+	 * Materialize the incoming clips at their back-to-back offsets. Each gets a fresh
+	 * id and its absolute `startTime` from the combined span; trims default to zero.
+	 */
+	private buildIncoming({
+		offsets,
+	}: {
+		offsets: number[];
+	}): TimelineElement[] {
+		return this.incoming.map((element, index) => {
+			return {
+				...element,
+				id: this.elementIds[index],
+				startTime: mediaTime({ ticks: offsets[index] }),
+				trimStart: element.trimStart ?? ZERO_MEDIA_TIME,
+				trimEnd: element.trimEnd ?? ZERO_MEDIA_TIME,
+				duration: element.duration ?? DEFAULT_NEW_ELEMENT_DURATION,
+			} as TimelineElement;
+		});
 	}
 }

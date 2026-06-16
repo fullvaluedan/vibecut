@@ -530,41 +530,76 @@ export class DragDropController {
 			.filter((asset): asset is MediaAsset => asset != null);
 		if (queue.length === 0) return;
 
-		// Premiere edit model (OQ7): a single clip dropped onto an OCCUPIED region
-		// of the hovered track carves it (overwrite default / Ctrl=insert) rather
-		// than spawning a new track. computeDropTarget set `carveMode` only when the
-		// dropped span actually overlaps that track, so non-overlapping drops never
-		// reach this branch. Multi-drops keep the back-to-back placement below.
-		if (queue.length === 1 && target.carveMode && !target.isNewTrack) {
-			const asset = queue[0];
+		const dropTrackType: TrackType =
+			dragData.mediaType === "audio" ? "audio" : "video";
+
+		// Premiere edit model (OQ7): clips dropped onto an OCCUPIED region of the
+		// hovered track carve it (overwrite default / Ctrl=insert) rather than spawning
+		// a new track. computeDropTarget set `carveMode` only when the dropped span
+		// actually overlaps that track, so non-overlapping drops never reach here.
+		//
+		// U5 — a MULTI-selection carves too: the clips matching the carve target's type
+		// are placed back-to-back as ONE combined span and carved in a single atomic
+		// command (one undo, OQ2 default). Off-type clips (e.g. audio dropped on a video
+		// track) keep today's behavior — routed to their own new track, no carve. The
+		// single-clip case is the N=1 path through the same command, behavior-identical.
+		if (target.carveMode && !target.isNewTrack) {
 			const track = orderedTracks({
 				sceneTracks: this.config.getSceneTracks(),
 			})[target.trackIndex];
-			if (track) {
-				const element = buildElementFromMedia({
-					mediaId: asset.id,
-					mediaType: asset.type,
-					name: asset.name,
-					duration: toElementDurationTicks({ seconds: asset.duration }),
-					startTime: target.xPosition,
-				});
+			const sameType = queue.filter(
+				(asset) =>
+					(asset.type === "audio" ? "audio" : "video") === dropTrackType,
+			);
+			if (track && sameType.length > 0) {
+				const incoming = sameType.map((asset) =>
+					buildElementFromMedia({
+						mediaId: asset.id,
+						mediaType: asset.type,
+						name: asset.name,
+						duration: toElementDurationTicks({ seconds: asset.duration }),
+						// The command lays clips back-to-back from incoming[0].startTime;
+						// the rest is recomputed, so target.xPosition is the span start.
+						startTime: target.xPosition,
+					}),
+				);
 				const command = new OverwriteDropCommand({
 					trackId: track.id,
-					incoming: element,
+					incoming,
 					mode: target.carveMode,
 				});
 				this.config.executeCommand(command);
-				this.maybeSeparateAudio({
-					asset,
-					elementId: command.getElementId(),
-					trackId: track.id,
+				const placedIds = command.getElementIds();
+				sameType.forEach((asset, index) => {
+					this.maybeSeparateAudio({
+						asset,
+						elementId: placedIds[index],
+						trackId: track.id,
+					});
 				});
+				// Off-type clips never carve in v1 — route each to its own new track,
+				// matching the non-carve multi-drop path below.
+				for (const asset of queue) {
+					if ((asset.type === "audio" ? "audio" : "video") === dropTrackType) {
+						continue;
+					}
+					const element = buildElementFromMedia({
+						mediaId: asset.id,
+						mediaType: asset.type,
+						name: asset.name,
+						duration: toElementDurationTicks({ seconds: asset.duration }),
+						startTime: target.xPosition,
+					});
+					const inserted = this.insertOnNewTrack({
+						element,
+						trackType: asset.type === "audio" ? "audio" : "video",
+					});
+					this.maybeSeparateAudio({ asset, ...inserted });
+				}
 				return;
 			}
 		}
 
-		const dropTrackType: TrackType =
-			dragData.mediaType === "audio" ? "audio" : "video";
 		// One landing track per track-type; same-type clips sit back-to-back.
 		const landingByType = new Map<
 			TrackType,
