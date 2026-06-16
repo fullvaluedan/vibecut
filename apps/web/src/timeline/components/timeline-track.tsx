@@ -68,7 +68,13 @@ export function TimelineTrackContent({
 
 	// Premiere's Track Select Forward: everything to the right of the click
 	// on all tracks; Shift+click = just this track.
-	const selectForwardFrom = (event: React.MouseEvent, time: number) => {
+	const selectForwardFrom = ({
+		event,
+		time,
+	}: {
+		event: React.MouseEvent;
+		time: number;
+	}) => {
 		const tracks = editor.scenes.getActiveScene().tracks;
 		const pool = event.shiftKey
 			? [track]
@@ -79,13 +85,10 @@ export function TimelineTrackContent({
 				.map((el) => ({ trackId: t.id, elementId: el.id })),
 		);
 		editor.selection.setSelectedElements({ elements: refs });
-		// Premiere parity (#2): the track-select gesture is momentary — hand
-		// control back to the Selection tool so the freshly-selected group can be
-		// dragged immediately (the move controller is selection-driven, not
-		// tool-gated). Without this the armed tool keeps swallowing the drag
-		// (the isForwardTool gate on element mousedown), so the selection looks
-		// stuck.
-		usePlaceToolStore.getState().setTool(null);
+		// The tool STAYS armed (Premiere keeps Track Select active until you pick
+		// another tool / press V). The freshly-selected group becomes movable via
+		// the press-drag handoff in onElementMouseDown below — selecting forward
+		// then opening the move on the same pointer-down — so we no longer disarm.
 	};
 
 	// Premiere gap selection: a click between two clips selects the GAP.
@@ -112,7 +115,7 @@ export function TimelineTrackContent({
 	const handleBackgroundMouseUp = (event: React.MouseEvent): boolean => {
 		const time = clickedTimeTicks(event);
 		if (isForwardTool) {
-			selectForwardFrom(event, time);
+			selectForwardFrom({ event, time });
 			return true; // consumed — no seek, no deselect
 		}
 		if (!trySelectGapAt(time)) setGap(null);
@@ -189,13 +192,30 @@ export function TimelineTrackContent({
 									onResizeStart({ event, element, track, side })
 								}
 								onElementMouseDown={({ event, element }) => {
-									if (isForwardTool) return; // no drag with the tool armed
+									if (isForwardTool) {
+										// Track Select Forward press-drag: select the forward
+										// group, then open the move on this same pointer-down so
+										// select + drag is one continuous gesture (the drag session
+										// is built from the mousedown selection snapshot, set
+										// synchronously). Shift (this-track-only) is handled by the
+										// click path to avoid the move controller's
+										// shift = multi-select toggle.
+										if (event.shiftKey) return;
+										selectForwardFrom({ event, time: element.startTime as number });
+										onElementMouseDown({ event, element, track });
+										return;
+									}
 									onElementMouseDown({ event, element, track });
 								}}
 								onElementClick={({ event, element }) => {
 									if (isForwardTool) {
-										// Clicking a clip selects it and everything after it.
-										selectForwardFrom(event, element.startTime as number);
+										// Shift = this-track forward select on click (kept off the
+										// press-drag path). The non-shift forward selection already
+										// happened on mousedown; consume the click either way so the
+										// normal single-select can't collapse the forward group.
+										if (event.shiftKey) {
+											selectForwardFrom({ event, time: element.startTime as number });
+										}
 										return;
 									}
 									setGap(null);
