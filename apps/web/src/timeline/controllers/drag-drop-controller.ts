@@ -374,6 +374,32 @@ export class DragDropController {
 		return { elementId: insertCmd.getElementId(), trackId };
 	}
 
+	/**
+	 * Create a fresh track of `trackType`, appended to its region via the command's
+	 * default index (resolved at execute time, so it is never stale), and insert the
+	 * element onto it. Used for a multi-drop asset whose type does NOT match the drop
+	 * target — the drop position is not meaningful for it, and reusing the pre-loop
+	 * drop index would be stale after earlier inserts shifted the track list.
+	 */
+	private insertOnNewTrack({
+		element,
+		trackType,
+	}: {
+		element: CreateTimelineElement;
+		trackType: TrackType;
+	}): { elementId: string | null; trackId: string | null } {
+		const addTrackCmd = new AddTrackCommand({ type: trackType });
+		const insertCmd = new InsertElementCommand({
+			element,
+			placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
+		});
+		this.config.executeCommand(new BatchCommand([addTrackCmd, insertCmd]));
+		return {
+			elementId: insertCmd.getElementId(),
+			trackId: addTrackCmd.getTrackId(),
+		};
+	}
+
 	/** After a video lands, peel its audio off onto an audio track. */
 	private maybeSeparateAudio({
 		asset,
@@ -510,18 +536,24 @@ export class DragDropController {
 				duration: toElementDurationTicks({ seconds: asset.duration }),
 				startTime,
 			});
-			const inserted = landing
-				? this.insertOnTrack({ element, trackId: landing.trackId })
-				: this.insertAtTarget({
-						element,
-						// Land on the drop target only when its type matches the asset;
-						// otherwise create a fresh track of the asset's own type.
-						target:
-							trackType === dropTrackType
-								? { ...target, xPosition: startTime }
-								: { ...target, xPosition: startTime, isNewTrack: true },
-						trackType,
-					});
+			let inserted: { elementId: string | null; trackId: string | null };
+			if (landing) {
+				// 2nd+ asset of this type: same track as the first, addressed by id.
+				inserted = this.insertOnTrack({ element, trackId: landing.trackId });
+			} else if (trackType === dropTrackType) {
+				// First asset of the drop type: honor the drop target position.
+				inserted = this.insertAtTarget({
+					element,
+					target: { ...target, xPosition: startTime },
+					trackType,
+				});
+			} else {
+				// First asset of an off-drop type: the drop position is not meaningful
+				// for it, and reusing the pre-loop drop index would be stale after
+				// earlier inserts shifted the track list — append a fresh track to this
+				// type's region (the command resolves the index at execute time).
+				inserted = this.insertOnNewTrack({ element, trackType });
+			}
 			this.maybeSeparateAudio({ asset, ...inserted });
 			if (inserted.trackId) {
 				landingByType.set(trackType, {
