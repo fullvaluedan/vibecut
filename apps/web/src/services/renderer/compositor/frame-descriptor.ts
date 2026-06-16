@@ -1,3 +1,7 @@
+import {
+	hasAnimatedMaskParams,
+	resolveMaskParamsAtTime,
+} from "@/animation";
 import { drawCssBackground } from "@/gradients";
 import { getMaskDefinition } from "@/masks";
 import { incrementCounter } from "@/diagnostics/render-perf";
@@ -403,26 +407,38 @@ function buildMaskArtifacts({
 		return { mask: null, strokeLayer: null };
 	}
 
+	// Resolve keyframed scalar mask params (feather/centerX/centerY/rotation/
+	// scale/expand) at the element's local time before drawing. HOT PATH: only
+	// pay the resolution cost when the element actually has `mask.*` channels —
+	// a static mask short-circuits to its original params (identity).
+	const params = hasAnimatedMaskParams({ animations: node.params.animations })
+		? resolveMaskParamsAtTime({
+				params: mask.params,
+				animations: node.params.animations,
+				localTime: node.resolved?.localTime ?? 0,
+			})
+		: mask.params;
+
 	const definition = getMaskDefinition(mask.type);
 
-	if (definition.isActive?.(mask.params) === false) {
+	if (definition.isActive?.(params) === false) {
 		return { mask: null, strokeLayer: null };
 	}
 
 	const { body } = definition.renderer;
 	const usesOpaqueFastPath =
 		body.kind === "drawWithFeather" &&
-		mask.params.feather === 0 &&
+		params.feather === 0 &&
 		Boolean(body.opaqueFastPath);
 	// drawWithFeather renderers encode feathering analytically in their canvas output
 	// (e.g. split mask uses a linear gradient instead of JFA). The descriptor feather is
 	// zeroed so the GPU compositor copies the mask texture as-is and does not run a second
 	// JFA feather pass on top of an already-soft texture.
-	const feather = body.kind === "drawWithFeather" ? 0 : mask.params.feather;
+	const feather = body.kind === "drawWithFeather" ? 0 : params.feather;
 
 	const maskTextureId = `${path}:mask`;
 	const { width: canvasWidth, height: canvasHeight } = renderer;
-	const maskContentHash = `mask:${mask.type}:${JSON.stringify(mask.params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:body=${body.kind}:fastPath=${usesOpaqueFastPath}`;
+	const maskContentHash = `mask:${mask.type}:${JSON.stringify(params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:body=${body.kind}:fastPath=${usesOpaqueFastPath}`;
 	const drawMask: TextureCanvasDrawFn = (ctx) => {
 		const { canvas: elementMaskCanvas, context: elementMaskCtx } =
 			createCanvasSurface({
@@ -433,7 +449,7 @@ function buildMaskArtifacts({
 		switch (body.kind) {
 			case "fillPath": {
 				const path2d = body.buildPath({
-					resolvedParams: mask.params,
+					resolvedParams: params,
 					width: transform.width,
 					height: transform.height,
 				});
@@ -443,7 +459,7 @@ function buildMaskArtifacts({
 			}
 			case "drawOpaque":
 				body.drawOpaque({
-					resolvedParams: mask.params,
+					resolvedParams: params,
 					ctx: elementMaskCtx,
 					width: Math.round(transform.width),
 					height: Math.round(transform.height),
@@ -452,7 +468,7 @@ function buildMaskArtifacts({
 			case "drawWithFeather":
 				if (usesOpaqueFastPath && body.opaqueFastPath) {
 					const path2d = body.opaqueFastPath.buildPath({
-						resolvedParams: mask.params,
+						resolvedParams: params,
 						width: transform.width,
 						height: transform.height,
 					});
@@ -460,11 +476,11 @@ function buildMaskArtifacts({
 					elementMaskCtx.fill(path2d);
 				} else {
 					body.drawWithFeather({
-						resolvedParams: mask.params,
+						resolvedParams: params,
 						ctx: elementMaskCtx,
 						width: Math.round(transform.width),
 						height: Math.round(transform.height),
-						feather: mask.params.feather,
+						feather: params.feather,
 					});
 				}
 				break;
@@ -482,11 +498,11 @@ function buildMaskArtifacts({
 	});
 
 	const stroke = definition.renderer.stroke;
-	const hasStroke = mask.params.strokeWidth > 0 && Boolean(stroke);
+	const hasStroke = params.strokeWidth > 0 && Boolean(stroke);
 	let strokeLayer: FrameItemDescriptor | null = null;
 	if (hasStroke && stroke) {
 		const strokeTextureId = `${path}:mask-stroke`;
-		const strokeContentHash = `stroke:${mask.type}:${JSON.stringify(mask.params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:stroke=${stroke.kind}`;
+		const strokeContentHash = `stroke:${mask.type}:${JSON.stringify(params)}:${transformHash(transform)}:${canvasWidth}x${canvasHeight}:stroke=${stroke.kind}`;
 		const drawStroke: TextureCanvasDrawFn = (ctx) => {
 			const { canvas: strokeCanvas, context: strokeCtx } = createCanvasSurface({
 				width: Math.round(transform.width),
@@ -496,7 +512,7 @@ function buildMaskArtifacts({
 			switch (stroke.kind) {
 				case "renderStroke":
 					stroke.renderStroke({
-						resolvedParams: mask.params,
+						resolvedParams: params,
 						ctx: strokeCtx,
 						width: transform.width,
 						height: transform.height,
@@ -504,12 +520,12 @@ function buildMaskArtifacts({
 					break;
 				case "strokeFromPath": {
 					const strokePath = stroke.buildStrokePath({
-						resolvedParams: mask.params,
+						resolvedParams: params,
 						width: transform.width,
 						height: transform.height,
 					});
-					strokeCtx.strokeStyle = mask.params.strokeColor;
-					strokeCtx.lineWidth = mask.params.strokeWidth;
+					strokeCtx.strokeStyle = params.strokeColor;
+					strokeCtx.lineWidth = params.strokeWidth;
 					strokeCtx.stroke(strokePath);
 					break;
 				}
@@ -540,7 +556,7 @@ function buildMaskArtifacts({
 		mask: {
 			textureId: maskTextureId,
 			feather,
-			inverted: mask.params.inverted,
+			inverted: params.inverted,
 		},
 		strokeLayer,
 	};

@@ -8,7 +8,16 @@ import {
 	getMaskDefinition,
 	getMaskDefinitionsForMenu,
 } from "@/masks";
+import {
+	buildMaskParamPath,
+	resolveAnimationPathValueAtTime,
+	type AnimatableMaskScalarKey,
+} from "@/animation";
+import type { MediaTime } from "@/wasm";
 import { useEditor } from "@/editor/use-editor";
+import { useElementPlayhead } from "@/components/editor/panels/properties/hooks/use-element-playhead";
+import { useKeyframedParamProperty } from "@/components/editor/panels/properties/hooks/use-keyframed-param-property";
+import { KeyframeToggle } from "@/components/editor/panels/properties/components/keyframe-toggle";
 import { useElementPreview } from "@/timeline/hooks/use-element-preview";
 import { useMenuPreview } from "@/editor/use-menu-preview";
 import { getVisibleElementsWithBounds } from "@/preview/element-bounds";
@@ -73,12 +82,21 @@ type MasksTabProps = {
 	trackId: string;
 };
 
+type MaskKeyframeContext = {
+	element: MaskableElement;
+	maskIndex: number;
+	renderMasks: Mask[];
+	localTime: MediaTime;
+	isPlayheadWithinElementRange: boolean;
+};
+
 type MaskItemProps = {
 	trackId: string;
 	elementId: string;
 	mask: Mask;
 	previewParam: (key: string) => (value: number | string | boolean) => void;
 	onCommit: () => void;
+	keyframeContext: MaskKeyframeContext;
 };
 
 type EmptyViewProps = {
@@ -134,6 +152,10 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 			elementId: element.id,
 			fallback: element,
 		});
+	const { localTime, isPlayheadWithinElementRange } = useElementPlayhead({
+		startTime: element.startTime,
+		duration: element.duration,
+	});
 	const maskDefs = getMaskDefinitionsForMenu();
 	const tracks = useEditor(
 		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
@@ -315,6 +337,13 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 							previewMaskParam({ index, key: paramKey })
 						}
 						onCommit={commit}
+						keyframeContext={{
+							element,
+							maskIndex: index,
+							renderMasks,
+							localTime,
+							isPlayheadWithinElementRange,
+						}}
 					/>
 				))
 			)}
@@ -328,6 +357,7 @@ function MaskItem({
 	mask,
 	previewParam,
 	onCommit,
+	keyframeContext,
 }: MaskItemProps) {
 	const editor = useEditor();
 	const definition = getMaskDefinition(mask.type);
@@ -383,6 +413,9 @@ function MaskItem({
 					definition={definition}
 					previewParam={previewParam}
 					onCommit={onCommit}
+					trackId={trackId}
+					elementId={elementId}
+					keyframeContext={keyframeContext}
 				/>
 			</SectionContent>
 		</Section>
@@ -394,11 +427,17 @@ function MaskParamsFields({
 	definition,
 	previewParam,
 	onCommit,
+	trackId,
+	elementId,
+	keyframeContext,
 }: {
 	mask: Mask;
 	definition: RegisteredMaskDefinition;
 	previewParam: PreviewParamHandler;
 	onCommit: () => void;
+	trackId: string;
+	elementId: string;
+	keyframeContext: MaskKeyframeContext;
 }) {
 	const featherParam = getNumberParamDefinition({
 		definition,
@@ -415,6 +454,13 @@ function MaskParamsFields({
 	const previewNumberParam = (key: string) => (value: number) =>
 		previewParam(key)(value);
 	const previewStrokeColor = previewParam("strokeColor");
+	const scalarFieldProps = (key: AnimatableMaskScalarKey) => ({
+		param: getNumberParamDefinition({ definition, key }),
+		paramKey: key,
+		trackId,
+		elementId,
+		keyframeContext,
+	});
 	const strokeAlignParam = definition.params.find(
 		(param): param is SelectParamDefinition<string> =>
 			param.key === "strokeAlign" && param.type === "select",
@@ -436,38 +482,14 @@ function MaskParamsFields({
 			{definition.features.hasPosition &&
 				"centerX" in mask.params &&
 				"centerY" in mask.params && (
-					<SectionField label="Position">
-						<div className="flex items-center gap-2">
-							<MaskNumberField
-								className="flex-1"
-								icon="X"
-								param={getNumberParamDefinition({
-									definition,
-									key: "centerX",
-								})}
-								value={getMaskNumber({
-									params: mask.params,
-									key: "centerX",
-								})}
-								onPreview={previewNumberParam("centerX")}
-								onCommit={onCommit}
-							/>
-							<MaskNumberField
-								className="flex-1"
-								icon="Y"
-								param={getNumberParamDefinition({
-									definition,
-									key: "centerY",
-								})}
-								value={getMaskNumber({
-									params: mask.params,
-									key: "centerY",
-								})}
-								onPreview={previewNumberParam("centerY")}
-								onCommit={onCommit}
-							/>
-						</div>
-					</SectionField>
+					<MaskScalarField
+						label="Position"
+						fields={[
+							{ ...scalarFieldProps("centerX"), icon: "X", className: "flex-1" },
+							{ ...scalarFieldProps("centerY"), icon: "Y", className: "flex-1" },
+						]}
+						containerClassName="flex items-center gap-2"
+					/>
 				)}
 
 			{definition.features.sizeMode === "width-height" &&
@@ -546,68 +568,54 @@ function MaskParamsFields({
 				)}
 
 			{definition.features.sizeMode === "uniform" && "scale" in mask.params && (
-				<SectionField label="Scale">
-					<MaskNumberField
-						icon={
-							isTextMask(mask) ? <HugeiconsIcon icon={ArrowExpandIcon} /> : "S"
-						}
-						param={getNumberParamDefinition({
-							definition,
-							key: "scale",
-						})}
-						value={getMaskNumber({
-							params: mask.params,
-							key: "scale",
-						})}
-						onPreview={previewNumberParam("scale")}
-						onCommit={onCommit}
-					/>
-				</SectionField>
+				<MaskScalarField
+					label="Scale"
+					fields={[
+						{
+							...scalarFieldProps("scale"),
+							icon: isTextMask(mask) ? (
+								<HugeiconsIcon icon={ArrowExpandIcon} />
+							) : (
+								"S"
+							),
+						},
+					]}
+				/>
 			)}
 
 			{definition.features.hasRotation && "rotation" in mask.params && (
-				<SectionField label="Rotation">
-					<MaskNumberField
-						icon={<HugeiconsIcon icon={RotateClockwiseIcon} />}
-						param={getNumberParamDefinition({
-							definition,
-							key: "rotation",
-						})}
-						value={getMaskNumber({
-							params: mask.params,
-							key: "rotation",
-						})}
-						onPreview={previewNumberParam("rotation")}
-						onCommit={onCommit}
-					/>
-				</SectionField>
+				<MaskScalarField
+					label="Rotation"
+					fields={[
+						{
+							...scalarFieldProps("rotation"),
+							icon: <HugeiconsIcon icon={RotateClockwiseIcon} />,
+						},
+					]}
+				/>
 			)}
 
-			<SectionField label="Feather">
-				<MaskNumberField
-					icon={<HugeiconsIcon icon={FeatherIcon} />}
-					param={featherParam}
-					value={getMaskNumber({
-						params: mask.params,
-						key: "feather",
-					})}
-					onPreview={previewNumberParam("feather")}
-					onCommit={onCommit}
-				/>
-			</SectionField>
+			<MaskScalarField
+				label="Feather"
+				fields={[
+					{
+						...scalarFieldProps("feather"),
+						param: featherParam,
+						icon: <HugeiconsIcon icon={FeatherIcon} />,
+					},
+				]}
+			/>
 
-			<SectionField label="Expand">
-				<MaskNumberField
-					icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
-					param={expandParam}
-					value={getMaskNumber({
-						params: mask.params,
-						key: "expand",
-					})}
-					onPreview={previewNumberParam("expand")}
-					onCommit={onCommit}
-				/>
-			</SectionField>
+			<MaskScalarField
+				label="Expand"
+				fields={[
+					{
+						...scalarFieldProps("expand"),
+						param: expandParam,
+						icon: <HugeiconsIcon icon={ArrowExpandIcon} />,
+					},
+				]}
+			/>
 
 			<SectionField label="Stroke">
 				<div className="flex flex-col gap-2">
@@ -753,6 +761,117 @@ function TextMaskFields({
 	);
 }
 
+type MaskScalarFieldDescriptor = {
+	param: NumberParamDefinition;
+	paramKey: AnimatableMaskScalarKey;
+	trackId: string;
+	elementId: string;
+	keyframeContext: MaskKeyframeContext;
+	icon?: React.ReactNode;
+	className?: string;
+};
+
+// A scalar mask field (feather/centerX/centerY/rotation/scale/expand) that is
+// animatable on the keyframe engine: it shows a keyframe stopwatch, resolves
+// its displayed value from the `mask.<key>` channel at the playhead, and on
+// edit either upserts a keyframe (when animated) or writes the static param.
+function MaskScalarField({
+	label,
+	fields,
+	containerClassName,
+}: {
+	label: string;
+	fields: MaskScalarFieldDescriptor[];
+	containerClassName?: string;
+}) {
+	const single = fields.length === 1 ? fields[0] : null;
+
+	return (
+		<SectionField label={label}>
+			<div className={containerClassName ?? "flex items-center gap-2"}>
+				{fields.map((field) => (
+					<MaskScalarInput
+						key={field.paramKey}
+						field={field}
+						showInlineLabel={single === null}
+					/>
+				))}
+			</div>
+		</SectionField>
+	);
+}
+
+function MaskScalarInput({
+	field,
+	showInlineLabel,
+}: {
+	field: MaskScalarFieldDescriptor;
+	showInlineLabel: boolean;
+}) {
+	const { param, paramKey, trackId, elementId, keyframeContext, icon, className } =
+		field;
+	const { element, maskIndex, renderMasks, localTime, isPlayheadWithinElementRange } =
+		keyframeContext;
+	const propertyPath = buildMaskParamPath({ paramKey });
+	const currentMask = renderMasks[maskIndex] ?? element.masks?.[maskIndex];
+	const rawValue = currentMask
+		? readOptionalMaskNumber({ params: currentMask.params, key: paramKey })
+		: undefined;
+	const staticValue = rawValue ?? param.default;
+	const resolvedValue = resolveAnimationPathValueAtTime({
+		animations: element.animations,
+		propertyPath,
+		localTime,
+		fallbackValue: staticValue,
+	});
+	const animatedParam = useKeyframedParamProperty({
+		param,
+		trackId,
+		elementId,
+		animations: element.animations,
+		propertyPath,
+		localTime,
+		isPlayheadWithinElementRange,
+		resolvedValue,
+		buildBaseUpdates: ({ value }) => {
+			const targetMask = renderMasks[maskIndex];
+			if (!targetMask) {
+				return {};
+			}
+			return {
+				masks: renderMasks.map((existingMask, index) =>
+					index !== maskIndex
+						? existingMask
+						: withPreviewedMaskParam({
+								mask: existingMask,
+								key: paramKey,
+								value,
+							}),
+				),
+			} as Partial<MaskableElement>;
+		},
+	});
+
+	return (
+		<div className={cn("flex items-center gap-1", className)}>
+			<KeyframeToggle
+				isActive={animatedParam.isKeyframedAtTime}
+				isDisabled={!isPlayheadWithinElementRange}
+				title={`Toggle ${param.label.toLowerCase()} keyframe`}
+				onToggle={animatedParam.toggleKeyframe}
+			/>
+			<MaskNumberField
+				className="flex-1"
+				icon={icon ?? (showInlineLabel ? param.shortLabel : undefined)}
+				param={param}
+				value={resolvedValue}
+				onPreview={(value) => animatedParam.onPreview(value)}
+				onCommit={animatedParam.onCommit}
+			/>
+		</div>
+	);
+}
+
 function getNumberParamDefinition({
 	definition,
 	key,
@@ -780,6 +899,22 @@ function getMaskNumber<
 	}
 
 	return value;
+}
+
+/**
+ * Reads a possibly-absent numeric mask param (e.g. `scale` is not on every mask
+ * type) without throwing. Returns undefined when the key is missing or not a
+ * number so callers can fall back to the param default.
+ */
+function readOptionalMaskNumber({
+	params,
+	key,
+}: {
+	params: Mask["params"];
+	key: AnimatableMaskScalarKey;
+}): number | undefined {
+	const value = Object.entries(params).find(([entryKey]) => entryKey === key)?.[1];
+	return typeof value === "number" ? value : undefined;
 }
 
 function MaskNumberField({

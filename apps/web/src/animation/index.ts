@@ -51,6 +51,16 @@ export {
 } from "./graphic-param-channel";
 
 export {
+	ANIMATABLE_MASK_SCALAR_KEYS,
+	type AnimatableMaskScalarKey,
+	buildMaskParamPath,
+	hasAnimatedMaskParams,
+	isMaskParamPath,
+	MASK_PARAM_PATH_PREFIX,
+	resolveMaskParamsAtTime,
+} from "./mask-param-channel";
+
+export {
 	buildEffectParamPath,
 	isEffectParamPath,
 	parseEffectParamPath,
