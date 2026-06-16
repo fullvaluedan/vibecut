@@ -2,6 +2,7 @@ import type { EditorCore } from "@/core";
 import type { ElementBounds } from "@/preview/element-bounds";
 import type { ParamValues } from "@/params";
 import type {
+	ElementRef,
 	SceneTracks,
 	TrackType,
 	TimelineTrack,
@@ -38,6 +39,7 @@ import {
 	DeleteElementsCommand,
 	DuplicateElementsCommand,
 	UpdateElementsCommand,
+	UnlinkElementsCommand,
 	SplitElementsCommand,
 	MoveElementCommand,
 	TracksSnapshotCommand,
@@ -269,6 +271,14 @@ export class TimelineManager {
 			trackId,
 			elementId,
 		});
+		this.editor.command.execute({ command });
+	}
+
+	unlinkElements({ refs }: { refs: ElementRef[] }): void {
+		if (refs.length === 0) {
+			return;
+		}
+		const command = new UnlinkElementsCommand({ refs });
 		this.editor.command.execute({ command });
 	}
 

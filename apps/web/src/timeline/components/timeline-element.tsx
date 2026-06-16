@@ -476,6 +476,19 @@ export function TimelineElement({
 							{sourceAudioLabel}
 						</ContextMenuItem>
 					)}
+					{element.linkId && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={ScissorIcon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								editor.timeline.unlinkElements({
+									refs: [{ trackId: track.id, elementId: element.id }],
+								});
+							}}
+						>
+							Unlink
+						</ContextMenuItem>
+					)}
 					{canElementBeHidden(element) && (
 						<VisibilityMenuItem
 							element={element}
