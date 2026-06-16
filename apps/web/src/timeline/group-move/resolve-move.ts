@@ -90,9 +90,7 @@ function resolveExistingTrackMove({
 
 	const clampedAnchorStartTime = clampAnchorStartTime({
 		group,
-		tracks,
 		anchorStartTime,
-		targetTrackIdsByElementId,
 	});
 
 	const moves = group.members.map((member) => ({
@@ -156,9 +154,7 @@ function resolveNewTrackMove({
 
 	const clampedAnchorStartTime = clampAnchorStartTime({
 		group,
-		tracks,
 		anchorStartTime,
-		targetTrackIdsByElementId: new Map(),
 	});
 	const blockStartIndex = hasAudioMember
 		? clampAudioInsertIndex({
@@ -342,15 +338,16 @@ function findCompatibleTrackPlacement({
 
 function clampAnchorStartTime({
 	group,
-	tracks,
 	anchorStartTime,
-	targetTrackIdsByElementId,
 }: {
 	group: MoveGroup;
-	tracks: SceneTracks;
 	anchorStartTime: MediaTime;
-	targetTrackIdsByElementId: Map<string, string>;
 }): MediaTime {
+	// Floor only: no member may start before 0:00 (a member with a negative
+	// offset from the anchor would otherwise push the anchor below zero). The
+	// main track (V1) is intentionally NOT anchored to 0:00 — a clip may sit
+	// anywhere with a leading gap, matching Premiere. Clip overlaps are still
+	// prevented downstream by canApplyMovesToExistingTracks.
 	const minimumAnchorStartTime = group.members.reduce(
 		(minimumStartTime, member) =>
 			member.timeOffset < ZERO_MEDIA_TIME
@@ -364,49 +361,9 @@ function clampAnchorStartTime({
 				: minimumStartTime,
 		ZERO_MEDIA_TIME,
 	);
-	let clampedAnchorStartTime =
-		anchorStartTime < minimumAnchorStartTime
-			? minimumAnchorStartTime
-			: anchorStartTime;
-
-	const memberOnMainTrack = group.members.find(
-		(member) =>
-			targetTrackIdsByElementId.get(member.elementId) === tracks.main.id,
-	);
-	if (!memberOnMainTrack) {
-		return clampedAnchorStartTime;
-	}
-
-	const movingElementIds = new Set(
-		group.members.map((member) => member.elementId),
-	);
-	const requestedMainStartTime = addMediaTime({
-		a: clampedAnchorStartTime,
-		b: memberOnMainTrack.timeOffset,
-	});
-	const earliestStationaryMainStartTime = tracks.main.elements
-		.filter((element) => !movingElementIds.has(element.id))
-		.reduce<MediaTime | null>((earliestStartTime, element) => {
-			if (earliestStartTime == null || element.startTime < earliestStartTime) {
-				return element.startTime;
-			}
-
-			return earliestStartTime;
-		}, null);
-	if (
-		earliestStationaryMainStartTime == null ||
-		requestedMainStartTime <= earliestStationaryMainStartTime
-	) {
-		clampedAnchorStartTime = maxMediaTime({
-			a: minimumAnchorStartTime,
-			b: subMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: memberOnMainTrack.timeOffset,
-			}),
-		});
-	}
-
-	return clampedAnchorStartTime;
+	return anchorStartTime < minimumAnchorStartTime
+		? minimumAnchorStartTime
+		: anchorStartTime;
 }
 
 function canApplyMovesToExistingTracks({
