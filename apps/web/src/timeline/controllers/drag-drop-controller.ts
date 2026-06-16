@@ -30,7 +30,7 @@ import type {
 import type { TimelineDragData } from "@/timeline/drag";
 import type { MediaAsset } from "@/media/types";
 import type { ProcessedMediaAsset } from "@/media/processing";
-import { roundFrameTime, type MediaTime } from "@/wasm";
+import { addMediaTime, roundFrameTime, type MediaTime } from "@/wasm";
 
 // --- Config ---
 
@@ -354,6 +354,26 @@ export class DragDropController {
 		return { elementId: insertCmd.getElementId(), trackId: track.id };
 	}
 
+	/**
+	 * Insert an element onto an existing track by id — used for the 2nd+ asset of
+	 * a sequential multi-asset drop, once the first asset of that type has
+	 * established the landing track.
+	 */
+	private insertOnTrack({
+		element,
+		trackId,
+	}: {
+		element: CreateTimelineElement;
+		trackId: string;
+	}): { elementId: string | null; trackId: string | null } {
+		const insertCmd = new InsertElementCommand({
+			element,
+			placement: { mode: "explicit", trackId },
+		});
+		this.config.executeCommand(insertCmd);
+		return { elementId: insertCmd.getElementId(), trackId };
+	}
+
 	/** After a video lands, peel its audio off onto an audio track. */
 	private maybeSeparateAudio({
 		asset,
@@ -460,22 +480,59 @@ export class DragDropController {
 			return;
 		}
 
-		const mediaAsset = this.config
-			.getMediaAssets()
-			.find((asset) => asset.id === dragData.id);
-		if (!mediaAsset) return;
+		const allAssets = this.config.getMediaAssets();
+		// A multi-selection drag carries every selected id; a single drag carries
+		// just the dragged one. Insert them all sequentially, in selection order.
+		const ids =
+			dragData.selectedIds && dragData.selectedIds.length > 0
+				? dragData.selectedIds
+				: [dragData.id];
+		const queue = ids
+			.map((id) => allAssets.find((asset) => asset.id === id))
+			.filter((asset): asset is MediaAsset => asset != null);
+		if (queue.length === 0) return;
 
-		const trackType: TrackType =
+		const dropTrackType: TrackType =
 			dragData.mediaType === "audio" ? "audio" : "video";
-		const element = buildElementFromMedia({
-			mediaId: mediaAsset.id,
-			mediaType: mediaAsset.type,
-			name: mediaAsset.name,
-			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
-			startTime: target.xPosition,
-		});
-		const inserted = this.insertAtTarget({ element, target, trackType });
-		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+		// One landing track per track-type; same-type clips sit back-to-back.
+		const landingByType = new Map<
+			TrackType,
+			{ trackId: string; nextStart: MediaTime }
+		>();
+		for (const asset of queue) {
+			const trackType: TrackType = asset.type === "audio" ? "audio" : "video";
+			const landing = landingByType.get(trackType);
+			const startTime = landing ? landing.nextStart : target.xPosition;
+			const element = buildElementFromMedia({
+				mediaId: asset.id,
+				mediaType: asset.type,
+				name: asset.name,
+				duration: toElementDurationTicks({ seconds: asset.duration }),
+				startTime,
+			});
+			const inserted = landing
+				? this.insertOnTrack({ element, trackId: landing.trackId })
+				: this.insertAtTarget({
+						element,
+						// Land on the drop target only when its type matches the asset;
+						// otherwise create a fresh track of the asset's own type.
+						target:
+							trackType === dropTrackType
+								? { ...target, xPosition: startTime }
+								: { ...target, xPosition: startTime, isNewTrack: true },
+						trackType,
+					});
+			this.maybeSeparateAudio({ asset, ...inserted });
+			if (inserted.trackId) {
+				landingByType.set(trackType, {
+					trackId: inserted.trackId,
+					nextStart: addMediaTime({
+						a: startTime,
+						b: toElementDurationTicks({ seconds: asset.duration }),
+					}),
+				});
+			}
+		}
 	}
 
 	private executeEffectDrop({

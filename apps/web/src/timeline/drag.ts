@@ -10,6 +10,12 @@ export interface MediaDragData extends BaseDragData {
 	type: "media";
 	mediaType: "image" | "video" | "audio";
 	targetElementTypes?: MaskableElement["type"][];
+	/**
+	 * When the dragged bin item is part of a multi-selection, the full set of
+	 * selected asset ids (in selection order). The drop handler inserts them all
+	 * sequentially. Absent/empty → just `id` is inserted.
+	 */
+	selectedIds?: string[];
 }
 
 export interface TextDragData extends BaseDragData {
