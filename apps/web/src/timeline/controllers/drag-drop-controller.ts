@@ -14,7 +14,11 @@ import {
 	buildElementFromMedia,
 	buildEffectElement,
 } from "@/timeline/element-utils";
-import { AddTrackCommand, InsertElementCommand } from "@/commands/timeline";
+import {
+	AddTrackCommand,
+	InsertElementCommand,
+	OverwriteDropCommand,
+} from "@/commands/timeline";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -212,6 +216,13 @@ export class DragDropController {
 		});
 		const targetElementTypes = getTargetElementTypesForDrag({ dragData });
 
+		// Premiere edit model (OQ7): media drops overwrite by default, or insert
+		// when Ctrl is held. Only media carves (text/graphic/effect stay overlays).
+		let editMode: "overwrite" | "insert" | undefined;
+		if (dragData.type === "media") {
+			editMode = event.ctrlKey ? "insert" : "overwrite";
+		}
+
 		const sceneTracks = this.config.getSceneTracks();
 		const target = computeDropTarget({
 			elementType,
@@ -224,6 +235,7 @@ export class DragDropController {
 			pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 			zoomLevel: this.config.zoomLevel,
 			targetElementTypes,
+			editMode,
 		});
 
 		const fps = this.config.getActiveProjectFps();
@@ -517,6 +529,39 @@ export class DragDropController {
 			.map((id) => allAssets.find((asset) => asset.id === id))
 			.filter((asset): asset is MediaAsset => asset != null);
 		if (queue.length === 0) return;
+
+		// Premiere edit model (OQ7): a single clip dropped onto an OCCUPIED region
+		// of the hovered track carves it (overwrite default / Ctrl=insert) rather
+		// than spawning a new track. computeDropTarget set `carveMode` only when the
+		// dropped span actually overlaps that track, so non-overlapping drops never
+		// reach this branch. Multi-drops keep the back-to-back placement below.
+		if (queue.length === 1 && target.carveMode && !target.isNewTrack) {
+			const asset = queue[0];
+			const track = orderedTracks({
+				sceneTracks: this.config.getSceneTracks(),
+			})[target.trackIndex];
+			if (track) {
+				const element = buildElementFromMedia({
+					mediaId: asset.id,
+					mediaType: asset.type,
+					name: asset.name,
+					duration: toElementDurationTicks({ seconds: asset.duration }),
+					startTime: target.xPosition,
+				});
+				const command = new OverwriteDropCommand({
+					trackId: track.id,
+					incoming: element,
+					mode: target.carveMode,
+				});
+				this.config.executeCommand(command);
+				this.maybeSeparateAudio({
+					asset,
+					elementId: command.getElementId(),
+					trackId: track.id,
+				});
+				return;
+			}
+		}
 
 		const dropTrackType: TrackType =
 			dragData.mediaType === "audio" ? "audio" : "video";

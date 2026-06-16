@@ -1,6 +1,10 @@
 import type { TimelineTrack, TimelineElement } from "@/timeline";
 import type { ComputeDropTargetParams, DropTarget } from "@/timeline";
-import { preferMainTrackIndex, resolveTrackPlacement } from "@/timeline/placement";
+import {
+	canElementGoOnTrack,
+	preferMainTrackIndex,
+	resolveTrackPlacement,
+} from "@/timeline/placement";
 import { TIMELINE_TRACK_GAP_PX } from "./layout";
 import { getTrackHeight } from "./track-layout";
 import {
@@ -86,6 +90,25 @@ function getTrackAtY({
 
 const EMPTY_TARGET_ELEMENT = null;
 
+// Does the incoming span [start, end) overlap any clip on the track? Touching
+// edges (clip.end == start or clip.start == end) do not count — matches the
+// half-open-interval geometry of the overwrite/insert planner.
+function spanOverlapsTrack({
+	track,
+	start,
+	end,
+}: {
+	track: TimelineTrack;
+	start: number;
+	end: number;
+}): boolean {
+	return track.elements.some(
+		(element) =>
+			(element.startTime as number) < end &&
+			(element.startTime as number) + (element.duration as number) > start,
+	);
+}
+
 // Premiere-style: a clip dropped near the timeline start snaps to 0:00 instead
 // of leaving a tiny gap. Only applies to mouse-derived drops (not external-file
 // drops, which land at the playhead), and only on DROP — moving an existing
@@ -147,6 +170,7 @@ export function computeDropTarget({
 	startTimeOverride,
 	excludeElementId,
 	targetElementTypes,
+	editMode,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const xPosition = dropXPosition({
@@ -224,6 +248,35 @@ export function computeDropTarget({
 	}
 
 	const { relativeY } = trackAtMouse;
+
+	// Premiere edit model (OQ7): a NEW media drop that lands on an OCCUPIED region
+	// of the hovered track stays on that track and carves it (overwrite default /
+	// Ctrl=insert) instead of being slid aside or pushed to a new track. Gated on
+	// an ACTUAL overlap so non-overlapping drops keep the existing placement
+	// (prefer-V1 etc.) unchanged; only honored for new drops on a type-compatible
+	// track. executeMediaDrop reads `carveMode` to apply the carve.
+	const hoveredTrack = orderedTracks[trackAtMouse.trackIndex];
+	if (
+		editMode &&
+		excludeElementId === undefined &&
+		hoveredTrack &&
+		canElementGoOnTrack({ elementType, trackType: hoveredTrack.type }) &&
+		spanOverlapsTrack({
+			track: hoveredTrack,
+			start: xPosition as number,
+			end: (xPosition as number) + (elementDuration as number),
+		})
+	) {
+		return {
+			trackIndex: trackAtMouse.trackIndex,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition,
+			targetElement: EMPTY_TARGET_ELEMENT,
+			carveMode: editMode,
+		};
+	}
+
 	// Premiere parity (#4): when DROPPING a NEW clip, a video/image prefers the
 	// main track (V1) when it fits, instead of the overlay lane the cursor happens
 	// to be over. When MOVING an existing clip (excludeElementId is set), honor the

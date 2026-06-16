@@ -297,6 +297,12 @@ export interface DropTarget {
 	insertPosition: "above" | "below" | null;
 	xPosition: MediaTime;
 	targetElement: { elementId: string; trackId: string } | null;
+	/**
+	 * Set when the drop lands on an occupied region of an existing track under the
+	 * Premiere edit model (OQ7): "overwrite" replaces the covered frames, "insert"
+	 * ripples downstream clips right. Absent for ordinary (non-overlapping) drops.
+	 */
+	carveMode?: "overwrite" | "insert";
 }
 
 export interface ComputeDropTargetParams {
@@ -313,6 +319,13 @@ export interface ComputeDropTargetParams {
 	startTimeOverride?: MediaTime;
 	excludeElementId?: string;
 	targetElementTypes?: string[];
+	/**
+	 * Premiere edit model (OQ7): when set, a NEW media drop that overlaps the
+	 * hovered track's clips lands on that track and carves it ("overwrite" /
+	 * "insert") instead of being slid aside or pushed to a new track. Only
+	 * honored for new drops (not moves) on a type-compatible track.
+	 */
+	editMode?: "overwrite" | "insert";
 }
 
 export interface ClipboardItem {
