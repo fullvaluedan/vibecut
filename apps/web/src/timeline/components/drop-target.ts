@@ -86,10 +86,12 @@ function getTrackAtY({
 
 const EMPTY_TARGET_ELEMENT = null;
 
-// Premiere-style: a clip dropped within a few pixels of the timeline start
-// snaps to 0:00 instead of leaving a tiny gap. Only applies to mouse-derived
-// drops (not external-file drops, which land at the playhead).
-const SNAP_TO_START_PX = 10;
+// Premiere-style: a clip dropped near the timeline start snaps to 0:00 instead
+// of leaving a tiny gap. Only applies to mouse-derived drops (not external-file
+// drops, which land at the playhead), and only on DROP — moving an existing
+// clip does not snap to the head (see group-move/snap.ts). A comfortable zone
+// so it's easy to hit.
+const SNAP_TO_START_PX = 28;
 
 function dropXPosition({
 	startTimeOverride,
