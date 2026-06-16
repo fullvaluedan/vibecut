@@ -347,6 +347,9 @@ export const textMaskDefinition: MaskDefinition<"text"> = {
 			type: "text",
 			params: {
 				feather: 0,
+				// `expand` is a no-op for text masks in v1: growing/shrinking glyph
+				// outlines needs per-contour offsetting, which is out of scope.
+				expand: 0,
 				inverted: false,
 				strokeColor: "#ffffff",
 				strokeWidth: 0,

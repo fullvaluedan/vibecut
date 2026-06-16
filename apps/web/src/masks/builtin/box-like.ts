@@ -2,6 +2,7 @@ import {
 	DEFAULT_SHAPE_MASK_SHORT_SIDE_RATIO,
 	MIN_MASK_DIMENSION,
 } from "@/masks/dimensions";
+import { expandRect } from "@/masks/expand";
 import { computeFeatherUpdate } from "../param-update";
 import type {
 	BaseMaskParams,
@@ -97,6 +98,7 @@ export const BOX_LIKE_MASK_PARAMS: ParamDefinition<
 export function getDefaultBaseMaskParams(): BaseMaskParams {
 	return {
 		feather: 0,
+		expand: 0,
 		inverted: false,
 		strokeColor: "#ffffff",
 		strokeWidth: 0,
@@ -154,11 +156,20 @@ export function getBoxLikeGeometry({
 	width: number;
 	height: number;
 }) {
+	const baseWidth = Math.max(params.width, MIN_MASK_DIMENSION) * width;
+	const baseHeight = Math.max(params.height, MIN_MASK_DIMENSION) * height;
+	// `expand` grows/shrinks the region by `expand` px on each side; a contract
+	// past the size clamps to an empty extent rather than inverting.
+	const expanded = expandRect({
+		width: baseWidth,
+		height: baseHeight,
+		expand: params.expand,
+	});
 	return {
 		centerX: width / 2 + params.centerX * width,
 		centerY: height / 2 + params.centerY * height,
-		maskWidth: Math.max(params.width, MIN_MASK_DIMENSION) * width,
-		maskHeight: Math.max(params.height, MIN_MASK_DIMENSION) * height,
+		maskWidth: expanded.width,
+		maskHeight: expanded.height,
 		rotationRad: (params.rotation * Math.PI) / 180,
 	};
 }

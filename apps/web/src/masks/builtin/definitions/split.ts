@@ -224,6 +224,9 @@ export const splitMaskDefinition: MaskDefinition<"split"> = {
 			type: "split",
 			params: {
 				feather: 0,
+				// `expand` is a no-op for split: the mask is a half-plane (no
+				// enclosed region to grow/shrink). Kept for BaseMaskParams parity.
+				expand: 0,
 				inverted: false,
 				strokeColor: "#ffffff",
 				strokeWidth: 0,

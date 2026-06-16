@@ -24,6 +24,7 @@ import {
 	type FreeformPathPoint,
 } from "@/masks/freeform/path";
 import { getBoxMaskHandlePositions } from "@/masks/handle-positions";
+import { offsetPathPoints } from "@/masks/expand";
 import { computeFeatherUpdate } from "@/masks/param-update";
 import {
 	setMaskLocalCenter,
@@ -177,6 +178,49 @@ function getFreeformDisplayHandles({
 		handles,
 		overlays,
 	};
+}
+
+/**
+ * Apply the `expand` control to a freeform path by offsetting each anchor along
+ * its vertex normal (see `offsetPathPoints`). `expand` is canvas px, while path
+ * points are element-fraction coords, so we offset in element-pixel space
+ * (fraction × element-px × scale) and convert back. Bezier handles are kept
+ * relative to their (moved) anchors — this is a per-vertex offset, an
+ * approximation that does not resolve self-intersection on large contracts.
+ */
+function expandFreeformPoints({
+	params,
+	width,
+	height,
+}: {
+	params: FreeformPathMaskParams;
+	width: number;
+	height: number;
+}): FreeformPathPoint[] {
+	if (params.expand === 0) {
+		return params.path;
+	}
+
+	const scaleX = width * params.scale;
+	const scaleY = height * params.scale;
+	if (scaleX === 0 || scaleY === 0) {
+		return params.path;
+	}
+
+	const offsetAnchors = offsetPathPoints({
+		points: params.path.map((point) => ({
+			x: point.x * scaleX,
+			y: point.y * scaleY,
+		})),
+		closed: params.closed,
+		expand: params.expand,
+	});
+
+	return params.path.map((point, index) => ({
+		...point,
+		x: offsetAnchors[index].x / scaleX,
+		y: offsetAnchors[index].y / scaleY,
+	}));
 }
 
 function updateFreeformPathMaskPoint({
@@ -409,6 +453,7 @@ export const freeformMaskDefinition: MaskDefinition<"freeform"> = {
 			type: "freeform",
 			params: {
 				feather: 0,
+				expand: 0,
 				inverted: false,
 				strokeColor: "#ffffff",
 				strokeWidth: 0,
@@ -431,10 +476,10 @@ export const freeformMaskDefinition: MaskDefinition<"freeform"> = {
 			kind: "fillPath",
 			buildPath({ resolvedParams, width, height }) {
 				const params = resolvedParams;
-				const points = params.path;
 				if (!params.closed) {
 					return new Path2D();
 				}
+				const points = expandFreeformPoints({ params, width, height });
 
 				return buildFreeformPath2D({
 					points,
@@ -461,7 +506,7 @@ export const freeformMaskDefinition: MaskDefinition<"freeform"> = {
 					return;
 				}
 
-				const points = params.path;
+				const points = expandFreeformPoints({ params, width, height });
 				const path = buildFreeformPath2D({
 					points,
 					centerX: params.centerX,

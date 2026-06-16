@@ -404,6 +404,10 @@ function MaskParamsFields({
 		definition,
 		key: "feather",
 	});
+	const expandParam = getNumberParamDefinition({
+		definition,
+		key: "expand",
+	});
 	const strokeWidthParam = getNumberParamDefinition({
 		definition,
 		key: "strokeWidth",
@@ -588,6 +592,19 @@ function MaskParamsFields({
 						key: "feather",
 					})}
 					onPreview={previewNumberParam("feather")}
+					onCommit={onCommit}
+				/>
+			</SectionField>
+
+			<SectionField label="Expand">
+				<MaskNumberField
+					icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
+					param={expandParam}
+					value={getMaskNumber({
+						params: mask.params,
+						key: "expand",
+					})}
+					onPreview={previewNumberParam("expand")}
 					onCommit={onCommit}
 				/>
 			</SectionField>
