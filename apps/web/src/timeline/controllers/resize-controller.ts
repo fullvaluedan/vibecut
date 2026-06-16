@@ -13,6 +13,7 @@ import {
 import {
 	computeGroupRateStretch,
 	computeGroupResize,
+	computeGroupRippleTrim,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -41,10 +42,10 @@ import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
 
-// An edge drag is either a plain trim (default) or a Rate-Stretch (the R tool
-// is armed): the latch is read once at resize-start so a mid-drag tool change
+// An edge drag is a plain trim (default), a Rate-Stretch (R armed), or a Ripple
+// (B armed): the latch is read once at resize-start so a mid-drag tool change
 // can't flip the gesture's behaviour underneath the user.
-type ResizeMode = "trim" | "rate-stretch";
+type ResizeMode = "trim" | "rate-stretch" | "ripple";
 
 interface ResizeSession {
 	kind: "active";
@@ -242,10 +243,13 @@ export class ResizeController {
 
 		this.config.discardPreview();
 
+		const armedTool = usePlaceToolStore.getState().tool?.kind;
 		const mode: ResizeMode =
-			usePlaceToolStore.getState().tool?.kind === "rate-stretch"
+			armedTool === "rate-stretch"
 				? "rate-stretch"
-				: "trim";
+				: armedTool === "ripple"
+					? "ripple"
+					: "trim";
 
 		this.session = {
 			kind: "active",
@@ -355,25 +359,36 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result =
-			session.mode === "rate-stretch"
-				? computeGroupRateStretch({
-						members: session.members,
-						side: session.side,
-						deltaTime,
-						minDuration: mediaTime({
-							ticks: Math.round(
-								(TICKS_PER_SECOND * session.fps.denominator) /
-									session.fps.numerator,
-							),
-						}),
-					})
-				: computeGroupResize({
-						members: session.members,
-						side: session.side,
-						deltaTime,
-						fps: session.fps,
-					});
+		const minDuration = mediaTime({
+			ticks: Math.round(
+				(TICKS_PER_SECOND * session.fps.denominator) / session.fps.numerator,
+			),
+		});
+
+		let result: GroupResizeResult;
+		if (session.mode === "rate-stretch") {
+			result = computeGroupRateStretch({
+				members: session.members,
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else if (session.mode === "ripple") {
+			result = computeGroupRippleTrim({
+				members: session.members,
+				tracks: this.config.getSceneTracks(),
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else {
+			result = computeGroupResize({
+				members: session.members,
+				side: session.side,
+				deltaTime,
+				fps: session.fps,
+			});
+		}
 
 		session.result = result;
 		this.config.previewElements(result.updates);

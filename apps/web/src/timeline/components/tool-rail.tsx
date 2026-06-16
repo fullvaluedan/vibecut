@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
+	ArrowExpand02Icon,
 	ArrowRight04Icon,
 	Bookmark02Icon,
 	Cursor01Icon,
@@ -77,6 +78,14 @@ export function TimelineToolRail() {
 					setTool(
 						tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" },
 					),
+			})}
+			{railButton({
+				title:
+					"Ripple Edit (B) — drag a clip edge to trim it and ripple downstream clips (no gap)",
+				icon: ArrowExpand02Icon,
+				active: tool?.kind === "ripple",
+				onClick: () =>
+					setTool(tool?.kind === "ripple" ? null : { kind: "ripple" }),
 			})}
 			{railButton({
 				title:

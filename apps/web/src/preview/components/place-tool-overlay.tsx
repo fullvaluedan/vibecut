@@ -51,13 +51,14 @@ export function PlaceToolOverlay({
 		}
 		maskTargetRef.current = editor.selection.getSelectedElements();
 	}, [tool, editor]);
-	// Track Select Forward, Razor and Rate-Stretch act on the timeline, not the
-	// preview canvas, so this overlay never mounts for them.
+	// Track Select Forward, Razor, Rate-Stretch and Ripple act on the timeline,
+	// not the preview canvas, so this overlay never mounts for them.
 	if (
 		!tool ||
 		tool.kind === "track-select-forward" ||
 		tool.kind === "razor" ||
-		tool.kind === "rate-stretch"
+		tool.kind === "rate-stretch" ||
+		tool.kind === "ripple"
 	)
 		return null;
 

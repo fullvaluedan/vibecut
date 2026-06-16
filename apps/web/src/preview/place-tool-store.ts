@@ -19,7 +19,11 @@ export type PlaceTool =
 	// Premiere's Rate-Stretch (R): drag a clip edge to change its playback
 	// SPEED (the source window stays fixed) instead of trimming it. Sticky —
 	// stays armed until V / Escape.
-	| { kind: "rate-stretch" };
+	| { kind: "rate-stretch" }
+	// Premiere's Ripple Edit (B): drag a clip edge to trim it AND ripple every
+	// downstream clip by the same amount (no gap/overlap opens). Sticky — stays
+	// armed until V / Escape.
+	| { kind: "ripple" };
 
 interface PlaceToolStore {
 	tool: PlaceTool | null;

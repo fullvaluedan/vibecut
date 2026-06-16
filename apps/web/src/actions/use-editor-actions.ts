@@ -416,7 +416,8 @@ export function useEditorActions() {
 			if (
 				toolStore.tool?.kind === "track-select-forward" ||
 				toolStore.tool?.kind === "razor" ||
-				toolStore.tool?.kind === "rate-stretch"
+				toolStore.tool?.kind === "rate-stretch" ||
+				toolStore.tool?.kind === "ripple"
 			) {
 				toolStore.setTool(null);
 				return;
@@ -614,6 +615,18 @@ export function useEditorActions() {
 		() => {
 			const { tool, setTool } = usePlaceToolStore.getState();
 			setTool(tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" });
+		},
+		undefined,
+	);
+
+	// Premiere B: arms the Ripple Edit TOOL — drag a clip edge to trim it and
+	// ripple every downstream clip by the same amount (no gap/overlap). Sticky:
+	// stays armed until V (selection) or Escape.
+	useActionHandler(
+		"ripple-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "ripple" ? null : { kind: "ripple" });
 		},
 		undefined,
 	);

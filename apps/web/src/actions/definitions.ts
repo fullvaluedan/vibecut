@@ -145,6 +145,11 @@ export const ACTIONS = {
 			"Rate-Stretch tool — drag a clip edge to change its playback speed instead of trimming",
 		category: "editing",
 	},
+	"ripple-tool": {
+		description:
+			"Ripple Edit tool — drag a clip edge to trim it and ripple downstream clips (no gap)",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -248,6 +253,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["activate-selection-tool", ["v"]],
 	["razor-tool", ["c"]],
 	["rate-stretch-tool", ["r"]],
+	["ripple-tool", ["b"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],
