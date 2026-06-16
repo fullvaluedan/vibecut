@@ -224,16 +224,22 @@ export function computeDropTarget({
 	}
 
 	const { relativeY } = trackAtMouse;
-	// Premiere parity (#4): a video/image drop prefers the main track (V1) when
-	// it fits, instead of the overlay lane the cursor happens to be over.
-	const trackIndex = preferMainTrackIndex({
-		tracks,
-		elementType,
-		hoveredTrackIndex: trackAtMouse.trackIndex,
-		timeSpans: [
-			{ startTime: xPosition, duration: elementDuration, excludeElementId },
-		],
-	});
+	// Premiere parity (#4): when DROPPING a NEW clip, a video/image prefers the
+	// main track (V1) when it fits, instead of the overlay lane the cursor happens
+	// to be over. When MOVING an existing clip (excludeElementId is set), honor the
+	// hovered track — the user is deliberately relocating it, so don't yank it back
+	// to V1. Without this, moving a video onto another track snaps it back to V1.
+	const isMovingExistingElement = excludeElementId !== undefined;
+	const trackIndex = isMovingExistingElement
+		? trackAtMouse.trackIndex
+		: preferMainTrackIndex({
+				tracks,
+				elementType,
+				hoveredTrackIndex: trackAtMouse.trackIndex,
+				timeSpans: [
+					{ startTime: xPosition, duration: elementDuration, excludeElementId },
+				],
+			});
 	const track = orderedTracks[trackIndex];
 
 	if (targetElementTypes && targetElementTypes.length > 0) {
