@@ -6,7 +6,7 @@
  * center) and creates the element there at the playhead.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics/types";
@@ -14,7 +14,7 @@ import { buildDefaultMaskInstance } from "@/masks";
 import { freeformCanvasPointToLocal } from "@/masks/freeform/path";
 import type { FreeformPathMaskParams } from "@/masks/types";
 import { getVisibleElementsWithBounds } from "@/preview/element-bounds";
-import type { MaskableElement } from "@/timeline";
+import type { ElementRef, MaskableElement } from "@/timeline";
 import { generateUUID } from "@/utils/id";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import {
@@ -38,9 +38,19 @@ export function PlaceToolOverlay({
 	const setTool = usePlaceToolStore((s) => s.setTool);
 	// Pen tool: clicked points in scene-normalized (0..1) coordinates.
 	const [penPoints, setPenPoints] = useState<[number, number][]>([]);
+	// The maskable target is LATCHED when the Pen arms, so a mid-draw canvas click
+	// that clears the selection can't flip "mask the selected clip" into "create a
+	// new shape". finishPenAsMask consults this latch, falling back to the live
+	// selection only when nothing was latched (e.g. the clip was selected after arming).
+	const maskTargetRef = useRef<ElementRef[]>([]);
 	useEffect(() => {
-		if (tool?.kind !== "pen") setPenPoints([]);
-	}, [tool]);
+		if (tool?.kind !== "pen") {
+			setPenPoints([]);
+			maskTargetRef.current = [];
+			return;
+		}
+		maskTargetRef.current = editor.selection.getSelectedElements();
+	}, [tool, editor]);
 	// Track Select Forward acts on the timeline, not the preview canvas.
 	if (!tool || tool.kind === "track-select-forward") return null;
 
@@ -52,7 +62,12 @@ export function PlaceToolOverlay({
 	 * (never silently turn that into a shape layer — tell the user why).
 	 */
 	const finishPenAsMask = (): "masked" | "no-target" | "failed" => {
-		const selected = editor.selection.getSelectedElements();
+		// Use the target latched when the Pen armed; fall back to the live selection
+		// only if nothing was latched (clip selected after arming).
+		const selected =
+			maskTargetRef.current.length > 0
+				? maskTargetRef.current
+				: editor.selection.getSelectedElements();
 		if (selected.length !== 1) return "no-target";
 		const ref = selected[0];
 		const withTrack = editor.timeline.getElementsWithTracks({
