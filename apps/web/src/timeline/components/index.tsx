@@ -915,7 +915,10 @@ function TimelineTrackRows({
 								editor.command.execute({
 									command: new AddTrackCommand({
 										type: "video",
-										index: 0,
+										// Adjacent to the right-clicked track: a new video track
+										// inserts just above it (Premiere adds video upward); the
+										// command clamps into the video region for audio-row clicks.
+										index,
 										keepWhenEmpty: true,
 									}),
 								});
@@ -930,7 +933,10 @@ function TimelineTrackRows({
 								editor.command.execute({
 									command: new AddTrackCommand({
 										type: "audio",
-										index: Number.MAX_SAFE_INTEGER,
+										// Adjacent to the right-clicked track: a new audio track
+										// inserts just below it (Premiere adds audio downward); the
+										// command clamps into the audio region for video-row clicks.
+										index: index + 1,
 										keepWhenEmpty: true,
 									}),
 								});
