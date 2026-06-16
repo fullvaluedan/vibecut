@@ -135,6 +135,11 @@ export const ACTIONS = {
 		description: "Selection tool (arrow) — the default move/trim tool",
 		category: "editing",
 	},
+	"razor-tool": {
+		description:
+			"Razor tool — click a clip to split it at the cursor (Shift+click: split all tracks at that time)",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -236,6 +241,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["select-clip-at-playhead", ["d"]],
 	["track-select-forward", ["a"]],
 	["activate-selection-tool", ["v"]],
+	["razor-tool", ["c"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],

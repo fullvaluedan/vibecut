@@ -11,7 +11,9 @@ import { useGapSelectionStore } from "@/timeline/gap-selection-store";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { BASE_TIMELINE_PIXELS_PER_SECOND } from "@/timeline/scale";
 import { timelineTimeToPixels } from "@/timeline/pixel-utils";
-import { TICKS_PER_SECOND } from "@/wasm";
+import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
+import { razorSplitTimeTicks } from "@/timeline/razor";
+import { getElementsAtTime } from "@/timeline";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
@@ -57,6 +59,37 @@ export function TimelineTrackContent({
 	const setGap = useGapSelectionStore((s) => s.setGap);
 	const placeTool = usePlaceToolStore((s) => s.tool);
 	const isForwardTool = placeTool?.kind === "track-select-forward";
+	const isRazorTool = placeTool?.kind === "razor";
+
+	// Premiere's Razor: split the clicked clip at the cursor; Shift+click splits
+	// EVERY track at that time. Pure reuse of SplitElementsCommand via the
+	// timeline manager's splitElements (same path as the S/Ctrl+K split action).
+	// The tool STAYS armed (Premiere keeps Razor active until V / Escape).
+	const razorSplitAt = ({
+		event,
+		element,
+	}: {
+		event: React.MouseEvent;
+		element: TimelineElementType;
+	}) => {
+		const rect = event.currentTarget.getBoundingClientRect();
+		const splitTimeTicks = razorSplitTimeTicks({
+			offsetXPx: event.clientX - rect.left,
+			elementStartTimeTicks: element.startTime as number,
+			elementDurationTicks: element.duration as number,
+			zoomLevel,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		const splitTime = mediaTime({ ticks: splitTimeTicks });
+		const elements = event.shiftKey
+			? getElementsAtTime({
+					tracks: editor.scenes.getActiveScene().tracks,
+					time: splitTimeTicks,
+				})
+			: [{ trackId: track.id, elementId: element.id }];
+		if (elements.length === 0) return;
+		editor.timeline.splitElements({ elements, splitTime });
+	};
 
 	const clickedTimeTicks = (event: React.MouseEvent): number => {
 		const rect = event.currentTarget.getBoundingClientRect();
@@ -192,6 +225,13 @@ export function TimelineTrackContent({
 									onResizeStart({ event, element, track, side })
 								}
 								onElementMouseDown={({ event, element }) => {
+									if (isRazorTool) {
+										// Consume the press so the Razor click can't open a
+										// move/trim drag; the actual cut happens on click below.
+										event.preventDefault();
+										event.stopPropagation();
+										return;
+									}
 									if (isForwardTool) {
 										// Track Select Forward press-drag: select the forward
 										// group, then open the move on this same pointer-down so
@@ -208,6 +248,14 @@ export function TimelineTrackContent({
 									onElementMouseDown({ event, element, track });
 								}}
 								onElementClick={({ event, element }) => {
+									if (isRazorTool) {
+										// Plain click = split this clip at the cursor;
+										// Shift+click = split every track at that time. The tool
+										// stays armed for repeated cuts.
+										event.stopPropagation();
+										razorSplitAt({ event, element });
+										return;
+									}
 									if (isForwardTool) {
 										// Shift = this-track forward select on click (kept off the
 										// press-drag path). The non-shift forward selection already

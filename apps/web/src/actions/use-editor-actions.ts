@@ -413,7 +413,10 @@ export function useEditorActions() {
 				return;
 			}
 			const toolStore = usePlaceToolStore.getState();
-			if (toolStore.tool?.kind === "track-select-forward") {
+			if (
+				toolStore.tool?.kind === "track-select-forward" ||
+				toolStore.tool?.kind === "razor"
+			) {
 				toolStore.setTool(null);
 				return;
 			}
@@ -586,6 +589,18 @@ export function useEditorActions() {
 					? null
 					: { kind: "track-select-forward" },
 			);
+		},
+		undefined,
+	);
+
+	// Premiere C: arms the Razor TOOL — click a clip on the timeline to split
+	// it at the click position (Shift+click = split all tracks at that time).
+	// Sticky: stays armed for repeated cuts until V (selection) or Escape.
+	useActionHandler(
+		"razor-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "razor" ? null : { kind: "razor" });
 		},
 		undefined,
 	);

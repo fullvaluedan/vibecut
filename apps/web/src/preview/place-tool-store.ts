@@ -11,7 +11,11 @@ export type PlaceTool =
 	| { kind: "pen" }
 	// Premiere's Track Select Forward (A): click the timeline to select
 	// everything to the right; Shift+click limits it to the clicked track.
-	| { kind: "track-select-forward" };
+	| { kind: "track-select-forward" }
+	// Premiere's Razor (C): click a clip on the timeline to split it at the
+	// click position; Shift+click splits every track at that time. Sticky —
+	// stays armed for repeated cuts until V / Escape.
+	| { kind: "razor" };
 
 interface PlaceToolStore {
 	tool: PlaceTool | null;

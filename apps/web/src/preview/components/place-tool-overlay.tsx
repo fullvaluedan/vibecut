@@ -51,8 +51,10 @@ export function PlaceToolOverlay({
 		}
 		maskTargetRef.current = editor.selection.getSelectedElements();
 	}, [tool, editor]);
-	// Track Select Forward acts on the timeline, not the preview canvas.
-	if (!tool || tool.kind === "track-select-forward") return null;
+	// Track Select Forward and Razor act on the timeline, not the preview
+	// canvas, so this overlay never mounts for them.
+	if (!tool || tool.kind === "track-select-forward" || tool.kind === "razor")
+		return null;
 
 	const isMaskableType = (type: string): boolean =>
 		type === "video" || type === "image" || type === "graphic";

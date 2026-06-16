@@ -60,9 +60,12 @@ export function TimelineToolRail() {
 					),
 			})}
 			{railButton({
-				title: "Razor — split the selected clip at the playhead",
+				title:
+					"Razor (C) — click a clip to split it at the cursor; Shift+click splits all tracks at that time",
 				icon: ScissorIcon,
-				onClick: () => invokeAction("split"),
+				active: tool?.kind === "razor",
+				onClick: () =>
+					setTool(tool?.kind === "razor" ? null : { kind: "razor" }),
 			})}
 			{railButton({
 				title:
