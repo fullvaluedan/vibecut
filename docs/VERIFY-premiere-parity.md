@@ -27,6 +27,13 @@ Arm from the left tool rail or hotkey; **V** or **Escape** disarms any tool.
   it overwrites the covered frames. Drop onto empty space → unchanged (as before).
 - [ ] **Insert drop** — hold **Ctrl** while dropping onto an occupied spot → everything
   from the drop point ripples right (nothing overwritten). One undo reverts the whole drop.
+- [ ] **Overwrite on MOVE** — drag an existing single clip onto another clip on the
+  **same track** → it overwrites; **Ctrl** → insert/ripple. Drag to empty space → ordinary
+  move (unchanged). **Regression watch:** confirm normal/multi-select/linked-A/V/new-track
+  moves still behave exactly as before, and the carve drag-ghost has no spurious new-track line.
+- [ ] **Multi-clip overwrite drop** — select 2+ bin clips, drop onto an occupied spot →
+  they overwrite back-to-back in selection order (Ctrl = insert); one undo reverts all.
+  Mixed video+audio: the video set carves, audio routes to its own track (new path — check).
 
 ## Non-gesture batch (plan 003)
 
@@ -50,8 +57,10 @@ Arm from the left tool rail or hotkey; **V** or **Escape** disarms any tool.
 - Freeform-mask **Expand contract** on a concave shape is a vertex-normal approximation
   (no self-intersection resolution) — large inward contracts may look rough.
 - Mask **Expand is a no-op** for split and text masks (intentional).
-- Overwrite/insert is **single-clip drops only** so far; multi-clip + overwrite-on-move
-  are the next units (U4/U5, not yet built).
+- Overwrite/insert **MOVE** + **multi-clip drop** are single-clip / same-type v1: a
+  linked-A/V *move* (a multi-member group) falls through to the ordinary move (no carve),
+  and a multi-drop's off-type clips route to their own track rather than carving — both
+  are intentional v1 scope.
 
 ---
 *Generated during the plan-003 build. Tick items as you confirm them; report any that
