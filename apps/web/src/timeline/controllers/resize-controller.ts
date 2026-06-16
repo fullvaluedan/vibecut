@@ -14,6 +14,7 @@ import {
 	computeGroupRateStretch,
 	computeGroupResize,
 	computeGroupRippleTrim,
+	computeGroupRoll,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -42,10 +43,11 @@ import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
 
-// An edge drag is a plain trim (default), a Rate-Stretch (R armed), or a Ripple
-// (B armed): the latch is read once at resize-start so a mid-drag tool change
-// can't flip the gesture's behaviour underneath the user.
-type ResizeMode = "trim" | "rate-stretch" | "ripple";
+// An edge drag is a plain trim (default), a Rate-Stretch (R armed), a Ripple
+// (B armed), or a Roll (cut between two clips): the latch is read once at
+// resize-start so a mid-drag tool change can't flip the gesture's behaviour
+// underneath the user.
+type ResizeMode = "trim" | "rate-stretch" | "ripple" | "roll";
 
 interface ResizeSession {
 	kind: "active";
@@ -249,7 +251,9 @@ export class ResizeController {
 				? "rate-stretch"
 				: armedTool === "ripple"
 					? "ripple"
-					: "trim";
+					: armedTool === "roll"
+						? "roll"
+						: "trim";
 
 		this.session = {
 			kind: "active",
@@ -375,6 +379,14 @@ export class ResizeController {
 			});
 		} else if (session.mode === "ripple") {
 			result = computeGroupRippleTrim({
+				members: session.members,
+				tracks: this.config.getSceneTracks(),
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else if (session.mode === "roll") {
+			result = computeGroupRoll({
 				members: session.members,
 				tracks: this.config.getSceneTracks(),
 				side: session.side,

@@ -11,6 +11,7 @@ import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	ArrowExpand02Icon,
+	ArrowLeftRightIcon,
 	ArrowRight04Icon,
 	Bookmark02Icon,
 	Cursor01Icon,
@@ -86,6 +87,14 @@ export function TimelineToolRail() {
 				active: tool?.kind === "ripple",
 				onClick: () =>
 					setTool(tool?.kind === "ripple" ? null : { kind: "ripple" }),
+			})}
+			{railButton({
+				title:
+					"Roll Edit — drag the cut between two clips to move the edit point",
+				icon: ArrowLeftRightIcon,
+				active: tool?.kind === "roll",
+				onClick: () =>
+					setTool(tool?.kind === "roll" ? null : { kind: "roll" }),
 			})}
 			{railButton({
 				title:

@@ -23,7 +23,11 @@ export type PlaceTool =
 	// Premiere's Ripple Edit (B): drag a clip edge to trim it AND ripple every
 	// downstream clip by the same amount (no gap/overlap opens). Sticky — stays
 	// armed until V / Escape.
-	| { kind: "ripple" };
+	| { kind: "ripple" }
+	// Premiere's Roll Edit: drag the cut between two adjacent clips to move the
+	// edit point (one grows, the other shrinks; no ripple). Sticky — stays armed
+	// until V / Escape. (No default key — Premiere's N is taken by snapping.)
+	| { kind: "roll" };
 
 interface PlaceToolStore {
 	tool: PlaceTool | null;

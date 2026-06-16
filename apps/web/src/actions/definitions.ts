@@ -150,6 +150,11 @@ export const ACTIONS = {
 			"Ripple Edit tool — drag a clip edge to trim it and ripple downstream clips (no gap)",
 		category: "editing",
 	},
+	"roll-tool": {
+		description:
+			"Roll Edit tool — drag the cut between two clips to move the edit point",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",

@@ -417,7 +417,8 @@ export function useEditorActions() {
 				toolStore.tool?.kind === "track-select-forward" ||
 				toolStore.tool?.kind === "razor" ||
 				toolStore.tool?.kind === "rate-stretch" ||
-				toolStore.tool?.kind === "ripple"
+				toolStore.tool?.kind === "ripple" ||
+				toolStore.tool?.kind === "roll"
 			) {
 				toolStore.setTool(null);
 				return;
@@ -627,6 +628,18 @@ export function useEditorActions() {
 		() => {
 			const { tool, setTool } = usePlaceToolStore.getState();
 			setTool(tool?.kind === "ripple" ? null : { kind: "ripple" });
+		},
+		undefined,
+	);
+
+	// Roll Edit TOOL — drag the cut between two adjacent clips to move the edit
+	// point. No default key (Premiere's N is taken by snapping); user-bindable +
+	// armed from the tool rail. Sticky: stays armed until V (selection) or Escape.
+	useActionHandler(
+		"roll-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "roll" ? null : { kind: "roll" });
 		},
 		undefined,
 	);
