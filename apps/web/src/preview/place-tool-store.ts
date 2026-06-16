@@ -15,7 +15,11 @@ export type PlaceTool =
 	// Premiere's Razor (C): click a clip on the timeline to split it at the
 	// click position; Shift+click splits every track at that time. Sticky —
 	// stays armed for repeated cuts until V / Escape.
-	| { kind: "razor" };
+	| { kind: "razor" }
+	// Premiere's Rate-Stretch (R): drag a clip edge to change its playback
+	// SPEED (the source window stays fixed) instead of trimming it. Sticky —
+	// stays armed until V / Escape.
+	| { kind: "rate-stretch" };
 
 interface PlaceToolStore {
 	tool: PlaceTool | null;

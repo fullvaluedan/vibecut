@@ -11,12 +11,14 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import {
+	computeGroupRateStretch,
 	computeGroupResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
 	type ResizeSide,
 } from "@/timeline/group-resize";
+import { usePlaceToolStore } from "@/preview/place-tool-store";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
@@ -39,9 +41,15 @@ import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
 
+// An edge drag is either a plain trim (default) or a Rate-Stretch (the R tool
+// is armed): the latch is read once at resize-start so a mid-drag tool change
+// can't flip the gesture's behaviour underneath the user.
+type ResizeMode = "trim" | "rate-stretch";
+
 interface ResizeSession {
 	kind: "active";
 	side: ResizeSide;
+	mode: ResizeMode;
 	startX: number;
 	fps: FrameRate;
 	members: GroupResizeMember[];
@@ -234,9 +242,15 @@ export class ResizeController {
 
 		this.config.discardPreview();
 
+		const mode: ResizeMode =
+			usePlaceToolStore.getState().tool?.kind === "rate-stretch"
+				? "rate-stretch"
+				: "trim";
+
 		this.session = {
 			kind: "active",
 			side,
+			mode,
 			startX: event.clientX,
 			fps,
 			members,
@@ -341,12 +355,25 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeGroupResize({
-			members: session.members,
-			side: session.side,
-			deltaTime,
-			fps: session.fps,
-		});
+		const result =
+			session.mode === "rate-stretch"
+				? computeGroupRateStretch({
+						members: session.members,
+						side: session.side,
+						deltaTime,
+						minDuration: mediaTime({
+							ticks: Math.round(
+								(TICKS_PER_SECOND * session.fps.denominator) /
+									session.fps.numerator,
+							),
+						}),
+					})
+				: computeGroupResize({
+						members: session.members,
+						side: session.side,
+						deltaTime,
+						fps: session.fps,
+					});
 
 		session.result = result;
 		this.config.previewElements(result.updates);

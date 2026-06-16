@@ -140,6 +140,11 @@ export const ACTIONS = {
 			"Razor tool — click a clip to split it at the cursor (Shift+click: split all tracks at that time)",
 		category: "editing",
 	},
+	"rate-stretch-tool": {
+		description:
+			"Rate-Stretch tool — drag a clip edge to change its playback speed instead of trimming",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -242,6 +247,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["track-select-forward", ["a"]],
 	["activate-selection-tool", ["v"]],
 	["razor-tool", ["c"]],
+	["rate-stretch-tool", ["r"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],

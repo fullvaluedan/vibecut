@@ -415,7 +415,8 @@ export function useEditorActions() {
 			const toolStore = usePlaceToolStore.getState();
 			if (
 				toolStore.tool?.kind === "track-select-forward" ||
-				toolStore.tool?.kind === "razor"
+				toolStore.tool?.kind === "razor" ||
+				toolStore.tool?.kind === "rate-stretch"
 			) {
 				toolStore.setTool(null);
 				return;
@@ -601,6 +602,18 @@ export function useEditorActions() {
 		() => {
 			const { tool, setTool } = usePlaceToolStore.getState();
 			setTool(tool?.kind === "razor" ? null : { kind: "razor" });
+		},
+		undefined,
+	);
+
+	// Premiere R: arms the Rate-Stretch TOOL — drag a clip edge to change its
+	// playback speed (the source window stays fixed) instead of trimming.
+	// Sticky: stays armed until V (selection) or Escape.
+	useActionHandler(
+		"rate-stretch-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" });
 		},
 		undefined,
 	);

@@ -21,6 +21,9 @@ export interface GroupResizeUpdate extends ElementRef {
 		trimEnd: MediaTime;
 		startTime: MediaTime;
 		duration: MediaTime;
+		// Rate-Stretch emits a new playback rate (the update pipeline derives the
+		// matching duration); a plain trim leaves this undefined.
+		retime?: RetimeConfig;
 	};
 }
 

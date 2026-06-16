@@ -13,6 +13,7 @@ import {
 	ArrowRight04Icon,
 	Bookmark02Icon,
 	Cursor01Icon,
+	DashboardSpeed02Icon,
 	PenTool03Icon,
 	ScissorIcon,
 	TextIcon,
@@ -66,6 +67,16 @@ export function TimelineToolRail() {
 				active: tool?.kind === "razor",
 				onClick: () =>
 					setTool(tool?.kind === "razor" ? null : { kind: "razor" }),
+			})}
+			{railButton({
+				title:
+					"Rate-Stretch (R) — drag a clip edge to change its playback speed instead of trimming",
+				icon: DashboardSpeed02Icon,
+				active: tool?.kind === "rate-stretch",
+				onClick: () =>
+					setTool(
+						tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" },
+					),
 			})}
 			{railButton({
 				title:
