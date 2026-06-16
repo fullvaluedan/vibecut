@@ -2,6 +2,7 @@
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
+	Copy01Icon,
 	Delete02Icon,
 	MagicWand05Icon,
 	MusicNote03Icon,
@@ -943,6 +944,15 @@ function TimelineTrackRows({
 							}}
 						>
 							Add audio track
+						</ContextMenuItem>
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={Copy01Icon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								timeline.duplicateTrack({ trackId: track.id });
+							}}
+						>
+							Duplicate track
 						</ContextMenuItem>
 						{track.id !== mainTrackId && (
 							<>

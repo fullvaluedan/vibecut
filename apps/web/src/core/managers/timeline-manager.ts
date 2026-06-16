@@ -32,6 +32,7 @@ import { resolveAnimationTarget } from "@/timeline/animation-targets";
 import { BatchCommand } from "@/commands";
 import {
 	AddTrackCommand,
+	DuplicateTrackCommand,
 	RemoveTrackCommand,
 	ToggleTrackMuteCommand,
 	ToggleTrackVisibilityCommand,
@@ -83,6 +84,12 @@ export class TimelineManager {
 	removeTrack({ trackId }: { trackId: string }): void {
 		const command = new RemoveTrackCommand(trackId);
 		this.editor.command.execute({ command });
+	}
+
+	duplicateTrack({ trackId }: { trackId: string }): string {
+		const command = new DuplicateTrackCommand({ trackId });
+		this.editor.command.execute({ command });
+		return command.getTrackId();
 	}
 
 	insertElement({ element, placement }: InsertElementParams): void {

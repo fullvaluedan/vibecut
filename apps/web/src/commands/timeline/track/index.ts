@@ -1,4 +1,5 @@
 export { AddTrackCommand } from "./add-track";
+export { DuplicateTrackCommand } from "./duplicate-track";
 export { OverwriteDropCommand } from "./overwrite-drop";
 export { RemoveTrackCommand } from "./remove-track";
 export { ToggleTrackMuteCommand } from "./toggle-track-mute";
