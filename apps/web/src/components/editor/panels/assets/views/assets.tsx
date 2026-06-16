@@ -29,7 +29,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
-import type { MediaTime } from "@/wasm";
+import { mediaTimeFromSeconds, TICKS_PER_SECOND, type MediaTime } from "@/wasm";
 import { useEditor } from "@/editor/use-editor";
 import { useFileUpload } from "@/media/use-file-upload";
 import { invokeAction } from "@/actions";
@@ -43,6 +43,7 @@ import {
 } from "@/selection";
 import { insertMediaAsset } from "@/features/editing/insert-media";
 import { assembleBinToTimeline } from "@/features/editing/assemble";
+import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
 import {
 	type MediaSortKey,
 	type MediaSortOrder,
@@ -307,6 +308,7 @@ function MediaAssetDraggable({
 	isRounded?: boolean;
 }) {
 	const editor = useEditor();
+	const { isSelected, selectedIds } = useSelection();
 
 	const addElementAtTime = ({
 		asset,
@@ -315,8 +317,34 @@ function MediaAssetDraggable({
 		asset: MediaAsset;
 		startTime: MediaTime;
 	}) => {
-		// Premiere-style: video clips bring their audio onto a separate track.
-		insertMediaAsset({ editor, asset, startTime });
+		// When the item is part of a multi-selection, add every selected asset
+		// back-to-back from this point (Premiere-style); otherwise just this one.
+		// (insertMediaAsset also peels a video's audio onto a separate track.)
+		const assetsById = new Map(
+			editor.media.getAssets().map((a) => [a.id, a] as const),
+		);
+		const targets = isSelected(asset.id)
+			? selectedIds.flatMap((id) => {
+					const found = assetsById.get(id);
+					return found ? [found] : [];
+				})
+			: [asset];
+
+		if (targets.length <= 1) {
+			insertMediaAsset({ editor, asset: targets[0] ?? asset, startTime });
+			return;
+		}
+
+		let cursorSec = startTime / TICKS_PER_SECOND;
+		for (const target of targets) {
+			insertMediaAsset({
+				editor,
+				asset: target,
+				startTime: mediaTimeFromSeconds({ seconds: cursorSec }),
+			});
+			cursorSec +=
+				target.duration ?? DEFAULT_NEW_ELEMENT_DURATION / TICKS_PER_SECOND;
+		}
 	};
 
 	return (
