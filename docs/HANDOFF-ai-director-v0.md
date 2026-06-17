@@ -2,8 +2,8 @@
 
 **Branch:** `feat/ai-director-v0` (off `feat/ai-director-foundations` / PR #49, now merged into `feat/round26`)
 **Plan:** [`docs/plans/2026-06-17-001-feat-v0-ai-director-plan.md`](plans/2026-06-17-001-feat-v0-ai-director-plan.md) (committed `ddaac5eb`)
-**Status:** **CODE-COMPLETE — all 6 units committed. NOT yet live-verified end-to-end.**
-**Verification at handoff:** 61 director tests pass · `tsc` clean · lint clean across all changed files.
+**Status:** **CODE-COMPLETE — all 6 units committed. Boot + menu + orchestrator wiring LIVE-VERIFIED; only the LLM happy-path through the modal remains.**
+**Verification:** 61 director tests pass · `tsc` clean · lint clean. **Live (2026-06-17, dev server on this branch):** app boots, editor + full director chain (incl. `<DirectorReviewDialog/>`) mounts with **zero console errors**; AI CUT dropdown shows exactly **"AI Director — review & cut the whole video"** + **"Remove silences"** (old 4 modes gone — U5 Menu ✓); clicking **AI Director** runs the real `runDirector` spine (assemble → remove-silences) with correct stage-tracked error + busy/cleanup lifecycle (U5 orchestrator wiring ✓). **Residual:** the LLM happy path — transcribe → plan → **modal render** → accept/reject → apply → undo → taste seed — needs a real speech clip imported + a live Claude dispatch (drive with actual footage).
 
 ---
 
@@ -53,15 +53,20 @@ DirectorReviewDialog                          [director-review-dialog.tsx]
 
 ---
 
-## THE REMAINING GATE — live end-to-end verification
+## THE REMAINING GATE — the LLM happy path (the only unverified seam)
 
-**Nothing in the UI path is bun-tested** (assertion: the 61 tests cover all *logic* — planner,
-sanitizer, apply ranges, taste aggregation, signal-table fusion, decision store — plus `tsc`/lint
-on the UI). The actual in-browser flow has **never been run**. Do this first in the next session:
+**Verified live already (2026-06-17):** boot, editor mount (no console errors), the AI CUT menu
+(U5 Menu scenario, screenshot-confirmed), and the orchestrator entry + spine + error/busy
+lifecycle (clicking AI Director with no media correctly fails at "Removing silences… Add some
+footage first"). The 61 tests cover all *logic* (planner, sanitizer, apply ranges, taste
+aggregation, signal-table fusion, decision store).
 
-1. Start the dev server **on this branch**: `bun run dev:web` (port 3000) from the worktree
-   `C:\Users\danom\Videos\framecut-director`.
-2. New project → import a talking-head clip with speech.
+**Still unrun:** the LLM-dependent happy path through the modal. Do this with real footage:
+
+1. Dev server on this branch is started via the **`framecut-director`** entry in
+   `C:\Users\danom\OneDrive\Documents\Claude\.claude\launch.json` (port 3000). It needs the env
+   file — see the gotcha below.
+2. New project → import a talking-head clip **with speech**.
 3. Click **AI CUT → "AI Director — review & cut the whole video"**.
 4. Confirm: progress stages advance → `/api/director/plan` returns a plan (needs working Claude
    dispatch — same path HyperFrames uses) → the **Review modal renders** with op rows (badge +
@@ -71,7 +76,18 @@ on the UI). The actual in-browser flow has **never been run**. Do this first in 
 6. Re-run → confirm the taste note is injected (check the request body / network tab).
 
 Watch for: the renderer crash under heavy DOM evals seen earlier (recover via reload — project
-auto-saves). Drive with the dev server + `Claude_Preview` browser tools, not by hand.
+auto-saves). Drive with the dev server + `Claude_Preview` browser tools, not by hand. Note Radix
+menus open on **pointerdown**, not a synthetic `.click()` — dispatch a real PointerEvent sequence.
+
+### ENV GOTCHA (cost the first live attempt)
+
+The worktree has **no `.env.local`** (it's gitignored, so it doesn't travel with a `git worktree`).
+Without it, `apps/web/src/env/web.ts:30` throws a `ZodError` for 8 missing vars
+(`DATABASE_URL`, `BETTER_AUTH_SECRET`, `UPSTASH_*`, `MARBLE_*`, `FREESOUND_*`,
+`NEXT_PUBLIC_MARBLE_API_URL`) and every route 500s. Fix: copy it from the main clone —
+`cp C:/Users/danom/Videos/framecut/apps/web/.env.local C:/Users/danom/Videos/framecut-director/apps/web/.env.local`
+— then restart the dev server (env is read at boot, not via HMR). This is already done in the
+current worktree.
 
 ---
 
