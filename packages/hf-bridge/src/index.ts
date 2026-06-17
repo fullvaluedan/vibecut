@@ -4,9 +4,17 @@ export {
 	planEffects,
 	planRepeatCuts,
 	planJson,
+	planMultimodal,
+	partitionMultimodalBlocks,
+	buildAnthropicMultimodalBody,
+	buildCustomMultimodalBody,
+	assertSafeMultimodalHost,
+	MAX_MULTIMODAL_IMAGES,
 	type CutsMode,
 	type RepeatCut,
 	type TokenUsage,
+	type MultimodalBlock,
+	type MultimodalResult,
 } from "./author";
 export {
 	renderTemplateJob,

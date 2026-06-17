@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
 import type {
 	ClaudeAuth,
@@ -403,6 +404,251 @@ export async function planJson({
 	schema: object;
 }): Promise<{ raw: unknown; usage: TokenUsage | null }> {
 	return planDispatch(prompt, auth, schema);
+}
+
+// --- Multimodal dispatch (U5: the Director's vision pass) ---
+//
+// The Director sends sampled keyframes alongside the fused-signal text so the
+// model can judge shot type / B-roll / framing. Only `api-key` (Anthropic
+// Messages) and a vision-capable `custom` endpoint accept inline images; the
+// `claude-code` CLI cannot, so it degrades to a text-only call and flags it.
+
+/** A content block for a multimodal ask: a base64 image or a text run. */
+export type MultimodalBlock =
+	| { type: "image"; mediaType: string; dataBase64: string }
+	| { type: "text"; text: string };
+
+export interface MultimodalResult {
+	raw: unknown;
+	usage: TokenUsage | null;
+	/** True when the backend can't take images and the call ran text-only. */
+	degraded: boolean;
+}
+
+/**
+ * Default vision model for BULK classification (cheap). Hard calls (the Director
+ * plan) pass `model: "claude-opus-4-8"`. (KTD2/KTD3.)
+ */
+const DEFAULT_MULTIMODAL_MODEL = "claude-sonnet-4-6";
+
+/**
+ * Max images forwarded in one request — bounds the payload and the server's
+ * compute window. Excess images are truncated with a logged warning, never
+ * silently dropped (the caller's tiered gate should keep counts well under this).
+ */
+export const MAX_MULTIMODAL_IMAGES = 20;
+
+interface PartitionedBlocks {
+	images: Array<{ mediaType: string; dataBase64: string }>;
+	/** All text blocks concatenated, in order. */
+	text: string;
+	/** True when images were truncated to fit MAX_MULTIMODAL_IMAGES. */
+	truncated: boolean;
+}
+
+/**
+ * Split blocks into a capped image list + concatenated text. Over the cap,
+ * truncate (keeping the first N) and log a warning — never silently drop.
+ */
+export function partitionMultimodalBlocks(
+	blocks: readonly MultimodalBlock[],
+): PartitionedBlocks {
+	const allImages = blocks.filter(
+		(b): b is Extract<MultimodalBlock, { type: "image" }> => b.type === "image",
+	);
+	const text = blocks
+		.filter((b): b is Extract<MultimodalBlock, { type: "text" }> => b.type === "text")
+		.map((b) => b.text)
+		.join("\n\n");
+	const truncated = allImages.length > MAX_MULTIMODAL_IMAGES;
+	if (truncated) {
+		console.warn(
+			`[hf-bridge] planMultimodal: ${allImages.length} images exceeds cap ${MAX_MULTIMODAL_IMAGES}; truncating to ${MAX_MULTIMODAL_IMAGES} (no silent drop).`,
+		);
+	}
+	const images = allImages
+		.slice(0, MAX_MULTIMODAL_IMAGES)
+		.map(({ mediaType, dataBase64 }) => ({ mediaType, dataBase64 }));
+	return { images, text, truncated };
+}
+
+/** Anthropic Messages body: images BEFORE text, native Structured Outputs. */
+export function buildAnthropicMultimodalBody({
+	images,
+	text,
+	schema,
+	model,
+}: {
+	images: Array<{ mediaType: string; dataBase64: string }>;
+	text: string;
+	schema: object;
+	model?: string;
+}): object {
+	return {
+		model: model ?? DEFAULT_MULTIMODAL_MODEL,
+		max_tokens: 8000,
+		thinking: { type: "adaptive" },
+		output_config: { format: { type: "json_schema", schema } },
+		messages: [
+			{
+				role: "user",
+				content: [
+					...images.map((img) => ({
+						type: "image",
+						source: {
+							type: "base64",
+							media_type: img.mediaType,
+							data: img.dataBase64,
+						},
+					})),
+					{ type: "text", text },
+				],
+			},
+		],
+	};
+}
+
+/** OpenAI-compatible vision body: image_url data URIs before text. */
+export function buildCustomMultimodalBody({
+	images,
+	text,
+	model,
+}: {
+	images: Array<{ mediaType: string; dataBase64: string }>;
+	text: string;
+	model: string;
+}): object {
+	return {
+		model,
+		messages: [
+			{
+				role: "user",
+				content: [
+					...images.map((img) => ({
+						type: "image_url",
+						image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` },
+					})),
+					{ type: "text", text },
+				],
+			},
+		],
+		temperature: 0.4,
+		response_format: { type: "json_object" },
+	};
+}
+
+/**
+ * SSRF guard for the user-supplied `custom` vision endpoint — the ONLY path that
+ * forwards FOOTAGE FRAMES off-device, so it is the only one that needs the guard.
+ * Mirrors `apps/web/.../api/broll/fetch/route.ts`: https only, no IP literals, no
+ * `localhost`/`.local`/`.internal`. (Local LLM servers can't take footage frames
+ * for this reason — use `api-key` for the visual Director.) Throws on reject.
+ */
+export function assertSafeMultimodalHost(baseUrl: string): void {
+	let parsed: URL;
+	try {
+		parsed = new URL(baseUrl);
+	} catch {
+		throw new Error(`Invalid custom endpoint URL: ${baseUrl}`);
+	}
+	const host = parsed.hostname.toLowerCase();
+	if (
+		parsed.protocol !== "https:" ||
+		isIP(host) !== 0 ||
+		host === "localhost" ||
+		host.endsWith(".local") ||
+		host.endsWith(".internal")
+	) {
+		throw new Error(
+			`Custom vision endpoint host not allowed (must be a public https host): ${host}`,
+		);
+	}
+}
+
+/**
+ * Dispatch a multimodal (image+text) schema-constrained ask. `api-key` and
+ * `custom` send the images; `claude-code` strips them and runs text-only with
+ * `degraded: true`. Accumulated `TokenUsage` rides on the result.
+ */
+export async function planMultimodal({
+	blocks,
+	auth,
+	schema,
+	model,
+}: {
+	blocks: readonly MultimodalBlock[];
+	auth: ClaudeAuth;
+	schema: object;
+	model?: string;
+}): Promise<MultimodalResult> {
+	const { images, text } = partitionMultimodalBlocks(blocks);
+
+	switch (auth.mode) {
+		case "api-key": {
+			const res = await fetch("https://api.anthropic.com/v1/messages", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-api-key": auth.apiKey,
+					"anthropic-version": "2023-06-01",
+				},
+				body: JSON.stringify(
+					buildAnthropicMultimodalBody({ images, text, schema, model }),
+				),
+			});
+			if (!res.ok) {
+				const body = await res.text();
+				throw new Error(`Anthropic API error ${res.status}: ${body.slice(0, 500)}`);
+			}
+			const data = (await res.json()) as {
+				content: { type: string; text?: string }[];
+				usage?: { input_tokens?: number; output_tokens?: number };
+			};
+			const out = data.content.find((b) => b.type === "text")?.text ?? "";
+			const usage = data.usage
+				? {
+						inputTokens: data.usage.input_tokens ?? 0,
+						outputTokens: data.usage.output_tokens ?? 0,
+					}
+				: null;
+			return { raw: extractJson(out), usage, degraded: false };
+		}
+		case "custom": {
+			// Guard the host BEFORE any fetch — no frame leaves until this passes.
+			assertSafeMultimodalHost(auth.baseUrl);
+			const res = await fetch(customChatUrl(auth.baseUrl), {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					...(auth.apiKey ? { authorization: `Bearer ${auth.apiKey}` } : {}),
+				},
+				body: JSON.stringify(
+					buildCustomMultimodalBody({ images, text, model: model ?? auth.model }),
+				),
+			});
+			if (!res.ok) {
+				const body = await res.text();
+				throw new Error(`Custom model error ${res.status}: ${body.slice(0, 500)}`);
+			}
+			const data = (await res.json()) as {
+				choices?: { message?: { content?: string } }[];
+				usage?: { prompt_tokens?: number; completion_tokens?: number };
+			};
+			const out = data.choices?.[0]?.message?.content ?? "";
+			const usage = data.usage
+				? {
+						inputTokens: data.usage.prompt_tokens ?? 0,
+						outputTokens: data.usage.completion_tokens ?? 0,
+					}
+				: null;
+			return { raw: extractJson(out), usage, degraded: false };
+		}
+		default: {
+			// claude-code CLI can't take inline images: strip them, run text-only.
+			const { raw, usage } = await planViaClaudeCode(text);
+			return { raw, usage, degraded: true };
+		}
+	}
 }
 
 export async function planRepeatCuts({
