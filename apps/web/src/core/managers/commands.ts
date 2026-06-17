@@ -10,6 +10,14 @@ interface CommandHistoryEntry {
 	selectionOverride?: EditorSelectionSnapshot;
 }
 
+/**
+ * Cap undo depth. Each entry can retain cloned timeline state (e.g.
+ * TracksSnapshotCommand), so an unbounded history grows memory across a long
+ * editing session — surfacing as GC-driven playback stutter that a reload
+ * clears. 200 steps is well beyond normal reach-back.
+ */
+const MAX_HISTORY = 200;
+
 export class CommandManager {
 	public isRippleEnabled = false;
 	private history: CommandHistoryEntry[] = [];
@@ -27,7 +35,7 @@ export class CommandManager {
 		this.applyRippleIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
-		this.history.push({
+		this.pushHistory({
 			command,
 			previousSelection,
 			selectionOverride,
@@ -37,7 +45,7 @@ export class CommandManager {
 	}
 
 	push({ command }: { command: Command }): void {
-		this.history.push({
+		this.pushHistory({
 			command,
 			previousSelection: this.getSelectionSnapshot(),
 		});
@@ -83,7 +91,7 @@ export class CommandManager {
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 
-		this.history.push({
+		this.pushHistory({
 			command: entry.command,
 			previousSelection,
 			selectionOverride,
@@ -101,6 +109,15 @@ export class CommandManager {
 	clear(): void {
 		this.history = [];
 		this.redoStack = [];
+	}
+
+	private pushHistory(entry: CommandHistoryEntry): void {
+		this.history.push(entry);
+		if (this.history.length > MAX_HISTORY) {
+			// Drop the oldest steps — they become non-undoable, which bounds the
+			// retained command/undo state so a long session can't leak unbounded.
+			this.history.splice(0, this.history.length - MAX_HISTORY);
+		}
 	}
 
 	private getSelectionSnapshot(): EditorSelectionSnapshot {
