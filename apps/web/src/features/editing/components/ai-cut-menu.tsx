@@ -12,12 +12,8 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
 import { runRemoveSilences } from "@/features/editing/remove-silences";
-import {
-	runFullCleanup,
-	runRemoveRepeats,
-	runYouTubeCut,
-} from "@/features/editing/remove-repeats";
-import { runAutocut } from "@/features/editing/autocut";
+import { runDirector } from "@/features/ai-generate/director/run-director";
+import { DirectorReviewDialog } from "@/features/ai-generate/director/components/director-review-dialog";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -31,13 +27,16 @@ export function AiCutMenu() {
 	const [stage, setStage] = useState<string | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
 
-	const run = async (
-		label: string,
+	const run = async ({
+		label,
+		fn,
+	}: {
+		label: string;
 		fn: (helpers: {
 			onProgress: (detail: string) => void;
 			signal: AbortSignal;
-		}) => Promise<{ cuts: number; removedSec: number }>,
-	) => {
+		}) => Promise<{ cuts: number; removedSec: number }>;
+	}) => {
 		if (busy) return;
 		const controller = new AbortController();
 		abortRef.current = controller;
@@ -89,6 +88,47 @@ export function AiCutMenu() {
 		}
 	};
 
+	// The Director plans then opens the Review modal — the modal owns apply + the
+	// result toast, so this flow has no success toast of its own.
+	const runDirectorFlow = async () => {
+		if (busy) return;
+		const controller = new AbortController();
+		abortRef.current = controller;
+		setBusy("AI Director");
+		useAiActivityStore.getState().setBusy(true);
+		setStage("Starting...");
+		const lastStage = { current: "starting" };
+		const toastId = toast.loading("AI Director...");
+		try {
+			await runDirector({
+				editor,
+				onProgress: (detail) => {
+					lastStage.current = detail;
+					setStage(detail);
+				},
+				signal: controller.signal,
+			});
+			toast.dismiss(toastId);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (message === "Cancelled" || controller.signal.aborted) {
+				toast.info("AI Director stopped", { id: toastId });
+			} else {
+				console.error(`AI Director failed during "${lastStage.current}"`, e);
+				toast.error("AI Director failed", {
+					id: toastId,
+					duration: 15000,
+					description: `While "${lastStage.current}": ${message}`,
+				});
+			}
+		} finally {
+			abortRef.current = null;
+			setBusy(null);
+			useAiActivityStore.getState().setBusy(false);
+			setStage(null);
+		}
+	};
+
 	return (
 		<>
 			<DropdownMenu>
@@ -111,49 +151,18 @@ export function AiCutMenu() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
-					<DropdownMenuItem
-						onClick={() =>
-							void run("AI Cut", ({ onProgress, signal }) =>
-								runYouTubeCut({ editor, onProgress, signal }),
-							)
-						}
-					>
-						AI Cut — assemble + edit like a YouTube video
+					<DropdownMenuItem onClick={() => void runDirectorFlow()}>
+						AI Director — review &amp; cut the whole video
 					</DropdownMenuItem>
 					<DropdownMenuItem
 						onClick={() =>
-							void run("Remove silences", () => runRemoveSilences({ editor }))
-						}
-					>
-						Remove silences
-					</DropdownMenuItem>
-					<DropdownMenuItem
-						onClick={() =>
-							void run("Remove repeats", ({ onProgress, signal }) =>
-								runRemoveRepeats({ editor, onProgress, signal }),
-							)
-						}
-					>
-						Remove repeats (retakes)
-					</DropdownMenuItem>
-					<DropdownMenuItem
-						onClick={() =>
-							void run("Full cleanup", ({ onProgress, signal }) =>
-								runFullCleanup({ editor, onProgress, signal }),
-							)
-						}
-					>
-						Full cleanup (silences + stutters + repeats + tangents)
-					</DropdownMenuItem>
-					<DropdownMenuItem
-						onClick={() =>
-							void run("Autocut", async () => {
-								const r = await runAutocut({ editor });
-								return { cuts: r.cuts, removedSec: r.removedSec };
+							void run({
+								label: "Remove silences",
+								fn: () => runRemoveSilences({ editor }),
 							})
 						}
 					>
-						Autocut (assemble + clean)
+						Remove silences
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
@@ -168,6 +177,7 @@ export function AiCutMenu() {
 					Stop
 				</Button>
 			)}
+			<DirectorReviewDialog />
 		</>
 	);
 }
