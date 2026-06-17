@@ -68,7 +68,13 @@ export function TimelineTrackContent({
 
 	// Premiere's Track Select Forward: everything to the right of the click
 	// on all tracks; Shift+click = just this track.
-	const selectForwardFrom = (event: React.MouseEvent, time: number) => {
+	const selectForwardFrom = ({
+		event,
+		time,
+	}: {
+		event: React.MouseEvent;
+		time: number;
+	}) => {
 		const tracks = editor.scenes.getActiveScene().tracks;
 		const pool = event.shiftKey
 			? [track]
@@ -105,7 +111,7 @@ export function TimelineTrackContent({
 	const handleBackgroundMouseUp = (event: React.MouseEvent): boolean => {
 		const time = clickedTimeTicks(event);
 		if (isForwardTool) {
-			selectForwardFrom(event, time);
+			selectForwardFrom({ event, time });
 			return true; // consumed — no seek, no deselect
 		}
 		if (!trySelectGapAt(time)) setGap(null);
@@ -182,13 +188,38 @@ export function TimelineTrackContent({
 									onResizeStart({ event, element, track, side })
 								}
 								onElementMouseDown={({ event, element }) => {
-									if (isForwardTool) return; // no drag with the tool armed
+									// Track Select Forward: a click on an unselected clip selects
+									// forward (handled in onElementClick); dragging a clip that's
+									// already part of the forward selection MOVES the whole
+									// selection — so you can shove everything right and open a gap
+									// to drag a cut clip's head back into.
+									if (
+										isForwardTool &&
+										!isElementSelected({
+											trackId: track.id,
+											elementId: element.id,
+										})
+									) {
+										return;
+									}
 									onElementMouseDown({ event, element, track });
 								}}
 								onElementClick={({ event, element }) => {
 									if (isForwardTool) {
-										// Clicking a clip selects it and everything after it.
-										selectForwardFrom(event, element.startTime as number);
+										// Only (re)select forward when the clip isn't already part
+										// of the selection, so the click that follows a move-drag
+										// doesn't reset what you just moved.
+										if (
+											!isElementSelected({
+												trackId: track.id,
+												elementId: element.id,
+											})
+										) {
+											selectForwardFrom({
+											event,
+											time: element.startTime as number,
+										});
+										}
 										return;
 									}
 									setGap(null);
