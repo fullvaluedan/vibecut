@@ -22,11 +22,14 @@ class TranscriptionService {
 		audioData,
 		language = "auto",
 		modelId = DEFAULT_TRANSCRIPTION_MODEL,
+		wordTimestamps = false,
 		onProgress,
 	}: {
 		audioData: Float32Array;
 		language?: TranscriptionLanguage;
 		modelId?: TranscriptionModelId;
+		/** Request per-word timestamps (slower; segments are rebuilt from words). */
+		wordTimestamps?: boolean;
 		onProgress?: ProgressCallback;
 	}): Promise<TranscriptionResult> {
 		await this.ensureWorker({ modelId, onProgress });
@@ -54,6 +57,7 @@ class TranscriptionService {
 						resolve({
 							text: response.text,
 							segments: response.segments,
+							words: response.words,
 							language,
 						});
 						break;
@@ -76,6 +80,7 @@ class TranscriptionService {
 				type: "transcribe",
 				audio: audioData,
 				language,
+				wordTimestamps,
 			} satisfies WorkerMessage);
 		});
 	}

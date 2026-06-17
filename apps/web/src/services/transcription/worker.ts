@@ -3,7 +3,10 @@ import {
 	type AutomaticSpeechRecognitionPipeline,
 	type AutomaticSpeechRecognitionOutput,
 } from "@huggingface/transformers";
-import type { TranscriptionSegment } from "@/transcription/types";
+import type {
+	TranscriptionSegment,
+	TranscriptionWord,
+} from "@/transcription/types";
 import {
 	DEFAULT_CHUNK_LENGTH_SECONDS,
 	DEFAULT_STRIDE_SECONDS,
@@ -11,7 +14,13 @@ import {
 
 export type WorkerMessage =
 	| { type: "init"; modelId: string }
-	| { type: "transcribe"; audio: Float32Array; language: string }
+	| {
+			type: "transcribe";
+			audio: Float32Array;
+			language: string;
+			/** Opt-in: emit per-word timestamps (+ segments rebuilt from them). */
+			wordTimestamps?: boolean;
+	  }
 	| { type: "cancel" };
 
 export type WorkerResponse =
@@ -23,9 +32,48 @@ export type WorkerResponse =
 			type: "transcribe-complete";
 			text: string;
 			segments: TranscriptionSegment[];
+			/** Present only when `wordTimestamps` was requested. */
+			words?: TranscriptionWord[];
 	  }
 	| { type: "transcribe-error"; error: string }
 	| { type: "cancelled" };
+
+/** Word ends a phrase when it carries sentence-final punctuation. */
+const SENTENCE_END = /[.!?]["')\]]?\s*$/;
+/** A silence longer than this between words starts a new segment. */
+const SEGMENT_GAP_SECONDS = 0.6;
+
+/**
+ * Rebuild phrase-level segments from word timing so word mode still satisfies
+ * every segment consumer. Groups words until sentence-final punctuation or a
+ * pause; faithful enough to stand in for Whisper's native chunking.
+ */
+function segmentsFromWords(
+	words: TranscriptionWord[],
+): TranscriptionSegment[] {
+	const segments: TranscriptionSegment[] = [];
+	let text = "";
+	let start = 0;
+	let open = false;
+	for (let i = 0; i < words.length; i++) {
+		const word = words[i];
+		if (!open) {
+			text = word.text;
+			start = word.start;
+			open = true;
+		} else {
+			text += word.text;
+		}
+		const next = words[i + 1];
+		const gapToNext = next ? next.start - word.end : Infinity;
+		if (SENTENCE_END.test(word.text) || gapToNext > SEGMENT_GAP_SECONDS) {
+			const trimmed = text.trim();
+			if (trimmed) segments.push({ text: trimmed, start, end: word.end });
+			open = false;
+		}
+	}
+	return segments;
+}
 
 let transcriber: AutomaticSpeechRecognitionPipeline | null = null;
 let cancelled = false;
@@ -43,6 +91,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 			await handleTranscribe({
 				audio: message.audio,
 				language: message.language,
+				wordTimestamps: message.wordTimestamps ?? false,
 			});
 			break;
 		case "cancel":
@@ -119,9 +168,11 @@ async function handleInit({ modelId }: { modelId: string }) {
 async function handleTranscribe({
 	audio,
 	language,
+	wordTimestamps,
 }: {
 	audio: Float32Array;
 	language: string;
+	wordTimestamps: boolean;
 }) {
 	if (!transcriber) {
 		self.postMessage({
@@ -138,7 +189,7 @@ async function handleTranscribe({
 			chunk_length_s: DEFAULT_CHUNK_LENGTH_SECONDS,
 			stride_length_s: DEFAULT_STRIDE_SECONDS,
 			language: language === "auto" ? undefined : language,
-			return_timestamps: true,
+			return_timestamps: wordTimestamps ? "word" : true,
 		});
 
 		if (cancelled) return;
@@ -146,6 +197,31 @@ async function handleTranscribe({
 		const result: AutomaticSpeechRecognitionOutput = Array.isArray(rawResult)
 			? rawResult[0]
 			: rawResult;
+
+		if (wordTimestamps) {
+			// In word mode the chunks ARE words; rebuild phrase segments from them
+			// so segment consumers are unaffected, and ship the words for the
+			// Director's duplicate-word detector.
+			const words: TranscriptionWord[] = [];
+			if (result.chunks) {
+				for (const chunk of result.chunks) {
+					if (chunk.timestamp && chunk.timestamp.length >= 2) {
+						words.push({
+							text: chunk.text,
+							start: chunk.timestamp[0] ?? 0,
+							end: chunk.timestamp[1] ?? chunk.timestamp[0] ?? 0,
+						});
+					}
+				}
+			}
+			self.postMessage({
+				type: "transcribe-complete",
+				text: result.text,
+				segments: segmentsFromWords(words),
+				words,
+			} satisfies WorkerResponse);
+			return;
+		}
 
 		const segments: TranscriptionSegment[] = [];
 

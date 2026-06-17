@@ -8,9 +8,18 @@ export interface TranscriptionSegment {
 	end: number;
 }
 
+/** One word with its own timing — only produced in word-timestamp mode. */
+export interface TranscriptionWord {
+	text: string;
+	start: number;
+	end: number;
+}
+
 export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];
+	/** Present only when transcription was requested with word timestamps. */
+	words?: TranscriptionWord[];
 	language: string;
 }
 

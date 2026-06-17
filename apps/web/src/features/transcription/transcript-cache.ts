@@ -19,6 +19,12 @@ export interface TranscriptSegmentLite {
 	text: string;
 }
 
+export interface TranscriptWordLite {
+	start: number;
+	end: number;
+	text: string;
+}
+
 export interface TranscribeProgress {
 	phase: "extracting" | "downloading-model" | "initializing-model" | "transcribing";
 	detail: string;
@@ -29,6 +35,8 @@ export interface TranscribeProgress {
 interface CacheEntry {
 	hash: string;
 	segments: TranscriptSegmentLite[];
+	/** Present only when this entry was produced with word timestamps. */
+	words?: TranscriptWordLite[];
 	createdAt: number;
 }
 
@@ -116,19 +124,26 @@ function writeCache(projectId: string, entry: CacheEntry): void {
 	}
 }
 
-export function getCachedTranscript(
-	editor: EditorCore,
-): TranscriptSegmentLite[] | null {
+/** The hash-matched cache entry for the current timeline, or null on a miss. */
+function getCachedEntry(editor: EditorCore): CacheEntry | null {
 	const projectId = editor.project.getActive().metadata.id;
 	const entry = readCache()[projectId];
 	if (!entry) return null;
-	return entry.hash === computeTimelineAudioHash(editor)
-		? entry.segments
-		: null;
+	return entry.hash === computeTimelineAudioHash(editor) ? entry : null;
 }
 
-let inFlight: Promise<TranscriptSegmentLite[]> | null = null;
+export function getCachedTranscript(
+	editor: EditorCore,
+): TranscriptSegmentLite[] | null {
+	return getCachedEntry(editor)?.segments ?? null;
+}
+
+let inFlight: Promise<{
+	segments: TranscriptSegmentLite[];
+	words?: TranscriptWordLite[];
+}> | null = null;
 let inFlightHash: string | null = null;
+let inFlightHasWords = false;
 
 // Every caller that joins the same in-flight transcription subscribes here, so
 // progress reaches ALL of them — not just whoever started the run. Without this,
@@ -159,17 +174,28 @@ export async function ensureTimelineTranscript({
 	editor,
 	onProgress,
 	signal,
+	wantWords = false,
 }: {
 	editor: EditorCore;
 	onProgress?: (p: TranscribeProgress) => void;
 	signal?: AbortSignal;
-}): Promise<{ segments: TranscriptSegmentLite[]; fromCache: boolean }> {
-	const cached = getCachedTranscript(editor);
+	/** Also produce per-word timing (for the Director's duplicate detector). */
+	wantWords?: boolean;
+}): Promise<{
+	segments: TranscriptSegmentLite[];
+	words?: TranscriptWordLite[];
+	fromCache: boolean;
+}> {
+	const cachedEntry = getCachedEntry(editor);
 	// A hash match is a hit even when the transcript is EMPTY (a silent /
-	// music-only timeline) — `[]` is a valid cached result. `cached?.length`
-	// treated empty as a miss and re-ran Whisper on every consumer.
-	if (cached) {
-		return { segments: cached, fromCache: true };
+	// music-only timeline) — `[]` is a valid cached result. But a word-level
+	// request only counts as a hit when the entry actually carries words.
+	if (cachedEntry && (!wantWords || cachedEntry.words)) {
+		return {
+			segments: cachedEntry.segments,
+			words: cachedEntry.words,
+			fromCache: true,
+		};
 	}
 
 	const hash = computeTimelineAudioHash(editor);
@@ -195,16 +221,19 @@ export async function ensureTimelineTranscript({
 		if (lastProgress) onProgress(lastProgress);
 	}
 
-	if (inFlight && inFlightHash === hash) {
+	if (inFlight && inFlightHash === hash && (!wantWords || inFlightHasWords)) {
 		try {
-			const segments = await abortable(inFlight);
-			return { segments, fromCache: false };
+			const result = await abortable(inFlight);
+			return { ...result, fromCache: false };
 		} finally {
 			if (onProgress) progressSubscribers.delete(onProgress);
 		}
 	}
 
-	const run = async (): Promise<TranscriptSegmentLite[]> => {
+	const run = async (): Promise<{
+		segments: TranscriptSegmentLite[];
+		words?: TranscriptWordLite[];
+	}> => {
 		const totalDuration = editor.timeline.getTotalDuration();
 		if (totalDuration / TICKS_PER_SECOND < 1) {
 			throw new Error("Add some footage to the timeline first.");
@@ -235,6 +264,7 @@ export async function ensureTimelineTranscript({
 		try {
 			const transcript = await transcriptionService.transcribe({
 				audioData: samples,
+				wordTimestamps: wantWords,
 				onProgress: (p) => {
 					if (p.status === "loading-model") {
 						if (p.progress >= 100) {
@@ -274,22 +304,27 @@ export async function ensureTimelineTranscript({
 			const segments: TranscriptSegmentLite[] = transcript.segments.map(
 				(s) => ({ start: s.start, end: s.end, text: s.text }),
 			);
-			writeCache(projectId, { hash, segments, createdAt: Date.now() });
-			return segments;
+			const words: TranscriptWordLite[] | undefined = transcript.words?.map(
+				(word) => ({ start: word.start, end: word.end, text: word.text }),
+			);
+			writeCache(projectId, { hash, segments, words, createdAt: Date.now() });
+			return { segments, words };
 		} finally {
 			stopTicker();
 		}
 	};
 
+	inFlightHasWords = wantWords;
 	inFlight = run().finally(() => {
 		inFlight = null;
 		inFlightHash = null;
+		inFlightHasWords = false;
 		lastProgress = null;
 	});
 	inFlightHash = hash;
 	try {
-		const segments = await abortable(inFlight);
-		return { segments, fromCache: false };
+		const result = await abortable(inFlight);
+		return { ...result, fromCache: false };
 	} finally {
 		if (onProgress) progressSubscribers.delete(onProgress);
 	}
