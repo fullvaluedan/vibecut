@@ -106,6 +106,12 @@ export async function extractFrames({
 		for (const timeSec of clamped) {
 			throwIfAborted(signal);
 			const sample = await sink.getSample(timeSec);
+			// The decode is async: if cancellation fired DURING it, release this
+			// sample and stop now rather than drawing one extra frame past the abort.
+			if (signal?.aborted) {
+				sample?.close();
+				throw new Error("Cancelled");
+			}
 			if (!sample) continue;
 			try {
 				const canvas = drawToCanvas({
@@ -166,6 +172,10 @@ export async function pickSceneCandidates({
 		for (const timeSec of times) {
 			throwIfAborted(signal);
 			const sample = await sink.getSample(timeSec);
+			if (signal?.aborted) {
+				sample?.close();
+				throw new Error("Cancelled");
+			}
 			if (!sample) continue;
 			try {
 				const canvas = drawToCanvas({

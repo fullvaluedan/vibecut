@@ -107,6 +107,10 @@ describe("pickSceneStartTimes", () => {
 			pickSceneStartTimes({ histograms: [black], times: [0, 2] }),
 		).toThrow(/length mismatch/);
 	});
+
+	test("empty histograms/times yields an empty list", () => {
+		expect(pickSceneStartTimes({ histograms: [], times: [] })).toEqual([]);
+	});
 });
 
 describe("throwIfAborted", () => {

@@ -64,6 +64,10 @@ describe("filler detection (heuristic fallback)", () => {
 		expect(
 			isFillerSegment({ text: "and then", energy: 0.01, maxEnergy: 0.5, durationSec: 0.8 }),
 		).toBe(true);
+		// Quiet + short but NO words → not filler (the countWords > 0 guard).
+		expect(
+			isFillerSegment({ text: "", energy: 0.01, maxEnergy: 0.5, durationSec: 0.8 }),
+		).toBe(false);
 		// A normal, loud, content-bearing line is not filler.
 		expect(
 			isFillerSegment({

@@ -172,6 +172,17 @@ describe("planMultimodal — custom endpoint SSRF guard", () => {
 		expect(() => assertSafeMultimodalHost("https://api.example.com/v1")).not.toThrow();
 	});
 
+	test("rejects IPv6 literals (brackets) and trailing-dot/FQDN loopback aliases", () => {
+		// URL.hostname keeps the brackets and node:net isIP() returns 0 for them —
+		// the guard must unwrap before the IP check or these reach loopback/private.
+		expect(() => assertSafeMultimodalHost("https://[::1]")).toThrow();
+		expect(() => assertSafeMultimodalHost("https://[::ffff:127.0.0.1]")).toThrow();
+		expect(() => assertSafeMultimodalHost("https://[fd00::1]")).toThrow();
+		expect(() => assertSafeMultimodalHost("https://localhost.")).toThrow();
+		expect(() => assertSafeMultimodalHost("https://localhost.localdomain")).toThrow();
+		expect(() => assertSafeMultimodalHost("https://api.example.com.")).not.toThrow();
+	});
+
 	test("rejects a private/loopback baseUrl BEFORE any frame is sent", async () => {
 		let fetchCalled = false;
 		globalThis.fetch = (async () => {
@@ -201,7 +212,7 @@ describe("multimodal body builders + image cap", () => {
 			const blocks = [
 				...Array.from({ length: MAX_MULTIMODAL_IMAGES + 5 }, (_, i) => ({
 					type: "image" as const,
-					mediaType: "image/jpeg",
+					mediaType: "image/jpeg" as const,
 					dataBase64: `frame-${i}`,
 				})),
 				{ type: "text" as const, text: "signals" },
@@ -246,5 +257,115 @@ describe("multimodal body builders + image cap", () => {
 			image_url: { url: "data:image/jpeg;base64,BBB" },
 		});
 		expect(content[1].type).toBe("text");
+	});
+
+	test("images-only blocks omit the empty text block (the API rejects text:'')", () => {
+		const anthropic = buildAnthropicMultimodalBody({
+			images: [{ mediaType: "image/jpeg", dataBase64: "A" }],
+			text: "",
+			schema: {},
+		}) as { messages: { content: { type: string }[] }[] };
+		const custom = buildCustomMultimodalBody({
+			images: [{ mediaType: "image/jpeg", dataBase64: "A" }],
+			text: "",
+			model: "m",
+		}) as { messages: { content: { type: string }[] }[] };
+		expect(anthropic.messages[0].content).toHaveLength(1);
+		expect(anthropic.messages[0].content[0].type).toBe("image");
+		expect(custom.messages[0].content).toHaveLength(1);
+	});
+});
+
+describe("planMultimodal — robustness", () => {
+	test("api-key: a 200 with no content array surfaces a typed error, not a crash", async () => {
+		globalThis.fetch = (async () =>
+			jsonResponse({ usage: { input_tokens: 1 } })) as unknown as typeof fetch;
+		await expect(
+			planMultimodal({
+				blocks: [{ type: "text", text: "x" }],
+				auth: { mode: "api-key", apiKey: "k" },
+				schema: {},
+			}),
+		).rejects.toThrow(/no parseable JSON/);
+	});
+
+	test("an already-aborted signal rejects with Cancelled before any fetch", async () => {
+		let fetchCalled = false;
+		globalThis.fetch = (async () => {
+			fetchCalled = true;
+			return jsonResponse({});
+		}) as unknown as typeof fetch;
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			planMultimodal({
+				blocks: [{ type: "text", text: "x" }],
+				auth: { mode: "api-key", apiKey: "k" },
+				schema: {},
+				signal: controller.signal,
+			}),
+		).rejects.toThrow(/Cancelled/);
+		expect(fetchCalled).toBe(false);
+	});
+
+	test("custom: forwards image_url to a safe https host and maps usage", async () => {
+		let body: Record<string, unknown> = {};
+		globalThis.fetch = (async (_url: string, opts: { body: string }) => {
+			body = JSON.parse(opts.body);
+			return jsonResponse({
+				choices: [{ message: { content: '{"role":"a-roll"}' } }],
+				usage: { prompt_tokens: 8, completion_tokens: 3 },
+			});
+		}) as unknown as typeof fetch;
+		const res = await planMultimodal({
+			blocks: [
+				{ type: "image", mediaType: "image/jpeg", dataBase64: "AAAA" },
+				{ type: "text", text: "classify" },
+			],
+			auth: { mode: "custom", baseUrl: "https://api.example.com/v1", model: "llava" },
+			schema: {},
+		});
+		expect(res).toEqual({
+			raw: { role: "a-roll" },
+			usage: { inputTokens: 8, outputTokens: 3 },
+			degraded: false,
+		});
+		expect(
+			(body.messages as { content: { type: string }[] }[])[0].content[0].type,
+		).toBe("image_url");
+	});
+
+	test("custom: a transport failure surfaces a typed error", async () => {
+		globalThis.fetch = (async () =>
+			new Response("down", { status: 502 })) as unknown as typeof fetch;
+		await expect(
+			planMultimodal({
+				blocks: [{ type: "text", text: "x" }],
+				auth: { mode: "custom", baseUrl: "https://api.example.com/v1", model: "m" },
+				schema: {},
+			}),
+		).rejects.toThrow(/Custom model error 502/);
+	});
+
+	test("claude-code: a non-zero CLI exit rejects", async () => {
+		fakeSpawn = () => ({
+			stdout: { on: () => {} },
+			stderr: {
+				on: (ev: string, cb: (d: Buffer) => void) => {
+					if (ev === "data") queueMicrotask(() => cb(Buffer.from("boom")));
+				},
+			},
+			stdin: { write: () => {}, end: () => {} },
+			on: (ev: string, cb: (code: number) => void) => {
+				if (ev === "close") queueMicrotask(() => cb(1));
+			},
+		});
+		await expect(
+			planMultimodal({
+				blocks: [{ type: "text", text: "x" }],
+				auth: { mode: "claude-code" },
+				schema: {},
+			}),
+		).rejects.toThrow(/exited 1/);
 	});
 });

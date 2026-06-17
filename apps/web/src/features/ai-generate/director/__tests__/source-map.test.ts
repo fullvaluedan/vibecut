@@ -101,4 +101,19 @@ describe("groupTranscriptByAsset", () => {
 		expect(grouped[0].assetId).toBe("assetA");
 		expect(grouped[0].segments.map((s) => s.text)).toEqual(["kept"]);
 	});
+
+	test("a segment straddling a cut is attributed to its midpoint asset (v1)", () => {
+		const elements: SourceMapElement[] = [
+			clip({ id: "e1", mediaId: "clipA", startTime: 0, duration: sec(4) }),
+			clip({ id: "e2", mediaId: "clipB", startTime: sec(4), duration: sec(4) }),
+		];
+		// Starts in clipA (3.5s) but its midpoint (4.0s) lands in clipB.
+		const segments: TranscriptSegment[] = [{ start: 3.5, end: 4.5, text: "crossing the cut" }];
+		const grouped = groupTranscriptByAsset({ segments, elements });
+		expect(grouped).toHaveLength(1);
+		expect(grouped[0].assetId).toBe("clipB");
+		// start maps to clipA (a different asset) → sourceStartSec falls back to the
+		// midpoint's source in clipB (0s), the documented straddle behavior.
+		expect(grouped[0].segments[0].sourceStartSec).toBeCloseTo(0, 5);
+	});
 });

@@ -5,15 +5,12 @@ export {
 	planRepeatCuts,
 	planJson,
 	planMultimodal,
-	partitionMultimodalBlocks,
-	buildAnthropicMultimodalBody,
-	buildCustomMultimodalBody,
-	assertSafeMultimodalHost,
 	MAX_MULTIMODAL_IMAGES,
 	type CutsMode,
 	type RepeatCut,
 	type TokenUsage,
 	type MultimodalBlock,
+	type MultimodalImageMediaType,
 	type MultimodalResult,
 } from "./author";
 export {

@@ -36,6 +36,27 @@ export interface TokenUsage {
 	outputTokens: number;
 }
 
+/** Map an Anthropic `usage` object to our TokenUsage (null when absent). */
+function normalizeAnthropicUsage(
+	usage: { input_tokens?: number; output_tokens?: number } | undefined,
+): TokenUsage | null {
+	return usage
+		? { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0 }
+		: null;
+}
+
+/** Map an OpenAI-compatible `usage` object to our TokenUsage (null when absent). */
+function normalizeOpenAiUsage(
+	usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+): TokenUsage | null {
+	return usage
+		? {
+				inputTokens: usage.prompt_tokens ?? 0,
+				outputTokens: usage.completion_tokens ?? 0,
+			}
+		: null;
+}
+
 function buildPreferencesBlock(preferences?: string[]): string {
 	if (!preferences?.length) return "";
 	return `\nUSER PREFERENCES (learned from this user's past edits — respect them):\n${preferences
@@ -142,13 +163,8 @@ async function planViaApiKeySchema(
 		content: { type: string; text?: string }[];
 		usage?: { input_tokens?: number; output_tokens?: number };
 	};
-	const text = data.content.find((b) => b.type === "text")?.text ?? "";
-	const usage = data.usage
-		? {
-				inputTokens: data.usage.input_tokens ?? 0,
-				outputTokens: data.usage.output_tokens ?? 0,
-			}
-		: null;
+	const text = data.content?.find((b) => b.type === "text")?.text ?? "";
+	const usage = normalizeAnthropicUsage(data.usage);
 	return { raw: extractJson(text), usage };
 }
 
@@ -177,12 +193,7 @@ function planViaClaudeCode(
 					usage?: { input_tokens?: number; output_tokens?: number };
 				};
 				const text = typeof wrapper.result === "string" ? wrapper.result : out;
-				const usage = wrapper.usage
-					? {
-							inputTokens: wrapper.usage.input_tokens ?? 0,
-							outputTokens: wrapper.usage.output_tokens ?? 0,
-						}
-					: null;
+				const usage = normalizeAnthropicUsage(wrapper.usage);
 				resolve({ raw: extractJson(text), usage });
 			} catch (e) {
 				reject(new Error(`Could not parse claude CLI output: ${String(e)}`));
@@ -229,12 +240,7 @@ async function planViaCustomSchema(
 		usage?: { prompt_tokens?: number; completion_tokens?: number };
 	};
 	const text = data.choices?.[0]?.message?.content ?? "";
-	const usage = data.usage
-		? {
-				inputTokens: data.usage.prompt_tokens ?? 0,
-				outputTokens: data.usage.completion_tokens ?? 0,
-			}
-		: null;
+	const usage = normalizeOpenAiUsage(data.usage);
 	return { raw: extractJson(text), usage };
 }
 
@@ -413,9 +419,16 @@ export async function planJson({
 // Messages) and a vision-capable `custom` endpoint accept inline images; the
 // `claude-code` CLI cannot, so it degrades to a text-only call and flags it.
 
+/** Image media types the Anthropic Messages API accepts. */
+export type MultimodalImageMediaType =
+	| "image/jpeg"
+	| "image/png"
+	| "image/gif"
+	| "image/webp";
+
 /** A content block for a multimodal ask: a base64 image or a text run. */
 export type MultimodalBlock =
-	| { type: "image"; mediaType: string; dataBase64: string }
+	| { type: "image"; mediaType: MultimodalImageMediaType; dataBase64: string }
 	| { type: "text"; text: string };
 
 export interface MultimodalResult {
@@ -501,7 +514,8 @@ export function buildAnthropicMultimodalBody({
 							data: img.dataBase64,
 						},
 					})),
-					{ type: "text", text },
+					// Omit an empty text block — the Messages API rejects `text: ""`.
+					...(text ? [{ type: "text", text }] : []),
 				],
 			},
 		],
@@ -528,7 +542,7 @@ export function buildCustomMultimodalBody({
 						type: "image_url",
 						image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` },
 					})),
-					{ type: "text", text },
+					...(text ? [{ type: "text", text }] : []),
 				],
 			},
 		],
@@ -551,11 +565,21 @@ export function assertSafeMultimodalHost(baseUrl: string): void {
 	} catch {
 		throw new Error(`Invalid custom endpoint URL: ${baseUrl}`);
 	}
-	const host = parsed.hostname.toLowerCase();
+	// Normalize before the checks: lowercase, strip a single trailing dot (the FQDN
+	// form `localhost.`), and unwrap an IPv6 literal's brackets — `URL.hostname`
+	// keeps them (e.g. `[::1]`) and `node:net` `isIP()` returns 0 for a bracketed
+	// address, which would otherwise let IPv6 loopback / ULA / link-local / IPv4-
+	// mapped literals slip past the IP-literal check.
+	let host = parsed.hostname.toLowerCase();
+	if (host.endsWith(".")) host = host.slice(0, -1);
+	const ipLiteral =
+		host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 	if (
 		parsed.protocol !== "https:" ||
-		isIP(host) !== 0 ||
+		isIP(ipLiteral) !== 0 ||
 		host === "localhost" ||
+		host === "localhost.localdomain" ||
+		host.endsWith(".localhost") ||
 		host.endsWith(".local") ||
 		host.endsWith(".internal")
 	) {
@@ -575,12 +599,16 @@ export async function planMultimodal({
 	auth,
 	schema,
 	model,
+	signal,
 }: {
 	blocks: readonly MultimodalBlock[];
 	auth: ClaudeAuth;
 	schema: object;
 	model?: string;
+	/** Aborts the in-flight LLM request when a Director run is cancelled. */
+	signal?: AbortSignal;
 }): Promise<MultimodalResult> {
+	if (signal?.aborted) throw new Error("Cancelled");
 	const { images, text } = partitionMultimodalBlocks(blocks);
 
 	switch (auth.mode) {
@@ -595,23 +623,24 @@ export async function planMultimodal({
 				body: JSON.stringify(
 					buildAnthropicMultimodalBody({ images, text, schema, model }),
 				),
+				signal,
 			});
 			if (!res.ok) {
 				const body = await res.text();
 				throw new Error(`Anthropic API error ${res.status}: ${body.slice(0, 500)}`);
 			}
 			const data = (await res.json()) as {
-				content: { type: string; text?: string }[];
+				content?: { type: string; text?: string }[];
 				usage?: { input_tokens?: number; output_tokens?: number };
 			};
-			const out = data.content.find((b) => b.type === "text")?.text ?? "";
-			const usage = data.usage
-				? {
-						inputTokens: data.usage.input_tokens ?? 0,
-						outputTokens: data.usage.output_tokens ?? 0,
-					}
-				: null;
-			return { raw: extractJson(out), usage, degraded: false };
+			// A 200 with a missing/empty content array (overloaded / refusal / streamed
+			// shapes) must surface as extractJson's typed error, not a raw TypeError.
+			const out = data.content?.find((b) => b.type === "text")?.text ?? "";
+			return {
+				raw: extractJson(out),
+				usage: normalizeAnthropicUsage(data.usage),
+				degraded: false,
+			};
 		}
 		case "custom": {
 			// Guard the host BEFORE any fetch — no frame leaves until this passes.
@@ -625,6 +654,7 @@ export async function planMultimodal({
 				body: JSON.stringify(
 					buildCustomMultimodalBody({ images, text, model: model ?? auth.model }),
 				),
+				signal,
 			});
 			if (!res.ok) {
 				const body = await res.text();
@@ -635,13 +665,11 @@ export async function planMultimodal({
 				usage?: { prompt_tokens?: number; completion_tokens?: number };
 			};
 			const out = data.choices?.[0]?.message?.content ?? "";
-			const usage = data.usage
-				? {
-						inputTokens: data.usage.prompt_tokens ?? 0,
-						outputTokens: data.usage.completion_tokens ?? 0,
-					}
-				: null;
-			return { raw: extractJson(out), usage, degraded: false };
+			return {
+				raw: extractJson(out),
+				usage: normalizeOpenAiUsage(data.usage),
+				degraded: false,
+			};
 		}
 		default: {
 			// claude-code CLI can't take inline images: strip them, run text-only.
