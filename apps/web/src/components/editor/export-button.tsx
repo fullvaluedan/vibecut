@@ -50,10 +50,16 @@ export function ExportButton() {
 	const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActiveOrNull());
+	const isExporting = useEditor((e) => e.project.getExportState().isExporting);
 	const hasProject = !!activeProject;
 
 	const handlePopoverOpenChange = ({ open }: { open: boolean }) => {
 		if (!open) {
+			// A running export must NOT be torn down just because the popover was
+			// dismissed (outside-click / Escape / focus loss) — that read as the
+			// export "cancelling itself" at 5%. Keep the popover open while
+			// exporting; the explicit Cancel button is the only way to stop it.
+			if (isExporting) return;
 			editor.project.cancelExport();
 			editor.project.clearExportState();
 		}
