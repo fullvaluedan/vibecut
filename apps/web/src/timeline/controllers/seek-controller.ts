@@ -144,6 +144,9 @@ export class SeekController {
 		if (!shouldProcess) return;
 
 		this.config.clearSelectedElements();
+		// Seek-on-click is scoped to the ruler band only. A plain click in the
+		// track area deselects (above) but must not move the playhead.
+		if (source === "tracks") return;
 		this.seekFromEvent({ event, source });
 	}
 

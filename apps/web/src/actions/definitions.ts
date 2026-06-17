@@ -49,12 +49,12 @@ export const ACTIONS = {
 		category: "navigation",
 	},
 	"jump-forward": {
-		description: "Jump forward 5 seconds",
+		description: "Nudge forward (frames — set in Settings → Hotkeys)",
 		category: "navigation",
 		args: { seconds: "number" },
 	},
 	"jump-backward": {
-		description: "Jump backward 5 seconds",
+		description: "Nudge backward (frames — set in Settings → Hotkeys)",
 		category: "navigation",
 		args: { seconds: "number" },
 	},

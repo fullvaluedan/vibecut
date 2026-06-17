@@ -178,14 +178,14 @@ export class PlayheadController {
 
 	/**
 	 * Updates the playhead position and auto-scrolls to keep the playhead
-	 * visible during playback.
+	 * visible during playback and on seeks (keyboard nudges, jumps, etc.).
 	 */
 	handlePlaybackUpdate(time: MediaTime): void {
 		this.updatePlayheadLeft(time);
 
-		// Auto-scroll only during playback, not while scrubbing.
-		if (!this.config.getIsPlaying() || this.session.kind === "scrubbing")
-			return;
+		// Follow the playhead on playback and seeks alike; only suppress while
+		// the user is actively scrubbing (so dragging the playhead stays manual).
+		if (this.session.kind === "scrubbing") return;
 
 		const rulerViewport = this.config.getRulerScrollEl();
 		const tracksViewport = this.config.getTracksScrollEl();

@@ -60,12 +60,9 @@ export function useKeybindingsListener() {
 				case "seek-backward":
 					invokeAction("seek-backward", { seconds: 1 }, "keypress");
 					break;
-				case "jump-forward":
-					invokeAction("jump-forward", { seconds: 5 }, "keypress");
-					break;
-				case "jump-backward":
-					invokeAction("jump-backward", { seconds: 5 }, "keypress");
-					break;
+				// jump-forward / jump-backward fall through to the default: the
+				// handler reads the configurable frame nudge itself rather than a
+				// fixed seconds value forced here.
 				default:
 					invokeAction(boundAction, undefined, "keypress");
 			}

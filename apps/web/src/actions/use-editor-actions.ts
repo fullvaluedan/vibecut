@@ -34,6 +34,28 @@ import {
 } from "@/selection/scope";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
 
+/**
+ * Delta for a Shift+←/→ "jump": the configured frame nudge (read from the
+ * timeline store) by default, or a caller-supplied seconds value (the seek
+ * API's escape hatch for any programmatic invocation).
+ */
+function jumpDelta({
+	fps,
+	frames,
+	seconds,
+}: {
+	fps: { numerator: number; denominator: number };
+	frames: number;
+	seconds?: number;
+}) {
+	if (seconds != null) return mediaTimeFromSeconds({ seconds });
+	return mediaTime({
+		ticks: Math.round(
+			((TICKS_PER_SECOND * fps.denominator) / fps.numerator) * frames,
+		),
+	});
+}
+
 export function useEditorActions() {
 	const editor = useEditor();
 	const { selectedElements, setElementSelection } = useElementSelection();
@@ -175,8 +197,11 @@ export function useEditorActions() {
 	useActionHandler(
 		"jump-forward",
 		(args) => {
-			const seconds = args?.seconds ?? 5;
-			const delta = mediaTimeFromSeconds({ seconds });
+			const delta = jumpDelta({
+				fps: editor.project.getActive().settings.fps,
+				frames: useTimelineStore.getState().timelineNudgeFrames,
+				seconds: args?.seconds,
+			});
 			editor.playback.seek({
 				time: minMediaTime({
 					a: editor.timeline.getTotalDuration(),
@@ -193,8 +218,11 @@ export function useEditorActions() {
 	useActionHandler(
 		"jump-backward",
 		(args) => {
-			const seconds = args?.seconds ?? 5;
-			const delta = mediaTimeFromSeconds({ seconds });
+			const delta = jumpDelta({
+				fps: editor.project.getActive().settings.fps,
+				frames: useTimelineStore.getState().timelineNudgeFrames,
+				seconds: args?.seconds,
+			});
 			editor.playback.seek({
 				time: maxMediaTime({
 					a: ZERO_MEDIA_TIME,

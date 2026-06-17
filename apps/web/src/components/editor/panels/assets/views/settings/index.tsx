@@ -34,6 +34,7 @@ import type { TCanvasSize } from "@/project/types";
 import { AiSettingsContent } from "@/features/ai-generate/components/ai-settings";
 import { ShortcutsEditor } from "@/actions/components/shortcuts-dialog";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
+import { useTimelineStore } from "@/timeline/timeline-store";
 import { HelpContent } from "./help";
 
 type SettingsView = "project-info" | "background" | "ai" | "hotkeys" | "help";
@@ -337,10 +338,57 @@ export function SettingsView() {
 	);
 }
 
+function NudgeFramesField({
+	value,
+	onCommit,
+}: {
+	value: number;
+	onCommit: (frames: number) => void;
+}) {
+	// Local draft so the user can type freely; commit on blur. Keyed by `value`
+	// in the parent, so a committed (clamped) value remounts this with the
+	// canonical string — no syncing effect needed.
+	const [draft, setDraft] = useState(String(value));
+
+	const commit = () => {
+		const parsed = Number(draft.trim());
+		if (Number.isFinite(parsed)) {
+			onCommit(parsed);
+		} else {
+			setDraft(String(value));
+		}
+	};
+
+	return (
+		<NumberField
+			value={draft}
+			suffix="frames"
+			className="w-28"
+			aria-label="Timeline nudge in frames"
+			allowExpressions={false}
+			onChange={(event) => setDraft(event.target.value)}
+			onBlur={commit}
+		/>
+	);
+}
+
 function HotkeysContent() {
 	const resetToDefaults = useKeybindingsStore((s) => s.resetToDefaults);
+	const nudgeFrames = useTimelineStore((s) => s.timelineNudgeFrames);
+	const setNudgeFrames = useTimelineStore((s) => s.setTimelineNudgeFrames);
+
 	return (
 		<div className="flex flex-col gap-4 p-3">
+			<Section showTopBorder={false} className="px-0">
+				<SectionHeader className="justify-between">
+					<SectionTitle className="flex-1">Shift + ← / → nudge</SectionTitle>
+					<NudgeFramesField
+						key={nudgeFrames}
+						value={nudgeFrames}
+						onCommit={setNudgeFrames}
+					/>
+				</SectionHeader>
+			</Section>
 			<p className="text-muted-foreground text-xs">
 				Click any key to record a new binding — press the combination you
 				want. Conflicting keys are rejected with a warning.
