@@ -5,6 +5,7 @@ export {
 	planRepeatCuts,
 	planJson,
 	planMultimodal,
+	planDirector,
 	MAX_MULTIMODAL_IMAGES,
 	type CutsMode,
 	type RepeatCut,
@@ -12,6 +13,10 @@ export {
 	type MultimodalBlock,
 	type MultimodalImageMediaType,
 	type MultimodalResult,
+	type DirectorOpKind,
+	type DirectorOp,
+	type DirectorPlan,
+	type DirectorSegment,
 } from "./author";
 export {
 	renderTemplateJob,

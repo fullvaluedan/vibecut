@@ -412,6 +412,227 @@ export async function planJson({
 	return planDispatch(prompt, auth, schema);
 }
 
+// --- Director planner (v0: text+audio typed-op plan) ---
+//
+// The Director fuses the transcript with audio features (energy/wpm/filler),
+// silence, and source-clip mapping into a per-segment signal table, then emits a
+// typed-op plan the editor reviews before applying. Text-only (no frames) so it
+// runs on every auth mode; the prompt mixes a Markdown reasoning table with a
+// strict JSON output block. Mirrors the cuts planner above.
+
+export type DirectorOpKind = "cut" | "keep" | "reorder" | "take_select";
+
+/** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
+export interface DirectorOp {
+	/** Stable id (hash of op|start|end|target) — survives re-planning of the same output. */
+	id: string;
+	op: DirectorOpKind;
+	startSec: number;
+	endSec: number;
+	reason: string;
+	/** Planner's confidence, 0..1. */
+	confidence: number;
+	/** `reorder` only: timeline-seconds destination the span should move to. */
+	targetStartSec?: number;
+}
+
+export interface DirectorPlan {
+	operations: DirectorOp[];
+}
+
+/** One fused-signal row the planner reasons over (built web-side from the audio + source-map features). */
+export interface DirectorSegment {
+	startSec: number;
+	endSec: number;
+	text: string;
+	/** Source asset id under this segment (for take comparison); absent over a gap. */
+	assetId?: string;
+	/** Mean RMS energy (file-relative scale). */
+	energy?: number;
+	/** Energy as a fraction of the loudest segment, 0..1. */
+	loudnessRelative?: number;
+	/** Speaking rate (words/min). */
+	wpm?: number;
+	/** True when the segment reads as filler/false-start. */
+	fillerCandidate?: boolean;
+	/** Seconds of silence immediately before this segment. */
+	silenceBeforeSec?: number;
+}
+
+const DIRECTOR_SCHEMA = {
+	type: "object",
+	properties: {
+		operations: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					op: { type: "string", enum: ["cut", "keep", "reorder", "take_select"] },
+					startSec: { type: "number" },
+					endSec: { type: "number" },
+					reason: { type: "string" },
+					confidence: { type: "number" },
+					targetStartSec: { type: "number" },
+				},
+				required: ["op", "startSec", "endSec", "reason", "confidence"],
+				additionalProperties: false,
+			},
+		},
+	},
+	required: ["operations"],
+	additionalProperties: false,
+} as const;
+
+/** Deterministic id for an op (djb2 over its identity fields) so re-planning the same output is stable. */
+function stableOpId(op: {
+	op: string;
+	startSec: number;
+	endSec: number;
+	targetStartSec?: number;
+}): string {
+	const key = `${op.op}|${op.startSec}|${op.endSec}|${op.targetStartSec ?? ""}`;
+	let h = 5381;
+	for (let i = 0; i < key.length; i++) {
+		h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
+	}
+	return `op_${h.toString(36)}`;
+}
+
+/** Render the per-segment signal table the planner reasons over (pipe-escaped). */
+export function renderSignalTable(segments: readonly DirectorSegment[]): string {
+	const header =
+		"| time (s) | src | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|";
+	const rows = segments.map((s) => {
+		const time = `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`;
+		const src = s.assetId ? s.assetId.slice(0, 6) : "-";
+		const text = s.text.trim().replace(/\|/g, "/").slice(0, 120) || "-";
+		const loud =
+			s.loudnessRelative !== undefined
+				? s.loudnessRelative.toFixed(2)
+				: (s.energy?.toFixed(3) ?? "-");
+		const wpm = s.wpm !== undefined ? String(Math.round(s.wpm)) : "-";
+		const filler = s.fillerCandidate ? "yes" : "-";
+		const silence = s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-";
+		return `| ${time} | ${src} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`;
+	});
+	return [header, ...rows].join("\n");
+}
+
+export function buildDirectorPrompt({
+	segments,
+	totalSec,
+	taste,
+}: {
+	segments: readonly DirectorSegment[];
+	totalSec: number;
+	/** Compact learned-taste note injected from the user's past reviews. */
+	taste?: string;
+}): string {
+	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
+
+Emit a plan of typed OPERATIONS:
+- "cut": remove a span [startSec,endSec) - retakes (keep the LAST attempt), stutters/false-starts, contentless filler runs, off-topic tangents, and dead-weight intros/outros.
+- "take_select": when TWO different source clips (different src) cover the SAME scripted line, keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. Only when you are confident the two are the same line. Single-take footage has nothing to take_select - that is fine.
+- "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
+- "keep": optionally mark a load-bearing span you deliberately kept.
+
+Rules:
+- Pacing beats completeness, but NEVER cut content the video's point depends on. Keep the speaker's personality; only cut what stalls the video.
+- Boundaries must align with the segment timestamps. Total duration is ${totalSec.toFixed(2)}s; every startSec/endSec/targetStartSec must be within [0, ${totalSec.toFixed(2)}].
+- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.
+
+SIGNAL TABLE:
+${renderSignalTable(segments)}
+${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
+Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only)}, ...]}.`;
+}
+
+/**
+ * Validate + normalize a raw Director plan: enforce start<end within [0,total],
+ * sort, drop overlapping REMOVALS (cut/take_select), drop reorders with an
+ * out-of-bounds target, round to 2 decimals, and assign stable op ids.
+ */
+export function sanitizeDirectorPlan(raw: unknown, totalSec: number): DirectorPlan {
+	const ops = (raw as { operations?: unknown[] })?.operations;
+	if (!Array.isArray(ops)) {
+		throw new Error("Director plan has no operations array");
+	}
+	const valid = new Set<DirectorOpKind>(["cut", "keep", "reorder", "take_select"]);
+	const round2 = (n: number) => Math.round(n * 100) / 100;
+
+	const cleaned: Omit<DirectorOp, "id">[] = [];
+	for (const entry of ops) {
+		const it = entry as Record<string, unknown>;
+		const op = String(it.op) as DirectorOpKind;
+		if (!valid.has(op)) continue;
+		const startSec = Number(it.startSec);
+		const endSec = Number(it.endSec);
+		if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) continue;
+		const s = Math.max(0, Math.min(startSec, totalSec));
+		const e = Math.max(0, Math.min(endSec, totalSec));
+		if (e <= s) continue;
+
+		let targetStartSec: number | undefined;
+		if (op === "reorder") {
+			const t = Number(it.targetStartSec);
+			if (!Number.isFinite(t) || t < 0 || t > totalSec) continue; // invalid reorder target -> drop
+			targetStartSec = round2(t);
+		}
+
+		const confidence = Number(it.confidence);
+		cleaned.push({
+			op,
+			startSec: round2(s),
+			endSec: round2(e),
+			reason: String(it.reason ?? "").slice(0, 240),
+			confidence: Number.isFinite(confidence)
+				? Math.max(0, Math.min(1, confidence))
+				: 0.5,
+			...(targetStartSec !== undefined ? { targetStartSec } : {}),
+		});
+	}
+
+	cleaned.sort((a, b) => a.startSec - b.startSec);
+
+	// Drop overlapping REMOVALS (cut/take_select) keeping the earlier one; keep/reorder pass through.
+	const removalKinds = new Set<DirectorOpKind>(["cut", "take_select"]);
+	const kept: Omit<DirectorOp, "id">[] = [];
+	let lastRemovalEnd = -1;
+	for (const op of cleaned) {
+		if (removalKinds.has(op.op)) {
+			if (op.startSec >= lastRemovalEnd) {
+				kept.push(op);
+				lastRemovalEnd = op.endSec;
+			}
+		} else {
+			kept.push(op);
+		}
+	}
+
+	return { operations: kept.map((op) => ({ ...op, id: stableOpId(op) })) };
+}
+
+/**
+ * Build the Director prompt, dispatch it text-only, and return a sanitized plan
+ * plus token usage. The route wraps this; vision layers on later by swapping the
+ * dispatch for `planMultimodal` with the same prompt + schema.
+ */
+export async function planDirector({
+	segments,
+	totalSec,
+	taste,
+	auth,
+}: {
+	segments: readonly DirectorSegment[];
+	totalSec: number;
+	taste?: string;
+	auth: ClaudeAuth;
+}): Promise<{ plan: DirectorPlan; usage: TokenUsage | null }> {
+	const prompt = buildDirectorPrompt({ segments, totalSec, taste });
+	const { raw, usage } = await planJson({ prompt, auth, schema: DIRECTOR_SCHEMA });
+	return { plan: sanitizeDirectorPlan(raw, totalSec), usage };
+}
+
 // --- Multimodal dispatch (U5: the Director's vision pass) ---
 //
 // The Director sends sampled keyframes alongside the fused-signal text so the
