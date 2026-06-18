@@ -912,6 +912,119 @@ export async function planMultimodal({
 	}
 }
 
+// --- Vision Director (U2): the text+audio cut, now with eyes ---
+//
+// `planDirectorVision` layers sampled footage frames onto the SAME planner: same
+// signal-table prompt (+ a vision addendum), same DIRECTOR_SCHEMA, same
+// sanitizer — so the apply/merge/taste spine downstream is untouched. Frames are
+// the planner's only new input; everything else is the shipped text path.
+
+/** A sampled footage frame tied to the segment it depicts, ready for the vision planner. */
+export interface DirectorVisionFrame {
+	/** Index into the `segments` array this frame depicts (drives the prompt mapping). */
+	segmentIndex: number;
+	mediaType: MultimodalImageMediaType;
+	dataBase64: string;
+}
+
+/** Default model for the (hard) vision Director call — the strong vision model. */
+const DIRECTOR_VISION_MODEL = "claude-opus-4-8";
+
+/**
+ * Append a vision addendum + a frame→segment time map to the text-only Director
+ * prompt. The frames are sent images-first (the Messages API order), so the text
+ * must tell the model which frame is which segment — by the segment's time range,
+ * matching the signal table's time column. No frames → the base prompt verbatim.
+ */
+export function buildDirectorVisionPrompt({
+	segments,
+	totalSec,
+	taste,
+	frames,
+}: {
+	segments: readonly DirectorSegment[];
+	totalSec: number;
+	taste?: string;
+	frames: readonly DirectorVisionFrame[];
+}): string {
+	const base = buildDirectorPrompt({ segments, totalSec, taste });
+	if (!frames.length) return base;
+	const frameLines = frames
+		.map((f, k) => {
+			const seg = segments[f.segmentIndex];
+			const time = seg
+				? `${seg.startSec.toFixed(1)}-${seg.endSec.toFixed(1)}s`
+				: "unknown";
+			return `- Frame ${k + 1}: the segment at ${time}`;
+		})
+		.join("\n");
+	return `${base}
+
+VISION: You are ALSO given ${frames.length} sampled frame(s) from the footage, one per segment below, in THIS order:
+${frameLines}
+
+Use each frame to judge that segment's VISUAL alongside its audio and text. Beyond the audio cues, CUT a segment whose visual is dead weight — the speaker off-screen or out of frame, a frozen / black / slate frame, an accidental cutaway, or a long low-information hold that doesn't earn its place. KEEP sharp, well-framed A-roll where the speaker is present and engaged. When the visual is fine, judge by audio and text as usual — do NOT invent visual cuts. Name the visual reason in "reason" (e.g. "speaker off-screen").`;
+}
+
+/**
+ * Build the multimodal blocks for a vision Director ask: the frames as image
+ * blocks (in segment order), then the signal-table + vision prompt as one text
+ * block. Pure (no dispatch), so the block shape is unit-testable.
+ */
+export function buildDirectorVisionBlocks({
+	segments,
+	totalSec,
+	taste,
+	frames,
+}: {
+	segments: readonly DirectorSegment[];
+	totalSec: number;
+	taste?: string;
+	frames: readonly DirectorVisionFrame[];
+}): MultimodalBlock[] {
+	const imageBlocks: MultimodalBlock[] = frames.map((f) => ({
+		type: "image",
+		mediaType: f.mediaType,
+		dataBase64: f.dataBase64,
+	}));
+	const text = buildDirectorVisionPrompt({ segments, totalSec, taste, frames });
+	return [...imageBlocks, { type: "text", text }];
+}
+
+/**
+ * Vision variant of `planDirector`: dispatch the frames + signal table through
+ * `planMultimodal`, then sanitize with the SAME schema as the text path. A
+ * backend that can't take images (e.g. `claude-code`) returns `degraded: true`
+ * and a valid text-only plan — never a failure (R3); the caller surfaces it.
+ */
+export async function planDirectorVision({
+	segments,
+	totalSec,
+	taste,
+	frames,
+	auth,
+	model,
+	signal,
+}: {
+	segments: readonly DirectorSegment[];
+	totalSec: number;
+	taste?: string;
+	frames: readonly DirectorVisionFrame[];
+	auth: ClaudeAuth;
+	model?: string;
+	signal?: AbortSignal;
+}): Promise<{ plan: DirectorPlan; usage: TokenUsage | null; degraded: boolean }> {
+	const blocks = buildDirectorVisionBlocks({ segments, totalSec, taste, frames });
+	const { raw, usage, degraded } = await planMultimodal({
+		blocks,
+		auth,
+		schema: DIRECTOR_SCHEMA,
+		model: model ?? DIRECTOR_VISION_MODEL,
+		signal,
+	});
+	return { plan: sanitizeDirectorPlan(raw, totalSec), usage, degraded };
+}
+
 export async function planRepeatCuts({
 	segments,
 	auth,

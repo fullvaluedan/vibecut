@@ -6,6 +6,9 @@ export {
 	planJson,
 	planMultimodal,
 	planDirector,
+	planDirectorVision,
+	buildDirectorVisionPrompt,
+	buildDirectorVisionBlocks,
 	MAX_MULTIMODAL_IMAGES,
 	type CutsMode,
 	type RepeatCut,
@@ -18,6 +21,7 @@ export {
 	type DirectorOp,
 	type DirectorPlan,
 	type DirectorSegment,
+	type DirectorVisionFrame,
 } from "./author";
 export {
 	renderTemplateJob,

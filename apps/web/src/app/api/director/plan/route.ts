@@ -1,14 +1,60 @@
 import { NextRequest, NextResponse } from "next/server";
-import { planDirector } from "@framecut/hf-bridge";
+import {
+	planDirector,
+	planDirectorVision,
+	type DirectorVisionFrame,
+	type MultimodalImageMediaType,
+} from "@framecut/hf-bridge";
 import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+const IMAGE_MEDIA_TYPES = new Set<string>([
+	"image/jpeg",
+	"image/png",
+	"image/gif",
+	"image/webp",
+]);
+
+/** Type-predicate guard (no `as` narrowing) for an accepted image media type. */
+function isImageMediaType(value: string): value is MultimodalImageMediaType {
+	return IMAGE_MEDIA_TYPES.has(value);
+}
+
 /**
- * The v0 Director planner endpoint: a fused-signal table + total duration + the
+ * Parse the wire `frames` array into typed `DirectorVisionFrame[]`, dropping any
+ * malformed entry. Returns `null` when `frames` is absent (the text-only path);
+ * an empty/all-malformed array yields `[]`, which also routes text-only.
+ */
+function parseVisionFrames(raw: unknown): DirectorVisionFrame[] | null {
+	if (raw === undefined || raw === null) return null;
+	if (!Array.isArray(raw)) return null;
+	const frames: DirectorVisionFrame[] = [];
+	for (const entry of raw) {
+		const segmentIndex: unknown = entry?.segmentIndex;
+		const mediaType: unknown = entry?.mediaType;
+		const dataBase64: unknown = entry?.dataBase64;
+		if (
+			typeof segmentIndex === "number" &&
+			Number.isInteger(segmentIndex) &&
+			segmentIndex >= 0 &&
+			typeof mediaType === "string" &&
+			isImageMediaType(mediaType) &&
+			typeof dataBase64 === "string" &&
+			dataBase64.length > 0
+		) {
+			frames.push({ segmentIndex, mediaType, dataBase64 });
+		}
+	}
+	return frames;
+}
+
+/**
+ * The Director planner endpoint: a fused-signal table + total duration + the
  * learned taste note in; a sanitized typed-op `DirectorPlan` + token usage out.
- * Text-only (no frames), so it works on every auth mode. Mirrors the cuts route.
+ * Optional `frames` route the request through the VISION planner; absent frames
+ * keep the text-only path (works on every auth mode). Mirrors the cuts route.
  */
 export async function POST(req: NextRequest) {
 	const auth = resolveAiAuth(req);
@@ -26,15 +72,34 @@ export async function POST(req: NextRequest) {
 	if (!Array.isArray(segments) || typeof totalSec !== "number") {
 		return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
 	}
+	const tasteNote = typeof taste === "string" ? taste : undefined;
+
+	// `frames: <non-array>` is a malformed request; `frames` absent or `[]` is the
+	// text-only path. Only a populated, well-formed array engages vision.
+	const frames = parseVisionFrames(body?.frames);
+	if (body?.frames !== undefined && frames === null) {
+		return NextResponse.json({ error: "Invalid frames" }, { status: 400 });
+	}
 
 	try {
+		if (frames && frames.length > 0) {
+			const { plan, usage, degraded } = await planDirectorVision({
+				segments,
+				totalSec,
+				taste: tasteNote,
+				frames,
+				auth,
+				signal: req.signal,
+			});
+			return NextResponse.json({ plan, usage, degraded });
+		}
 		const { plan, usage } = await planDirector({
 			segments,
 			totalSec,
-			taste: typeof taste === "string" ? taste : undefined,
+			taste: tasteNote,
 			auth,
 		});
-		return NextResponse.json({ plan, usage });
+		return NextResponse.json({ plan, usage, degraded: false });
 	} catch (e) {
 		return NextResponse.json(
 			{ error: `Director planning failed: ${e instanceof Error ? e.message : String(e)}` },
