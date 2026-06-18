@@ -6,6 +6,7 @@ import type { MediaAsset } from "@/media/types";
 import { readVideoFile } from "./mediabunny";
 import type { VideoFileData } from "./mediabunny";
 import { renderThumbnailDataUrl } from "./thumbnail";
+import { finiteDurationOrUndefined } from "./duration";
 
 export interface ProcessedMediaAsset extends Omit<MediaAsset, "id"> {}
 
@@ -258,7 +259,11 @@ export async function processMediaAssets({
 	return processedAssets;
 }
 
-const getMediaDuration = ({ file }: { file: File }): Promise<number> => {
+const getMediaDuration = ({
+	file,
+}: {
+	file: File;
+}): Promise<number | undefined> => {
 	return new Promise((resolve, reject) => {
 		const element = document.createElement(
 			file.type.startsWith("video/") ? "video" : "audio",
@@ -266,7 +271,10 @@ const getMediaDuration = ({ file }: { file: File }): Promise<number> => {
 		const objectUrl = URL.createObjectURL(file);
 
 		element.addEventListener("loadedmetadata", () => {
-			resolve(element.duration);
+			// A streaming/malformed audio file yields Infinity/NaN/0 here; collapse
+			// those to undefined so DEFAULT_NEW_ELEMENT_DURATION takes over instead of
+			// pasting a zero-length element (or throwing in mediaTimeFromSeconds).
+			resolve(finiteDurationOrUndefined(element.duration));
 			URL.revokeObjectURL(objectUrl);
 			element.remove();
 		});

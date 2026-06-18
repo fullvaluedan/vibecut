@@ -21,6 +21,7 @@ import {
 	writeBufferToHandle,
 	downloadBuffer,
 } from "@/export";
+import { canExport } from "@/export/can-export";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
 	EXPORT_FORMAT_VALUES,
@@ -115,6 +116,11 @@ function ExportPopover({
 	const activeProject = useEditor((e) => e.project.getActive());
 	const exportState = useEditor((e) => e.project.getExportState());
 	const { isExporting, progress, result: exportResult } = exportState;
+	// Read the timeline duration up front so an empty project disables Export and
+	// short-circuits handleExport BEFORE pickSaveLocation — otherwise the save
+	// dialog is shown only to fail with "Project is empty" right after.
+	const totalDuration = useEditor((e) => e.timeline.getTotalDuration());
+	const canExportProject = canExport({ durationTicks: totalDuration });
 	const [format, setFormat] = useState<ExportFormat>(
 		DEFAULT_EXPORT_OPTIONS.format,
 	);
@@ -127,6 +133,12 @@ function ExportPopover({
 
 	const handleExport = async () => {
 		if (!activeProject) return;
+		// Bail before pickSaveLocation: an empty timeline can't export, so don't
+		// prompt for a save destination only to fail with "Project is empty".
+		if (!canExport({ durationTicks: editor.timeline.getTotalDuration() })) {
+			toast.error("Add footage to the timeline first");
+			return;
+		}
 
 		const tracks = editor.scenes.getActiveScene().tracks;
 		const mediaAssets = editor.media.getAssets();
@@ -315,10 +327,19 @@ function ExportPopover({
 								</div>
 
 								<div className="p-3 pt-0">
-									<Button onClick={handleExport} className="w-full gap-2">
+									<Button
+										onClick={handleExport}
+										disabled={!canExportProject}
+										className="w-full gap-2"
+									>
 										<Download className="size-4" />
 										Export
 									</Button>
+									{!canExportProject && (
+										<p className="text-muted-foreground mt-2 text-xs">
+											Add footage to the timeline to export.
+										</p>
+									)}
 								</div>
 							</>
 						)}

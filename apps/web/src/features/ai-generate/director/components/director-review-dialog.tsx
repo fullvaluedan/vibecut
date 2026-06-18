@@ -41,6 +41,19 @@ export function DirectorReviewDialog() {
 	const ops = plan?.operations ?? [];
 	const acceptedCount = ops.filter((op) => decisions[op.id]).length;
 
+	// Cancelling/dismissing the modal does NOT roll back the timeline: run-director
+	// already ran assemble + remove-silences (each its own command) BEFORE opening
+	// this modal, so the footage is laid out and silences are cut. Signpost that
+	// it's reversible rather than leaving the user with a silently-mutated timeline.
+	// (One-undo rollback-on-cancel is a follow-up — see docs/TO-VERIFY.md.)
+	const handleCancel = () => {
+		close();
+		toast.info("Director: review cancelled", {
+			description:
+				"Footage was assembled and silences removed — Ctrl+Z to undo.",
+		});
+	};
+
 	const apply = () => {
 		if (!plan) return;
 		const accepted = ops.filter((op) => decisions[op.id]);
@@ -78,7 +91,7 @@ export function DirectorReviewDialog() {
 		<Dialog
 			open={open}
 			onOpenChange={(isOpen) => {
-				if (!isOpen) close();
+				if (!isOpen) handleCancel();
 			}}
 		>
 			<DialogContent className="max-w-2xl p-6">
@@ -124,7 +137,7 @@ export function DirectorReviewDialog() {
 					</div>
 				)}
 				<div className="flex justify-end gap-2 pt-2">
-					<Button variant="ghost" size="sm" onClick={close}>
+					<Button variant="ghost" size="sm" onClick={handleCancel}>
 						Cancel
 					</Button>
 					<Button size="sm" onClick={apply} disabled={ops.length === 0}>
