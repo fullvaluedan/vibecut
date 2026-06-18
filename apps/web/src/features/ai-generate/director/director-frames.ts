@@ -169,6 +169,49 @@ export async function sampleDirectorFrames({
 	return frames;
 }
 
+/** A user-facing notice after a (possibly attempted) vision run. */
+export interface VisionNotice {
+	kind: "info" | "warning" | "none";
+	message: string;
+}
+
+/**
+ * Decide what to tell the user after a Director run (cost transparency + the
+ * degrade path, R4/R3). No frames → nothing to say. Frames sent but the backend
+ * couldn't take them (`degraded`) → a warning that it fell back to the transcript.
+ * Frames analyzed → an info line with the frame count and (when known) the token
+ * cost. Pure, so the branch is unit-tested; the caller dispatches the toast.
+ */
+export function formatVisionNotice({
+	frameCount,
+	degraded,
+	inputTokens,
+}: {
+	frameCount: number;
+	degraded: boolean;
+	inputTokens?: number | null;
+}): VisionNotice {
+	if (frameCount <= 0) {
+		return { kind: "none", message: "" };
+	}
+	if (degraded) {
+		return {
+			kind: "warning",
+			message:
+				"Director vision isn't available on this connection — used the transcript instead. Add an API key (Settings → AI) for visual cuts.",
+		};
+	}
+	const tokenNote =
+		typeof inputTokens === "number" && inputTokens > 0
+			? ` · ~${Math.round(inputTokens / 1000)}k tokens`
+			: "";
+	const plural = frameCount === 1 ? "" : "s";
+	return {
+		kind: "info",
+		message: `Director vision analyzed ${frameCount} frame${plural}${tokenNote}.`,
+	};
+}
+
 /** Accepted base64 image data-URL: `data:image/<jpeg|png|gif|webp>;base64,<data>`. */
 const DATA_URL_RE = /^data:(image\/(?:jpeg|png|gif|webp));base64,(.+)$/;
 

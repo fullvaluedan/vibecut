@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	formatVisionNotice,
 	pickSpread,
 	selectDirectorFrameRequests,
 	toVisionFrames,
@@ -122,5 +123,43 @@ describe("toVisionFrames", () => {
 		expect(wire).toEqual([
 			{ segmentIndex: 2, mediaType: "image/webp", dataBase64: "WEBP" },
 		]);
+	});
+});
+
+describe("formatVisionNotice", () => {
+	test("no frames → nothing to say", () => {
+		expect(formatVisionNotice({ frameCount: 0, degraded: false })).toEqual({
+			kind: "none",
+			message: "",
+		});
+	});
+
+	test("frames sent but degraded → a warning about the transcript fallback (R3)", () => {
+		const notice = formatVisionNotice({ frameCount: 8, degraded: true });
+		expect(notice.kind).toBe("warning");
+		expect(notice.message).toContain("isn't available");
+		expect(notice.message).toContain("API key");
+	});
+
+	test("frames analyzed → an info line with count and token cost (R4)", () => {
+		const notice = formatVisionNotice({
+			frameCount: 12,
+			degraded: false,
+			inputTokens: 41234,
+		});
+		expect(notice.kind).toBe("info");
+		expect(notice.message).toContain("12 frames");
+		expect(notice.message).toContain("~41k tokens");
+	});
+
+	test("a single frame is singular and an unknown token count is omitted", () => {
+		const notice = formatVisionNotice({
+			frameCount: 1,
+			degraded: false,
+			inputTokens: null,
+		});
+		expect(notice.message).toContain("1 frame");
+		expect(notice.message).not.toContain("frames");
+		expect(notice.message).not.toContain("tokens");
 	});
 });

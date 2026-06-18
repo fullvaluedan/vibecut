@@ -20,7 +20,12 @@ import type { EditorCore } from "@/core";
 import type { DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeSpeechFeatures } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
-import { sampleDirectorFrames, toVisionFrames } from "./director-frames";
+import { toast } from "sonner";
+import {
+	formatVisionNotice,
+	sampleDirectorFrames,
+	toVisionFrames,
+} from "./director-frames";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import { detectDuplicateWordCuts } from "./duplicate-words";
@@ -133,6 +138,17 @@ export async function runDirector({
 	// the backend wasn't degraded to text-only), so the review badge + per-category
 	// taste learn vision cuts separately from text-only ones.
 	const usedVision = frames.length > 0 && data?.degraded !== true;
+	// Cost transparency + the degrade fallback notice (R3/R4).
+	const notice = formatVisionNotice({
+		frameCount: frames.length,
+		degraded: data?.degraded === true,
+		inputTokens: data?.usage?.inputTokens,
+	});
+	if (notice.kind === "warning") {
+		toast.warning(notice.message);
+	} else if (notice.kind === "info") {
+		toast.info(notice.message);
+	}
 	const rawPlanOps = Array.isArray(data?.plan?.operations)
 		? data.plan.operations
 		: [];
