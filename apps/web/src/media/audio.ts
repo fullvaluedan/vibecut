@@ -21,6 +21,7 @@ import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { timelineAudioFrameCount } from "./timeline-audio-size";
 import {
 	computeRmsBuckets,
 	type SampleBucket,
@@ -638,6 +639,7 @@ export async function createTimelineAudioBuffer({
 	mediaAssets,
 	duration,
 	sampleRate = EXPORT_SAMPLE_RATE,
+	outputChannels = 2,
 	audioContext,
 	onProgress,
 }: {
@@ -645,6 +647,10 @@ export async function createTimelineAudioBuffer({
 	mediaAssets: MediaAsset[];
 	duration: number;
 	sampleRate?: number;
+	/** Output channel count. Export uses 2 (stereo); the analysis/transcription
+	 * path passes 1 (mono) — together with a lower sampleRate this keeps the
+	 * buffer small enough that `createBuffer` doesn't reject a long timeline. */
+	outputChannels?: number;
 	audioContext?: AudioContext;
 	/** Fires 0..1 across decode → mix → mastering, so the export bar moves
 	 * during this stage instead of looking frozen. */
@@ -662,14 +668,24 @@ export async function createTimelineAudioBuffer({
 
 	if (audioElements.length === 0) return null;
 
-	const outputChannels = 2;
 	const durationSeconds = duration / TICKS_PER_SECOND;
-	const outputLength = Math.ceil(durationSeconds * sampleRate);
-	const outputBuffer = context.createBuffer(
-		outputChannels,
-		outputLength,
+	const outputLength = timelineAudioFrameCount({
+		durationTicks: duration,
 		sampleRate,
-	);
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	let outputBuffer: AudioBuffer;
+	try {
+		outputBuffer = context.createBuffer(outputChannels, outputLength, sampleRate);
+	} catch (error) {
+		// A long enough timeline overflows the browser's createBuffer allocation
+		// limit (~21 min stereo @ 44.1kHz ≈ 459 MB). Surface an actionable message
+		// instead of the raw "createBuffer(...) failed" DOMException.
+		const minutes = Math.max(1, Math.round(durationSeconds / 60));
+		throw new Error(
+			`Timeline audio is too large to process in one buffer (~${minutes} min, ${outputChannels}ch @ ${sampleRate}Hz). Shorten the timeline or split the export. (createBuffer failed: ${error instanceof Error ? error.message : String(error)})`,
+		);
+	}
 
 	let mixed = 0;
 	for (const element of audioElements) {
@@ -859,7 +875,9 @@ function mixAudioChannels({
 	const outputStartSample = Math.floor(startTime * sampleRate);
 	const renderedLength = Math.ceil(elementDuration * sampleRate);
 
-	const outputChannels = 2;
+	// Follow the output buffer's channel count: 2 for export (stereo), 1 for the
+	// mono analysis path. A source channel beyond the output folds to the last.
+	const outputChannels = outputBuffer.numberOfChannels;
 	for (let channel = 0; channel < outputChannels; channel++) {
 		const outputData = outputBuffer.getChannelData(channel);
 		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
