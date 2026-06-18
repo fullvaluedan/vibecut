@@ -1,21 +1,23 @@
 /**
- * Director taste module (U6) — the minimal self-learning seed.
+ * Director taste module (U6 + Round-2 U4) — the self-learning seed.
  *
  * The Review modal's per-op accept/reject decisions are the ground-truth signal:
- * this module aggregates them per op type and, once a per-type sample threshold
- * is met, derives a compact plain-language note injected into the next Director
- * prompt (alongside the existing cut preferences). Device-local (localStorage),
- * no network I/O, clearable in Settings → AI. v0 is capture + inject only — the
- * LLM compression loop is deferred. Mirrors `preference-store.ts`.
+ * this module aggregates them per CUT CATEGORY (duplicate / filler / pacing /
+ * reorder / take / llm) and, once a per-category sample threshold is met, derives
+ * a compact plain-language note injected into the next Director prompt. Learning
+ * per category (not just per op kind) lets it distinguish "this editor keeps
+ * fillers" from "rejects tangent cuts". Device-local (localStorage), no network
+ * I/O, clearable in Settings → AI. Mirrors `preference-store.ts`.
  */
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { DirectorOpKind } from "@framecut/hf-bridge";
+import type { DirectorOpCategory, DirectorOpKind } from "@framecut/hf-bridge";
 
-/** One reviewed op outcome. */
+/** One reviewed op outcome. `category` is the op's explicit category when set. */
 export interface ReviewDecision {
 	op: DirectorOpKind;
+	category?: DirectorOpCategory;
 	accepted: boolean;
 }
 
@@ -24,21 +26,48 @@ interface OpStat {
 	rejected: number;
 }
 
-/** Per-op-type accept/reject tallies. */
-export type DirectorTasteStats = Partial<Record<DirectorOpKind, OpStat>>;
+/** Per-category accept/reject tallies. */
+export type DirectorTasteStats = Partial<Record<DirectorOpCategory, OpStat>>;
 
-/** A note fires once a type has at least this many decisions. */
+/** A note fires once a category has at least this many decisions. */
 const MIN_SAMPLES = 2;
 /** ...and the accept/reject share crosses this fraction. */
 const SIGNAL_THRESHOLD = 0.5;
 
-const OP_KINDS: readonly DirectorOpKind[] = ["cut", "take_select", "reorder", "keep"];
-const OP_LABEL: Record<DirectorOpKind, string> = {
-	cut: "cuts",
-	take_select: "take selections",
+const CATEGORIES: readonly DirectorOpCategory[] = [
+	"duplicate",
+	"filler",
+	"pacing",
+	"reorder",
+	"take",
+	"llm",
+];
+const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
+	duplicate: "duplicate-word cuts",
+	filler: "filler cuts",
+	pacing: "pacing cuts",
 	reorder: "reorders",
-	keep: "keeps",
+	take: "take selections",
+	llm: "cuts",
 };
+
+/**
+ * The taste category for a reviewed op: its explicit category, else derived from
+ * the op kind (raw LLM ops). `keep` is informational and carries no signal (null).
+ */
+function resolveCategory({ op, category }: ReviewDecision): DirectorOpCategory | null {
+	if (category) return category;
+	switch (op) {
+		case "take_select":
+			return "take";
+		case "reorder":
+			return "reorder";
+		case "cut":
+			return "llm";
+		default:
+			return null; // keep
+	}
+}
 
 /** Pure: fold a batch of decisions onto the existing stats (immutably). */
 export function aggregateDecisions({
@@ -50,8 +79,10 @@ export function aggregateDecisions({
 }): DirectorTasteStats {
 	const next: DirectorTasteStats = { ...stats };
 	for (const d of decisions) {
-		const stat = next[d.op] ?? { accepted: 0, rejected: 0 };
-		next[d.op] = d.accepted
+		const cat = resolveCategory(d);
+		if (!cat) continue;
+		const stat = next[cat] ?? { accepted: 0, rejected: 0 };
+		next[cat] = d.accepted
 			? { accepted: stat.accepted + 1, rejected: stat.rejected }
 			: { accepted: stat.accepted, rejected: stat.rejected + 1 };
 	}
@@ -61,18 +92,18 @@ export function aggregateDecisions({
 /** Pure: a compact taste note from the stats; empty string when nothing is confident. */
 export function deriveTasteNote(stats: DirectorTasteStats): string {
 	const lines: string[] = [];
-	for (const key of OP_KINDS) {
+	for (const key of CATEGORIES) {
 		const stat = stats[key];
 		if (!stat) continue;
 		const total = stat.accepted + stat.rejected;
 		if (total < MIN_SAMPLES) continue;
 		if (stat.rejected / total >= SIGNAL_THRESHOLD) {
 			lines.push(
-				`The user rejected ${stat.rejected} of ${total} proposed ${OP_LABEL[key]} — be conservative with ${OP_LABEL[key]}.`,
+				`The user rejected ${stat.rejected} of ${total} proposed ${CATEGORY_LABEL[key]} — be conservative with ${CATEGORY_LABEL[key]}.`,
 			);
 		} else if (stat.accepted / total >= SIGNAL_THRESHOLD) {
 			lines.push(
-				`The user accepted ${stat.accepted} of ${total} proposed ${OP_LABEL[key]} — that judgment is welcome.`,
+				`The user accepted ${stat.accepted} of ${total} proposed ${CATEGORY_LABEL[key]} — that judgment is welcome.`,
 			);
 		}
 	}

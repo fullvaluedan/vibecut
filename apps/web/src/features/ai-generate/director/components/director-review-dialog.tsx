@@ -41,7 +41,11 @@ export function DirectorReviewDialog() {
 		const result = applyDirectorPlan({ editor, ops: accepted });
 		// Seed the taste signal from every reviewed decision (accepted or not).
 		useDirectorTasteStore.getState().noteReviewDecisions(
-			ops.map((op) => ({ op: op.op, accepted: Boolean(decisions[op.id]) })),
+			ops.map((op) => ({
+				op: op.op,
+				category: op.category,
+				accepted: Boolean(decisions[op.id]),
+			})),
 		);
 		close();
 		if (result.cuts === 0 && result.reorders === 0) {
