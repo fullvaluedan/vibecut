@@ -431,7 +431,8 @@ export type DirectorOpCategory =
 	| "reorder"
 	| "take"
 	| "llm"
-	| "vision";
+	| "vision"
+	| "repeat";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {
@@ -544,7 +545,7 @@ export function buildDirectorPrompt({
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 Emit a plan of typed OPERATIONS:
-- "cut": remove a span [startSec,endSec) - retakes (keep the LAST attempt), stutters/false-starts, contentless filler runs, off-topic tangents, and dead-weight intros/outros.
+- "cut": remove a span [startSec,endSec) - retakes and RESTARTS (keep the LAST attempt), REDUNDANT RESTATEMENTS (the speaker makes the same point a second time, even in DIFFERENT words - keep the single clearest version and cut the rest), stutters/false-starts, contentless filler runs, off-topic tangents, dead-weight intros/outros, and DEAD TIME where nothing useful is said (long fumbling / "let me just..." while figuring something out). This is ONE continuous recording, so expect the speaker to circle back and repeat themselves - cut that redundancy aggressively; pacing beats completeness.
 - "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
 - "keep": optionally mark a load-bearing span you deliberately kept.
