@@ -166,6 +166,25 @@ export function resolveTrackPlacement({
 	}
 
 	if (strategy.type === "firstAvailable") {
+		// An imported video should default to the main (V1) track. orderedTracks
+		// lists overlay BEFORE main, so plain first-available would grab an empty
+		// V2 overlay video track whenever one exists — divert video to main when
+		// it can hold the span (text/graphic/audio keep filling overlay/audio
+		// first; Assemble already targets main explicitly).
+		if (
+			trackType === "video" &&
+			canPlaceTimeSpansOnTrack({ track: tracks.main, timeSpans })
+		) {
+			return buildExistingTrackResult({
+				track: tracks.main,
+				trackIndex: orderedTracks.findIndex(
+					(track) => track.id === tracks.main.id,
+				),
+				tracks,
+				timeSpans,
+			});
+		}
+
 		const existingTrackIndex = findFirstAvailableTrackIndex({
 			tracks: orderedTracks,
 			trackType,

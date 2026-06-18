@@ -342,6 +342,26 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 
+	test("firstAvailable diverts a video to the main track over an empty overlay video track", () => {
+		const tracks = buildSceneTracks({
+			overlay: [buildTrack({ id: "video-overlay", type: "video" })],
+		});
+
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 0, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toEqual({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackIndex: 1,
+			trackType: "video",
+		});
+	});
+
 	test("firstAvailable creates a new track when all compatible tracks are full", () => {
 		const tracks = buildSceneTracks({
 			overlay: [
