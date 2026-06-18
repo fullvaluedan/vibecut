@@ -412,6 +412,24 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"unlink-elements",
+		() => {
+			if (selectedElements.length !== 1) {
+				return;
+			}
+			const selectedElement = editor.timeline.getElementsWithTracks({
+				elements: selectedElements,
+			})[0];
+			const linkId = selectedElement?.element.linkId;
+			if (!linkId) {
+				return;
+			}
+			editor.timeline.unlinkElements({ linkId });
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"select-all",
 		() => {
 			const scene = editor.scenes.getActiveScene();

@@ -353,6 +353,10 @@ export function TimelineElement({
 		selectedElements.length === 1 &&
 		isCurrentElementSelected &&
 		canToggleSourceAudio(element, mediaAsset);
+	const canUnlink =
+		selectedElements.length === 1 &&
+		isCurrentElementSelected &&
+		Boolean(element.linkId);
 	const sourceAudioLabel =
 		element.type === "video"
 			? getSourceAudioActionLabel({ element })
@@ -474,6 +478,17 @@ export function TimelineElement({
 							}}
 						>
 							{sourceAudioLabel}
+						</ContextMenuItem>
+					)}
+					{canUnlink && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={ScissorIcon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								invokeAction("unlink-elements");
+							}}
+						>
+							Unlink audio/video
 						</ContextMenuItem>
 					)}
 					{canElementBeHidden(element) && (

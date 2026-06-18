@@ -40,6 +40,7 @@ import {
 	UpdateElementsCommand,
 	SplitElementsCommand,
 	MoveElementCommand,
+	UnlinkElementsCommand,
 	TracksSnapshotCommand,
 	UpsertKeyframeCommand,
 	RemoveKeyframeCommand,
@@ -269,6 +270,11 @@ export class TimelineManager {
 			trackId,
 			elementId,
 		});
+		this.editor.command.execute({ command });
+	}
+
+	unlinkElements({ linkId }: { linkId: string }): void {
+		const command = new UnlinkElementsCommand({ linkId });
 		this.editor.command.execute({ command });
 	}
 

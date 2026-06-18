@@ -147,6 +147,10 @@ export const ACTIONS = {
 		description: "Extract or recover source audio",
 		category: "editing",
 	},
+	"unlink-elements": {
+		description: "Unlink audio/video (move independently)",
+		category: "editing",
+	},
 	"select-all": {
 		description: "Select all elements",
 		category: "selection",
