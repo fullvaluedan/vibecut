@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	aggregateDecisions,
 	deriveTasteNote,
+	useDirectorTasteStore,
 	type DirectorTasteStats,
 } from "../taste";
 
@@ -78,5 +79,24 @@ describe("deriveTasteNote", () => {
 
 	test("empty stats produce no note", () => {
 		expect(deriveTasteNote({})).toBe("");
+	});
+});
+
+describe("useDirectorTasteStore — clearTaste", () => {
+	beforeEach(() => {
+		// In-memory reset (persist storage is absent under bun; the store still works).
+		useDirectorTasteStore.setState({ opStats: {}, selfLearningEnabled: true });
+	});
+
+	test("clearing taste empties the per-category notes", () => {
+		// Record enough rejected fillers to cross the note threshold...
+		useDirectorTasteStore.getState().noteReviewDecisions([
+			{ op: "cut", category: "filler", accepted: false },
+			{ op: "cut", category: "filler", accepted: false },
+		]);
+		expect(useDirectorTasteStore.getState().buildDirectorTasteNote()).not.toBe("");
+		// ...then clearTaste wipes the stats so the next prompt carries no note.
+		useDirectorTasteStore.getState().clearTaste();
+		expect(useDirectorTasteStore.getState().buildDirectorTasteNote()).toBe("");
 	});
 });

@@ -19,7 +19,6 @@ import { BatchCommand } from "@/commands/batch-command";
 import type { Command } from "@/commands/base-command";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
 import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
-import type { EditorCore } from "@/core";
 import type { DirectorOp } from "@framecut/hf-bridge";
 
 export interface ApplyDirectorPlanResult {
@@ -108,6 +107,31 @@ export function planReorderMoves({
 	return moves;
 }
 
+/** One main/overlay/audio track, as much as the apply reads (wasm-free numbers). */
+interface DirectorApplyTrack {
+	id: string;
+	elements: readonly { id: string; startTime: number; duration: number }[];
+}
+
+/**
+ * The minimal editor surface `applyDirectorPlan` needs — the active scene's tracks
+ * and a command sink. Segregated from the full `EditorCore` (which it stays
+ * structurally assignable to — `MediaTime` reads as `number`) so the apply glue is
+ * unit-testable with a plain stub. Element times are plain ticks.
+ */
+export interface DirectorApplyEditor {
+	scenes: {
+		getActiveScene: () => {
+			tracks: {
+				main: DirectorApplyTrack;
+				overlay: readonly DirectorApplyTrack[];
+				audio: readonly DirectorApplyTrack[];
+			};
+		};
+	};
+	command: { execute: (args: { command: Command }) => void };
+}
+
 /**
  * Apply the accepted ops as one undoable step: a `MoveElementCommand` for the
  * reorders (first) and an all-track `RemoveRangesCommand` for the removals, wrapped
@@ -117,7 +141,7 @@ export function applyDirectorPlan({
 	editor,
 	ops,
 }: {
-	editor: EditorCore;
+	editor: DirectorApplyEditor;
 	ops: readonly DirectorOp[];
 }): ApplyDirectorPlanResult {
 	const { ranges, removedSec } = planRemovalRanges({
@@ -132,8 +156,8 @@ export function applyDirectorPlan({
 			elements.push({
 				elementId: el.id,
 				trackId: track.id,
-				startTimeTicks: el.startTime as number,
-				durationTicks: el.duration as number,
+				startTimeTicks: el.startTime,
+				durationTicks: el.duration,
 			});
 		}
 	}
