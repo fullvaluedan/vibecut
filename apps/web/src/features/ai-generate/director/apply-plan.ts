@@ -1,20 +1,24 @@
 /**
- * Apply an accepted Director plan to the timeline (U3).
+ * Apply an accepted Director plan to the timeline (U3 + Round-2 U1).
  *
- * v0 applies the REMOVAL ops (`cut` / `take_select`) as a single all-track
- * `RemoveRangesCommand` — one undoable step, so a single Ctrl+Z restores the
- * pre-Director timeline. `reorder` ops are PROPOSED by the planner and shown in
- * the Review modal, but their application is deferred this round (returned as
- * `unappliedReorders`): building the `MoveElementCommand` move + ordering it
- * against the cuts needs live exercise (the plan's reorder-granularity open
- * question). `keep` ops are informational no-ops.
+ * Removal ops (`cut` / `take_select`) apply as one all-track `RemoveRangesCommand`,
+ * and `reorder` ops apply as a `MoveElementCommand` that shifts the elements in the
+ * reordered span to the target time. Both are wrapped in a single `BatchCommand`
+ * (reorders FIRST — a move repositions only its own elements without rippling, so
+ * the removal ranges, expressed in original coordinates, still line up). One
+ * undoable step: a single Ctrl+Z restores the pre-Director timeline. `keep` ops are
+ * informational no-ops.
  */
 
 import {
 	RemoveRangesCommand,
 	type TimeRange,
 } from "@/commands/timeline/track/remove-ranges";
-import { TICKS_PER_SECOND } from "@/wasm";
+import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
+import { BatchCommand } from "@/commands/batch-command";
+import type { Command } from "@/commands/base-command";
+import type { PlannedElementMove } from "@/timeline/group-move/types";
+import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
 import type { DirectorOp } from "@framecut/hf-bridge";
 
@@ -23,14 +27,29 @@ export interface ApplyDirectorPlanResult {
 	cuts: number;
 	/** Total seconds removed. */
 	removedSec: number;
-	/** Accepted reorder ops not applied in v0 (proposed only). */
-	unappliedReorders: number;
+	/** Reorder ops applied as element moves. */
+	reorders: number;
+}
+
+/** One element to relocate, in plain ticks (wasm-free so it's unit-testable). */
+export interface ReorderElement {
+	elementId: string;
+	trackId: string;
+	startTimeTicks: number;
+	durationTicks: number;
+}
+
+/** A resolved reorder move, in plain ticks. */
+export interface ReorderMove {
+	elementId: string;
+	trackId: string;
+	newStartTimeTicks: number;
 }
 
 /**
- * Pure: split accepted ops into removal tick-ranges (cut/take_select) + the
- * reorder count. `keep` is ignored. `ticksPerSecond` is injected so this is
- * unit-testable without the opencut-wasm binary.
+ * Pure: split accepted ops into removal tick-ranges (cut/take_select). `keep` and
+ * `reorder` are ignored here. `ticksPerSecond` is injected so this is unit-testable
+ * without the opencut-wasm binary.
  */
 export function planRemovalRanges({
 	ops,
@@ -38,20 +57,61 @@ export function planRemovalRanges({
 }: {
 	ops: readonly DirectorOp[];
 	ticksPerSecond: number;
-}): { ranges: TimeRange[]; removedSec: number; reorders: number } {
+}): { ranges: TimeRange[]; removedSec: number } {
 	const removals = ops.filter((o) => o.op === "cut" || o.op === "take_select");
-	const reorders = ops.filter((o) => o.op === "reorder").length;
 	const ranges: TimeRange[] = removals.map((o) => ({
 		start: Math.round(o.startSec * ticksPerSecond),
 		end: Math.round(o.endSec * ticksPerSecond),
 	}));
-	const removedSec = removals.reduce((acc, o) => acc + (o.endSec - o.startSec), 0);
-	return { ranges, removedSec, reorders };
+	const removedSec = removals.reduce(
+		(acc, o) => acc + (o.endSec - o.startSec),
+		0,
+	);
+	return { ranges, removedSec };
 }
 
 /**
- * Apply the accepted ops as one undoable step. Removals go through a single
- * all-track `RemoveRangesCommand`; reorders are counted but not applied (v0).
+ * Pure: resolve each `reorder` op to the moves it implies. An op claims the
+ * elements FULLY contained in its [startSec, endSec) span (clip granularity — KTD-2)
+ * and shifts each by `targetStartSec - startSec`, preserving relative offsets. Ops
+ * with no movement (target === start) or no contained elements yield nothing.
+ */
+export function planReorderMoves({
+	ops,
+	ticksPerSecond,
+	elements,
+}: {
+	ops: readonly DirectorOp[];
+	ticksPerSecond: number;
+	elements: readonly ReorderElement[];
+}): ReorderMove[] {
+	const moves: ReorderMove[] = [];
+	for (const op of ops) {
+		if (op.op !== "reorder" || op.targetStartSec == null) continue;
+		const spanStart = Math.round(op.startSec * ticksPerSecond);
+		const spanEnd = Math.round(op.endSec * ticksPerSecond);
+		const deltaTicks = Math.round(
+			(op.targetStartSec - op.startSec) * ticksPerSecond,
+		);
+		if (deltaTicks === 0) continue;
+		for (const el of elements) {
+			const elEnd = el.startTimeTicks + el.durationTicks;
+			if (el.startTimeTicks >= spanStart && elEnd <= spanEnd) {
+				moves.push({
+					elementId: el.elementId,
+					trackId: el.trackId,
+					newStartTimeTicks: Math.max(0, el.startTimeTicks + deltaTicks),
+				});
+			}
+		}
+	}
+	return moves;
+}
+
+/**
+ * Apply the accepted ops as one undoable step: a `MoveElementCommand` for the
+ * reorders (first) and an all-track `RemoveRangesCommand` for the removals, wrapped
+ * in a `BatchCommand`. With no reorders this is byte-identical to the v0 path.
  */
 export function applyDirectorPlan({
 	editor,
@@ -60,14 +120,55 @@ export function applyDirectorPlan({
 	editor: EditorCore;
 	ops: readonly DirectorOp[];
 }): ApplyDirectorPlanResult {
-	const { ranges, removedSec, reorders } = planRemovalRanges({
+	const { ranges, removedSec } = planRemovalRanges({
 		ops,
 		ticksPerSecond: TICKS_PER_SECOND,
 	});
-	if (ranges.length === 0) {
-		return { cuts: 0, removedSec: 0, unappliedReorders: reorders };
+
+	const tracks = editor.scenes.getActiveScene().tracks;
+	const elements: ReorderElement[] = [];
+	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
+		for (const el of track.elements) {
+			elements.push({
+				elementId: el.id,
+				trackId: track.id,
+				startTimeTicks: el.startTime as number,
+				durationTicks: el.duration as number,
+			});
+		}
 	}
-	const command = new RemoveRangesCommand({ ranges });
+	const reorderMoves = planReorderMoves({
+		ops,
+		ticksPerSecond: TICKS_PER_SECOND,
+		elements,
+	});
+
+	const commands: Command[] = [];
+	if (reorderMoves.length > 0) {
+		const moves: PlannedElementMove[] = reorderMoves.map((m) => ({
+			sourceTrackId: m.trackId,
+			targetTrackId: m.trackId,
+			elementId: m.elementId,
+			newStartTime: mediaTime({ ticks: m.newStartTimeTicks }),
+		}));
+		commands.push(new MoveElementCommand({ moves }));
+	}
+	let removalCommand: RemoveRangesCommand | null = null;
+	if (ranges.length > 0) {
+		removalCommand = new RemoveRangesCommand({ ranges });
+		commands.push(removalCommand);
+	}
+
+	if (commands.length === 0) {
+		return { cuts: 0, removedSec: 0, reorders: 0 };
+	}
+	const command =
+		commands.length === 1 ? commands[0] : new BatchCommand(commands);
 	editor.command.execute({ command });
-	return { cuts: command.getRemovedCount(), removedSec, unappliedReorders: reorders };
+
+	return {
+		cuts: removalCommand ? removalCommand.getRemovedCount() : 0,
+		removedSec,
+		reorders: reorderMoves.length,
+	};
 }

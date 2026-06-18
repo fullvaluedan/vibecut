@@ -44,13 +44,23 @@ export function DirectorReviewDialog() {
 			ops.map((op) => ({ op: op.op, accepted: Boolean(decisions[op.id]) })),
 		);
 		close();
-		if (result.cuts === 0) {
+		if (result.cuts === 0 && result.reorders === 0) {
 			toast.info("Director: nothing applied");
 		} else {
-			toast.success(
-				`Director: ${result.cuts} cut${result.cuts === 1 ? "" : "s"}, ${result.removedSec.toFixed(1)}s removed`,
-				{ description: "Ctrl+Z restores everything." },
-			);
+			const parts: string[] = [];
+			if (result.cuts > 0) {
+				parts.push(
+					`${result.cuts} cut${result.cuts === 1 ? "" : "s"} (${result.removedSec.toFixed(1)}s)`,
+				);
+			}
+			if (result.reorders > 0) {
+				parts.push(
+					`${result.reorders} reorder${result.reorders === 1 ? "" : "s"}`,
+				);
+			}
+			toast.success(`Director: ${parts.join(", ")}`, {
+				description: "Ctrl+Z restores everything.",
+			});
 		}
 	};
 
