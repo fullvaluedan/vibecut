@@ -26,6 +26,17 @@ import {
 	usePreviewViewportState,
 } from "./preview-viewport";
 
+/**
+ * Vertical headroom (px) the interaction/handle overlay is allowed to paint
+ * beyond the viewport top/bottom edges before being clipped. Must cover the
+ * rotation handle, which sits ROTATION_HANDLE_OFFSET (24px) above an element's
+ * top edge with an additional ICON_HANDLE_RADIUS (10px) hit radius — so a
+ * full-bleed element (top edge at the canvas/viewport top) keeps its rotation
+ * and top-corner handles grabbable. Bounded so handles never reach adjacent
+ * panels.
+ */
+const HANDLE_OVERLAY_HEADROOM_PX = 36;
+
 function usePreviewSize() {
 	const canvasSize = useEditor(
 		(e) => e.project.getActive()?.settings.canvasSize,
@@ -309,8 +320,17 @@ function PreviewCanvas({
 						<ContextMenuTrigger asChild>
 							<div
 								ref={viewportRef}
-								className="relative flex size-full min-h-0 min-w-0 items-center justify-center overflow-hidden"
+								className="relative flex size-full min-h-0 min-w-0 items-center justify-center overflow-visible"
 							>
+							{/*
+							  Scene layer: clipped to the viewport box so the rendered
+							  canvas + letterbox stay bounded when zoomed in (the canvas
+							  mount can exceed the viewport at >100% zoom). The
+							  interaction/handle overlay further below is intentionally
+							  NOT inside this clip so a full-bleed element's rotation +
+							  top-corner handles stay grabbable past the canvas top edge.
+							*/}
+							<div className="pointer-events-none absolute inset-0 overflow-hidden">
 							<div
 								ref={canvasMountRef}
 								className="absolute block border"
@@ -336,21 +356,47 @@ function PreviewCanvas({
 							>
 								<AiOverlayPreviewLayer />
 							</div>
+							</div>
 								<PlaceToolOverlay
 									sceneLeft={viewport.sceneLeft}
 									sceneTop={viewport.sceneTop}
 									sceneWidth={viewport.sceneWidth}
 									sceneHeight={viewport.sceneHeight}
 								/>
-								<PreviewOverlayLayer
-									instances={overlayInstances}
-									plane="under-interaction"
-								/>
-								<PreviewInteractionOverlay />
-								<PreviewOverlayLayer
-									instances={overlayInstances}
-									plane="over-interaction"
-								/>
+								{/*
+								  Bounded-headroom escape for the interaction/handle overlay.
+								  The outer wrapper extends HANDLE_OVERLAY_HEADROOM_PX past the
+								  viewport top/bottom and clips there, so handles can paint just
+								  beyond the canvas edge (24px rotation offset + 10px hit radius)
+								  without escaping into adjacent panels. The inner wrapper shifts
+								  the overlay back onto the exact viewport box, so the
+								  canvas->overlay coordinate mapping is unchanged.
+								*/}
+								<div
+									className="pointer-events-none absolute inset-x-0 overflow-hidden"
+									style={{
+										top: -HANDLE_OVERLAY_HEADROOM_PX,
+										bottom: -HANDLE_OVERLAY_HEADROOM_PX,
+									}}
+								>
+									<div
+										className="absolute inset-x-0"
+										style={{
+											top: HANDLE_OVERLAY_HEADROOM_PX,
+											bottom: HANDLE_OVERLAY_HEADROOM_PX,
+										}}
+									>
+										<PreviewOverlayLayer
+											instances={overlayInstances}
+											plane="under-interaction"
+										/>
+										<PreviewInteractionOverlay />
+										<PreviewOverlayLayer
+											instances={overlayInstances}
+											plane="over-interaction"
+										/>
+									</div>
+								</div>
 							</div>
 						</ContextMenuTrigger>
 						<PreviewContextMenu
