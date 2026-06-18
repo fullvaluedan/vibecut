@@ -17,7 +17,9 @@ import { cn } from "@/utils/ui";
 import {
 	getExportMimeType,
 	getExportFileExtension,
-	saveBufferWithPicker,
+	pickSaveLocation,
+	writeBufferToHandle,
+	downloadBuffer,
 } from "@/export";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
@@ -34,7 +36,10 @@ import {
 } from "@/components/section";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_EXPORT_OPTIONS } from "@/export/defaults";
-import { compositeAiOverlays } from "@/features/ai-generate/composite-export";
+import {
+	compositeAiOverlays,
+	collectAiOverlayClips,
+} from "@/features/ai-generate/composite-export";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { toast } from "sonner";
 
@@ -123,6 +128,22 @@ function ExportPopover({
 	const handleExport = async () => {
 		if (!activeProject) return;
 
+		const tracks = editor.scenes.getActiveScene().tracks;
+		const mediaAssets = editor.media.getAssets();
+		// Predict the final container up front: AI/alpha overlays force an mp4
+		// burn-in (compositeAiOverlays below), so the save dialog can show the
+		// correct extension before we encode. collectAiOverlayClips is pure.
+		const willComposite =
+			collectAiOverlayClips({ tracks, mediaAssets }).length > 0;
+		const downloadFormat: ExportFormat = willComposite ? "mp4" : format;
+		const filename = `${activeProject.metadata.name}${getExportFileExtension({ format: downloadFormat })}`;
+		const mimeType = getExportMimeType({ format: downloadFormat });
+
+		// Ask WHERE to save FIRST — cancelling here costs nothing instead of
+		// throwing away a finished (often minutes-long) encode.
+		const location = await pickSaveLocation({ filename, mimeType });
+		if (location.kind === "cancelled") return;
+
 		const result = await editor.project.export({
 			options: {
 				format,
@@ -136,53 +157,49 @@ function ExportPopover({
 			editor.project.clearExportState();
 			return;
 		}
+		if (!result.success || !result.buffer) return;
 
-		if (result.success && result.buffer) {
-			// Self-learning: compare what's being exported against the last
-			// AI Cut: did the user keep it, restore content, or trim more?
-			usePreferenceStore.getState().noteExport({
-				durationTicks: editor.timeline.getTotalDuration() as number,
+		// Self-learning: compare what's being exported against the last
+		// AI Cut: did the user keep it, restore content, or trim more?
+		usePreferenceStore.getState().noteExport({
+			durationTicks: editor.timeline.getTotalDuration() as number,
+		});
+		// FrameCut AI overlays (alpha WebMs) are excluded from the canvas
+		// render — burn them in with local ffmpeg before saving.
+		let buffer = result.buffer;
+		try {
+			const composite = await compositeAiOverlays({
+				baseBuffer: result.buffer,
+				baseName: `base${getExportFileExtension({ format })}`,
+				tracks,
+				mediaAssets,
+				canvasSize: editor.project.getActive().settings.canvasSize,
 			});
-			// FrameCut AI overlays (alpha WebMs) are excluded from the canvas
-			// render â€” burn them in with local ffmpeg before downloading.
-			let buffer = result.buffer;
-			let downloadFormat = format;
-			try {
-				const composite = await compositeAiOverlays({
-					baseBuffer: result.buffer,
-					baseName: `base${getExportFileExtension({ format })}`,
-					tracks: editor.scenes.getActiveScene().tracks,
-					mediaAssets: editor.media.getAssets(),
-					canvasSize: editor.project.getActive().settings.canvasSize,
-				});
-				buffer = composite.buffer;
-				if (composite.composited) {
-					downloadFormat = "mp4";
-				}
-			} catch (e) {
-				toast.error("Couldn't burn in AI effects", {
-					description: e instanceof Error ? e.message : String(e),
-				});
-			}
-			const outcome = await saveBufferWithPicker({
-				buffer,
-				filename: `${activeProject.metadata.name}${getExportFileExtension({ format: downloadFormat })}`,
-				mimeType: getExportMimeType({ format: downloadFormat }),
+			buffer = composite.buffer;
+		} catch (e) {
+			toast.error("Couldn't burn in AI effects", {
+				description: e instanceof Error ? e.message : String(e),
 			});
-			if (outcome === "saved") {
-				toast.success("Exported", {
-					description:
-						"Saved to your chosen folder â€” next export defaults there.",
-				});
-			} else if (outcome === "cancelled") {
-				toast.info("Export not saved", {
-					description: "The save dialog was cancelled.",
-				});
-			}
-
-			editor.project.clearExportState();
-			onOpenChange(false);
 		}
+
+		if (location.kind === "handle") {
+			try {
+				await writeBufferToHandle({ handle: location.handle, buffer, mimeType });
+				toast.success("Exported", {
+					description: "Saved to your chosen folder — next export defaults there.",
+				});
+			} catch {
+				downloadBuffer({ buffer, filename, mimeType });
+				toast.success("Exported", { description: "Saved to your downloads." });
+			}
+		} else {
+			// No File System Access API — fall back to a plain download.
+			downloadBuffer({ buffer, filename, mimeType });
+			toast.success("Exported", { description: "Saved to your downloads." });
+		}
+
+		editor.project.clearExportState();
+		onOpenChange(false);
 	};
 
 	const handleCancel = () => {
