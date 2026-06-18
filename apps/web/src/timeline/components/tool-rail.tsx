@@ -10,9 +10,14 @@ import { Button } from "@/components/ui/button";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
+	ArrowExpand02Icon,
+	ArrowLeftRightIcon,
+	ArrowMoveDownRightIcon,
 	ArrowRight04Icon,
 	Bookmark02Icon,
 	Cursor01Icon,
+	DashboardSpeed02Icon,
+	DragDropHorizontalIcon,
 	PenTool03Icon,
 	ScissorIcon,
 	TextIcon,
@@ -60,9 +65,54 @@ export function TimelineToolRail() {
 					),
 			})}
 			{railButton({
-				title: "Razor — split the selected clip at the playhead",
+				title:
+					"Razor (C) — click a clip to split it at the cursor; Shift+click splits all tracks at that time",
 				icon: ScissorIcon,
-				onClick: () => invokeAction("split"),
+				active: tool?.kind === "razor",
+				onClick: () =>
+					setTool(tool?.kind === "razor" ? null : { kind: "razor" }),
+			})}
+			{railButton({
+				title:
+					"Rate-Stretch (R) — drag a clip edge to change its playback speed instead of trimming",
+				icon: DashboardSpeed02Icon,
+				active: tool?.kind === "rate-stretch",
+				onClick: () =>
+					setTool(
+						tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" },
+					),
+			})}
+			{railButton({
+				title:
+					"Ripple Edit (B) — drag a clip edge to trim it and ripple downstream clips (no gap)",
+				icon: ArrowExpand02Icon,
+				active: tool?.kind === "ripple",
+				onClick: () =>
+					setTool(tool?.kind === "ripple" ? null : { kind: "ripple" }),
+			})}
+			{railButton({
+				title:
+					"Roll Edit — drag the cut between two clips to move the edit point",
+				icon: ArrowLeftRightIcon,
+				active: tool?.kind === "roll",
+				onClick: () =>
+					setTool(tool?.kind === "roll" ? null : { kind: "roll" }),
+			})}
+			{railButton({
+				title:
+					"Slip (Y) — drag a clip's interior to slide its source window; the clip stays put",
+				icon: DragDropHorizontalIcon,
+				active: tool?.kind === "slip",
+				onClick: () =>
+					setTool(tool?.kind === "slip" ? null : { kind: "slip" }),
+			})}
+			{railButton({
+				title:
+					"Slide (U) — drag a clip's interior to move it between its neighbours, which absorb the move",
+				icon: ArrowMoveDownRightIcon,
+				active: tool?.kind === "slide",
+				onClick: () =>
+					setTool(tool?.kind === "slide" ? null : { kind: "slide" }),
 			})}
 			{railButton({
 				title:

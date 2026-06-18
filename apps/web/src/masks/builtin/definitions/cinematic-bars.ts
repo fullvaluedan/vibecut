@@ -11,6 +11,7 @@ import {
 	getStrokeOffset,
 	rotatePoint,
 } from "../box-like";
+import { expandRect } from "@/masks/expand";
 
 function getDefaultCinematicBarsMaskParams({
 	elementSize,
@@ -100,15 +101,20 @@ export const cinematicBarsMaskDefinition: MaskDefinition<"cinematic-bars"> = {
 				const params = resolvedParams;
 				const centerX = width / 2 + params.centerX * width;
 				const centerY = height / 2 + params.centerY * height;
-				const maskWidth = Math.max(params.width * width, width);
-				const maskHeight = Math.max(params.height, 0.01) * height;
+				const baseWidth = Math.max(params.width * width, width);
+				const baseHeight = Math.max(params.height, 0.01) * height;
+				const expanded = expandRect({
+					width: baseWidth,
+					height: baseHeight,
+					expand: params.expand,
+				});
 				const rotationRad = (params.rotation * Math.PI) / 180;
 
 				return buildBandPath({
 					centerX,
 					centerY,
-					halfWidth: maskWidth / 2,
-					halfHeight: maskHeight / 2,
+					halfWidth: expanded.width / 2,
+					halfHeight: expanded.height / 2,
 					rotationRad,
 				});
 			},
@@ -124,18 +130,17 @@ export const cinematicBarsMaskDefinition: MaskDefinition<"cinematic-bars"> = {
 					strokeAlign: params.strokeAlign,
 					strokeWidth: params.strokeWidth,
 				});
+				const expanded = expandRect({
+					width: Math.max(params.width * width, width),
+					height: Math.max(params.height, 0.01) * height,
+					expand: params.expand,
+				});
 
 				return buildBandPath({
 					centerX,
 					centerY,
-					halfWidth: Math.max(
-						Math.max(params.width * width, width) / 2 + offset,
-						1,
-					),
-					halfHeight: Math.max(
-						(Math.max(params.height, 0.01) * height) / 2 + offset,
-						1,
-					),
+					halfWidth: Math.max(expanded.width / 2 + offset, 1),
+					halfHeight: Math.max(expanded.height / 2 + offset, 1),
 					rotationRad,
 				});
 			},

@@ -19,12 +19,23 @@ import {
 import { TIMELINE_DRAG_THRESHOLD_PX } from "@/timeline/components/interaction";
 import type { FrameRate } from "opencut-wasm";
 import { computeDropTarget } from "@/timeline/components/drop-target";
+import { buildMoveCarveInputs } from "@/timeline/overwrite/move-overwrite-plan";
+import type { DropMode } from "@/timeline/overwrite/overwrite-plan";
+import { canElementGoOnTrack } from "@/timeline/placement";
 import { getMouseTimeFromClientX } from "@/timeline/drag-utils";
 import { generateUUID } from "@/utils/id";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { expandSelectionWithLinks } from "@/timeline/link-elements";
+import { usePlaceToolStore } from "@/preview/place-tool-store";
+import { computeSlipTarget } from "@/timeline/trim-tools/slip";
+import {
+	computeSlideTarget,
+	type SlideNeighbor,
+} from "@/timeline/trim-tools/slide";
+import { isRetimableElement } from "@/timeline";
 import type { SnapPoint } from "@/timeline/snapping";
 import type {
+	Bookmark,
 	DropTarget,
 	ElementRef,
 	ElementDragView,
@@ -50,6 +61,7 @@ export interface InputAdapter {
 
 export interface SceneReader {
 	getTracks: () => SceneTracks;
+	getBookmarks: () => Bookmark[];
 	getActiveFps: () => FrameRate | null;
 }
 
@@ -66,8 +78,52 @@ export interface PlaybackReader {
 	getCurrentTime: () => MediaTime;
 }
 
+/** A trim-only patch the Slip body-drag emits (startTime/duration unchanged). */
+export interface SlipTrimPatch {
+	trackId: string;
+	elementId: string;
+	trimStart: MediaTime;
+	trimEnd: MediaTime;
+}
+
+/**
+ * A full position+trim patch the Slide body-drag emits. Slide moves the clip
+ * (startTime) and reshapes both neighbours (startTime + duration + trim), so —
+ * unlike Slip's trim-only patch — each field is optional and only the changed
+ * ones are set per element.
+ */
+export interface SlidePatch {
+	trackId: string;
+	elementId: string;
+	startTime?: MediaTime;
+	duration?: MediaTime;
+	trimStart?: MediaTime;
+	trimEnd?: MediaTime;
+}
+
 export interface TimelineOps {
 	moveElements: (args: Pick<GroupMoveResult, "moves" | "createTracks">) => void;
+	// Single-clip overwrite/insert MOVE (U4): relocate the moved clip onto an
+	// OCCUPIED region of an existing track, carving it like a bin drop. Only called
+	// when the controller's conservative carve gate passes; ordinary moves use
+	// moveElements.
+	commitMoveOverwrite: (args: {
+		elementId: string;
+		targetTrackId: string;
+		newStartTime: MediaTime;
+		mode: DropMode;
+	}) => void;
+	// Slip body-drag preview/commit path (mirrors the resize-controller's). Slip
+	// changes only the source window, so these carry trim-only patches.
+	previewSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
+	discardSlipPreview: () => void;
+	commitSlip: (args: { patches: readonly SlipTrimPatch[] }) => void;
+	// Slide body-drag preview/commit path (reuses the U2 seam). Slide changes the
+	// clip's position and both neighbours' position/duration/trim, so these carry
+	// full position+trim patches.
+	previewSlide: (args: { patches: readonly SlidePatch[] }) => void;
+	discardSlidePreview: () => void;
+	commitSlide: (args: { patches: readonly SlidePatch[] }) => void;
 }
 
 export interface SnapConfig {
@@ -91,15 +147,71 @@ export interface ElementInteractionDepsRef {
 
 // --- Session ---
 
+// An interior body-drag is a plain clip MOVE (default), a SLIP (Y armed), or a
+// SLIDE (U armed): the mode is latched once at mousedown from the armed place
+// tool, so a mid-drag tool change can't flip the gesture's behaviour underneath
+// the user (mirrors the resize-controller's ResizeMode latch). Slip slides the
+// SOURCE window under each dragged clip; Slide moves the clip ALONG the timeline
+// between its neighbours, which absorb the move. Both route through their own
+// preview/commit path and never build a MoveGroup.
+type MoveMode = "move" | "slip" | "slide";
+
 type Point = { readonly x: number; readonly y: number };
 
 interface MousedownSnapshot {
 	readonly origin: Point;
+	readonly mode: MoveMode;
 	readonly elementId: string;
 	readonly trackId: string;
 	readonly startElementTime: MediaTime;
 	readonly clickOffsetTime: MediaTime;
 	readonly selectedElements: readonly ElementRef[];
+}
+
+// The frozen original state of one clip being slipped, captured at mousedown so a
+// preview can be re-derived from scratch every mousemove (idempotent, like the
+// resize controller re-deriving from `members`).
+interface SlipMember {
+	readonly trackId: string;
+	readonly elementId: string;
+	readonly trimStartTicks: number;
+	readonly trimEndTicks: number;
+	readonly sourceDurationTicks: number;
+	readonly durationTicks: number;
+	readonly rate: number;
+}
+
+interface SlipProgress {
+	readonly members: readonly SlipMember[];
+	patches: readonly SlipTrimPatch[];
+}
+
+// The frozen original state of the slid clip plus its two immediate neighbours on
+// the SAME track, captured at mousedown so the preview can be re-derived from
+// scratch every mousemove (idempotent). A neighbour is null when the clip sits at
+// a track edge (a gap on that side) — the slide is then bounded by the other side.
+interface SlideCaptured {
+	readonly trackId: string;
+	readonly clip: { readonly startTimeTicks: number; readonly durationTicks: number };
+	readonly clipElementId: string;
+	readonly left: (SlideNeighbor & { readonly elementId: string }) | null;
+	readonly right: (SlideNeighbor & { readonly elementId: string }) | null;
+	readonly minDurationTicks: number;
+}
+
+interface SlideProgress {
+	readonly captured: SlideCaptured;
+	patches: readonly SlidePatch[];
+}
+
+// The resolved single-clip carve-move for the current drop position, recomputed
+// every mousemove alongside the drop target. Present ONLY when the conservative
+// gate holds (single clip, existing type-compatible track, actual overlap); null
+// otherwise, so the ordinary move path is the default. Committed on mouseup.
+interface MoveCarvePlan {
+	elementId: string;
+	targetTrackId: string;
+	newStartTime: MediaTime;
 }
 
 interface DragProgress {
@@ -116,12 +228,17 @@ interface DragProgress {
 	currentMouseY: number;
 	groupMoveResult: GroupMoveResult | null;
 	dropTarget: DropTarget | null;
+	// Set when this drop position is a single-clip carve-move (overwrite/insert onto
+	// an occupied existing track). Takes precedence over groupMoveResult at commit.
+	moveCarve: MoveCarvePlan | null;
 }
 
 type Session =
 	| { kind: "idle" }
 	| { kind: "pending"; mousedown: MousedownSnapshot }
-	| { kind: "dragging"; mousedown: MousedownSnapshot; drag: DragProgress };
+	| { kind: "dragging"; mousedown: MousedownSnapshot; drag: DragProgress }
+	| { kind: "slipping"; mousedown: MousedownSnapshot; slip: SlipProgress }
+	| { kind: "sliding"; mousedown: MousedownSnapshot; slide: SlideProgress };
 
 const IDLE_VIEW: ElementDragView = { kind: "idle" };
 
@@ -155,6 +272,212 @@ function verticalDirection({
 
 function orderedTracks(sceneTracks: SceneTracks): TimelineTrack[] {
 	return [...sceneTracks.overlay, sceneTracks.main, ...sceneTracks.audio];
+}
+
+function rateOfElement(element: TimelineElement): number {
+	return isRetimableElement(element) ? (element.retime?.rate ?? 1) : 1;
+}
+
+/**
+ * Snapshot the original trim/source/duration/rate of each clip that the Slip
+ * gesture will slide. Slip only makes sense for clips with a real source window
+ * (a `sourceDuration`), so generated elements without one are dropped — they
+ * have nothing to slip. Returns the frozen members; the controller re-derives
+ * the preview from these every mousemove.
+ */
+function buildSlipMembers({
+	tracks,
+	selectedElements,
+}: {
+	tracks: SceneTracks;
+	selectedElements: readonly ElementRef[];
+}): SlipMember[] {
+	const trackMap = new Map(
+		orderedTracks(tracks).map((track) => [track.id, track]),
+	);
+	return selectedElements.flatMap(({ trackId, elementId }) => {
+		const track = trackMap.get(trackId);
+		const element = track?.elements.find((el) => el.id === elementId);
+		if (!element || element.sourceDuration == null) return [];
+		return [
+			{
+				trackId,
+				elementId,
+				trimStartTicks: element.trimStart as number,
+				trimEndTicks: element.trimEnd as number,
+				sourceDurationTicks: element.sourceDuration as number,
+				durationTicks: element.duration as number,
+				rate: rateOfElement(element),
+			},
+		];
+	});
+}
+
+/**
+ * Turn a horizontal pixel delta into a trim-only patch per slipped clip via the
+ * pure `computeSlipTarget`. The clip's timeline position and duration never
+ * change — only its `trimStart`/`trimEnd` (the source window) slides. A member
+ * whose trim is unchanged after clamping (e.g. a fully-saturated clip, or a zero
+ * drag) is omitted, so a no-op gesture commits nothing.
+ */
+function slipPatchesForDelta({
+	members,
+	deltaPx,
+	zoomLevel,
+}: {
+	members: readonly SlipMember[];
+	deltaPx: number;
+	zoomLevel: number;
+}): SlipTrimPatch[] {
+	const deltaTicks = Math.round(
+		(deltaPx / (BASE_TIMELINE_PIXELS_PER_SECOND * zoomLevel)) *
+			TICKS_PER_SECOND,
+	);
+	return members.flatMap((member) => {
+		const target = computeSlipTarget({
+			trimStartTicks: member.trimStartTicks,
+			trimEndTicks: member.trimEndTicks,
+			sourceDurationTicks: member.sourceDurationTicks,
+			durationTicks: member.durationTicks,
+			deltaTicks,
+			rate: member.rate,
+		});
+		if (
+			target.trimStartTicks === member.trimStartTicks &&
+			target.trimEndTicks === member.trimEndTicks
+		) {
+			return [];
+		}
+		return [
+			{
+				trackId: member.trackId,
+				elementId: member.elementId,
+				trimStart: mediaTime({ ticks: target.trimStartTicks }),
+				trimEnd: mediaTime({ ticks: target.trimEndTicks }),
+			},
+		];
+	});
+}
+
+/**
+ * Snapshot the slid clip plus its two immediate neighbours on the SAME track for
+ * a Slide gesture. Neighbours are resolved by exact-tick adjacency: the left
+ * neighbour ends exactly at the clip's start, the right neighbour starts exactly
+ * at the clip's end. A side with no adjacent clip (a gap / the track edge) is
+ * null — the slide is then bounded by the present side only. Returns null when
+ * the clip isn't found or BOTH sides are empty (nothing can absorb a slide).
+ */
+function buildSlideCaptured({
+	tracks,
+	anchorRef,
+	minDurationTicks,
+}: {
+	tracks: SceneTracks;
+	anchorRef: ElementRef;
+	minDurationTicks: number;
+}): SlideCaptured | null {
+	const track = orderedTracks(tracks).find((t) => t.id === anchorRef.trackId);
+	const clipEl = track?.elements.find((el) => el.id === anchorRef.elementId);
+	if (!track || !clipEl) return null;
+
+	const clipStart = clipEl.startTime as number;
+	const clipEnd = (clipEl.startTime + clipEl.duration) as number;
+
+	const toNeighbor = (
+		element: TimelineElement,
+	): SlideNeighbor & { elementId: string } => ({
+		elementId: element.id,
+		startTimeTicks: element.startTime as number,
+		durationTicks: element.duration as number,
+		trimStartTicks: element.trimStart as number,
+		trimEndTicks: element.trimEnd as number,
+		sourceDurationTicks:
+			element.sourceDuration == null
+				? undefined
+				: (element.sourceDuration as number),
+		rate: rateOfElement(element),
+	});
+
+	const leftEl = track.elements.find(
+		(el) =>
+			el.id !== clipEl.id &&
+			(el.startTime + el.duration) === clipStart,
+	);
+	const rightEl = track.elements.find(
+		(el) => el.id !== clipEl.id && (el.startTime as number) === clipEnd,
+	);
+
+	if (!leftEl && !rightEl) return null;
+
+	return {
+		trackId: track.id,
+		clipElementId: clipEl.id,
+		clip: { startTimeTicks: clipStart, durationTicks: clipEl.duration as number },
+		left: leftEl ? toNeighbor(leftEl) : null,
+		right: rightEl ? toNeighbor(rightEl) : null,
+		minDurationTicks,
+	};
+}
+
+/**
+ * Turn a horizontal pixel delta into Slide patches via the pure
+ * `computeSlideTarget`: a startTime patch for the clip plus a position/trim patch
+ * for each present neighbour. Returns [] when the slide is a no-op (zero clamped
+ * delta — the clip and neighbours unchanged) so a no-op gesture commits nothing.
+ */
+function slidePatchesForDelta({
+	captured,
+	deltaPx,
+	zoomLevel,
+}: {
+	captured: SlideCaptured;
+	deltaPx: number;
+	zoomLevel: number;
+}): SlidePatch[] {
+	const deltaTicks = Math.round(
+		(deltaPx / (BASE_TIMELINE_PIXELS_PER_SECOND * zoomLevel)) *
+			TICKS_PER_SECOND,
+	);
+	const target = computeSlideTarget({
+		clip: captured.clip,
+		left: captured.left,
+		right: captured.right,
+		deltaTicks,
+		minDurationTicks: captured.minDurationTicks,
+	});
+	// No slideable result, or the clamp pinned the clip in place: commit nothing.
+	if (!target || target.startTimeTicks === captured.clip.startTimeTicks) {
+		return [];
+	}
+
+	const patches: SlidePatch[] = [
+		{
+			trackId: captured.trackId,
+			elementId: captured.clipElementId,
+			startTime: mediaTime({ ticks: target.startTimeTicks }),
+		},
+	];
+	if (captured.left && target.left) {
+		patches.push({
+			trackId: captured.trackId,
+			elementId: captured.left.elementId,
+			startTime: mediaTime({ ticks: target.left.startTimeTicks }),
+			duration: mediaTime({ ticks: target.left.durationTicks }),
+			trimStart: mediaTime({ ticks: target.left.trimStartTicks }),
+			trimEnd: mediaTime({ ticks: target.left.trimEndTicks }),
+		});
+	}
+	if (captured.right && target.right) {
+		patches.push({
+			trackId: captured.trackId,
+			elementId: captured.right.elementId,
+			startTime: mediaTime({ ticks: target.right.startTimeTicks }),
+			duration: mediaTime({ ticks: target.right.durationTicks }),
+			trimStart: mediaTime({ ticks: target.right.trimStartTicks }),
+			trimEnd: mediaTime({ ticks: target.right.trimEndTicks }),
+		});
+	}
+	return patches;
 }
 
 function movedPastDragThreshold({
@@ -289,6 +612,67 @@ function resolveGroupMoveForDrop({
 	);
 }
 
+/**
+ * Conservative single-clip carve-move gate (U4). Returns a carve plan ONLY when ALL
+ * hold, mirroring the DROP path's `computeDropTarget` editMode gating:
+ *   - a SINGLE clip is being moved (not a multi-selection),
+ *   - it lands on an EXISTING track row (not a new-track drop),
+ *   - that track is TYPE-COMPATIBLE with the moved element, and
+ *   - the moved clip's new span ACTUALLY OVERLAPS another clip on that track
+ *     (the moved clip itself excluded — it is the incoming element).
+ * Otherwise returns null and the caller falls through to the ordinary move
+ * resolution UNCHANGED. Strictly additive: no normal move can reach a non-null
+ * result, because a non-overlapping move fails the overlap test.
+ */
+function resolveMoveCarve({
+	group,
+	tracks,
+	anchorStartTime,
+	anchorDropTarget,
+}: {
+	group: MoveGroup;
+	tracks: SceneTracks;
+	anchorStartTime: MediaTime;
+	anchorDropTarget: DropTarget;
+}): MoveCarvePlan | null {
+	// Single clip only — multi-clip-move carve is a follow-up (U5 sibling).
+	if (group.members.length !== 1) return null;
+	// Must land on an existing track row, not a new-track drop.
+	if (anchorDropTarget.isNewTrack) return null;
+
+	const movedMember = group.members[0];
+	const targetTrack = orderedTracks(tracks)[anchorDropTarget.trackIndex];
+	if (!targetTrack) return null;
+
+	// Type-compatible target only (e.g. don't carve a video clip onto an audio track).
+	if (
+		!canElementGoOnTrack({
+			elementType: movedMember.elementType,
+			trackType: targetTrack.type,
+		})
+	) {
+		return null;
+	}
+
+	const { overlaps } = buildMoveCarveInputs({
+		targetTrackElements: targetTrack.elements.map((element) => ({
+			id: element.id,
+			startTime: element.startTime as number,
+			duration: element.duration as number,
+		})),
+		movedElementId: movedMember.elementId,
+		newStart: anchorStartTime as number,
+		newDuration: movedMember.duration as number,
+	});
+	if (!overlaps) return null;
+
+	return {
+		elementId: movedMember.elementId,
+		targetTrackId: targetTrack.id,
+		newStartTime: anchorStartTime,
+	};
+}
+
 // --- Controller ---
 
 export class ElementInteractionController {
@@ -391,10 +775,19 @@ export class ElementInteractionController {
 					})
 				: baseSelected;
 
+		// Latch the body-drag mode ONCE here from the armed place tool (Y = Slip,
+		// U = Slide), mirroring the resize-controller's ResizeMode latch. A mid-drag
+		// tool change can't flip the gesture after this point. Defaults to "move"
+		// whenever neither is armed, so the normal move path is the fall-through.
+		const armedKind = usePlaceToolStore.getState().tool?.kind;
+		const mode: MoveMode =
+			armedKind === "slip" ? "slip" : armedKind === "slide" ? "slide" : "move";
+
 		this.session = {
 			kind: "pending",
 			mousedown: {
 				origin: { x: event.clientX, y: event.clientY },
+				mode,
 				elementId: element.id,
 				trackId: track.id,
 				startElementTime: element.startTime,
@@ -467,6 +860,14 @@ export class ElementInteractionController {
 	}
 
 	private finishSession(): void {
+		// A live slip/slide preview is committed on mouseup; any OTHER exit (cancel /
+		// Escape / a sub-threshold release) must roll the preview overlay back.
+		if (this.session.kind === "slipping") {
+			this.deps.timeline.discardSlipPreview();
+		}
+		if (this.session.kind === "sliding") {
+			this.deps.timeline.discardSlidePreview();
+		}
 		this.session = { kind: "idle" };
 		this.deactivate();
 		this.deps.snap.onChange?.(null);
@@ -490,6 +891,7 @@ export class ElementInteractionController {
 			group,
 			anchorStartTime: frameSnappedTime,
 			tracks: scene.getTracks(),
+			bookmarks: scene.getBookmarks(),
 			playheadTime: playback.getCurrentTime(),
 			zoomLevel: viewport.getZoomLevel(),
 		});
@@ -532,19 +934,37 @@ export class ElementInteractionController {
 			}),
 		});
 
-		const nextGroupMoveResult = anchorDropTarget
-			? resolveGroupMoveForDrop({
+		// U4: a single clip landing on an OCCUPIED existing track carves it. Resolve
+		// this BEFORE the ordinary group-move — `resolveGroupMove` rejects same-track
+		// overlaps (returns null), which would otherwise flip the drop into a spurious
+		// new-track. When a carve is active we keep the drop target as the hovered
+		// EXISTING track (no new-track line) so the preview matches the carve.
+		const nextMoveCarve = anchorDropTarget
+			? resolveMoveCarve({
 					group: drag.moveGroup,
 					tracks,
 					anchorStartTime: snappedTime,
-					dropTarget: anchorDropTarget,
-					reservedNewTrackIds: drag.reservedNewTrackIds,
+					anchorDropTarget,
 				})
 			: null;
 
+		const nextGroupMoveResult =
+			anchorDropTarget && !nextMoveCarve
+				? resolveGroupMoveForDrop({
+						group: drag.moveGroup,
+						tracks,
+						anchorStartTime: snappedTime,
+						dropTarget: anchorDropTarget,
+						reservedNewTrackIds: drag.reservedNewTrackIds,
+					})
+				: null;
+
+		drag.moveCarve = nextMoveCarve;
 		drag.groupMoveResult = nextGroupMoveResult;
-		drag.dropTarget =
-			anchorDropTarget && (anchorDropTarget.isNewTrack || !nextGroupMoveResult)
+		drag.dropTarget = nextMoveCarve
+			? anchorDropTarget
+			: anchorDropTarget &&
+					(anchorDropTarget.isNewTrack || !nextGroupMoveResult)
 				? { ...anchorDropTarget, isNewTrack: true }
 				: null;
 	}
@@ -554,6 +974,24 @@ export class ElementInteractionController {
 		if (!scrollContainer) return;
 
 		if (this.session.kind === "pending") {
+			// Slip (Y armed) and Slide (U armed) each take a wholly separate path and
+			// never build a MoveGroup. Move (the default) is unchanged.
+			if (this.session.mousedown.mode === "slip") {
+				this.beginSlipFromPending({
+					mousedown: this.session.mousedown,
+					clientX,
+					clientY,
+				});
+				return;
+			}
+			if (this.session.mousedown.mode === "slide") {
+				this.beginSlideFromPending({
+					mousedown: this.session.mousedown,
+					clientX,
+					clientY,
+				});
+				return;
+			}
 			this.beginDragFromPending({
 				mousedown: this.session.mousedown,
 				clientX,
@@ -570,6 +1008,22 @@ export class ElementInteractionController {
 				clientX,
 				clientY,
 				scrollContainer,
+			});
+			return;
+		}
+
+		if (this.session.kind === "slipping") {
+			this.updateActiveSlip({
+				slip: this.session.slip,
+				clientX,
+			});
+			return;
+		}
+
+		if (this.session.kind === "sliding") {
+			this.updateActiveSlide({
+				slide: this.session.slide,
+				clientX,
 			});
 		}
 	};
@@ -639,6 +1093,7 @@ export class ElementInteractionController {
 			currentMouseY: clientY,
 			groupMoveResult: null,
 			dropTarget: null,
+			moveCarve: null,
 		};
 
 		this.session = { kind: "dragging", mousedown, drag };
@@ -700,8 +1155,214 @@ export class ElementInteractionController {
 		this.notify();
 	}
 
-	private handleMouseUp = ({ clientX, clientY }: MouseEvent): void => {
+	// --- Slip body-drag (Y armed) ---
+
+	private beginSlipFromPending({
+		mousedown,
+		clientX,
+		clientY,
+	}: {
+		mousedown: MousedownSnapshot;
+		clientX: number;
+		clientY: number;
+	}): void {
+		if (
+			!movedPastDragThreshold({
+				current: { x: clientX, y: clientY },
+				origin: mousedown.origin,
+			})
+		) {
+			return;
+		}
+
+		const members = buildSlipMembers({
+			tracks: this.deps.scene.getTracks(),
+			selectedElements: mousedown.selectedElements,
+		});
+		// No slippable clip (e.g. a generated element with no source window):
+		// abandon the gesture rather than silently latching an empty slip session.
+		if (members.length === 0) {
+			this.finishSession();
+			return;
+		}
+
+		const slip: SlipProgress = { members, patches: [] };
+		this.session = { kind: "slipping", mousedown, slip };
+		this.lastGestureWasDrag = true;
+
+		this.applySlipPreview({ slip, clientX });
+		this.notify();
+	}
+
+	private updateActiveSlip({
+		slip,
+		clientX,
+	}: {
+		slip: SlipProgress;
+		clientX: number;
+	}): void {
+		this.applySlipPreview({ slip, clientX });
+		this.notify();
+	}
+
+	private applySlipPreview({
+		slip,
+		clientX,
+	}: {
+		slip: SlipProgress;
+		clientX: number;
+	}): void {
+		const deltaPx = clientX - this.sessionOriginX();
+		slip.patches = slipPatchesForDelta({
+			members: slip.members,
+			deltaPx,
+			zoomLevel: this.deps.viewport.getZoomLevel(),
+		});
+		this.deps.timeline.previewSlip({ patches: slip.patches });
+	}
+
+	/** The mousedown X of the active session (slip/slide use raw pixel delta). */
+	private sessionOriginX(): number {
+		return this.session.kind === "idle"
+			? 0
+			: this.session.mousedown.origin.x;
+	}
+
+	// --- Slide body-drag (U armed) — reuses the U2 seam ---
+
+	private beginSlideFromPending({
+		mousedown,
+		clientX,
+		clientY,
+	}: {
+		mousedown: MousedownSnapshot;
+		clientX: number;
+		clientY: number;
+	}): void {
+		if (
+			!movedPastDragThreshold({
+				current: { x: clientX, y: clientY },
+				origin: mousedown.origin,
+			})
+		) {
+			return;
+		}
+
+		const fps = this.deps.scene.getActiveFps();
+		if (!fps) {
+			this.finishSession();
+			return;
+		}
+		const minDurationTicks = Math.round(
+			(TICKS_PER_SECOND * fps.denominator) / fps.numerator,
+		);
+
+		const captured = buildSlideCaptured({
+			tracks: this.deps.scene.getTracks(),
+			anchorRef: {
+				trackId: mousedown.trackId,
+				elementId: mousedown.elementId,
+			},
+			minDurationTicks,
+		});
+		// No neighbour on either side (clip at both track edges): slide is a no-op —
+		// abandon the gesture rather than latching an empty slide session.
+		if (!captured) {
+			this.finishSession();
+			return;
+		}
+
+		const slide: SlideProgress = { captured, patches: [] };
+		this.session = { kind: "sliding", mousedown, slide };
+		this.lastGestureWasDrag = true;
+
+		this.applySlidePreview({ slide, clientX });
+		this.notify();
+	}
+
+	private updateActiveSlide({
+		slide,
+		clientX,
+	}: {
+		slide: SlideProgress;
+		clientX: number;
+	}): void {
+		this.applySlidePreview({ slide, clientX });
+		this.notify();
+	}
+
+	private applySlidePreview({
+		slide,
+		clientX,
+	}: {
+		slide: SlideProgress;
+		clientX: number;
+	}): void {
+		const deltaPx = clientX - this.sessionOriginX();
+		slide.patches = slidePatchesForDelta({
+			captured: slide.captured,
+			deltaPx,
+			zoomLevel: this.deps.viewport.getZoomLevel(),
+		});
+		this.deps.timeline.previewSlide({ patches: slide.patches });
+	}
+
+	private handleMouseUp = ({ clientX, clientY, ctrlKey }: MouseEvent): void => {
 		if (this.session.kind === "pending") {
+			this.finishSession();
+			return;
+		}
+
+		if (this.session.kind === "slipping") {
+			const { mousedown, slip } = this.session;
+			// A sub-threshold release is a cancel (the user nudged then returned);
+			// finishSession discards the live preview. Otherwise commit the trim.
+			if (
+				movedPastDragThreshold({
+					current: { x: clientX, y: clientY },
+					origin: mousedown.origin,
+				}) &&
+				slip.patches.length > 0
+			) {
+				// Roll back the live preview, then commit the trim through the
+				// history-backed path so the whole slip is ONE undo step.
+				this.deps.timeline.discardSlipPreview();
+				this.deps.timeline.commitSlip({ patches: slip.patches });
+				// Mark idle WITHOUT a second discard (already discarded above).
+				this.session = { kind: "idle" };
+				this.deactivate();
+				this.deps.snap.onChange?.(null);
+				this.notify();
+				return;
+			}
+			this.lastGestureWasDrag = false;
+			this.finishSession();
+			return;
+		}
+
+		if (this.session.kind === "sliding") {
+			const { mousedown, slide } = this.session;
+			// A sub-threshold release is a cancel (the user nudged then returned);
+			// finishSession discards the live preview. Otherwise commit the slide.
+			if (
+				movedPastDragThreshold({
+					current: { x: clientX, y: clientY },
+					origin: mousedown.origin,
+				}) &&
+				slide.patches.length > 0
+			) {
+				// Roll back the live preview, then commit through the history-backed
+				// path so the whole slide (clip + neighbours) is ONE undo step.
+				this.deps.timeline.discardSlidePreview();
+				this.deps.timeline.commitSlide({ patches: slide.patches });
+				// Mark idle WITHOUT a second discard (already discarded above).
+				this.session = { kind: "idle" };
+				this.deactivate();
+				this.deps.snap.onChange?.(null);
+				this.notify();
+				return;
+			}
+			this.lastGestureWasDrag = false;
 			this.finishSession();
 			return;
 		}
@@ -724,7 +1385,22 @@ export class ElementInteractionController {
 			return;
 		}
 
-		const { moveGroup, groupMoveResult } = drag;
+		// U4: a single-clip carve-move (overwrite default / Ctrl = insert) takes
+		// precedence over the ordinary group move. `moveCarve` is set ONLY when the
+		// conservative gate held during the drag (single clip, existing
+		// type-compatible track, actual overlap), so a normal move never lands here.
+		const { moveGroup, groupMoveResult, moveCarve } = drag;
+		if (moveCarve) {
+			this.deps.timeline.commitMoveOverwrite({
+				elementId: moveCarve.elementId,
+				targetTrackId: moveCarve.targetTrackId,
+				newStartTime: moveCarve.newStartTime,
+				mode: ctrlKey ? "insert" : "overwrite",
+			});
+			this.finishSession();
+			return;
+		}
+
 		if (!groupMoveResult) {
 			this.finishSession();
 			return;

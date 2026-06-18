@@ -1,3 +1,4 @@
+import { MAX_EXPAND } from "@/masks/expand";
 import { MAX_FEATHER } from "@/masks/feather";
 import type { ParamDefinition } from "@/params";
 import type {
@@ -39,6 +40,15 @@ export const BASE_MASK_PARAM_DEFINITIONS: ParamDefinition<
 		max: MAX_FEATHER,
 		step: 1,
 		unit: "percent",
+	},
+	{
+		key: "expand",
+		label: "Expand",
+		type: "number",
+		default: 0,
+		min: -MAX_EXPAND,
+		max: MAX_EXPAND,
+		step: 1,
 	},
 	{
 		key: "strokeWidth",

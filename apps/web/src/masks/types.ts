@@ -22,6 +22,12 @@ export type MaskType = BuiltinMaskType | "freeform";
 
 export interface BaseMaskParams {
 	feather: number;
+	/**
+	 * Grows (positive) or shrinks (negative) the masked region, in the mask's
+	 * geometry units (canvas px). Distinct from `feather`, which softens the
+	 * edge without moving it.
+	 */
+	expand: number;
 	inverted: boolean;
 	strokeColor: string;
 	strokeWidth: number;

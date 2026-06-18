@@ -7,7 +7,7 @@
  * row, Scale gets a Uniform Scale checkbox like Premiere's Motion effect.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
 	getKeyframeAtTime,
 	hasKeyframesForPath,
@@ -38,29 +38,26 @@ import {
 } from "@/params/registry";
 import type { TimelineElement, VisualElement } from "@/timeline";
 import type { MediaTime } from "@/wasm";
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	ArrowDown01Icon,
-	ArrowLeft01Icon,
-	ArrowRight01Icon,
-	ArrowTurnBackwardIcon,
-	ArrowUp01Icon,
-	KeyframeIcon,
-	StopWatchIcon,
-} from "@hugeicons/core-free-icons";
+	FxGroup,
+	KfNav,
+	Row,
+	Stopwatch,
+	ValueField,
+	type KfGroup,
+} from "@/components/editor/panels/properties/components/fx-group";
 import { cn } from "@/utils/ui";
 
 const POSITION_X = "transform.positionX";
 const POSITION_Y = "transform.positionY";
+const ANCHOR_X = "transform.anchorX";
+const ANCHOR_Y = "transform.anchorY";
 const SCALE_X = "transform.scaleX";
 const SCALE_Y = "transform.scaleY";
 const ROTATE = "transform.rotate";
 const OPACITY = "opacity";
 const VOLUME = "volume";
 const MUTED = "muted";
-
-/** Pixels of horizontal drag per display-unit step while scrubbing. */
-const SCRUB_PX_PER_STEP = 2;
 
 interface RowContext {
 	element: VisualElement;
@@ -74,10 +71,6 @@ function findParam(
 	key: string,
 ): ElementParamDefinition | null {
 	return getElementParams({ element }).find((p) => p.key === key) ?? null;
-}
-
-function formatDisplay(value: number, decimals: number): string {
-	return value.toFixed(decimals);
 }
 
 function paramRange(param: ElementParamDefinition): {
@@ -103,7 +96,7 @@ function useKfGroup({
 }: {
 	ctx: RowContext;
 	entries: { path: string; value: number }[];
-}) {
+}): KfGroup {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const editor = useEditor();
 	const channels = entries.map((entry) => ({
@@ -194,333 +187,6 @@ function useKfGroup({
 		goPrev: () => seekToLocal(prevTime),
 		goNext: () => seekToLocal(nextTime),
 	};
-}
-
-type KfGroup = ReturnType<typeof useKfGroup>;
-
-function Stopwatch({ group, label }: { group: KfGroup; label: string }) {
-	return (
-		<button
-			type="button"
-			title={
-				group.animated
-					? `Turn off ${label} animation (removes ALL its keyframes)`
-					: `Animate ${label} (adds a keyframe at the playhead)`
-			}
-			className={cn(
-				"flex w-6 shrink-0 items-center justify-center",
-				group.animated ? "text-primary" : "text-muted-foreground/60",
-				!group.animated && !group.within && "opacity-40",
-			)}
-			onClick={group.toggleAnimation}
-		>
-			<HugeiconsIcon icon={StopWatchIcon} size={13} />
-		</button>
-	);
-}
-
-function KfNav({ group }: { group: KfGroup }) {
-	if (!group.animated) return null;
-	const navBtn =
-		"flex h-4 w-4 items-center justify-center disabled:opacity-25";
-	return (
-		<div className="text-muted-foreground flex items-center">
-			<button
-				type="button"
-				title="Go to previous keyframe"
-				className={navBtn}
-				disabled={!group.hasPrev}
-				onClick={group.goPrev}
-			>
-				<HugeiconsIcon icon={ArrowLeft01Icon} size={11} />
-			</button>
-			<button
-				type="button"
-				title={
-					group.anyAtPlayhead
-						? "Remove keyframe at playhead"
-						: "Add keyframe at playhead"
-				}
-				className={cn(navBtn, group.anyAtPlayhead && "text-primary")}
-				disabled={!group.within}
-				onClick={group.toggleAtPlayhead}
-			>
-				<HugeiconsIcon
-					icon={KeyframeIcon}
-					size={11}
-					className={cn(group.anyAtPlayhead && "fill-primary")}
-				/>
-			</button>
-			<button
-				type="button"
-				title="Go to next keyframe"
-				className={navBtn}
-				disabled={!group.hasNext}
-				onClick={group.goNext}
-			>
-				<HugeiconsIcon icon={ArrowRight01Icon} size={11} />
-			</button>
-		</div>
-	);
-}
-
-/**
- * Premiere-style value control. The blue number itself is the drag surface:
- * click-and-hold then drag left/right to scrub (pointer-locked), release
- * without moving to type an exact value. Tiny ▲/▼ arrows nudge by one step.
- * Values display in scaled units (e.g. scale 1.0 → 100.0); writes convert
- * back to model units and clamp to the param's range.
- */
-function ValueField({
-	resolved,
-	factor,
-	decimals,
-	suffix,
-	iconLabel,
-	isDefault,
-	step = 1,
-	minModel,
-	maxModel,
-	onPreviewModel,
-	onCommit,
-	onResetModel,
-}: {
-	resolved: number;
-	factor: number;
-	decimals: number;
-	suffix?: string;
-	iconLabel?: string;
-	isDefault: boolean;
-	/** Increment per arrow click / per few px of drag, in DISPLAY units. */
-	step?: number;
-	minModel?: number;
-	maxModel?: number;
-	onPreviewModel: (modelValue: number) => void;
-	onCommit: () => void;
-	onResetModel?: () => void;
-}) {
-	const [editing, setEditing] = useState(false);
-	const [draft, setDraft] = useState("");
-	// Live readout while dragging: previews don't flow back into `resolved`
-	// until commit, so the scrub keeps its own display text.
-	const [scrubText, setScrubText] = useState<string | null>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-	const display = scrubText ?? formatDisplay(resolved * factor, decimals);
-
-	useEffect(() => {
-		if (editing) {
-			inputRef.current?.focus();
-			inputRef.current?.select();
-		}
-	}, [editing]);
-
-	const clampModel = (value: number) => {
-		let next = value;
-		if (minModel !== undefined) next = Math.max(minModel, next);
-		if (maxModel !== undefined) next = Math.min(maxModel, next);
-		return next;
-	};
-	/** Previews the clamped value and returns it in display units. */
-	const previewDisplay = (displayValue: number): number => {
-		const clampedModel = clampModel(displayValue / factor);
-		onPreviewModel(clampedModel);
-		return clampedModel * factor;
-	};
-
-	const nudge = (direction: 1 | -1) => {
-		previewDisplay(resolved * factor + direction * step);
-		onCommit();
-	};
-
-	const startScrub = (event: React.PointerEvent<HTMLElement>) => {
-		if (event.button !== 0 || editing) return;
-		event.preventDefault();
-		const surface = event.currentTarget;
-		const startDisplay = resolved * factor;
-		let cumulative = 0;
-		let scrubbing = false;
-
-		const onMove = (move: PointerEvent) => {
-			cumulative += move.movementX;
-			if (!scrubbing && Math.abs(cumulative) >= 3) {
-				scrubbing = true;
-				// Pointer CAPTURE, not pointer lock: Chromium leaves the cursor
-				// invisible after exitPointerLock until the next click.
-				try {
-					surface.setPointerCapture(event.pointerId);
-				} catch {
-					// capture is best-effort
-				}
-				document.body.style.cursor = "ew-resize";
-			}
-			if (scrubbing) {
-				const shown = previewDisplay(
-					startDisplay + (cumulative / SCRUB_PX_PER_STEP) * step,
-				);
-				// Don't let the drag distance pile up past a min/max bound —
-				// otherwise the value "sticks" until you drag all the way back.
-				const cumulativeAtShown =
-					((shown - startDisplay) / step) * SCRUB_PX_PER_STEP;
-				if (Math.abs(cumulative - cumulativeAtShown) > SCRUB_PX_PER_STEP) {
-					cumulative = cumulativeAtShown;
-				}
-				setScrubText(formatDisplay(shown, decimals));
-			}
-		};
-		const onUp = () => {
-			document.removeEventListener("pointermove", onMove);
-			document.removeEventListener("pointerup", onUp);
-			document.body.style.cursor = "";
-			setScrubText(null);
-			if (scrubbing) {
-				onCommit();
-			} else {
-				// A plain click: switch to typing with the value pre-selected.
-				setDraft(display);
-				setEditing(true);
-			}
-		};
-		document.addEventListener("pointermove", onMove);
-		document.addEventListener("pointerup", onUp);
-	};
-
-	return (
-		<div className="flex items-center gap-0.5">
-			{onResetModel && (
-				<button
-					type="button"
-					title={isDefault ? "Already at default" : "Reset to default"}
-					disabled={isDefault}
-					className={cn(
-						"text-muted-foreground hover:text-foreground",
-						isDefault && "cursor-default opacity-25 hover:text-muted-foreground",
-					)}
-					onClick={onResetModel}
-				>
-					<HugeiconsIcon icon={ArrowTurnBackwardIcon} size={11} />
-				</button>
-			)}
-			<div className="bg-foreground/5 hover:bg-foreground/10 flex h-6 min-w-[76px] items-center justify-end gap-1 rounded px-1.5">
-				{iconLabel && (
-					<span className="text-muted-foreground select-none text-[10px]">
-						{iconLabel}
-					</span>
-				)}
-				{editing ? (
-					<input
-						ref={inputRef}
-						value={draft}
-						className="w-full min-w-0 bg-transparent text-right text-xs font-medium text-sky-400 outline-none"
-						onChange={(e) => {
-							setDraft(e.target.value);
-							const parsed = parseFloat(e.target.value);
-							if (Number.isFinite(parsed)) previewDisplay(parsed);
-						}}
-						onBlur={() => {
-							setEditing(false);
-							onCommit();
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" || e.key === "Escape") {
-								e.currentTarget.blur();
-							}
-							if (e.key === "ArrowUp") {
-								e.preventDefault();
-								nudge(1);
-								setDraft(formatDisplay(resolved * factor + step, decimals));
-							}
-							if (e.key === "ArrowDown") {
-								e.preventDefault();
-								nudge(-1);
-								setDraft(formatDisplay(resolved * factor - step, decimals));
-							}
-						}}
-					/>
-				) : (
-					<span
-						className="cursor-ew-resize select-none whitespace-nowrap text-xs font-medium text-sky-400"
-						title="Drag to scrub, click to type"
-						onPointerDown={startScrub}
-					>
-						{display}
-						{suffix ?? ""}
-					</span>
-				)}
-				<div className="flex flex-col">
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`+${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(1)}
-					>
-						<HugeiconsIcon icon={ArrowUp01Icon} size={10} />
-					</button>
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`-${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(-1)}
-					>
-						<HugeiconsIcon icon={ArrowDown01Icon} size={10} />
-					</button>
-				</div>
-			</div>
-		</div>
-	);
-}
-
-function Row({
-	label,
-	stopwatch,
-	children,
-	indent = true,
-}: {
-	label: string;
-	stopwatch?: React.ReactNode;
-	children: React.ReactNode;
-	indent?: boolean;
-}) {
-	return (
-		<div className={cn("flex h-7 items-center gap-1 pr-2", indent && "pl-1")}>
-			{stopwatch ?? <span className="w-6 shrink-0" />}
-			<span className="w-[84px] shrink-0 truncate text-xs text-foreground/75">
-				{label}
-			</span>
-			<div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-				{children}
-			</div>
-		</div>
-	);
-}
-
-function FxGroup({
-	title,
-	children,
-}: {
-	title: string;
-	children: React.ReactNode;
-}) {
-	const [open, setOpen] = useState(true);
-	return (
-		<div className="border-b py-1 last:border-b-0">
-			<button
-				type="button"
-				className="flex w-full items-center gap-1.5 px-1 py-1 text-left"
-				onClick={() => setOpen((o) => !o)}
-			>
-				<HugeiconsIcon
-					icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-					size={14}
-					className="text-muted-foreground"
-				/>
-				<span className="text-[10px] font-bold italic text-primary/80">fx</span>
-				<span className="text-xs font-semibold">{title}</span>
-			</button>
-			{open && <div className="flex flex-col">{children}</div>}
-		</div>
-	);
 }
 
 /** One keyframable scalar property (Rotation, Opacity). */
@@ -731,6 +397,125 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 			>
 				⇕
 			</button>
+		</Row>
+	);
+}
+
+/**
+ * Anchor Point: X and Y side by side, one stopwatch for both channels — the
+ * pivot for scale/rotation, in element-local pixels offset from the center.
+ * Mirrors PositionRow; (0,0) is the default (center) and is export-safe.
+ */
+function AnchorRow({ ctx }: { ctx: RowContext }) {
+	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
+	const editor = useEditor();
+	const paramX = findParam(element, ANCHOR_X);
+	const paramY = findParam(element, ANCHOR_Y);
+
+	const resolve = (key: string, param: ElementParamDefinition | null) => {
+		const base =
+			(param ? readElementParamValue({ element, param }) : null) ??
+			param?.default ??
+			0;
+		const value = resolveAnimationPathValueAtTime({
+			animations: element.animations,
+			propertyPath: key,
+			localTime,
+			fallbackValue: base,
+		});
+		return typeof value === "number" ? value : 0;
+	};
+	const x = resolve(ANCHOR_X, paramX);
+	const y = resolve(ANCHOR_Y, paramY);
+
+	const previewAxis = (
+		param: ElementParamDefinition,
+		key: AnimationPath,
+		value: number,
+	) => {
+		const animatedChannel =
+			hasKeyframesForPath({
+				animations: element.animations,
+				propertyPath: key,
+			}) && isPlayheadWithinElementRange;
+		if (animatedChannel) {
+			editor.timeline.previewElements({
+				updates: [
+					{
+						trackId,
+						elementId: element.id,
+						updates: {
+							animations: upsertPathKeyframe({
+								animations: element.animations,
+								propertyPath: key,
+								time: localTime,
+								value,
+								channelLayout: getParamChannelLayout({ param }),
+								coerceValue: ({ value: next }) =>
+									coerceParamValue({ param, value: next }),
+							}),
+						},
+					},
+				],
+			});
+			return;
+		}
+		editor.timeline.previewElements({
+			updates: [
+				{
+					trackId,
+					elementId: element.id,
+					updates: writeElementParamValue({ element, param, value }),
+				},
+			],
+		});
+	};
+
+	const commit = () => editor.timeline.commitPreview();
+	const kfGroup = useKfGroup({
+		ctx,
+		entries: [
+			{ path: ANCHOR_X, value: x },
+			{ path: ANCHOR_Y, value: y },
+		],
+	});
+
+	if (!paramX || !paramY) return null;
+
+	return (
+		<Row
+			label="Anchor Point"
+			stopwatch={<Stopwatch group={kfGroup} label="anchor point" />}
+		>
+			<KfNav group={kfGroup} />
+			<ValueField
+				resolved={x}
+				factor={1}
+				decimals={1}
+				iconLabel="X"
+				{...paramRange(paramX)}
+				isDefault={x === paramX.default}
+				onPreviewModel={(v) => previewAxis(paramX, ANCHOR_X, v)}
+				onCommit={commit}
+				onResetModel={() => {
+					previewAxis(paramX, ANCHOR_X, Number(paramX.default) || 0);
+					commit();
+				}}
+			/>
+			<ValueField
+				resolved={y}
+				factor={1}
+				decimals={1}
+				iconLabel="Y"
+				{...paramRange(paramY)}
+				isDefault={y === paramY.default}
+				onPreviewModel={(v) => previewAxis(paramY, ANCHOR_Y, v)}
+				onCommit={commit}
+				onResetModel={() => {
+					previewAxis(paramY, ANCHOR_Y, Number(paramY.default) || 0);
+					commit();
+				}}
+			/>
 		</Row>
 	);
 }
@@ -1007,7 +792,7 @@ export function EffectControlsTab({
 
 	return (
 		<div className="flex flex-col px-2 pt-2">
-			<FxGroup title="Motion">
+			<FxGroup title="Motion" badge>
 				<PositionRow ctx={ctx} />
 				<ScaleRows ctx={ctx} />
 				<SingleRow
@@ -1019,8 +804,9 @@ export function EffectControlsTab({
 					suffix="°"
 					iconLabel="∠"
 				/>
+				<AnchorRow ctx={ctx} />
 			</FxGroup>
-			<FxGroup title="Opacity">
+			<FxGroup title="Opacity" badge>
 				<SingleRow
 					ctx={ctx}
 					paramKey={OPACITY}
@@ -1032,7 +818,7 @@ export function EffectControlsTab({
 				/>
 			</FxGroup>
 			{findParam(element, VOLUME) && (
-				<FxGroup title="Audio">
+				<FxGroup title="Audio" badge>
 					<SingleRow
 						ctx={ctx}
 						paramKey={VOLUME}

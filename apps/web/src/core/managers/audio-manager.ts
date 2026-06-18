@@ -21,9 +21,25 @@ import {
 	type WrappedAudioBuffer,
 } from "mediabunny";
 
+/**
+ * Observe-only meter tap on the master output bus. An `AnalyserNode` has no
+ * audible output effect — it only reads samples flowing through whatever node
+ * is connected INTO it — so attaching it never alters the signal reaching the
+ * destination. A `ChannelSplitter` gives per-channel (L/R) analysers when the
+ * context is stereo; the analysers themselves are dead-ends (no `connect` to
+ * destination), preserving the existing output path untouched.
+ */
+export interface AudioMeterTap {
+	/** Per-channel analysers (length === channelCount, typically 2 for L/R). */
+	readonly analysers: AnalyserNode[];
+	/** AudioContext sample rate, for any dB/time math the UI wants to do. */
+	readonly sampleRate: number;
+}
+
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
+	private meterTap: AudioMeterTap | null = null;
 	private playbackStartTime = 0;
 	private playbackStartContextTime = 0;
 	/** Preview speed for this play session (timeline seconds per wall second). */
@@ -72,6 +88,7 @@ export class AudioManager {
 			void this.audioContext.close();
 			this.audioContext = null;
 			this.masterGain = null;
+			this.meterTap = null;
 		}
 	}
 
@@ -127,13 +144,79 @@ export class AudioManager {
 		if (typeof window === "undefined") return null;
 
 		this.audioContext = createAudioContext();
-		const { input } = createAudioMasteringChain({
+		const { input, outputGain } = createAudioMasteringChain({
 			audioContext: this.audioContext,
 			destination: this.audioContext.destination,
 		});
 		this.masterGain = input;
 		this.masterGain.gain.value = this.lastVolume;
+		this.attachMeterTap({ audioContext: this.audioContext, source: outputGain });
 		return this.audioContext;
+	}
+
+	/**
+	 * Attach an OBSERVE-ONLY meter tap to the post-limiter output node.
+	 *
+	 * `outputGain → destination` is left fully intact; we additionally connect
+	 * `outputGain → splitter → analyser[ch]`. Each AnalyserNode is a leaf (it is
+	 * never connected onward), so it observes the bus without changing the
+	 * signal that reaches `audioContext.destination`. Re-runs whenever the graph
+	 * is rebuilt (after a context recreation), so the tap survives.
+	 */
+	private attachMeterTap({
+		audioContext,
+		source,
+	}: {
+		audioContext: AudioContext;
+		source: AudioNode;
+	}): void {
+		try {
+			const channelCount = Math.max(
+				1,
+				Math.min(2, audioContext.destination.channelCount || 2),
+			);
+			const analysers: AnalyserNode[] = [];
+
+			if (channelCount > 1) {
+				const splitter = audioContext.createChannelSplitter(channelCount);
+				source.connect(splitter);
+				for (let channel = 0; channel < channelCount; channel++) {
+					const analyser = audioContext.createAnalyser();
+					analyser.fftSize = 2048;
+					// splitter output `channel` → analyser; analyser is a dead-end.
+					splitter.connect(analyser, channel);
+					analysers.push(analyser);
+				}
+			} else {
+				const analyser = audioContext.createAnalyser();
+				analyser.fftSize = 2048;
+				source.connect(analyser);
+				analysers.push(analyser);
+			}
+
+			this.meterTap = { analysers, sampleRate: audioContext.sampleRate };
+		} catch (error) {
+			// Metering is non-essential; never let a tap failure break playback.
+			console.warn("Failed to attach audio meter tap:", error);
+			this.meterTap = null;
+		}
+	}
+
+	/**
+	 * The observe-only meter tap, or null when no AudioContext exists yet (SSR,
+	 * before first playback, or a browser without Web Audio). The UI calls this
+	 * on each animation frame and reads `getFloatTimeDomainData` off the
+	 * returned analysers. Returns the live tap, so it reflects re-taps after a
+	 * context rebuild.
+	 */
+	getMeterTap(): AudioMeterTap | null {
+		return this.meterTap;
+	}
+
+	/** Ensures the AudioContext (and meter tap) exists, then returns the tap. */
+	ensureMeterTap(): AudioMeterTap | null {
+		this.ensureAudioContext();
+		return this.meterTap;
 	}
 
 	private updateGain(): void {

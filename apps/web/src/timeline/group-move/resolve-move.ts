@@ -90,9 +90,7 @@ function resolveExistingTrackMove({
 
 	const clampedAnchorStartTime = clampAnchorStartTime({
 		group,
-		tracks,
 		anchorStartTime,
-		targetTrackIdsByElementId,
 	});
 
 	const moves = group.members.map((member) => ({
@@ -144,40 +142,50 @@ function resolveNewTrackMove({
 		return null;
 	}
 
-	const hasAudioMember = sortedMembers.some(
-		(member) => member.trackSection === "audio",
-	);
-	const hasNonAudioMember = sortedMembers.some(
-		(member) => member.trackSection !== "audio",
-	);
-	if (hasAudioMember && hasNonAudioMember) {
-		return null;
-	}
-
 	const clampedAnchorStartTime = clampAnchorStartTime({
 		group,
-		tracks,
 		anchorStartTime,
-		targetTrackIdsByElementId: new Map(),
 	});
-	const blockStartIndex = hasAudioMember
-		? clampAudioInsertIndex({
-				tracks,
-				insertIndex: anchorInsertIndex - anchorMemberIndex,
-			})
-		: Math.max(
-				0,
-				Math.min(anchorInsertIndex - anchorMemberIndex, tracks.overlay.length),
-			);
 
+	// New tracks land per member-type region: video/overlay members go in the
+	// overlay region, audio members in the audio region. A LINKED A/V pair
+	// dragged into new-track space therefore gets BOTH a new video track and a
+	// new audio track — previously a mixed group returned null and the move was
+	// silently cancelled. `insertTrackAtDisplayIndex` (MoveElementCommand) routes
+	// each new track to its region by type, so we only need a region-appropriate
+	// base index per member; the offsets keep multiple same-region members ordered.
+	const requestedBlockStart = anchorInsertIndex - anchorMemberIndex;
+	const overlayBaseIndex = Math.max(
+		0,
+		Math.min(requestedBlockStart, tracks.overlay.length),
+	);
+	// MoveElementCommand inserts the new overlay (video) tracks before the new audio
+	// tracks (lower display index first), which grows overlay.length before the audio
+	// display index is re-derived in insertTrackAtDisplayIndex. Offset the audio base
+	// by the number of new overlay tracks so audio members keep their intended slot
+	// among existing audio tracks — without this, the new audio track lands one slot
+	// too high when audio tracks already exist (the empty-timeline case is unaffected).
+	const newOverlayTrackCount = sortedMembers.filter(
+		(member) =>
+			getTrackTypeForElementType({ elementType: member.elementType }) !== "audio",
+	).length;
+	const audioBaseIndex =
+		clampAudioInsertIndex({ tracks, insertIndex: requestedBlockStart }) +
+		newOverlayTrackCount;
+
+	let overlayOffset = 0;
+	let audioOffset = 0;
 	const createTracks: PlannedTrackCreation[] = sortedMembers.map(
-		(member, memberIndex) => ({
-			id: newTrackIds[memberIndex],
-			type: getTrackTypeForElementType({
+		(member, memberIndex) => {
+			const type = getTrackTypeForElementType({
 				elementType: member.elementType,
-			}),
-			index: blockStartIndex + memberIndex,
-		}),
+			});
+			const index =
+				type === "audio"
+					? audioBaseIndex + audioOffset++
+					: overlayBaseIndex + overlayOffset++;
+			return { id: newTrackIds[memberIndex], type, index };
+		},
 	);
 	const moves = sortedMembers.map((member, memberIndex) => ({
 		sourceTrackId: member.trackId,
@@ -342,15 +350,16 @@ function findCompatibleTrackPlacement({
 
 function clampAnchorStartTime({
 	group,
-	tracks,
 	anchorStartTime,
-	targetTrackIdsByElementId,
 }: {
 	group: MoveGroup;
-	tracks: SceneTracks;
 	anchorStartTime: MediaTime;
-	targetTrackIdsByElementId: Map<string, string>;
 }): MediaTime {
+	// Floor only: no member may start before 0:00 (a member with a negative
+	// offset from the anchor would otherwise push the anchor below zero). The
+	// main track (V1) is intentionally NOT anchored to 0:00 — a clip may sit
+	// anywhere with a leading gap, matching Premiere. Clip overlaps are still
+	// prevented downstream by canApplyMovesToExistingTracks.
 	const minimumAnchorStartTime = group.members.reduce(
 		(minimumStartTime, member) =>
 			member.timeOffset < ZERO_MEDIA_TIME
@@ -364,49 +373,9 @@ function clampAnchorStartTime({
 				: minimumStartTime,
 		ZERO_MEDIA_TIME,
 	);
-	let clampedAnchorStartTime =
-		anchorStartTime < minimumAnchorStartTime
-			? minimumAnchorStartTime
-			: anchorStartTime;
-
-	const memberOnMainTrack = group.members.find(
-		(member) =>
-			targetTrackIdsByElementId.get(member.elementId) === tracks.main.id,
-	);
-	if (!memberOnMainTrack) {
-		return clampedAnchorStartTime;
-	}
-
-	const movingElementIds = new Set(
-		group.members.map((member) => member.elementId),
-	);
-	const requestedMainStartTime = addMediaTime({
-		a: clampedAnchorStartTime,
-		b: memberOnMainTrack.timeOffset,
-	});
-	const earliestStationaryMainStartTime = tracks.main.elements
-		.filter((element) => !movingElementIds.has(element.id))
-		.reduce<MediaTime | null>((earliestStartTime, element) => {
-			if (earliestStartTime == null || element.startTime < earliestStartTime) {
-				return element.startTime;
-			}
-
-			return earliestStartTime;
-		}, null);
-	if (
-		earliestStationaryMainStartTime == null ||
-		requestedMainStartTime <= earliestStationaryMainStartTime
-	) {
-		clampedAnchorStartTime = maxMediaTime({
-			a: minimumAnchorStartTime,
-			b: subMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: memberOnMainTrack.timeOffset,
-			}),
-		});
-	}
-
-	return clampedAnchorStartTime;
+	return anchorStartTime < minimumAnchorStartTime
+		? minimumAnchorStartTime
+		: anchorStartTime;
 }
 
 function canApplyMovesToExistingTracks({

@@ -11,6 +11,7 @@ import {
 	snapToStep,
 } from "@/utils/math";
 import { SectionField } from "@/components/section";
+import { Row } from "@/components/editor/panels/properties/components/fx-group";
 import { NumberField } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { ColorPicker } from "@/components/ui/color-picker";
@@ -79,6 +80,61 @@ export function PropertyParamField({
 				onCommit={onCommit}
 			/>
 		</SectionField>
+	);
+}
+
+/**
+ * Effect-Controls fx-group variant of {@link PropertyParamField}: the param
+ * label sits in the fixed label column, the control is right-aligned, and the
+ * existing keyframe toggle takes the row's stopwatch slot. Same controls and
+ * behavior as the vertical layout — only the row wrapper changes.
+ */
+export function FxParamRow({
+	param,
+	value,
+	onPreview,
+	onCommit,
+	keyframe,
+}: {
+	param: ParamDefinition;
+	value: ParamValue;
+	onPreview: (value: ParamValue) => void;
+	onCommit: () => void;
+	keyframe?: {
+		isActive: boolean;
+		isDisabled: boolean;
+		onToggle: () => void;
+	};
+}) {
+	const stopwatch =
+		keyframe && param.keyframable !== false ? (
+			<div className="flex w-6 shrink-0 items-center justify-center">
+				<KeyframeToggle
+					isActive={keyframe.isActive}
+					isDisabled={keyframe.isDisabled}
+					title={`Toggle ${param.label.toLowerCase()} keyframe`}
+					onToggle={keyframe.onToggle}
+				/>
+			</div>
+		) : undefined;
+
+	const control = (
+		<ParamInput
+			param={param}
+			value={value}
+			onPreview={onPreview}
+			onCommit={onCommit}
+		/>
+	);
+
+	return (
+		<Row label={param.label} stopwatch={stopwatch}>
+			{param.type === "boolean" ? (
+				control
+			) : (
+				<div className="w-[130px]">{control}</div>
+			)}
+		</Row>
 	);
 }
 

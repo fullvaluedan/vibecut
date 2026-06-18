@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { RenameProjectDialog } from "@/project/components/rename-project-dialog";
 import { DeleteProjectDialog } from "@/project/components/delete-project-dialog";
+import { ProjectInfoDialog } from "@/project/components/project-info-dialog";
 import { useRouter } from "next/navigation";
 import { FaDiscord } from "react-icons/fa6";
 import { ExportButton } from "./export-button";
@@ -21,7 +22,11 @@ import { DEFAULT_LOGO_URL } from "@/site/brand";
 import { SOCIAL_LINKS } from "@/site/social";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
-import { CommandIcon, Logout05Icon } from "@hugeicons/core-free-icons";
+import {
+	CommandIcon,
+	Logout05Icon,
+	Settings01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ShortcutsDialog } from "@/actions/components/shortcuts-dialog";
 import Image from "next/image";
@@ -45,7 +50,7 @@ export function EditorHeader() {
 
 function ProjectDropdown() {
 	const [openDialog, setOpenDialog] = useState<
-		"delete" | "rename" | "shortcuts" | null
+		"delete" | "rename" | "shortcuts" | "sequence-settings" | null
 	>(null);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
@@ -131,6 +136,14 @@ function ProjectDropdown() {
 					</DropdownMenuItem>
 
 					<DropdownMenuItem
+						onClick={() => setOpenDialog("sequence-settings")}
+						disabled={!activeProject}
+						icon={<HugeiconsIcon icon={Settings01Icon} />}
+					>
+						Sequence settings
+					</DropdownMenuItem>
+
+					<DropdownMenuItem
 						onClick={() => setOpenDialog("shortcuts")}
 						icon={<HugeiconsIcon icon={CommandIcon} />}
 					>
@@ -166,6 +179,19 @@ function ProjectDropdown() {
 				isOpen={openDialog === "shortcuts"}
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "shortcuts" : null)}
 			/>
+			{activeProject && (
+				<ProjectInfoDialog
+					isOpen={openDialog === "sequence-settings"}
+					onOpenChange={(isOpen) =>
+						setOpenDialog(isOpen ? "sequence-settings" : null)
+					}
+					project={activeProject.metadata}
+					settings={activeProject.settings}
+					onUpdateSettings={(settings) => {
+						editor.project.updateSettings({ settings });
+					}}
+				/>
+			)}
 		</>
 	);
 }

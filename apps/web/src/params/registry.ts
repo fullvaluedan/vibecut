@@ -136,6 +136,22 @@ const visualElementParams: ElementParamDefinition[] = [
 		step: 1,
 	},
 	{
+		key: "transform.anchorX",
+		label: "Anchor X",
+		type: "number",
+		default: DEFAULTS.element.transform.anchor.x,
+		min: -100_000,
+		step: 1,
+	},
+	{
+		key: "transform.anchorY",
+		label: "Anchor Y",
+		type: "number",
+		default: DEFAULTS.element.transform.anchor.y,
+		min: -100_000,
+		step: 1,
+	},
+	{
 		key: "opacity",
 		label: "Opacity",
 		type: "number",

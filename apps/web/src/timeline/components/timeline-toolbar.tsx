@@ -341,7 +341,7 @@ function ToolbarRightSection({
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={MagnetIcon} />}
 					isActive={snappingEnabled}
-					tooltip="Auto snapping"
+					tooltip={snappingEnabled ? "Snapping on (N)" : "Snapping off (N)"}
 					onClick={() => toggleSnapping()}
 				/>
 

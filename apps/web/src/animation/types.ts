@@ -16,6 +16,12 @@ export const ANIMATION_PROPERTY_PATHS = [
 	"background.offsetX",
 	"background.offsetY",
 	"background.cornerRadius",
+	"mask.feather",
+	"mask.centerX",
+	"mask.centerY",
+	"mask.rotation",
+	"mask.scale",
+	"mask.expand",
 ] as const;
 
 export type AnimationPropertyPath = (typeof ANIMATION_PROPERTY_PATHS)[number];

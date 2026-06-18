@@ -24,7 +24,10 @@ import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { toast } from "sonner";
 import { useGapSelectionStore } from "@/timeline/gap-selection-store";
-import { usePlaceToolStore } from "@/preview/place-tool-store";
+import {
+	STICKY_TIMELINE_TOOLS,
+	usePlaceToolStore,
+} from "@/preview/place-tool-store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { canToggleSourceAudio } from "@/timeline/audio-separation";
 import {
@@ -413,7 +416,10 @@ export function useEditorActions() {
 				return;
 			}
 			const toolStore = usePlaceToolStore.getState();
-			if (toolStore.tool?.kind === "track-select-forward") {
+			if (
+				toolStore.tool &&
+				STICKY_TIMELINE_TOOLS.has(toolStore.tool.kind)
+			) {
 				toolStore.setTool(null);
 				return;
 			}
@@ -586,6 +592,80 @@ export function useEditorActions() {
 					? null
 					: { kind: "track-select-forward" },
 			);
+		},
+		undefined,
+	);
+
+	// Premiere C: arms the Razor TOOL — click a clip on the timeline to split
+	// it at the click position (Shift+click = split all tracks at that time).
+	// Sticky: stays armed for repeated cuts until V (selection) or Escape.
+	useActionHandler(
+		"razor-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "razor" ? null : { kind: "razor" });
+		},
+		undefined,
+	);
+
+	// Premiere R: arms the Rate-Stretch TOOL — drag a clip edge to change its
+	// playback speed (the source window stays fixed) instead of trimming.
+	// Sticky: stays armed until V (selection) or Escape.
+	useActionHandler(
+		"rate-stretch-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "rate-stretch" ? null : { kind: "rate-stretch" });
+		},
+		undefined,
+	);
+
+	// Premiere B: arms the Ripple Edit TOOL — drag a clip edge to trim it and
+	// ripple every downstream clip by the same amount (no gap/overlap). Sticky:
+	// stays armed until V (selection) or Escape.
+	useActionHandler(
+		"ripple-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "ripple" ? null : { kind: "ripple" });
+		},
+		undefined,
+	);
+
+	// Roll Edit TOOL — drag the cut between two adjacent clips to move the edit
+	// point. No default key (Premiere's N is taken by snapping); user-bindable +
+	// armed from the tool rail. Sticky: stays armed until V (selection) or Escape.
+	useActionHandler(
+		"roll-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "roll" ? null : { kind: "roll" });
+		},
+		undefined,
+	);
+
+	// Premiere Y: arms the Slip TOOL — drag a clip's interior to slide its source
+	// window under the fixed timeline position (the footage shifts; the clip
+	// stays put). Sticky: stays armed until V (selection) or Escape (the Escape
+	// disarm is handled centrally via STICKY_TIMELINE_TOOLS above).
+	useActionHandler(
+		"slip-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "slip" ? null : { kind: "slip" });
+		},
+		undefined,
+	);
+
+	// Premiere U: arms the Slide TOOL — drag a clip's interior to move it along the
+	// timeline between its two neighbours, which absorb the move (the clip's own
+	// content stays fixed). Sticky: stays armed until V (selection) or Escape (the
+	// Escape disarm is handled centrally via STICKY_TIMELINE_TOOLS above).
+	useActionHandler(
+		"slide-tool",
+		() => {
+			const { tool, setTool } = usePlaceToolStore.getState();
+			setTool(tool?.kind === "slide" ? null : { kind: "slide" });
 		},
 		undefined,
 	);

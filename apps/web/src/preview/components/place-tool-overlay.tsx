@@ -6,7 +6,7 @@
  * center) and creates the element there at the playhead.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
 import { DEFAULT_GRAPHIC_SOURCE_SIZE } from "@/graphics/types";
@@ -14,9 +14,12 @@ import { buildDefaultMaskInstance } from "@/masks";
 import { freeformCanvasPointToLocal } from "@/masks/freeform/path";
 import type { FreeformPathMaskParams } from "@/masks/types";
 import { getVisibleElementsWithBounds } from "@/preview/element-bounds";
-import type { MaskableElement } from "@/timeline";
+import type { ElementRef, MaskableElement } from "@/timeline";
 import { generateUUID } from "@/utils/id";
-import { usePlaceToolStore } from "@/preview/place-tool-store";
+import {
+	isStickyTimelineTool,
+	usePlaceToolStore,
+} from "@/preview/place-tool-store";
 import {
 	buildGraphicElement,
 	buildTextElement,
@@ -38,11 +41,78 @@ export function PlaceToolOverlay({
 	const setTool = usePlaceToolStore((s) => s.setTool);
 	// Pen tool: clicked points in scene-normalized (0..1) coordinates.
 	const [penPoints, setPenPoints] = useState<[number, number][]>([]);
+	// The maskable target is LATCHED when the Pen arms, so a mid-draw canvas click
+	// that clears the selection can't flip "mask the selected clip" into "create a
+	// new shape". finishPenAsMask consults this latch, falling back to the live
+	// selection only when nothing was latched (e.g. the clip was selected after arming).
+	const maskTargetRef = useRef<ElementRef[]>([]);
 	useEffect(() => {
-		if (tool?.kind !== "pen") setPenPoints([]);
-	}, [tool]);
-	// Track Select Forward acts on the timeline, not the preview canvas.
-	if (!tool || tool.kind === "track-select-forward") return null;
+		if (tool?.kind !== "pen") {
+			setPenPoints([]);
+			maskTargetRef.current = [];
+			return;
+		}
+		maskTargetRef.current = editor.selection.getSelectedElements();
+	}, [tool, editor]);
+	// Track Select Forward, Razor, Rate-Stretch, Ripple and Roll act on the
+	// timeline, not the preview canvas, so this overlay never mounts for them.
+	if (!tool || isStickyTimelineTool(tool)) return null;
+
+	const isMaskableType = (type: string): boolean =>
+		type === "video" || type === "image" || type === "graphic";
+
+	// U9: the topmost visible maskable clip under the drawn path's centroid, so you
+	// can draw over a clip and mask it without selecting it first. Returns null when
+	// no maskable clip sits under the path (the caller then makes a Custom shape).
+	const resolveUnderPathMaskTarget = (): ElementRef | null => {
+		if (penPoints.length === 0) return null;
+		const canvasSize = editor.project.getActive().settings.canvasSize;
+		const px =
+			(penPoints.reduce((sum, [x]) => sum + x, 0) / penPoints.length) *
+			canvasSize.width;
+		const py =
+			(penPoints.reduce((sum, [, y]) => sum + y, 0) / penPoints.length) *
+			canvasSize.height;
+		let hit: ElementRef | null = null;
+		for (const item of getVisibleElementsWithBounds({
+			tracks: editor.scenes.getActiveScene().tracks,
+			currentTime: editor.playback.getCurrentTime(),
+			canvasSize,
+			mediaAssets: editor.media.getAssets(),
+		})) {
+			if (!isMaskableType(item.element.type)) continue;
+			const { cx, cy, width, height, rotation } = item.bounds;
+			const rad = (-rotation * Math.PI) / 180;
+			const dx = px - cx;
+			const dy = py - cy;
+			const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+			const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+			// Keep the LAST hit: getVisibleElementsWithBounds is bottom-to-top, so the
+			// last clip containing the point is the topmost.
+			if (Math.abs(localX) <= width / 2 && Math.abs(localY) <= height / 2) {
+				hit = { trackId: item.trackId, elementId: item.elementId };
+			}
+		}
+		return hit;
+	};
+
+	// The mask target: the single selected/latched maskable clip, else (U9) the
+	// maskable clip under the drawn path.
+	const resolveMaskTargetRef = (): ElementRef | null => {
+		const latched =
+			maskTargetRef.current.length > 0
+				? maskTargetRef.current
+				: editor.selection.getSelectedElements();
+		if (latched.length === 1) {
+			const withTrack = editor.timeline.getElementsWithTracks({
+				elements: latched,
+			})[0];
+			if (withTrack && isMaskableType(withTrack.element.type)) {
+				return latched[0];
+			}
+		}
+		return resolveUnderPathMaskTarget();
+	};
 
 	/**
 	 * Premiere behavior: drawing with a video/image/graphic clip selected cuts
@@ -52,17 +122,15 @@ export function PlaceToolOverlay({
 	 * (never silently turn that into a shape layer — tell the user why).
 	 */
 	const finishPenAsMask = (): "masked" | "no-target" | "failed" => {
-		const selected = editor.selection.getSelectedElements();
-		if (selected.length !== 1) return "no-target";
-		const ref = selected[0];
+		// Target the single selected/latched maskable clip (U7 latch), or — when
+		// nothing maskable is selected — the maskable clip under the drawn path (U9).
+		const ref = resolveMaskTargetRef();
+		if (!ref) return "no-target";
 		const withTrack = editor.timeline.getElementsWithTracks({
-			elements: selected,
+			elements: [ref],
 		})[0];
 		if (!withTrack) return "no-target";
 		const target = withTrack.element;
-		if (!["video", "image", "graphic"].includes(target.type)) {
-			return "no-target";
-		}
 
 		const canvasSize = editor.project.getActive().settings.canvasSize;
 		const clampedTime = Math.min(
@@ -251,6 +319,8 @@ export function PlaceToolOverlay({
 				width: sceneWidth,
 				height: sceneHeight,
 			}}
+			onPointerDown={(event) => event.stopPropagation()}
+			onPointerUp={(event) => event.stopPropagation()}
 			onClick={handleClick}
 		>
 			{tool.kind === "pen" && penPoints.length > 0 && (

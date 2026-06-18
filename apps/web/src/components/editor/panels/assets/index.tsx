@@ -11,6 +11,7 @@ import { ShapesView } from "@/graphics/components/assets-view";
 import { TextView } from "@/text/components/assets-view";
 import { EffectsView } from "@/effects/components/assets-view";
 import { HyperframesPanel } from "@/features/ai-generate/components/hyperframes-panel";
+import { MarkersView } from "./views/markers";
 
 export function AssetsPanel() {
 	const { activeTab } = useAssetsPanelStore();
@@ -33,6 +34,7 @@ export function AssetsPanel() {
 				Adjustment view coming soon...
 			</div>
 		),
+		markers: <MarkersView />,
 		settings: <SettingsView />,
 	};
 

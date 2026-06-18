@@ -14,7 +14,11 @@ import {
 	buildElementFromMedia,
 	buildEffectElement,
 } from "@/timeline/element-utils";
-import { AddTrackCommand, InsertElementCommand } from "@/commands/timeline";
+import {
+	AddTrackCommand,
+	InsertElementCommand,
+	OverwriteDropCommand,
+} from "@/commands/timeline";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -30,7 +34,7 @@ import type {
 import type { TimelineDragData } from "@/timeline/drag";
 import type { MediaAsset } from "@/media/types";
 import type { ProcessedMediaAsset } from "@/media/processing";
-import { roundFrameTime, type MediaTime } from "@/wasm";
+import { addMediaTime, roundFrameTime, type MediaTime } from "@/wasm";
 
 // --- Config ---
 
@@ -212,6 +216,13 @@ export class DragDropController {
 		});
 		const targetElementTypes = getTargetElementTypesForDrag({ dragData });
 
+		// Premiere edit model (OQ7): media drops overwrite by default, or insert
+		// when Ctrl is held. Only media carves (text/graphic/effect stay overlays).
+		let editMode: "overwrite" | "insert" | undefined;
+		if (dragData.type === "media") {
+			editMode = event.ctrlKey ? "insert" : "overwrite";
+		}
+
 		const sceneTracks = this.config.getSceneTracks();
 		const target = computeDropTarget({
 			elementType,
@@ -224,6 +235,7 @@ export class DragDropController {
 			pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 			zoomLevel: this.config.zoomLevel,
 			targetElementTypes,
+			editMode,
 		});
 
 		const fps = this.config.getActiveProjectFps();
@@ -354,6 +366,52 @@ export class DragDropController {
 		return { elementId: insertCmd.getElementId(), trackId: track.id };
 	}
 
+	/**
+	 * Insert an element onto an existing track by id — used for the 2nd+ asset of
+	 * a sequential multi-asset drop, once the first asset of that type has
+	 * established the landing track.
+	 */
+	private insertOnTrack({
+		element,
+		trackId,
+	}: {
+		element: CreateTimelineElement;
+		trackId: string;
+	}): { elementId: string | null; trackId: string | null } {
+		const insertCmd = new InsertElementCommand({
+			element,
+			placement: { mode: "explicit", trackId },
+		});
+		this.config.executeCommand(insertCmd);
+		return { elementId: insertCmd.getElementId(), trackId };
+	}
+
+	/**
+	 * Create a fresh track of `trackType`, appended to its region via the command's
+	 * default index (resolved at execute time, so it is never stale), and insert the
+	 * element onto it. Used for a multi-drop asset whose type does NOT match the drop
+	 * target — the drop position is not meaningful for it, and reusing the pre-loop
+	 * drop index would be stale after earlier inserts shifted the track list.
+	 */
+	private insertOnNewTrack({
+		element,
+		trackType,
+	}: {
+		element: CreateTimelineElement;
+		trackType: TrackType;
+	}): { elementId: string | null; trackId: string | null } {
+		const addTrackCmd = new AddTrackCommand({ type: trackType });
+		const insertCmd = new InsertElementCommand({
+			element,
+			placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
+		});
+		this.config.executeCommand(new BatchCommand([addTrackCmd, insertCmd]));
+		return {
+			elementId: insertCmd.getElementId(),
+			trackId: addTrackCmd.getTrackId(),
+		};
+	}
+
 	/** After a video lands, peel its audio off onto an audio track. */
 	private maybeSeparateAudio({
 		asset,
@@ -460,22 +518,133 @@ export class DragDropController {
 			return;
 		}
 
-		const mediaAsset = this.config
-			.getMediaAssets()
-			.find((asset) => asset.id === dragData.id);
-		if (!mediaAsset) return;
+		const allAssets = this.config.getMediaAssets();
+		// A multi-selection drag carries every selected id; a single drag carries
+		// just the dragged one. Insert them all sequentially, in selection order.
+		const ids =
+			dragData.selectedIds && dragData.selectedIds.length > 0
+				? dragData.selectedIds
+				: [dragData.id];
+		const queue = ids
+			.map((id) => allAssets.find((asset) => asset.id === id))
+			.filter((asset): asset is MediaAsset => asset != null);
+		if (queue.length === 0) return;
 
-		const trackType: TrackType =
+		const dropTrackType: TrackType =
 			dragData.mediaType === "audio" ? "audio" : "video";
-		const element = buildElementFromMedia({
-			mediaId: mediaAsset.id,
-			mediaType: mediaAsset.type,
-			name: mediaAsset.name,
-			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
-			startTime: target.xPosition,
-		});
-		const inserted = this.insertAtTarget({ element, target, trackType });
-		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+
+		// Premiere edit model (OQ7): clips dropped onto an OCCUPIED region of the
+		// hovered track carve it (overwrite default / Ctrl=insert) rather than spawning
+		// a new track. computeDropTarget set `carveMode` only when the dropped span
+		// actually overlaps that track, so non-overlapping drops never reach here.
+		//
+		// U5 — a MULTI-selection carves too: the clips matching the carve target's type
+		// are placed back-to-back as ONE combined span and carved in a single atomic
+		// command (one undo, OQ2 default). Off-type clips (e.g. audio dropped on a video
+		// track) keep today's behavior — routed to their own new track, no carve. The
+		// single-clip case is the N=1 path through the same command, behavior-identical.
+		if (target.carveMode && !target.isNewTrack) {
+			const track = orderedTracks({
+				sceneTracks: this.config.getSceneTracks(),
+			})[target.trackIndex];
+			const sameType = queue.filter(
+				(asset) =>
+					(asset.type === "audio" ? "audio" : "video") === dropTrackType,
+			);
+			if (track && sameType.length > 0) {
+				const incoming = sameType.map((asset) =>
+					buildElementFromMedia({
+						mediaId: asset.id,
+						mediaType: asset.type,
+						name: asset.name,
+						duration: toElementDurationTicks({ seconds: asset.duration }),
+						// The command lays clips back-to-back from incoming[0].startTime;
+						// the rest is recomputed, so target.xPosition is the span start.
+						startTime: target.xPosition,
+					}),
+				);
+				const command = new OverwriteDropCommand({
+					trackId: track.id,
+					incoming,
+					mode: target.carveMode,
+				});
+				this.config.executeCommand(command);
+				const placedIds = command.getElementIds();
+				sameType.forEach((asset, index) => {
+					this.maybeSeparateAudio({
+						asset,
+						elementId: placedIds[index],
+						trackId: track.id,
+					});
+				});
+				// Off-type clips never carve in v1 — route each to its own new track,
+				// matching the non-carve multi-drop path below.
+				for (const asset of queue) {
+					if ((asset.type === "audio" ? "audio" : "video") === dropTrackType) {
+						continue;
+					}
+					const element = buildElementFromMedia({
+						mediaId: asset.id,
+						mediaType: asset.type,
+						name: asset.name,
+						duration: toElementDurationTicks({ seconds: asset.duration }),
+						startTime: target.xPosition,
+					});
+					const inserted = this.insertOnNewTrack({
+						element,
+						trackType: asset.type === "audio" ? "audio" : "video",
+					});
+					this.maybeSeparateAudio({ asset, ...inserted });
+				}
+				return;
+			}
+		}
+
+		// One landing track per track-type; same-type clips sit back-to-back.
+		const landingByType = new Map<
+			TrackType,
+			{ trackId: string; nextStart: MediaTime }
+		>();
+		for (const asset of queue) {
+			const trackType: TrackType = asset.type === "audio" ? "audio" : "video";
+			const landing = landingByType.get(trackType);
+			const startTime = landing ? landing.nextStart : target.xPosition;
+			const element = buildElementFromMedia({
+				mediaId: asset.id,
+				mediaType: asset.type,
+				name: asset.name,
+				duration: toElementDurationTicks({ seconds: asset.duration }),
+				startTime,
+			});
+			let inserted: { elementId: string | null; trackId: string | null };
+			if (landing) {
+				// 2nd+ asset of this type: same track as the first, addressed by id.
+				inserted = this.insertOnTrack({ element, trackId: landing.trackId });
+			} else if (trackType === dropTrackType) {
+				// First asset of the drop type: honor the drop target position.
+				inserted = this.insertAtTarget({
+					element,
+					target: { ...target, xPosition: startTime },
+					trackType,
+				});
+			} else {
+				// First asset of an off-drop type: the drop position is not meaningful
+				// for it, and reusing the pre-loop drop index would be stale after
+				// earlier inserts shifted the track list — append a fresh track to this
+				// type's region (the command resolves the index at execute time).
+				inserted = this.insertOnNewTrack({ element, trackType });
+			}
+			this.maybeSeparateAudio({ asset, ...inserted });
+			if (inserted.trackId) {
+				landingByType.set(trackType, {
+					trackId: inserted.trackId,
+					nextStart: addMediaTime({
+						a: startTime,
+						b: toElementDurationTicks({ seconds: asset.duration }),
+					}),
+				});
+			}
+		}
 	}
 
 	private executeEffectDrop({

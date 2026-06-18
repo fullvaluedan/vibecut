@@ -101,6 +101,8 @@ function buildBlendingTab({
 				trackId={trackId}
 				paramKeys={BLENDING_PARAM_KEYS}
 				sectionKey="blending"
+				variant="fx"
+				title="Blending"
 			/>
 		),
 	};
@@ -122,6 +124,8 @@ function buildAudioTab({
 					trackId={trackId}
 					paramKeys={AUDIO_PARAM_KEYS}
 					sectionKey="audio"
+					variant="fx"
+					title="Audio"
 				/>
 				<AudioSyncSection element={element} />
 			</>

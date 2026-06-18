@@ -22,6 +22,28 @@ export const useMediaPreviewStore = create<MediaPreviewStore>((set) => ({
 	close: () => set({ asset: null }),
 }));
 
+function formatPreviewDuration(duration: number) {
+	const min = Math.floor(duration / 60);
+	const sec = Math.floor(duration % 60);
+	return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
+/** Resolution · fps · duration · codec · audio — whatever the asset carries. */
+function PreviewMeta({ asset }: { asset: MediaAsset }) {
+	const parts: string[] = [];
+	if (asset.width && asset.height) parts.push(`${asset.width}×${asset.height}`);
+	if (asset.fps) parts.push(`${Math.round(asset.fps)} fps`);
+	if (asset.duration) parts.push(formatPreviewDuration(asset.duration));
+	if (asset.codec) parts.push(asset.codec);
+	if (asset.type === "video") parts.push(asset.hasAudio ? "audio" : "no audio");
+	if (parts.length === 0) return null;
+	return (
+		<div className="text-muted-foreground mt-0.5 text-xs">
+			{parts.join(" · ")}
+		</div>
+	);
+}
+
 export function MediaPreviewDialog() {
 	const asset = useMediaPreviewStore((s) => s.asset);
 	const close = useMediaPreviewStore((s) => s.close);
@@ -59,8 +81,11 @@ export function MediaPreviewDialog() {
 								/>
 							)}
 						</div>
-						<div className="text-foreground truncate border-t px-4 py-2 text-sm font-medium">
-							{asset.name}
+						<div className="border-t px-4 py-2">
+							<div className="text-foreground truncate text-sm font-medium">
+								{asset.name}
+							</div>
+							<PreviewMeta asset={asset} />
 						</div>
 					</div>
 				)}

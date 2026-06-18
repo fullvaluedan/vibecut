@@ -8,14 +8,19 @@ import {
 	minMediaTime,
 	subMediaTime,
 	TICKS_PER_SECOND,
+	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import {
+	computeGroupRateStretch,
 	computeGroupResize,
+	computeGroupRippleTrim,
+	computeGroupRoll,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
 	type ResizeSide,
 } from "@/timeline/group-resize";
+import { usePlaceToolStore } from "@/preview/place-tool-store";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
@@ -24,9 +29,11 @@ import {
 } from "@/timeline/snapping";
 import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
+import { getBookmarkSnapPoints } from "@/timeline/bookmarks/snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
 	isRetimableElement,
+	type Bookmark,
 	type SceneTracks,
 	type TimelineElement,
 	type TimelineTrack,
@@ -36,9 +43,16 @@ import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
 
+// An edge drag is a plain trim (default), a Rate-Stretch (R armed), a Ripple
+// (B armed), or a Roll (cut between two clips): the latch is read once at
+// resize-start so a mid-drag tool change can't flip the gesture's behaviour
+// underneath the user.
+type ResizeMode = "trim" | "rate-stretch" | "ripple" | "roll";
+
 interface ResizeSession {
 	kind: "active";
 	side: ResizeSide;
+	mode: ResizeMode;
 	startX: number;
 	fps: FrameRate;
 	members: GroupResizeMember[];
@@ -54,6 +68,7 @@ export interface ResizeConfig {
 	snappingEnabled: boolean;
 	isShiftHeld: () => boolean;
 	getSceneTracks: () => SceneTracks;
+	getSceneBookmarks: () => Bookmark[];
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
 	selectedElements: ElementRef[];
@@ -230,9 +245,20 @@ export class ResizeController {
 
 		this.config.discardPreview();
 
+		const armedTool = usePlaceToolStore.getState().tool?.kind;
+		const mode: ResizeMode =
+			armedTool === "rate-stretch"
+				? "rate-stretch"
+				: armedTool === "ripple"
+					? "ripple"
+					: armedTool === "roll"
+						? "roll"
+						: "trim";
+
 		this.session = {
 			kind: "active",
 			side,
+			mode,
 			startX: event.clientX,
 			fps,
 			members,
@@ -285,6 +311,9 @@ export class ResizeController {
 			sources: [
 				() => getElementEdgeSnapPoints({ tracks, excludeElementIds }),
 				() => getPlayheadSnapPoints({ playheadTime }),
+				() => getBookmarkSnapPoints({ bookmarks: this.config.getSceneBookmarks() }),
+				// Premiere parity (R4): trim edges snap to the sequence start (0:00).
+				() => [{ time: ZERO_MEDIA_TIME, type: "sequence-start" }],
 				() =>
 					getAnimationKeyframeSnapPointsForTimeline({
 						tracks,
@@ -334,12 +363,44 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeGroupResize({
-			members: session.members,
-			side: session.side,
-			deltaTime,
-			fps: session.fps,
+		const minDuration = mediaTime({
+			ticks: Math.round(
+				(TICKS_PER_SECOND * session.fps.denominator) / session.fps.numerator,
+			),
 		});
+
+		let result: GroupResizeResult;
+		if (session.mode === "rate-stretch") {
+			result = computeGroupRateStretch({
+				members: session.members,
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else if (session.mode === "ripple") {
+			result = computeGroupRippleTrim({
+				members: session.members,
+				tracks: this.config.getSceneTracks(),
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else if (session.mode === "roll") {
+			result = computeGroupRoll({
+				members: session.members,
+				tracks: this.config.getSceneTracks(),
+				side: session.side,
+				deltaTime,
+				minDuration,
+			});
+		} else {
+			result = computeGroupResize({
+				members: session.members,
+				side: session.side,
+				deltaTime,
+				fps: session.fps,
+			});
+		}
 
 		session.result = result;
 		this.config.previewElements(result.updates);
