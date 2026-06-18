@@ -202,11 +202,19 @@ async function resolveVideoNode({
 			clipTime,
 			retime: node.params.retime,
 		});
-	const frame = await videoCache.getFrameAt({
-		mediaId: node.params.mediaId,
-		file: node.params.file,
-		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
-	});
+	let frame: Awaited<ReturnType<typeof videoCache.getFrameAt>>;
+	try {
+		frame = await videoCache.getFrameAt({
+			mediaId: node.params.mediaId,
+			file: node.params.file,
+			time: mediaTimeToSeconds({
+				time: roundMediaTime({ time: sourceTimeTicks }),
+			}),
+		});
+	} catch (error) {
+		console.error("Failed to resolve video frame", error);
+		return null;
+	}
 	if (!frame) {
 		return null;
 	}

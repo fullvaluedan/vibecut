@@ -22,6 +22,10 @@ export class VideoCache {
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
 	private seekGenerations = new Map<string, number>();
+	// Negative cache: mediaIds whose codec can't be decoded. Without this every
+	// getFrameAt re-creates the mediabunny Input, re-throws, and the preview
+	// re-probes an undecodable clip on every frame.
+	private undecodableMediaIds = new Set<string>();
 
 	async getFrameAt({
 		mediaId,
@@ -32,6 +36,8 @@ export class VideoCache {
 		file: File;
 		time: number;
 	}): Promise<WrappedCanvas | null> {
+		if (this.undecodableMediaIds.has(mediaId)) return null;
+
 		await this.ensureSink({ mediaId, file });
 
 		const sinkData = this.sinks.get(mediaId);
@@ -239,6 +245,7 @@ export class VideoCache {
 		mediaId: string;
 		file: File;
 	}): Promise<void> {
+		if (this.undecodableMediaIds.has(mediaId)) return;
 		if (this.sinks.has(mediaId)) return;
 
 		if (this.initPromises.has(mediaId)) {
@@ -251,6 +258,10 @@ export class VideoCache {
 
 		try {
 			await initPromise;
+		} catch {
+			// initializeSink already logged. Record the failure so we stop
+			// re-creating the Input and re-throwing on every subsequent frame.
+			this.undecodableMediaIds.add(mediaId);
 		} finally {
 			this.initPromises.delete(mediaId);
 		}
@@ -314,6 +325,7 @@ export class VideoCache {
 		this.initPromises.delete(mediaId);
 		this.frameChain.delete(mediaId);
 		this.seekGenerations.delete(mediaId);
+		this.undecodableMediaIds.delete(mediaId);
 	}
 
 	clearAll(): void {

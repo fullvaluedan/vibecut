@@ -524,6 +524,17 @@ function MediaTypePlaceholder({
 	);
 }
 
+function NoPreviewBadge() {
+	return (
+		<div
+			className="absolute top-1 left-1 rounded bg-red-600/90 px-1 text-[0.6rem] font-semibold text-white"
+			title="This browser can't decode this video. Right-click → Convert for editing."
+		>
+			No preview
+		</div>
+	);
+}
+
 function MediaPreview({
 	item,
 	variant = "grid",
@@ -562,14 +573,7 @@ function MediaPreview({
 						loading="lazy"
 						unoptimized
 					/>
-					{item.canDecode === false && (
-						<div
-							className="absolute top-1 left-1 rounded bg-red-600/90 px-1 text-[0.6rem] font-semibold text-white"
-							title="This browser can't decode this video. Right-click → Convert for editing."
-						>
-							No preview
-						</div>
-					)}
+					{item.canDecode === false && <NoPreviewBadge />}
 					{shouldShowDurationBadge ? (
 						<MediaDurationBadge duration={item.duration} />
 					) : null}
@@ -577,13 +581,19 @@ function MediaPreview({
 			);
 		}
 
+		// Undecodable videos have no thumbnail (thumbnail render is gated on
+		// canDecode), so they fall through here — show the warning over the
+		// placeholder tile too rather than a plain "Video" tile with no hint.
 		return (
-			<MediaTypePlaceholder
-				icon={Video01Icon}
-				label="Video"
-				duration={item.duration}
-				variant="muted"
-			/>
+			<div className="relative size-full">
+				<MediaTypePlaceholder
+					icon={Video01Icon}
+					label="Video"
+					duration={item.duration}
+					variant="muted"
+				/>
+				{item.canDecode === false && <NoPreviewBadge />}
+			</div>
 		);
 	}
 
