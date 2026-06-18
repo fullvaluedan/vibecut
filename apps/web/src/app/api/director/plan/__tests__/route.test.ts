@@ -1,19 +1,34 @@
 import { describe, expect, mock, test } from "bun:test";
 import { NextRequest } from "next/server";
 
-// Stub the auth resolver and the planner so the route's guard / validate / error
-// logic is tested without a real LLM call. Registered before importing the route.
+// Stub the auth resolver and BOTH planners (text + vision) so the route's guard /
+// validate / route-by-frames / error logic is tested without a real LLM call.
+// Registered before importing the route.
 let authImpl: () => unknown = () => null;
 let planDirectorImpl: () => Promise<unknown> = async () => ({
 	plan: { operations: [] },
 	usage: null,
 });
+let planDirectorVisionImpl: () => Promise<unknown> = async () => ({
+	plan: { operations: [] },
+	usage: null,
+	degraded: false,
+});
+// Which planner the route dispatched to (reset per test).
+let lastPlanner: "text" | "vision" | null = null;
 
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
 mock.module("@framecut/hf-bridge", () => ({
-	planDirector: () => planDirectorImpl(),
+	planDirector: () => {
+		lastPlanner = "text";
+		return planDirectorImpl();
+	},
+	planDirectorVision: () => {
+		lastPlanner = "vision";
+		return planDirectorVisionImpl();
+	},
 }));
 
 const { POST } = await import("../route");
@@ -44,8 +59,9 @@ describe("/api/director/plan", () => {
 		expect((await POST(post({ segments: [] }))).status).toBe(400);
 	});
 
-	test("happy path returns the sanitized plan + usage", async () => {
+	test("happy path returns the sanitized plan + usage (text planner, not degraded)", async () => {
 		authImpl = () => ({ mode: "claude-code" });
+		lastPlanner = null;
 		planDirectorImpl = async () => ({
 			plan: {
 				operations: [
@@ -61,6 +77,58 @@ describe("/api/director/plan", () => {
 		const json = await res.json();
 		expect(json.plan.operations).toHaveLength(1);
 		expect(json.usage).toEqual({ inputTokens: 5, outputTokens: 2 });
+		// No frames → the text planner, and degraded defaults false (R3 contract).
+		expect(lastPlanner).toBe("text");
+		expect(json.degraded).toBe(false);
+	});
+
+	test("routes to the VISION planner when valid frames are present, passing degraded through", async () => {
+		authImpl = () => ({ mode: "api-key", apiKey: "k" });
+		lastPlanner = null;
+		planDirectorVisionImpl = async () => ({
+			plan: {
+				operations: [
+					{ id: "op_v", op: "cut", startSec: 3, endSec: 4, reason: "off-screen", confidence: 0.8 },
+				],
+			},
+			usage: { inputTokens: 99, outputTokens: 8 },
+			degraded: true,
+		});
+		const res = await POST(
+			post({
+				segments: [{ startSec: 0, endSec: 5, text: "hi" }],
+				totalSec: 5,
+				frames: [{ segmentIndex: 0, mediaType: "image/jpeg", dataBase64: "AAAA" }],
+			}),
+		);
+		expect(res.status).toBe(200);
+		const json = await res.json();
+		expect(lastPlanner).toBe("vision"); // frames → vision planner, not text
+		expect(json.plan.operations).toHaveLength(1);
+		expect(json.degraded).toBe(true); // the planner's degrade flag rides through
+	});
+
+	test("an empty / all-malformed frames array falls back to the text planner (not a 400)", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		lastPlanner = null;
+		// All entries malformed → parsed to [] → text path, no vision dispatch.
+		const res = await POST(
+			post({
+				segments: [{ startSec: 0, endSec: 5, text: "hi" }],
+				totalSec: 5,
+				frames: [{ nope: true }],
+			}),
+		);
+		expect(res.status).toBe(200);
+		expect(lastPlanner).toBe("text");
+	});
+
+	test("400 when frames is present but not an array", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		const res = await POST(
+			post({ segments: [], totalSec: 5, frames: "not-an-array" }),
+		);
+		expect(res.status).toBe(400);
 	});
 
 	test("500 when the planner throws", async () => {
