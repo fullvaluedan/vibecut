@@ -188,11 +188,13 @@ export function TimelineTrackContent({
 									onResizeStart({ event, element, track, side })
 								}
 								onElementMouseDown={({ event, element }) => {
-									// Track Select Forward: a click on an unselected clip selects
-									// forward (handled in onElementClick); dragging a clip that's
-									// already part of the forward selection MOVES the whole
-									// selection — so you can shove everything right and open a gap
-									// to drag a cut clip's head back into.
+									// Track Select Forward: pressing an unselected clip selects
+									// everything forward AND begins a drag in the same gesture, so
+									// one press-drag shoves the whole group right (open a gap to
+									// drag a cut clip's head into). A plain press still just
+									// forward-selects (the controller only commits a move if you
+									// actually move). The controller reads LIVE selection, so the
+									// just-made forward selection is the move group.
 									if (
 										isForwardTool &&
 										!isElementSelected({
@@ -200,7 +202,10 @@ export function TimelineTrackContent({
 											elementId: element.id,
 										})
 									) {
-										return;
+										selectForwardFrom({
+											event,
+											time: element.startTime as number,
+										});
 									}
 									onElementMouseDown({ event, element, track });
 								}}

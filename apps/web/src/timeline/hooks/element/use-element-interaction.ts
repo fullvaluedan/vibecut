@@ -47,8 +47,15 @@ export function useElementInteraction({
 			getActiveFps: () => editor.project.getActive()?.settings.fps ?? null,
 		},
 		selection: {
-			getSelected: () => selection.selectedElements,
-			isSelected: selection.isElementSelected,
+			// Read selection LIVE (not the React render snapshot) so a selection
+			// made earlier in the same synchronous gesture — e.g. Track Select
+			// Forward selecting on mousedown — is visible when the controller
+			// builds the move group. The snapshot only updates after a commit.
+			getSelected: () => editor.selection.getSelectedElements(),
+			isSelected: ({ trackId, elementId }) =>
+				editor.selection
+					.getSelectedElements()
+					.some((ref) => ref.trackId === trackId && ref.elementId === elementId),
 			select: selection.selectElement,
 			selectMany: (elements) => selection.setElementSelection({ elements }),
 			handleClick: selection.handleElementClick,
