@@ -175,11 +175,16 @@ export class RendererManager {
 
 			let audioBuffer: AudioBuffer | null = null;
 			if (includeAudio) {
-				onProgress?.({ progress: 0.05 });
+				// The audio stage owns the first 5% of the bar. Feed its real
+				// decode/mix/master progress through so it moves instead of looking
+				// frozen at 5% for the whole (often slow) audio build.
+				onProgress?.({ progress: 0.01 });
 				audioBuffer = await createTimelineAudioBuffer({
 					tracks,
 					mediaAssets,
 					duration,
+					onProgress: (fraction) =>
+						onProgress?.({ progress: 0.01 + fraction * 0.04 }),
 				});
 			}
 

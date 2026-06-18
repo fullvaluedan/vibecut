@@ -137,10 +137,13 @@ export async function collectAudioElements({
 	tracks,
 	mediaAssets,
 	audioContext,
+	onDecodeProgress,
 }: {
 	tracks: SceneTracks;
 	mediaAssets: MediaAsset[];
 	audioContext: AudioContext;
+	/** Fires 0..1 as each asset finishes decoding (export progress feedback). */
+	onDecodeProgress?: (fraction: number) => void;
 }): Promise<CollectedAudioElement[]> {
 	const candidates = collectAudibleCandidates({ tracks, mediaAssets });
 	const mediaMap = new Map<string, MediaAsset>(
@@ -206,7 +209,15 @@ export async function collectAudioElements({
 		}
 	}
 
-	const resolvedElements = await Promise.all(pendingElements);
+	const total = pendingElements.length;
+	let settled = 0;
+	const tracked = pendingElements.map((pending) =>
+		pending.finally(() => {
+			settled++;
+			if (total > 0) onDecodeProgress?.(settled / total);
+		}),
+	);
+	const resolvedElements = await Promise.all(tracked);
 	const audioElements: CollectedAudioElement[] = [];
 	for (const element of resolvedElements) {
 		if (element) audioElements.push(element);
@@ -628,19 +639,25 @@ export async function createTimelineAudioBuffer({
 	duration,
 	sampleRate = EXPORT_SAMPLE_RATE,
 	audioContext,
+	onProgress,
 }: {
 	tracks: SceneTracks;
 	mediaAssets: MediaAsset[];
 	duration: number;
 	sampleRate?: number;
 	audioContext?: AudioContext;
+	/** Fires 0..1 across decode → mix → mastering, so the export bar moves
+	 * during this stage instead of looking frozen. */
+	onProgress?: (fraction: number) => void;
 }): Promise<AudioBuffer | null> {
 	const context = audioContext ?? createAudioContext({ sampleRate });
 
+	// Decoding every asset is the slow part — give it the bulk of the bar.
 	const audioElements = await collectAudioElements({
 		tracks,
 		mediaAssets,
 		audioContext: context,
+		onDecodeProgress: (fraction) => onProgress?.(fraction * 0.7),
 	});
 
 	if (audioElements.length === 0) return null;
@@ -654,35 +671,44 @@ export async function createTimelineAudioBuffer({
 		sampleRate,
 	);
 
+	let mixed = 0;
 	for (const element of audioElements) {
-		if (element.muted) continue;
+		if (!element.muted) {
+			const renderedBuffer = shouldMaintainPitch({
+				rate: element.retime?.rate ?? 1,
+				maintainPitch: element.retime?.maintainPitch,
+			})
+				? await renderRetimedBuffer({
+						audioContext: context,
+						sourceBuffer: element.buffer,
+						trimStart: element.trimStart,
+						clipDuration: element.duration,
+						retime: element.retime,
+						maintainPitch: true,
+					})
+				: undefined;
 
-		const renderedBuffer = shouldMaintainPitch({
-			rate: element.retime?.rate ?? 1,
-			maintainPitch: element.retime?.maintainPitch,
-		})
-			? await renderRetimedBuffer({
-					audioContext: context,
-					sourceBuffer: element.buffer,
-					trimStart: element.trimStart,
-					clipDuration: element.duration,
-					retime: element.retime,
-					maintainPitch: true,
-				})
-			: undefined;
-
-		mixAudioChannels({
-			element,
-			buffer: renderedBuffer ?? element.buffer,
-			trimStart: renderedBuffer ? 0 : element.trimStart,
-			retime: renderedBuffer ? undefined : element.retime,
-			outputBuffer,
-			outputLength,
-			sampleRate,
-		});
+			mixAudioChannels({
+				element,
+				buffer: renderedBuffer ?? element.buffer,
+				trimStart: renderedBuffer ? 0 : element.trimStart,
+				retime: renderedBuffer ? undefined : element.retime,
+				outputBuffer,
+				outputLength,
+				sampleRate,
+			});
+		}
+		mixed++;
+		// Mixing spans 0.7 → 0.95 of the audio stage.
+		onProgress?.(0.7 + (mixed / audioElements.length) * 0.25);
 	}
 
-	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
+	onProgress?.(0.95);
+	const mastered = await applyAudioMasteringToBuffer({
+		audioBuffer: outputBuffer,
+	});
+	onProgress?.(1);
+	return mastered;
 }
 
 function collectPeakRange({
