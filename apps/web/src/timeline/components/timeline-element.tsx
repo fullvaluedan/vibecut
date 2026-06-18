@@ -701,7 +701,7 @@ function ElementInner({
 					<button
 						type="button"
 						tabIndex={-1}
-						className="absolute inset-0 size-full flex flex-col"
+						className="absolute inset-0 size-full flex flex-col cursor-grab transition-[filter] hover:brightness-110"
 						onClick={(event) => onElementClick({ event, element })}
 						onMouseDown={(event) => onElementMouseDown({ event, element })}
 					>

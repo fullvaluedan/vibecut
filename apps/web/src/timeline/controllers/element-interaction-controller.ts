@@ -17,6 +17,10 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import { TIMELINE_DRAG_THRESHOLD_PX } from "@/timeline/components/interaction";
+import {
+	lockGestureCursor,
+	type GestureCursorLock,
+} from "@/timeline/gesture-cursor";
 import type { FrameRate } from "opencut-wasm";
 import { computeDropTarget } from "@/timeline/components/drop-target";
 import { getMouseTimeFromClientX } from "@/timeline/drag-utils";
@@ -298,6 +302,10 @@ export class ElementInteractionController {
 	// has already returned to idle, so the "was this a drag?" answer must
 	// outlive the session. Reset on the next mousedown.
 	private lastGestureWasDrag = false;
+	// Pins the body cursor to "grabbing" for the drag's lifetime. Set when the
+	// drag crosses the threshold (beginDragFromPending), released in
+	// finishSession — the single funnel every gesture-end path flows through.
+	private cursorLock: GestureCursorLock | null = null;
 
 	private readonly subscribers = new Set<() => void>();
 	private readonly depsRef: ElementInteractionDepsRef;
@@ -468,6 +476,8 @@ export class ElementInteractionController {
 
 	private finishSession(): void {
 		this.session = { kind: "idle" };
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.deps.snap.onChange?.(null);
 		this.notify();
@@ -643,6 +653,7 @@ export class ElementInteractionController {
 
 		this.session = { kind: "dragging", mousedown, drag };
 		this.lastGestureWasDrag = true;
+		this.cursorLock = lockGestureCursor({ cursor: "grabbing" });
 
 		this.updateDropTarget({
 			clientX,

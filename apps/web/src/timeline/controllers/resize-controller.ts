@@ -23,6 +23,10 @@ import {
 	type SnapPoint,
 } from "@/timeline/snapping";
 import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
+import {
+	lockGestureCursor,
+	type GestureCursorLock,
+} from "@/timeline/gesture-cursor";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
@@ -161,6 +165,9 @@ function hasResizeChanges({
 
 export class ResizeController {
 	private session: Session = { kind: "idle" };
+	// Pins the body cursor to "ew-resize" for the resize's lifetime; released in
+	// finishSession (the single funnel for finish/cancel/destroy).
+	private cursorLock: GestureCursorLock | null = null;
 	private readonly subscribers = new Set<() => void>();
 	private readonly configRef: ResizeConfigRef;
 
@@ -190,6 +197,8 @@ export class ResizeController {
 	}
 
 	destroy(): void {
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.subscribers.clear();
 	}
@@ -238,6 +247,7 @@ export class ResizeController {
 			members,
 			result: null,
 		};
+		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
 		this.notify();
 	}
@@ -258,6 +268,8 @@ export class ResizeController {
 
 	private finishSession(): void {
 		this.session = { kind: "idle" };
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.config.onSnapPointChange?.(null);
 		this.notify();

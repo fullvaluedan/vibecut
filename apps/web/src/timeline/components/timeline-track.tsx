@@ -12,6 +12,7 @@ import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { BASE_TIMELINE_PIXELS_PER_SECOND } from "@/timeline/scale";
 import { timelineTimeToPixels } from "@/timeline/pixel-utils";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { cn } from "@/utils/ui";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
@@ -119,7 +120,7 @@ export function TimelineTrackContent({
 	};
 
 	return (
-		<div className="relative size-full">
+		<div className={cn("relative size-full", isForwardTool && "cursor-e-resize")}>
 			<button
 				type="button"
 				className="absolute inset-0 m-0 size-full appearance-none border-0 bg-transparent p-0"

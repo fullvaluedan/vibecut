@@ -79,6 +79,14 @@ export interface EditingTextState {
 	readonly element: TextElement;
 }
 
+/**
+ * Cursor the canvas surface advertises while idle (no active gesture):
+ * `move` over a selectable element, `text` over a text element (hinting
+ * double-click-to-edit), `default` over empty canvas. The pan cursor (set
+ * by the viewport) takes precedence in the overlay.
+ */
+export type CanvasHoverCursor = "default" | "move" | "text";
+
 export interface PreviewViewportAdapter {
 	screenToCanvas: ({
 		clientX,
@@ -231,6 +239,7 @@ export class PreviewInteractionController {
 
 	private gesture: GestureSession = IDLE_GESTURE;
 	private editingTextState: EditingTextState | null = null;
+	private hoverCursorState: CanvasHoverCursor = "default";
 	private wasPlaying: boolean;
 	private unsubscribePlayback: (() => void) | null = null;
 
@@ -260,6 +269,16 @@ export class PreviewInteractionController {
 
 	get editingText(): EditingTextState | null {
 		return this.editingTextState;
+	}
+
+	get hoverCursor(): CanvasHoverCursor {
+		return this.hoverCursorState;
+	}
+
+	private setHoverCursor(next: CanvasHoverCursor): void {
+		if (this.hoverCursorState === next) return;
+		this.hoverCursorState = next;
+		this.notify();
 	}
 
 	subscribe({ listener }: { listener: () => void }): () => void {
@@ -337,6 +356,8 @@ export class PreviewInteractionController {
 		if (this.deps.preview.isMaskMode()) return;
 		if (button !== PRIMARY_POINTER_BUTTON) return;
 
+		this.setHoverCursor("default");
+
 		const startPos = this.deps.viewport.screenToCanvas({
 			clientX,
 			clientY,
@@ -371,7 +392,18 @@ export class PreviewInteractionController {
 			clientX,
 			clientY,
 		});
-		if (!currentPos) return;
+		if (!currentPos) {
+			if (this.gesture.kind === "idle") this.setHoverCursor("default");
+			return;
+		}
+
+		// Idle (no gesture, not editing, not mask mode): advertise the
+		// grab/text affordance under the pointer so the canvas signals what's
+		// manipulable without a click.
+		if (this.gesture.kind === "idle") {
+			this.updateHoverCursor({ pos: currentPos });
+			return;
+		}
 
 		if (this.gesture.kind === "pending") {
 			const pending = this.gesture;
@@ -456,6 +488,26 @@ export class PreviewInteractionController {
 		}
 
 		pointerState.captureTarget.releasePointerCapture(pointerState.pointerId);
+	}
+
+	private updateHoverCursor({ pos }: { pos: Point }): void {
+		if (this.editingTextState || this.deps.preview.isMaskMode()) {
+			this.setHoverCursor("default");
+			return;
+		}
+
+		const hit = hitTest({
+			canvasX: pos.x,
+			canvasY: pos.y,
+			elementsWithBounds: this.getVisibleElementsWithBounds(),
+		});
+
+		if (!hit) {
+			this.setHoverCursor("default");
+			return;
+		}
+
+		this.setHoverCursor(hit.element.type === "text" ? "text" : "move");
 	}
 
 	private getVisibleElementsWithBounds(): ElementWithBounds[] {
