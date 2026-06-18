@@ -81,7 +81,7 @@ export function DirectorReviewDialog() {
 				if (!isOpen) close();
 			}}
 		>
-			<DialogContent className="max-w-2xl">
+			<DialogContent className="max-w-2xl p-6">
 				<DialogTitle>Director&apos;s cut — review</DialogTitle>
 				<DialogDescription>
 					Review each proposed change and apply the ones you want — Ctrl+Z

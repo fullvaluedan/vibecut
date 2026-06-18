@@ -87,7 +87,7 @@ export function VariantPickerDialog() {
 				if (!isOpen) close();
 			}}
 		>
-			<DialogContent className="max-w-4xl">
+			<DialogContent className="max-w-4xl p-6">
 				<DialogTitle>Pick a HyperFrames version</DialogTitle>
 				<div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pt-1">
 					{(versions ?? []).map((v) => (

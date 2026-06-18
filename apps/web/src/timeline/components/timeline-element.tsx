@@ -79,6 +79,8 @@ import {
 	MagicWand05Icon,
 	Layers01Icon,
 	EraserIcon,
+	Link02Icon,
+	Unlink02Icon,
 } from "@hugeicons/core-free-icons";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
 import { runHyperframesOnClip } from "@/features/ai-generate/run-hyperframes-scoped";
@@ -476,7 +478,7 @@ export function TimelineElement({
 							icon={
 								<HugeiconsIcon
 									icon={
-										isElementSourceAudioSeparated ? ScissorIcon : ScissorIcon
+										isElementSourceAudioSeparated ? Unlink02Icon : Link02Icon
 									}
 								/>
 							}

@@ -414,7 +414,7 @@ function MediaItemWithContextMenu({
 							: "Convert for editing"}
 					</ContextMenuItem>
 				)}
-				<ContextMenuItem>Export clips</ContextMenuItem>
+				<ContextMenuItem disabled>Export clips</ContextMenuItem>
 				<ContextMenuItem
 					variant="destructive"
 					onClick={(event: React.MouseEvent<HTMLDivElement>) =>

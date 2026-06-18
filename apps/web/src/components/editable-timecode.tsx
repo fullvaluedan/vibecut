@@ -96,9 +96,16 @@ export function EditableTimecode({
 	};
 
 	const handleBlur = () => {
-		if (!enterPressedRef.current && isEditing) {
-			applyEdit();
+		if (enterPressedRef.current || !isEditing) return;
+		// Clicking away always exits edit mode. A valid entry commits; an
+		// invalid one is discarded (revert to the displayed time) rather than
+		// trapping the user in the error state with no way out but Escape.
+		const parsedTime = parseMediaTimecode({ timeCode: inputValue, format, fps });
+		if (parsedTime == null) {
+			cancelEditing();
+			return;
 		}
+		applyEdit();
 	};
 
 	const handleDisplayKeyDown = (

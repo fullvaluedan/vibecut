@@ -234,17 +234,6 @@ export function RunHyperframesButton() {
 							: "RUN HYPERFRAMES"}
 					</Button>
 				</TooltipTrigger>
-				{isRunning && (
-					<Button
-						variant="destructive"
-						size="sm"
-						className="ml-1 rounded-sm px-2"
-						title="Stop this HyperFrames run"
-						onClick={() => abortRef.current?.abort()}
-					>
-						Stop
-					</Button>
-				)}
 				<TooltipContent className="max-w-72">
 					{isRunning && progress ? (
 						<div className="flex w-56 flex-col gap-1.5">
@@ -257,6 +246,17 @@ export function RunHyperframesButton() {
 				</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
+			{isRunning && (
+				<Button
+					variant="destructive"
+					size="sm"
+					className="rounded-sm px-2"
+					title="Stop this HyperFrames run"
+					onClick={() => abortRef.current?.abort()}
+				>
+					Stop
+				</Button>
+			)}
 			{engine === "authored" && (
 				<TooltipProvider delayDuration={300}>
 					<Tooltip>
