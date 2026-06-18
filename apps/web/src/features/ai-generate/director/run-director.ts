@@ -23,6 +23,7 @@ import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import { detectDuplicateWordCuts } from "./duplicate-words";
 import { detectFillerCuts } from "./filler-words";
+import { detectPacingCuts } from "./pacing";
 import { mergeDetectedCuts } from "./cut-utils";
 
 /**
@@ -67,6 +68,7 @@ export async function runDirector({
 	const detectedCuts = [
 		...detectDuplicateWordCuts({ words: words ?? [] }),
 		...detectFillerCuts({ words: words ?? [] }),
+		...detectPacingCuts({ segments }),
 	];
 	abort();
 

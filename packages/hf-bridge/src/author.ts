@@ -544,7 +544,7 @@ export function buildDirectorPrompt({
 
 Emit a plan of typed OPERATIONS:
 - "cut": remove a span [startSec,endSec) - retakes (keep the LAST attempt), stutters/false-starts, contentless filler runs, off-topic tangents, and dead-weight intros/outros.
-- "take_select": when TWO different source clips (different src) cover the SAME scripted line, keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. Only when you are confident the two are the same line. Single-take footage has nothing to take_select - that is fine.
+- "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
 - "keep": optionally mark a load-bearing span you deliberately kept.
 
