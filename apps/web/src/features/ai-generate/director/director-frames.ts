@@ -16,6 +16,10 @@
  * segment, which is what this provides.
  */
 
+import type {
+	DirectorVisionFrame,
+	MultimodalImageMediaType,
+} from "@framecut/hf-bridge";
 import type { MediaAsset } from "@/media/types";
 import { extractFrames, type FrameSample } from "./frame-extract";
 import type { TranscriptSegment } from "./build-signal-table";
@@ -163,4 +167,37 @@ export async function sampleDirectorFrames({
 
 	frames.sort((a, b) => a.segmentIndex - b.segmentIndex);
 	return frames;
+}
+
+/** Accepted base64 image data-URL: `data:image/<jpeg|png|gif|webp>;base64,<data>`. */
+const DATA_URL_RE = /^data:(image\/(?:jpeg|png|gif|webp));base64,(.+)$/;
+
+/** Type-predicate guard (no `as` narrowing) for an accepted image media type. */
+function isImageMediaType(value: string): value is MultimodalImageMediaType {
+	return (
+		value === "image/jpeg" ||
+		value === "image/png" ||
+		value === "image/gif" ||
+		value === "image/webp"
+	);
+}
+
+/**
+ * Convert sampled frames into the planner's wire shape (segment-tagged base64,
+ * no `data:` prefix), dropping any frame whose data URL can't be parsed. Pure —
+ * the route forwards these straight to `planDirectorVision`.
+ */
+export function toVisionFrames(
+	frames: readonly DirectorFrame[],
+): DirectorVisionFrame[] {
+	const out: DirectorVisionFrame[] = [];
+	for (const frame of frames) {
+		const match = DATA_URL_RE.exec(frame.dataUrl);
+		if (!match) continue;
+		const mediaType = match[1];
+		const dataBase64 = match[2];
+		if (!isImageMediaType(mediaType)) continue;
+		out.push({ segmentIndex: frame.segmentIndex, mediaType, dataBase64 });
+	}
+	return out;
 }

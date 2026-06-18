@@ -430,7 +430,8 @@ export type DirectorOpCategory =
 	| "pacing"
 	| "reorder"
 	| "take"
-	| "llm";
+	| "llm"
+	| "vision";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {

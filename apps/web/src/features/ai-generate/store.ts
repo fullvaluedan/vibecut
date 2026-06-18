@@ -56,6 +56,13 @@ interface AiSettingsStore {
 	backgroundTranscriptionEnabled: boolean;
 	setBackgroundTranscriptionEnabled: (enabled: boolean) => void;
 	/**
+	 * Send sampled footage frames to the Director so its cuts can SEE the video
+	 * (catch off-screen / frozen / dead-air visuals). Opt-in — frames cost tokens
+	 * and only `api-key` / vision-capable `custom` backends accept them.
+	 */
+	directorVisionEnabled: boolean;
+	setDirectorVisionEnabled: (enabled: boolean) => void;
+	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -145,6 +152,10 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			backgroundTranscriptionEnabled: true,
 			setBackgroundTranscriptionEnabled: (backgroundTranscriptionEnabled) =>
 				set({ backgroundTranscriptionEnabled }),
+
+			directorVisionEnabled: false,
+			setDirectorVisionEnabled: (directorVisionEnabled) =>
+				set({ directorVisionEnabled }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),

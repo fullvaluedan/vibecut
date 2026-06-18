@@ -14,11 +14,13 @@ import { ensureTimelineTranscript } from "@/features/transcription/transcript-ca
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { decodeAudioToFloat32 } from "@/media/audio";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
-import { buildAiAuthHeaders } from "@/features/ai-generate/store";
+import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
+import type { DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeSpeechFeatures } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
+import { sampleDirectorFrames, toVisionFrames } from "./director-frames";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import { detectDuplicateWordCuts } from "./duplicate-words";
@@ -92,6 +94,22 @@ export async function runDirector({
 	});
 	abort();
 
+	// Vision pass (opt-in): sample one frame per segment so the Director's cuts can
+	// SEE the footage. With vision off, `frames` stays empty and the request body
+	// is byte-identical to the text-only path (no regression).
+	let frames: DirectorVisionFrame[] = [];
+	if (useAiSettingsStore.getState().directorVisionEnabled) {
+		onProgress?.("Looking at the footage...");
+		const sampled = await sampleDirectorFrames({
+			segments,
+			elements: tracks.main.elements,
+			assets: editor.media.getAssets(),
+			signal,
+		});
+		frames = toVisionFrames(sampled);
+		abort();
+	}
+
 	onProgress?.("Directing...");
 	const totalSec = (totalDuration as number) / TICKS_PER_SECOND;
 	const taste = useDirectorTasteStore.getState().buildDirectorTasteNote();
@@ -99,19 +117,31 @@ export async function runDirector({
 		method: "POST",
 		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
 		signal,
-		body: JSON.stringify({ segments: signalTable, totalSec, taste: taste || undefined }),
+		body: JSON.stringify({
+			segments: signalTable,
+			totalSec,
+			taste: taste || undefined,
+			...(frames.length > 0 ? { frames } : {}),
+		}),
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => null);
 		throw new Error(err?.error ?? `Director planning failed (${res.status})`);
 	}
 	const data = await res.json();
+	// Tag the LLM ops "vision" when the visual pass actually ran (frames sent AND
+	// the backend wasn't degraded to text-only), so the review badge + per-category
+	// taste learn vision cuts separately from text-only ones.
+	const usedVision = frames.length > 0 && data?.degraded !== true;
+	const rawPlanOps = Array.isArray(data?.plan?.operations)
+		? data.plan.operations
+		: [];
+	const planOps = usedVision
+		? rawPlanOps.map((op: Record<string, unknown>) => ({ ...op, category: "vision" }))
+		: rawPlanOps;
 	// Fold the deterministic duplicate-word cuts into the LLM plan (dropping any
 	// that overlap a cut it already made), then hand off to the Review modal —
 	// apply (and the taste capture) happen on accept.
-	const planOps = Array.isArray(data?.plan?.operations)
-		? data.plan.operations
-		: [];
 	const operations = mergeDetectedCuts({ planOps, extraOps: detectedCuts });
 	useDirectorPlanStore.getState().openWith({ operations });
 }

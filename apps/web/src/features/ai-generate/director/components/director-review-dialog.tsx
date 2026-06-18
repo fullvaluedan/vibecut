@@ -98,6 +98,11 @@ export function DirectorReviewDialog() {
 									<span className="bg-secondary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
 										{OP_BADGE[op.op]}
 									</span>
+									{op.category === "vision" ? (
+										<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+											Vision
+										</span>
+									) : null}
 									<span className="text-muted-foreground mr-2 text-xs">
 										{op.startSec.toFixed(1)}–{op.endSec.toFixed(1)}s
 									</span>

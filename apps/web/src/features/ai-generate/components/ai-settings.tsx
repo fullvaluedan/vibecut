@@ -174,12 +174,38 @@ export function AiSettingsContent() {
 
 			<BackgroundTranscriptionSection />
 
+			<DirectorVisionSection />
+
 			<LowPowerSection />
 
 			<IntegrationsSection />
 
 			<SelfLearningSection />
 		</div>
+	);
+}
+
+function DirectorVisionSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVisionEnabled);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorVisionEnabled);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Director vision</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Lets AI CUT&apos;s Director SEE your footage: it samples a frame per
+					spoken segment so it can cut off-screen, frozen, or visually dead
+					moments — not just what the audio says. Costs more (frames use extra
+					tokens) and needs an API key or a vision-capable custom model; the
+					claude-code CLI falls back to text. Off by default.
+				</p>
+			</SectionContent>
+		</Section>
 	);
 }
 

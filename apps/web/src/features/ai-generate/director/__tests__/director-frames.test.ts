@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	pickSpread,
 	selectDirectorFrameRequests,
+	toVisionFrames,
 } from "../director-frames";
 import type { SourceMapElement } from "../source-map";
 import type { TranscriptSegment } from "../build-signal-table";
@@ -97,5 +98,29 @@ describe("selectDirectorFrameRequests", () => {
 		// Indices stay strictly increasing (we sampled across the timeline).
 		const indices = requests.map((r) => r.segmentIndex);
 		expect([...indices].sort((a, b) => a - b)).toEqual(indices);
+	});
+});
+
+describe("toVisionFrames", () => {
+	test("parses jpeg data URLs into segment-tagged base64 (no data: prefix)", () => {
+		const wire = toVisionFrames([
+			{ segmentIndex: 3, sourceSec: 1.2, dataUrl: "data:image/jpeg;base64,AAAB" },
+			{ segmentIndex: 7, sourceSec: 4.0, dataUrl: "data:image/png;base64,CCCD" },
+		]);
+		expect(wire).toEqual([
+			{ segmentIndex: 3, mediaType: "image/jpeg", dataBase64: "AAAB" },
+			{ segmentIndex: 7, mediaType: "image/png", dataBase64: "CCCD" },
+		]);
+	});
+
+	test("drops frames whose data URL can't be parsed", () => {
+		const wire = toVisionFrames([
+			{ segmentIndex: 0, sourceSec: 0, dataUrl: "not-a-data-url" },
+			{ segmentIndex: 1, sourceSec: 1, dataUrl: "data:image/svg+xml;base64,ZZZ" }, // unsupported type
+			{ segmentIndex: 2, sourceSec: 2, dataUrl: "data:image/webp;base64,WEBP" },
+		]);
+		expect(wire).toEqual([
+			{ segmentIndex: 2, mediaType: "image/webp", dataBase64: "WEBP" },
+		]);
 	});
 });

@@ -41,6 +41,7 @@ const CATEGORIES: readonly DirectorOpCategory[] = [
 	"reorder",
 	"take",
 	"llm",
+	"vision",
 ];
 const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	duplicate: "duplicate-word cuts",
@@ -49,6 +50,7 @@ const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	reorder: "reorders",
 	take: "take selections",
 	llm: "cuts",
+	vision: "vision-based cuts",
 };
 
 /**
