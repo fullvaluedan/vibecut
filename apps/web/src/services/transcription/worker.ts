@@ -203,16 +203,24 @@ async function handleTranscribe({
 			// so segment consumers are unaffected, and ship the words for the
 			// Director's duplicate-word detector.
 			const words: TranscriptionWord[] = [];
-			if (result.chunks) {
-				for (const chunk of result.chunks) {
-					if (chunk.timestamp && chunk.timestamp.length >= 2) {
-						words.push({
-							text: chunk.text,
-							start: chunk.timestamp[0] ?? 0,
-							end: chunk.timestamp[1] ?? chunk.timestamp[0] ?? 0,
-						});
-					}
+			const chunks = result.chunks ?? [];
+			for (let i = 0; i < chunks.length; i++) {
+				const chunk = chunks[i];
+				if (!chunk.timestamp || chunk.timestamp.length < 2) continue;
+				const start = chunk.timestamp[0] ?? 0;
+				const rawEnd = chunk.timestamp[1];
+				let end = start;
+				if (Number.isFinite(rawEnd)) {
+					end = rawEnd;
+				} else {
+					// At each 30s chunk boundary transformers.js emits a word with a
+					// null end. Don't collapse it to start (a zero-length point the
+					// duplicate detector would drop and which breaks gap math) —
+					// infer the end from the next word's start.
+					const nextStart = chunks[i + 1]?.timestamp?.[0];
+					end = nextStart != null && nextStart > start ? nextStart : start + 0.1;
 				}
+				words.push({ text: chunk.text, start, end });
 			}
 			self.postMessage({
 				type: "transcribe-complete",

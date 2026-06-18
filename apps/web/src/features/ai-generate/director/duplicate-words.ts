@@ -41,8 +41,17 @@ const INTENTIONAL_DOUBLES = new Set([
 	"boom",
 ]);
 
-/** Two occurrences further apart than this read as a pause, not a stumble. */
-const DEFAULT_MAX_GAP_SECONDS = 0.5;
+/**
+ * Two occurrences further apart than this read as a pause, not a stumble. Real
+ * stumbled repeats carry a re-articulation pause, so this is generous; the cuts
+ * are review-flagged, not auto-applied.
+ */
+const DEFAULT_MAX_GAP_SECONDS = 1.0;
+/** Look back this many words for the repeat, so one breath/filler between the
+ * two equal words doesn't hide the duplicate. */
+const MAX_LOOKBACK = 2;
+/** Interstitial tokens we'll step over when looking back for the repeat. */
+const FILLERS = new Set(["uh", "um", "er", "ah", "eh", "hmm", "mm", "mhm"]);
 
 /** Lowercase + strip surrounding punctuation; keep inner apostrophes/digits. */
 function normalizeWord(text: string): string {
@@ -75,24 +84,38 @@ export function detectDuplicateWordCuts({
 }): DirectorOp[] {
 	const ops: DirectorOp[] = [];
 	for (let i = 1; i < words.length; i++) {
-		const prev = words[i - 1];
 		const cur = words[i];
-		const a = normalizeWord(prev.text);
 		const b = normalizeWord(cur.text);
-		if (!a || a !== b) continue;
-		if (INTENTIONAL_DOUBLES.has(a)) continue;
-		// Single-letter tokens ("a a", "I I") are too noisy to trust.
-		if (a.length < 2) continue;
-		const gap = cur.start - prev.end;
-		if (gap < 0 || gap > maxGapSeconds) continue;
+		// Single-letter tokens ("a a", "I I") are too noisy; allow-listed doubles
+		// (no/yeah/very…) are usually deliberate.
+		if (!b || b.length < 2 || INTENTIONAL_DOUBLES.has(b)) continue;
 		if (cur.end <= cur.start) continue;
+
+		// Look back for the same token, stepping over at most one breath/filler —
+		// real stumbles often have a re-articulation pause or an interstitial that
+		// whisper tokenizes, so strict i-1 adjacency misses them.
+		let matchIndex = -1;
+		for (let j = i - 1; j >= Math.max(0, i - MAX_LOOKBACK); j--) {
+			const token = normalizeWord(words[j].text);
+			if (token === b) {
+				matchIndex = j;
+				break;
+			}
+			if (token !== "" && !FILLERS.has(token)) break;
+		}
+		if (matchIndex < 0) continue;
+
+		const gap = cur.start - words[matchIndex].end;
+		if (gap < 0 || gap > maxGapSeconds) continue;
+
 		ops.push({
-			id: dupOpId(`${a}:${cur.start.toFixed(3)}:${cur.end.toFixed(3)}`),
+			id: dupOpId(`${b}:${cur.start.toFixed(3)}:${cur.end.toFixed(3)}`),
 			op: "cut",
 			startSec: cur.start,
 			endSec: cur.end,
 			reason: `Repeated word "${cur.text.trim()}" — likely a stumble`,
-			confidence: 0.7,
+			// Wider gaps are less certain — still flag, but lower confidence.
+			confidence: gap > 0.5 ? 0.6 : 0.7,
 		});
 	}
 	return ops;

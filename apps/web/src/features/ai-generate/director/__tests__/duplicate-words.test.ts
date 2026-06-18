@@ -44,6 +44,29 @@ describe("detectDuplicateWordCuts", () => {
 		expect(ops).toEqual([]);
 	});
 
+	test("steps over a single breath/filler between the repeats", () => {
+		const ops = detectDuplicateWordCuts({
+			words: [w(["now", 1.0, 1.2]), w(["uh", 1.25, 1.35]), w(["now", 1.4, 1.6])],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0]).toMatchObject({ startSec: 1.4, endSec: 1.6 });
+	});
+
+	test("a non-filler word between the repeats is NOT skipped", () => {
+		const ops = detectDuplicateWordCuts({
+			words: [w(["now", 0, 0.2]), w(["you", 0.25, 0.4]), w(["now", 0.45, 0.65])],
+		});
+		expect(ops).toEqual([]);
+	});
+
+	test("a re-articulation pause up to ~1s is still caught (lower confidence)", () => {
+		const ops = detectDuplicateWordCuts({
+			words: [w(["pizza", 0, 0.3]), w(["pizza", 0.9, 1.2])],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].confidence).toBe(0.6);
+	});
+
 	test("a triple keeps one and cuts the two extras", () => {
 		const intentional = detectDuplicateWordCuts({
 			words: [w(["really", 0, 0.3]), w(["really", 0.32, 0.6]), w(["really", 0.62, 0.9])],
