@@ -21,6 +21,8 @@ const REPEAT_SAFE_ACTIONS: ReadonlySet<string> = new Set([
 	"jump-backward",
 	"go-to-previous-edit",
 	"go-to-next-edit",
+	"nudge-selected-left",
+	"nudge-selected-right",
 ]);
 
 /** True when `action` should keep firing on held-key auto-repeat. */

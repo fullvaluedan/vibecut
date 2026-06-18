@@ -151,6 +151,14 @@ export const ACTIONS = {
 		description: "Unlink audio/video (move independently)",
 		category: "editing",
 	},
+	"nudge-selected-left": {
+		description: "Nudge selected element(s) one frame left",
+		category: "editing",
+	},
+	"nudge-selected-right": {
+		description: "Nudge selected element(s) one frame right",
+		category: "editing",
+	},
 	"select-all": {
 		description: "Select all elements",
 		category: "selection",
@@ -255,6 +263,8 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],
+	["nudge-selected-left", ["alt+left"]],
+	["nudge-selected-right", ["alt+right"]],
 	["undo", ["ctrl+z"]],
 	["redo", ["ctrl+shift+z", "ctrl+y"]],
 ] as const satisfies ReadonlyArray<

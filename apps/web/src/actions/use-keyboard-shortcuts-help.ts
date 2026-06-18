@@ -2,7 +2,11 @@
 
 import { useMemo } from "react";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
-import { ACTIONS, type TActionWithOptionalArgs } from "@/actions";
+import {
+	ACTIONS,
+	isActionWithOptionalArgs,
+	type TActionWithOptionalArgs,
+} from "@/actions";
 import {
 	getPlatformAlternateKey,
 	getPlatformSpecialKey,
@@ -42,7 +46,18 @@ export function useKeyboardShortcutsHelp() {
 	const { keybindings } = useKeybindingsStore();
 
 	const shortcuts = useMemo(() => {
+		// Seed EVERY invokable action so unbound ones (e.g. stop-playback,
+		// toggle-ripple-editing) still appear in the editor as "Not set" and can
+		// be assigned a key — the editor was previously built from bound keys
+		// only, hiding actions that ship without a default shortcut. The
+		// asset-removal actions need a payload and can't be invoked from a bare
+		// hotkey, so they're excluded.
 		const actionToKeys = new Map<TActionWithOptionalArgs, string[]>();
+		for (const action of Object.keys(ACTIONS)) {
+			if (isActionWithOptionalArgs(action)) {
+				actionToKeys.set(action, []);
+			}
+		}
 
 		for (const [key, action] of keybindings) {
 			const existing = actionToKeys.get(action);

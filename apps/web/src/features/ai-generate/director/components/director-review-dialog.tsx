@@ -9,8 +9,14 @@
  */
 
 import { toast } from "sonner";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
 import type { DirectorOp } from "@framecut/hf-bridge";
 import { applyDirectorPlan } from "../apply-plan";
@@ -77,6 +83,10 @@ export function DirectorReviewDialog() {
 		>
 			<DialogContent className="max-w-2xl">
 				<DialogTitle>Director&apos;s cut — review</DialogTitle>
+				<DialogDescription>
+					Review each proposed change and apply the ones you want — Ctrl+Z
+					restores everything.
+				</DialogDescription>
 				{ops.length === 0 ? (
 					<p className="text-muted-foreground py-6 text-sm">
 						The Director found nothing to change.
@@ -86,12 +96,13 @@ export function DirectorReviewDialog() {
 						{ops.map((op) => (
 							<label
 								key={op.id}
+								htmlFor={`director-op-${op.id}`}
 								className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
 							>
-								<input
-									type="checkbox"
+								<Checkbox
+									id={`director-op-${op.id}`}
 									checked={Boolean(decisions[op.id])}
-									onChange={() => toggle(op.id)}
+									onCheckedChange={() => toggle(op.id)}
 									className="mt-1"
 								/>
 								<span className="text-foreground min-w-0 flex-1 text-sm">

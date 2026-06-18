@@ -20,6 +20,8 @@ import {
 } from "@/wasm";
 import { useKeyframeSelection } from "@/timeline/hooks/element/use-keyframe-selection";
 import { getElementsAtTime, hasMediaId } from "@/timeline";
+import { buildMoveGroup, resolveGroupMove } from "@/timeline/group-move";
+import { frameOffsetTicks } from "@/timeline/frame-offset";
 import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { toast } from "sonner";
@@ -489,6 +491,55 @@ export function useEditorActions() {
 		},
 		undefined,
 	);
+
+	// Alt+←/→: shift the selection by one frame using the SAME group-move
+	// pipeline as a mouse drag, so collision/track rules match exactly. The
+	// anchor stays on its own track (a nudge never changes tracks).
+	const nudgeSelected = (direction: 1 | -1) => {
+		if (selectedElements.length === 0) return;
+		const anchorRef = selectedElements[0];
+		const tracks = editor.scenes.getActiveScene().tracks;
+		const group = buildMoveGroup({
+			anchorRef,
+			selectedElements,
+			tracks,
+		});
+		if (!group) return;
+
+		const fps = editor.project.getActive().settings.fps;
+		const delta = mediaTime({
+			ticks: frameOffsetTicks({
+				ticksPerSecond: TICKS_PER_SECOND,
+				fpsNumerator: fps.numerator,
+				fpsDenominator: fps.denominator,
+				direction,
+			}),
+		});
+		const anchorElement = editor.timeline.getElementsWithTracks({
+			elements: [anchorRef],
+		})[0];
+		if (!anchorElement) return;
+		const anchorStartTime = maxMediaTime({
+			a: ZERO_MEDIA_TIME,
+			b: addMediaTime({ a: anchorElement.element.startTime, b: delta }),
+		});
+
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime,
+			target: { kind: "existingTrack", anchorTargetTrackId: anchorRef.trackId },
+		});
+		if (!result || result.moves.length === 0) return;
+
+		editor.timeline.moveElements({
+			moves: result.moves,
+			createTracks: result.createTracks,
+		});
+		setElementSelection({ elements: result.targetSelection });
+	};
+	useActionHandler("nudge-selected-left", () => nudgeSelected(-1), undefined);
+	useActionHandler("nudge-selected-right", () => nudgeSelected(1), undefined);
 
 	useActionHandler(
 		"toggle-elements-muted-selected",

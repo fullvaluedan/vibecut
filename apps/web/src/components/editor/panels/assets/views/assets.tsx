@@ -640,6 +640,7 @@ function MediaActions({
 						<Button
 							size="icon"
 							variant="ghost"
+							aria-label="Assemble all assets onto the timeline as one video"
 							onClick={onAssemble}
 							disabled={isProcessing}
 							className="items-center justify-center"
@@ -656,6 +657,11 @@ function MediaActions({
 						<Button
 							size="icon"
 							variant="ghost"
+							aria-label={
+								mediaViewMode === "grid"
+									? "Switch to list view"
+									: "Switch to grid view"
+							}
 							onClick={() =>
 								setMediaViewMode(mediaViewMode === "grid" ? "list" : "grid")
 							}
@@ -684,6 +690,7 @@ function MediaActions({
 								<Button
 									size="icon"
 									variant="ghost"
+									aria-label="Sort media assets"
 									disabled={isProcessing}
 									className="items-center justify-center"
 								>
