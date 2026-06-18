@@ -23,6 +23,9 @@ Run **AI CUT → AI Director** on a talking-head clip with speech, then check th
 - [ ] **Save location first** — clicking Export opens the save dialog BEFORE the encode (cancelling costs no render); the file extension matches (mp4 when AI overlays are burned in).
 - [ ] **Audio-stage progress** — exporting WITH audio shows the bar move through the first 5% instead of freezing; export no longer self-cancels when you click away from the popover.
 
+## Move between tracks + unlink (#4 — built, needs drag verification)
+- [ ] **Cross-track move (#4A)** — drag a linked video clip vertically onto another video track: the video moves, its linked audio **stays put** (no Alt needed). A genuine overlap on the target track still rejects the move.
+- [ ] **Unlink (#4B)** — right-click a linked clip → **Unlink audio/video**; afterward the video and audio move/trim fully independently (the menu item only appears on linked clips; Ctrl+Z re-links).
+
 ## Open follow-ups (not yet built)
-- [ ] **#4 move between tracks + unlink** — see the in-progress build; cross-track drag of a linked A/V pair + a real "Unlink" command.
 - [ ] **#6 playback stutter** — root-caused to the Rust compositor texture pool but unconfirmed as the dominant cause; needs pool-size instrumentation + a wasm rebuild before fixing (don't change Rust blind).

@@ -266,7 +266,13 @@ function resolveExistingTrackIdsByElementId({
 			usedTrackIds,
 		});
 		if (!targetPlacement) {
-			return null;
+			// No compatible free track near the anchor — keep this member on its
+			// CURRENT track instead of aborting the whole move, so a linked audio
+			// partner stays put while its video moves between video tracks (Alt is
+			// no longer the only way). Real overlaps are still rejected downstream
+			// by canApplyMovesToExistingTracks.
+			targetTrackIdsByElementId.set(member.elementId, member.trackId);
+			continue;
 		}
 
 		targetTrackIdsByElementId.set(member.elementId, targetPlacement.trackId);
@@ -291,7 +297,10 @@ function resolveExistingTrackIdsByElementId({
 			usedTrackIds,
 		});
 		if (!targetPlacement) {
-			return null;
+			// Keep this member on its current track rather than aborting the whole
+			// move (same rationale as the upward pass above).
+			targetTrackIdsByElementId.set(member.elementId, member.trackId);
+			continue;
 		}
 
 		targetTrackIdsByElementId.set(member.elementId, targetPlacement.trackId);
