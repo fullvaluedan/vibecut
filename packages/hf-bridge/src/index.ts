@@ -14,6 +14,7 @@ export {
 	type MultimodalImageMediaType,
 	type MultimodalResult,
 	type DirectorOpKind,
+	type DirectorOpCategory,
 	type DirectorOp,
 	type DirectorPlan,
 	type DirectorSegment,

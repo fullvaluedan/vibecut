@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-	detectDuplicateWordCuts,
-	mergeDuplicateCuts,
-	type DupWord,
-} from "../duplicate-words";
-import type { DirectorOp } from "@framecut/hf-bridge";
+import { detectDuplicateWordCuts, type DupWord } from "../duplicate-words";
 
 const w = ([text, start, end]: [string, number, number]): DupWord => ({
 	text,
@@ -18,7 +13,12 @@ describe("detectDuplicateWordCuts", () => {
 			words: [w(["and", 1.0, 1.2]), w(["now", 1.25, 1.45]), w(["now", 1.5, 1.7])],
 		});
 		expect(ops).toHaveLength(1);
-		expect(ops[0]).toMatchObject({ op: "cut", startSec: 1.5, endSec: 1.7 });
+		expect(ops[0]).toMatchObject({
+			op: "cut",
+			startSec: 1.5,
+			endSec: 1.7,
+			category: "duplicate",
+		});
 		expect(ops[0].reason).toContain("now");
 	});
 
@@ -102,39 +102,5 @@ describe("detectDuplicateWordCuts", () => {
 		const b = detectDuplicateWordCuts({ words });
 		expect(a[0].id).toBe(b[0].id);
 		expect(a[0].id.startsWith("dup-")).toBe(true);
-	});
-});
-
-describe("mergeDuplicateCuts", () => {
-	const op = (
-		over: Partial<DirectorOp> & { startSec: number; endSec: number },
-	): DirectorOp => ({
-		id: `id-${over.startSec}`,
-		op: "cut",
-		reason: "r",
-		confidence: 0.8,
-		...over,
-	});
-
-	test("drops a duplicate cut that overlaps an existing removal", () => {
-		const planOps = [op({ startSec: 1, endSec: 5 })];
-		const dupOps = [op({ startSec: 2, endSec: 2.3, id: "dup-x" })];
-		const merged = mergeDuplicateCuts({ planOps, dupOps });
-		expect(merged).toHaveLength(1);
-		expect(merged[0].startSec).toBe(1);
-	});
-
-	test("keeps a non-overlapping duplicate cut and sorts by time", () => {
-		const planOps = [op({ startSec: 10, endSec: 12 })];
-		const dupOps = [op({ startSec: 3, endSec: 3.3, id: "dup-y" })];
-		const merged = mergeDuplicateCuts({ planOps, dupOps });
-		expect(merged.map((o) => o.startSec)).toEqual([3, 10]);
-	});
-
-	test("a 'keep'/'reorder' op does not suppress a duplicate cut", () => {
-		const planOps = [op({ startSec: 2, endSec: 8, op: "keep" })];
-		const dupOps = [op({ startSec: 4, endSec: 4.2, id: "dup-z" })];
-		const merged = mergeDuplicateCuts({ planOps, dupOps });
-		expect(merged).toHaveLength(2);
 	});
 });

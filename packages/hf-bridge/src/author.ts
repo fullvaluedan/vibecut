@@ -422,6 +422,16 @@ export async function planJson({
 
 export type DirectorOpKind = "cut" | "keep" | "reorder" | "take_select";
 
+/** What KIND of cut this is, for per-category taste learning. Client-assigned by
+ * the deterministic detectors; absent on raw LLM ops (which default by op kind). */
+export type DirectorOpCategory =
+	| "duplicate"
+	| "filler"
+	| "pacing"
+	| "reorder"
+	| "take"
+	| "llm";
+
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {
 	/** Stable id (hash of op|start|end|target) — survives re-planning of the same output. */
@@ -434,6 +444,8 @@ export interface DirectorOp {
 	confidence: number;
 	/** `reorder` only: timeline-seconds destination the span should move to. */
 	targetStartSec?: number;
+	/** Cut category for taste learning (client-assigned; absent on raw LLM ops). */
+	category?: DirectorOpCategory;
 }
 
 export interface DirectorPlan {

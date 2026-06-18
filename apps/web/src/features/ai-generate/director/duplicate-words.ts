@@ -8,13 +8,10 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
+import { normalizeWord, stableCutId, type WordTiming } from "./cut-utils";
 
-/** One transcript word with timeline-relative timing (seconds). */
-export interface DupWord {
-	text: string;
-	start: number;
-	end: number;
-}
+/** @deprecated alias kept for callers; use `WordTiming` from cut-utils. */
+export type DupWord = WordTiming;
 
 /**
  * Words whose doubling is usually deliberate (emphasis / idiom), so flagging a
@@ -53,23 +50,6 @@ const MAX_LOOKBACK = 2;
 /** Interstitial tokens we'll step over when looking back for the repeat. */
 const FILLERS = new Set(["uh", "um", "er", "ah", "eh", "hmm", "mm", "mhm"]);
 
-/** Lowercase + strip surrounding punctuation; keep inner apostrophes/digits. */
-function normalizeWord(text: string): string {
-	return text
-		.toLowerCase()
-		.replace(/^[^a-z0-9']+/, "")
-		.replace(/[^a-z0-9']+$/, "");
-}
-
-/** djb2 → base36. Local copy so this module stays free of planner internals. */
-function dupOpId(input: string): string {
-	let hash = 5381;
-	for (let i = 0; i < input.length; i++) {
-		hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
-	}
-	return `dup-${(hash >>> 0).toString(36)}`;
-}
-
 /**
  * Scan adjacent words for an immediate repeat of the same token and return a
  * `cut` op over the second occurrence (keeping the first, clean read). Triples
@@ -79,7 +59,7 @@ export function detectDuplicateWordCuts({
 	words,
 	maxGapSeconds = DEFAULT_MAX_GAP_SECONDS,
 }: {
-	words: DupWord[];
+	words: WordTiming[];
 	maxGapSeconds?: number;
 }): DirectorOp[] {
 	const ops: DirectorOp[] = [];
@@ -109,35 +89,15 @@ export function detectDuplicateWordCuts({
 		if (gap < 0 || gap > maxGapSeconds) continue;
 
 		ops.push({
-			id: dupOpId(`${b}:${cur.start.toFixed(3)}:${cur.end.toFixed(3)}`),
+			id: `dup-${stableCutId(`${b}:${cur.start.toFixed(3)}:${cur.end.toFixed(3)}`)}`,
 			op: "cut",
 			startSec: cur.start,
 			endSec: cur.end,
 			reason: `Repeated word "${cur.text.trim()}" — likely a stumble`,
 			// Wider gaps are less certain — still flag, but lower confidence.
 			confidence: gap > 0.5 ? 0.6 : 0.7,
+			category: "duplicate",
 		});
 	}
 	return ops;
-}
-
-/**
- * Merge deterministic duplicate-word cuts into a planner's ops, dropping any
- * that overlap an existing removal (the LLM already cut that span). Returns the
- * combined op list in time order.
- */
-export function mergeDuplicateCuts({
-	planOps,
-	dupOps,
-}: {
-	planOps: DirectorOp[];
-	dupOps: DirectorOp[];
-}): DirectorOp[] {
-	const removals = planOps.filter(
-		(op) => op.op === "cut" || op.op === "take_select",
-	);
-	const overlaps = (op: DirectorOp): boolean =>
-		removals.some((r) => op.startSec < r.endSec && r.startSec < op.endSec);
-	const fresh = dupOps.filter((op) => !overlaps(op));
-	return [...planOps, ...fresh].sort((a, b) => a.startSec - b.startSec);
 }

@@ -21,7 +21,9 @@ import { computeSpeechFeatures } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
-import { detectDuplicateWordCuts, mergeDuplicateCuts } from "./duplicate-words";
+import { detectDuplicateWordCuts } from "./duplicate-words";
+import { detectFillerCuts } from "./filler-words";
+import { mergeDetectedCuts } from "./cut-utils";
 
 /**
  * Plan a Director's cut and open the Review modal. Resolves once the plan is on
@@ -59,9 +61,13 @@ export async function runDirector({
 	if (!segments.length) {
 		throw new Error("No speech found — the Director plans from the transcript.");
 	}
-	// Deterministic adjacent-duplicate-word cuts (the LLM works at segment level
-	// and can't see a doubled word inside a segment) — merged into the plan below.
-	const duplicateCuts = detectDuplicateWordCuts({ words: words ?? [] });
+	// Deterministic word-level cuts (the LLM works at segment level and misses
+	// doubled words + standalone fillers inside a segment) — merged into the plan
+	// below, deduped against the LLM's removals.
+	const detectedCuts = [
+		...detectDuplicateWordCuts({ words: words ?? [] }),
+		...detectFillerCuts({ words: words ?? [] }),
+	];
 	abort();
 
 	onProgress?.("Listening to the takes...");
@@ -104,6 +110,6 @@ export async function runDirector({
 	const planOps = Array.isArray(data?.plan?.operations)
 		? data.plan.operations
 		: [];
-	const operations = mergeDuplicateCuts({ planOps, dupOps: duplicateCuts });
+	const operations = mergeDetectedCuts({ planOps, extraOps: detectedCuts });
 	useDirectorPlanStore.getState().openWith({ operations });
 }
