@@ -17,7 +17,11 @@ export interface KeyboardShortcut {
 	icon?: React.ReactNode;
 }
 
-function formatKey({ key }: { key: string }): string {
+export function formatKey({ key }: { key: string }): string {
+	// NOTE: combos already use "+" as their separator (e.g. "ctrl+c"), so the
+	// per-token replacements below leave it intact. We do NOT rewrite "-" to
+	// "+": "-" is the literal zoom-out key, and rewriting it produced an empty
+	// two-chip render once `split("+")` ran over it.
 	return key
 		.replace("ctrl", getPlatformSpecialKey())
 		.replace("alt", getPlatformAlternateKey())
@@ -31,8 +35,7 @@ function formatKey({ key }: { key: string }): string {
 		.replace("enter", "Enter")
 		.replace("end", "End")
 		.replace("delete", "Delete")
-		.replace("backspace", "Backspace")
-		.replace("-", "+");
+		.replace("backspace", "Backspace");
 }
 
 export function useKeyboardShortcutsHelp() {
