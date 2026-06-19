@@ -105,3 +105,54 @@ export function scoreImportance({
 		return clamp01(W_EMPHASIS * emphasis + W_RATE * rate + W_LEXICAL * lexical);
 	});
 }
+
+/** A span ≥ this score is eligible for normal-cut protection. */
+export const PROTECT_FLOOR = 0.6;
+/** Never protect more than this many spans (the cut must still do work). */
+export const MAX_PROTECTED_SPANS = 8;
+/** ...nor more than this fraction of the timeline (KTD2 — conservative = LESS protection). */
+export const MAX_PROTECTED_FRACTION = 0.4;
+
+/** A timeline span to protect from removal (seconds). */
+export interface ProtectedSpan {
+	startSec: number;
+	endSec: number;
+}
+
+/**
+ * Pick the spans the normal Director must not cut: above-floor segments, ranked by
+ * score, CAPPED at both a span count and a fraction of the timeline (KTD2). The cap
+ * is essential — without it, dense confident footage (exactly what the score rewards)
+ * protects most segments and the cut does nothing. Returns timeline-ordered spans;
+ * the caller unions them with the take-cluster keepers and passes to the merge.
+ */
+export function selectProtectedSpans({
+	segments,
+	importance,
+	options,
+}: {
+	segments: readonly { start: number; end: number }[];
+	importance: readonly number[];
+	options?: { protectFloor?: number; maxSpans?: number; maxFraction?: number };
+}): ProtectedSpan[] {
+	const floor = options?.protectFloor ?? PROTECT_FLOOR;
+	const maxSpans = options?.maxSpans ?? MAX_PROTECTED_SPANS;
+	const maxFraction = options?.maxFraction ?? MAX_PROTECTED_FRACTION;
+
+	const total = segments.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
+	const candidates = segments
+		.map((s, i) => ({ start: s.start, end: s.end, dur: Math.max(0, s.end - s.start), score: importance[i] ?? 0 }))
+		.filter((c) => c.score >= floor && c.dur > 0)
+		.sort((a, b) => b.score - a.score || a.start - b.start);
+
+	const out: ProtectedSpan[] = [];
+	let acc = 0;
+	for (const c of candidates) {
+		if (out.length >= maxSpans) break;
+		// Fraction cap — but always allow at least one protected span.
+		if (out.length >= 1 && total > 0 && acc + c.dur > maxFraction * total) break;
+		out.push({ startSec: c.start, endSec: c.end });
+		acc += c.dur;
+	}
+	return out.sort((a, b) => a.startSec - b.startSec);
+}

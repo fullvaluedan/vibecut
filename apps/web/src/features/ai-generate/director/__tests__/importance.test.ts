@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { scoreImportance, type ImportanceSegment } from "../importance";
+import { scoreImportance, selectProtectedSpans, type ImportanceSegment } from "../importance";
 import type { SpeechFeatures } from "../types";
 
 function feat({
@@ -129,5 +129,62 @@ describe("scoreImportance", () => {
 			expect(s).toBeGreaterThanOrEqual(0);
 			expect(s).toBeLessThanOrEqual(1);
 		}
+	});
+});
+
+describe("selectProtectedSpans", () => {
+	function segsOf(durations: number[]): { start: number; end: number }[] {
+		let t = 0;
+		return durations.map((d) => {
+			const s = { start: t, end: t + d };
+			t += d;
+			return s;
+		});
+	}
+
+	test("protects above-floor spans in timeline order", () => {
+		// 12s timeline so two 2s protected spans (4s) stay under the 40% fraction cap.
+		const out = selectProtectedSpans({
+			segments: segsOf([2, 2, 2, 2, 2, 2]),
+			importance: [0.9, 0.3, 0.3, 0.3, 0.8, 0.3],
+		});
+		expect(out).toEqual([
+			{ startSec: 0, endSec: 2 }, // seg 0 (0.9)
+			{ startSec: 8, endSec: 10 }, // seg 4 (0.8) — the rest below the floor
+		]);
+	});
+
+	test("protects nothing when all scores are below the floor", () => {
+		expect(
+			selectProtectedSpans({ segments: segsOf([2, 2, 2]), importance: [0.3, 0.4, 0.2] }),
+		).toEqual([]);
+	});
+
+	test("caps the count on uniformly-high footage (over-protection guard)", () => {
+		const out = selectProtectedSpans({
+			segments: segsOf(Array(20).fill(1)),
+			importance: Array(20).fill(0.9),
+		});
+		expect(out.length).toBeLessThanOrEqual(8); // MAX_PROTECTED_SPANS — the cut still works on the rest
+		expect(out.length).toBeLessThan(20);
+	});
+
+	test("caps the protected fraction of the timeline", () => {
+		const out = selectProtectedSpans({
+			segments: segsOf([10, 10, 10, 10, 10]),
+			importance: Array(5).fill(0.9),
+		});
+		const protectedSec = out.reduce((a, s) => a + (s.endSec - s.startSec), 0);
+		expect(out.length).toBeLessThan(5);
+		expect(protectedSec).toBeLessThanOrEqual(25); // ~≤ 40% of the 50s timeline
+	});
+
+	test("always allows at least one protected span even past the fraction cap", () => {
+		const out = selectProtectedSpans({
+			segments: segsOf([100]),
+			importance: [0.9],
+			options: { maxFraction: 0.1 },
+		});
+		expect(out).toHaveLength(1);
 	});
 });
