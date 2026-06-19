@@ -34,6 +34,7 @@ export function buildSignalTable({
 	features,
 	elements,
 	clusterIds,
+	importance,
 }: {
 	segments: readonly TranscriptSegment[];
 	/** Parallel to `segments` (one per segment), as returned by computeSpeechFeatures. */
@@ -42,6 +43,8 @@ export function buildSignalTable({
 	elements: readonly SourceMapElement[];
 	/** Take-cluster id per segment, keyed by start second (3-decimal). Absent → no grp column. */
 	clusterIds?: ReadonlyMap<number, string>;
+	/** Importance score per segment (parallel to `segments`). Absent → no imp column. */
+	importance?: readonly number[];
 }): DirectorSegment[] {
 	return segments.map((seg, i) => {
 		const f = features[i];
@@ -53,6 +56,7 @@ export function buildSignalTable({
 		const prevEnd = i > 0 ? segments[i - 1].end : 0;
 		const silenceBeforeSec = Math.max(0, seg.start - prevEnd);
 		const clusterId = clusterIds?.get(Math.round(seg.start * 1000) / 1000);
+		const imp = importance?.[i];
 
 		return {
 			startSec: seg.start,
@@ -69,6 +73,7 @@ export function buildSignalTable({
 				: {}),
 			...(silenceBeforeSec > MIN_SILENCE_SEC ? { silenceBeforeSec } : {}),
 			...(clusterId ? { clusterId } : {}),
+			...(imp !== undefined ? { importance: imp } : {}),
 		};
 	});
 }

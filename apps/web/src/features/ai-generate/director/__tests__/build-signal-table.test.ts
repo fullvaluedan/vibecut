@@ -95,4 +95,27 @@ describe("buildSignalTable", () => {
 		});
 		expect(row.clusterId).toBeUndefined();
 	});
+
+	test("annotates importance per segment when supplied", () => {
+		const table = buildSignalTable({
+			segments: [
+				{ start: 0, end: 2, text: "a" },
+				{ start: 2, end: 4, text: "b" },
+			],
+			features: [],
+			elements,
+			importance: [0.9, 0.2],
+		});
+		expect(table[0].importance).toBe(0.9);
+		expect(table[1].importance).toBe(0.2);
+	});
+
+	test("leaves importance unset when not supplied (regression-safe)", () => {
+		const [row] = buildSignalTable({
+			segments: [{ start: 0, end: 2, text: "x" }],
+			features: [],
+			elements,
+		});
+		expect(row.importance).toBeUndefined();
+	});
 });

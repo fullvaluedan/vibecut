@@ -474,6 +474,8 @@ export interface DirectorSegment {
 	silenceBeforeSec?: number;
 	/** Take-cluster id when this row is an alternate take/restatement already flagged for de-dup. */
 	clusterId?: string;
+	/** Emphasis/anchor importance score 0..1 (keep-side); absent on cut-only runs. */
+	importance?: number;
 }
 
 /** One source-clip summary the planner reads above the signal table (the asset catalog). */
@@ -525,29 +527,33 @@ function stableOpId(op: {
 }
 
 /**
- * Render the per-segment signal table the planner reasons over (pipe-escaped). A
- * "grp" (take-cluster) column is added ONLY when at least one segment carries a
- * clusterId — so the no-cluster path stays byte-identical to the pre-cluster table.
+ * Render the per-segment signal table the planner reasons over (pipe-escaped).
+ * Optional columns are added ONLY when a segment carries the field: "grp" (take
+ * cluster) and "imp" (keep-side importance). With neither present the table is
+ * byte-identical to the original cut-only table.
  */
 export function renderSignalTable(segments: readonly DirectorSegment[]): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
-	const header = hasClusters
-		? "| time (s) | src | grp | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|---|"
-		: "| time (s) | src | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|";
+	const hasImportance = segments.some((s) => s.importance !== undefined);
+
+	const headers = ["time (s)", "src"];
+	if (hasClusters) headers.push("grp");
+	if (hasImportance) headers.push("imp");
+	headers.push("text", "loudness", "wpm", "filler", "silence(s)");
+	const header = `| ${headers.join(" | ")} |\n|${headers.map(() => "---").join("|")}|`;
+
 	const rows = segments.map((s) => {
-		const time = `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`;
-		const src = s.assetId ? s.assetId.slice(0, 6) : "-";
-		const text = s.text.trim().replace(/\|/g, "/").slice(0, 120) || "-";
-		const loud =
-			s.loudnessRelative !== undefined
-				? s.loudnessRelative.toFixed(2)
-				: (s.energy?.toFixed(3) ?? "-");
-		const wpm = s.wpm !== undefined ? String(Math.round(s.wpm)) : "-";
-		const filler = s.fillerCandidate ? "yes" : "-";
-		const silence = s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-";
-		return hasClusters
-			? `| ${time} | ${src} | ${s.clusterId ?? "-"} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`
-			: `| ${time} | ${src} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`;
+		const cells = [`${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`, s.assetId ? s.assetId.slice(0, 6) : "-"];
+		if (hasClusters) cells.push(s.clusterId ?? "-");
+		if (hasImportance) cells.push(s.importance !== undefined ? s.importance.toFixed(2) : "-");
+		cells.push(
+			s.text.trim().replace(/\|/g, "/").slice(0, 120) || "-",
+			s.loudnessRelative !== undefined ? s.loudnessRelative.toFixed(2) : (s.energy?.toFixed(3) ?? "-"),
+			s.wpm !== undefined ? String(Math.round(s.wpm)) : "-",
+			s.fillerCandidate ? "yes" : "-",
+			s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-",
+		);
+		return `| ${cells.join(" | ")} |`;
 	});
 	return [header, ...rows].join("\n");
 }
@@ -579,10 +585,14 @@ export function buildDirectorPrompt({
 	catalog?: readonly DirectorAssetSummary[];
 }): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
+	const hasImportance = segments.some((s) => s.importance !== undefined);
 	const catalogBlock =
 		catalog && catalog.length >= 2 ? `${renderAssetCatalog(catalog)}\n\n` : "";
 	const clusterRule = hasClusters
 		? `\n- Rows sharing a "grp" id are alternate takes/restatements of the same line that the editor has ALREADY flagged for de-duplication — do NOT emit "cut" or "take_select" for grp rows; they are handled. Apply your own judgment only to redundancy NOT marked with a grp (e.g. the same point paraphrased in different words).`
+		: "";
+	const importanceRule = hasImportance
+		? `\n- Each row has an "imp" score (0-1): a deterministic emphasis/anchor signal (loudness + steady delivery + content density). Lean toward KEEPING high-imp rows and cutting low-imp ones when trimming for pace — but imp measures EMPHASIS, not meaning, so never cut a load-bearing line just because its imp is low.`
 		: "";
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
@@ -595,7 +605,7 @@ ${catalogBlock}Emit a plan of typed OPERATIONS:
 Rules:
 - Pacing beats completeness, but NEVER cut content the video's point depends on. Keep the speaker's personality; only cut what stalls the video.
 - Boundaries must align with the segment timestamps. Total duration is ${totalSec.toFixed(2)}s; every startSec/endSec/targetStartSec must be within [0, ${totalSec.toFixed(2)}].
-- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}
+- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}${importanceRule}
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
