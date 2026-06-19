@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
 	planDirector,
 	planDirectorVision,
+	type DirectorAssetSummary,
 	type DirectorVisionFrame,
 	type MultimodalImageMediaType,
 } from "@framecut/hf-bridge";
@@ -51,6 +52,35 @@ function parseVisionFrames(raw: unknown): DirectorVisionFrame[] | null {
 }
 
 /**
+ * Parse the wire `catalog` array into typed `DirectorAssetSummary[]`, dropping any
+ * malformed entry. Returns `undefined` when absent (single-clip / no catalog), so
+ * the prompt path is unchanged. Malformed-but-present yields the valid subset.
+ */
+function parseCatalog(raw: unknown): DirectorAssetSummary[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: DirectorAssetSummary[] = [];
+	for (const entry of raw) {
+		const name: unknown = entry?.name;
+		const durationSec: unknown = entry?.durationSec;
+		const segmentCount: unknown = entry?.segmentCount;
+		const firstLine: unknown = entry?.firstLine;
+		const lastLine: unknown = entry?.lastLine;
+		if (
+			typeof name === "string" &&
+			typeof durationSec === "number" &&
+			Number.isFinite(durationSec) &&
+			typeof segmentCount === "number" &&
+			Number.isFinite(segmentCount) &&
+			typeof firstLine === "string" &&
+			typeof lastLine === "string"
+		) {
+			out.push({ name, durationSec, segmentCount, firstLine, lastLine });
+		}
+	}
+	return out.length > 0 ? out : undefined;
+}
+
+/**
  * The Director planner endpoint: a fused-signal table + total duration + the
  * learned taste note in; a sanitized typed-op `DirectorPlan` + token usage out.
  * Optional `frames` route the request through the VISION planner; absent frames
@@ -73,6 +103,7 @@ export async function POST(req: NextRequest) {
 		return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
 	}
 	const tasteNote = typeof taste === "string" ? taste : undefined;
+	const catalog = parseCatalog(body?.catalog);
 
 	// `frames: <non-array>` is a malformed request; `frames` absent or `[]` is the
 	// text-only path. Only a populated, well-formed array engages vision.
@@ -87,6 +118,7 @@ export async function POST(req: NextRequest) {
 				segments,
 				totalSec,
 				taste: tasteNote,
+				catalog,
 				frames,
 				auth,
 				signal: req.signal,
@@ -97,6 +129,7 @@ export async function POST(req: NextRequest) {
 			segments,
 			totalSec,
 			taste: tasteNote,
+			catalog,
 			auth,
 		});
 		return NextResponse.json({ plan, usage, degraded: false });

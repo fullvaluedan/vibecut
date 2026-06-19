@@ -6,6 +6,7 @@
 
 import { create } from "zustand";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
+import type { NearTieNote } from "./redundancy";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
@@ -45,8 +46,10 @@ interface DirectorPlanState {
 	open: boolean;
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
-	/** Open the modal with a fresh plan (all ops accepted). */
-	openWith: (plan: DirectorPlan) => void;
+	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
+	nearTies: NearTieNote[];
+	/** Open the modal with a fresh plan (all ops accepted) + any near-tie notes. */
+	openWith: (args: { plan: DirectorPlan; nearTies?: readonly NearTieNote[] }) => void;
 	/** Flip one op's accept/reject. */
 	toggle: (id: string) => void;
 	/** The currently-accepted ops. */
@@ -59,12 +62,14 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	open: false,
 	plan: null,
 	decisions: {},
-	openWith: (plan) => set({ open: true, plan, decisions: initDecisions(plan) }),
+	nearTies: [],
+	openWith: ({ plan, nearTies }) =>
+		set({ open: true, plan, decisions: initDecisions(plan), nearTies: [...(nearTies ?? [])] }),
 	toggle: (id) =>
 		set((state) => ({ decisions: toggleDecision({ decisions: state.decisions, id }) })),
 	acceptedOps: () => {
 		const { plan, decisions } = get();
 		return plan ? selectAccepted({ plan, decisions }) : [];
 	},
-	close: () => set({ open: false, plan: null, decisions: {} }),
+	close: () => set({ open: false, plan: null, decisions: {}, nearTies: [] }),
 }));

@@ -472,6 +472,17 @@ export interface DirectorSegment {
 	fillerCandidate?: boolean;
 	/** Seconds of silence immediately before this segment. */
 	silenceBeforeSec?: number;
+	/** Take-cluster id when this row is an alternate take/restatement already flagged for de-dup. */
+	clusterId?: string;
+}
+
+/** One source-clip summary the planner reads above the signal table (the asset catalog). */
+export interface DirectorAssetSummary {
+	name: string;
+	durationSec: number;
+	segmentCount: number;
+	firstLine: string;
+	lastLine: string;
 }
 
 const DIRECTOR_SCHEMA = {
@@ -513,10 +524,16 @@ function stableOpId(op: {
 	return `op_${h.toString(36)}`;
 }
 
-/** Render the per-segment signal table the planner reasons over (pipe-escaped). */
+/**
+ * Render the per-segment signal table the planner reasons over (pipe-escaped). A
+ * "grp" (take-cluster) column is added ONLY when at least one segment carries a
+ * clusterId — so the no-cluster path stays byte-identical to the pre-cluster table.
+ */
 export function renderSignalTable(segments: readonly DirectorSegment[]): string {
-	const header =
-		"| time (s) | src | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|";
+	const hasClusters = segments.some((s) => s.clusterId !== undefined);
+	const header = hasClusters
+		? "| time (s) | src | grp | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|---|"
+		: "| time (s) | src | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|";
 	const rows = segments.map((s) => {
 		const time = `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`;
 		const src = s.assetId ? s.assetId.slice(0, 6) : "-";
@@ -528,24 +545,48 @@ export function renderSignalTable(segments: readonly DirectorSegment[]): string 
 		const wpm = s.wpm !== undefined ? String(Math.round(s.wpm)) : "-";
 		const filler = s.fillerCandidate ? "yes" : "-";
 		const silence = s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-";
-		return `| ${time} | ${src} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`;
+		return hasClusters
+			? `| ${time} | ${src} | ${s.clusterId ?? "-"} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`
+			: `| ${time} | ${src} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`;
 	});
 	return [header, ...rows].join("\n");
+}
+
+/**
+ * Render the asset catalog block — a one-line summary per source clip — that sits
+ * above the signal table so the planner knows what footage it is cutting (clip
+ * name, length, line count, and how each clip opens/closes).
+ */
+export function renderAssetCatalog(catalog: readonly DirectorAssetSummary[]): string {
+	const lines = catalog.map(
+		(a, i) =>
+			`- Clip ${i + 1}: "${a.name}" (${a.durationSec.toFixed(1)}s, ${a.segmentCount} lines) — opens "${a.firstLine}"${a.lastLine && a.lastLine !== a.firstLine ? ` … closes "${a.lastLine}"` : ""}`,
+	);
+	return `ASSET CATALOG (the source clips assembled into this timeline):\n${lines.join("\n")}`;
 }
 
 export function buildDirectorPrompt({
 	segments,
 	totalSec,
 	taste,
+	catalog,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	/** Compact learned-taste note injected from the user's past reviews. */
 	taste?: string;
+	/** Per-clip summary block; rendered only for multi-clip input. */
+	catalog?: readonly DirectorAssetSummary[];
 }): string {
+	const hasClusters = segments.some((s) => s.clusterId !== undefined);
+	const catalogBlock =
+		catalog && catalog.length >= 2 ? `${renderAssetCatalog(catalog)}\n\n` : "";
+	const clusterRule = hasClusters
+		? `\n- Rows sharing a "grp" id are alternate takes/restatements of the same line that the editor has ALREADY flagged for de-duplication — do NOT emit "cut" or "take_select" for grp rows; they are handled. Apply your own judgment only to redundancy NOT marked with a grp (e.g. the same point paraphrased in different words).`
+		: "";
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
-Emit a plan of typed OPERATIONS:
+${catalogBlock}Emit a plan of typed OPERATIONS:
 - "cut": remove a span [startSec,endSec) - retakes and RESTARTS (keep the LAST attempt), REDUNDANT RESTATEMENTS (the speaker makes the same point a second time, even in DIFFERENT words - keep the single clearest version and cut the rest), stutters/false-starts, contentless filler runs, off-topic tangents, dead-weight intros/outros, and DEAD TIME where nothing useful is said (long fumbling / "let me just..." while figuring something out). This is ONE continuous recording, so expect the speaker to circle back and repeat themselves - cut that redundancy aggressively; pacing beats completeness.
 - "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
@@ -554,7 +595,7 @@ Emit a plan of typed OPERATIONS:
 Rules:
 - Pacing beats completeness, but NEVER cut content the video's point depends on. Keep the speaker's personality; only cut what stalls the video.
 - Boundaries must align with the segment timestamps. Total duration is ${totalSec.toFixed(2)}s; every startSec/endSec/targetStartSec must be within [0, ${totalSec.toFixed(2)}].
-- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.
+- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
@@ -636,14 +677,16 @@ export async function planDirector({
 	segments,
 	totalSec,
 	taste,
+	catalog,
 	auth,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
+	catalog?: readonly DirectorAssetSummary[];
 	auth: ClaudeAuth;
 }): Promise<{ plan: DirectorPlan; usage: TokenUsage | null }> {
-	const prompt = buildDirectorPrompt({ segments, totalSec, taste });
+	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog });
 	const { raw, usage } = await planJson({ prompt, auth, schema: DIRECTOR_SCHEMA });
 	return { plan: sanitizeDirectorPlan(raw, totalSec), usage };
 }
@@ -943,14 +986,16 @@ export function buildDirectorVisionPrompt({
 	segments,
 	totalSec,
 	taste,
+	catalog,
 	frames,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
+	catalog?: readonly DirectorAssetSummary[];
 	frames: readonly DirectorVisionFrame[];
 }): string {
-	const base = buildDirectorPrompt({ segments, totalSec, taste });
+	const base = buildDirectorPrompt({ segments, totalSec, taste, catalog });
 	if (!frames.length) return base;
 	const frameLines = frames
 		.map((f, k) => {
@@ -978,11 +1023,13 @@ export function buildDirectorVisionBlocks({
 	segments,
 	totalSec,
 	taste,
+	catalog,
 	frames,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
+	catalog?: readonly DirectorAssetSummary[];
 	frames: readonly DirectorVisionFrame[];
 }): MultimodalBlock[] {
 	const imageBlocks: MultimodalBlock[] = frames.map((f) => ({
@@ -990,7 +1037,7 @@ export function buildDirectorVisionBlocks({
 		mediaType: f.mediaType,
 		dataBase64: f.dataBase64,
 	}));
-	const text = buildDirectorVisionPrompt({ segments, totalSec, taste, frames });
+	const text = buildDirectorVisionPrompt({ segments, totalSec, taste, catalog, frames });
 	return [...imageBlocks, { type: "text", text }];
 }
 
@@ -1004,6 +1051,7 @@ export async function planDirectorVision({
 	segments,
 	totalSec,
 	taste,
+	catalog,
 	frames,
 	auth,
 	model,
@@ -1012,12 +1060,13 @@ export async function planDirectorVision({
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
+	catalog?: readonly DirectorAssetSummary[];
 	frames: readonly DirectorVisionFrame[];
 	auth: ClaudeAuth;
 	model?: string;
 	signal?: AbortSignal;
 }): Promise<{ plan: DirectorPlan; usage: TokenUsage | null; degraded: boolean }> {
-	const blocks = buildDirectorVisionBlocks({ segments, totalSec, taste, frames });
+	const blocks = buildDirectorVisionBlocks({ segments, totalSec, taste, catalog, frames });
 	const { raw, usage, degraded } = await planMultimodal({
 		blocks,
 		auth,

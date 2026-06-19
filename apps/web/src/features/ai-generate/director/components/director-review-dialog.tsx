@@ -18,23 +18,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
-import type { DirectorOp } from "@framecut/hf-bridge";
 import { applyDirectorPlan } from "../apply-plan";
 import { useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
-
-const OP_BADGE: Record<DirectorOp["op"], string> = {
-	cut: "Cut",
-	take_select: "Take",
-	reorder: "Reorder",
-	keep: "Keep",
-};
+import { describeReviewOp } from "../review-format";
 
 export function DirectorReviewDialog() {
 	const editor = useEditor();
 	const open = useDirectorPlanStore((s) => s.open);
 	const plan = useDirectorPlanStore((s) => s.plan);
 	const decisions = useDirectorPlanStore((s) => s.decisions);
+	const nearTies = useDirectorPlanStore((s) => s.nearTies);
 	const toggle = useDirectorPlanStore((s) => s.toggle);
 	const close = useDirectorPlanStore((s) => s.close);
 
@@ -100,50 +94,75 @@ export function DirectorReviewDialog() {
 					Review each proposed change and apply the ones you want — Ctrl+Z
 					restores everything.
 				</DialogDescription>
-				{ops.length === 0 ? (
+				{ops.length === 0 && nearTies.length === 0 ? (
 					<p className="text-muted-foreground py-6 text-sm">
 						The Director found nothing to change.
 					</p>
 				) : (
 					<div className="-mx-1 max-h-[60vh] space-y-1 overflow-y-auto px-1">
-						{ops.map((op) => (
-							<label
-								key={op.id}
-								htmlFor={`director-op-${op.id}`}
-								className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
-							>
-								<Checkbox
-									id={`director-op-${op.id}`}
-									checked={Boolean(decisions[op.id])}
-									onCheckedChange={() => toggle(op.id)}
-									className="mt-1"
-								/>
-								<span className="text-foreground min-w-0 flex-1 text-sm">
-									<span className="bg-secondary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-										{OP_BADGE[op.op]}
+						{ops.map((op) => {
+							const accepted = Boolean(decisions[op.id]);
+							const display = describeReviewOp({ op, accepted });
+							return (
+								<label
+									key={op.id}
+									htmlFor={`director-op-${op.id}`}
+									className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
+								>
+									<Checkbox
+										id={`director-op-${op.id}`}
+										checked={accepted}
+										onCheckedChange={() => toggle(op.id)}
+										className="mt-1"
+									/>
+									<span className="text-foreground min-w-0 flex-1 text-sm">
+										<span className="bg-secondary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+											{display.badge}
+										</span>
+										{display.categoryBadge ? (
+											<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+												{display.categoryBadge}
+											</span>
+										) : null}
+										<span className="text-muted-foreground mr-2 text-xs">
+											{op.startSec.toFixed(1)}–{op.endSec.toFixed(1)}s
+										</span>
+										{op.reason}
+										{display.rejectedHint ? (
+											<span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-500">
+												· {display.rejectedHint}
+											</span>
+										) : null}
 									</span>
-									{op.category === "vision" ? (
-										<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-											Vision
-										</span>
-									) : null}
-									{op.category === "repeat" ? (
-										<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-											Repeat
-										</span>
-									) : null}
-									{op.category === "deadair" ? (
-										<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-											Dead air
-										</span>
-									) : null}
-									<span className="text-muted-foreground mr-2 text-xs">
-										{op.startSec.toFixed(1)}–{op.endSec.toFixed(1)}s
-									</span>
-									{op.reason}
-								</span>
-							</label>
-						))}
+								</label>
+							);
+						})}
+						{nearTies.length > 0 ? (
+							<div className="border-amber-500/40 bg-amber-500/10 mt-2 space-y-2 rounded-sm border p-2">
+								<p className="text-foreground text-sm font-medium">
+									Near-identical takes — pick one to cut yourself
+								</p>
+								<p className="text-muted-foreground text-xs">
+									These takes were too close to auto-pick a keeper, so nothing was
+									removed. Trim the weaker one manually.
+								</p>
+								{nearTies.map((note) => (
+									<div
+										key={`${note.kind}-${note.members[0]?.startSec ?? 0}`}
+										className="space-y-0.5 text-xs"
+									>
+										{note.members.map((m) => (
+											<div key={m.startSec} className="text-muted-foreground">
+												<span className="text-foreground font-mono">
+													{m.startSec.toFixed(1)}–{m.endSec.toFixed(1)}s
+												</span>{" "}
+												&ldquo;{m.text.trim().slice(0, 80)}&rdquo;
+											</div>
+										))}
+									</div>
+								))}
+							</div>
+						) : null}
 					</div>
 				)}
 				<div className="flex justify-end gap-2 pt-2">
