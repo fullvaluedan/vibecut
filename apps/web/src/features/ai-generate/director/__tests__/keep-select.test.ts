@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { selectKeepSpans, type KeepSelectSegment } from "../keep-select";
+import {
+	buildHighlightKeeps,
+	mergeSpans,
+	selectKeepSpans,
+	type KeepSelectSegment,
+} from "../keep-select";
 
 /** Build contiguous segments from a list of durations (seconds). */
 function segs(durations: number[]): KeepSelectSegment[] {
@@ -107,5 +112,61 @@ describe("selectKeepSpans — budget mode", () => {
 		});
 		const starts = spans.map((s) => s.startSec);
 		expect([...starts].sort((a, b) => a - b)).toEqual(starts);
+	});
+});
+
+describe("mergeSpans", () => {
+	test("sorts and merges overlapping/adjacent spans", () => {
+		expect(
+			mergeSpans([
+				{ startSec: 10, endSec: 12 },
+				{ startSec: 0, endSec: 5 },
+				{ startSec: 3, endSec: 8 },
+			]),
+		).toEqual([
+			{ startSec: 0, endSec: 8 },
+			{ startSec: 10, endSec: 12 },
+		]);
+	});
+
+	test("drops zero/negative-length spans", () => {
+		expect(mergeSpans([{ startSec: 5, endSec: 5 }])).toEqual([]);
+	});
+});
+
+describe("buildHighlightKeeps", () => {
+	const segments = segs([3, 3, 3, 3, 3]); // total 15
+
+	test("with a budget, uses the deterministic contiguity-aware selection", () => {
+		const { keeps, preview } = buildHighlightKeeps({
+			segments,
+			importance: [0.9, 0.8, 0.7, 0.6, 0.5],
+			totalSec: 15,
+			budgetSec: 6,
+		});
+		expect(keeps).toEqual([{ startSec: 0, endSec: 6 }]);
+		expect(preview).toEqual({ keptCount: 1, totalCount: 5, keptSec: 6, totalSec: 15 });
+	});
+
+	test("without a budget, LLM keep spans are primary (unioned with the emphasis floor)", () => {
+		const { keeps } = buildHighlightKeeps({
+			segments,
+			importance: [0.2, 0.2, 0.2, 0.2, 0.2], // all below the keep floor → no deterministic floor
+			totalSec: 15,
+			llmKeepSpans: [{ startSec: 6, endSec: 9 }], // the LLM's load-bearing pick
+		});
+		expect(keeps).toEqual([{ startSec: 6, endSec: 9 }]);
+	});
+
+	test("without a budget and no LLM spans, falls back to the emphasis floor", () => {
+		const { keeps } = buildHighlightKeeps({
+			segments,
+			importance: [0.9, 0.2, 0.8, 0.2, 0.2], // segs 0,2 above the 0.5 floor
+			totalSec: 15,
+		});
+		expect(keeps).toEqual([
+			{ startSec: 0, endSec: 3 },
+			{ startSec: 6, endSec: 9 },
+		]);
 	});
 });

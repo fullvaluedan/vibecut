@@ -16,6 +16,8 @@
  * applies the complement (U5).
  */
 
+import type { HighlightPreview } from "./highlight-preview";
+
 /** Score at/above which a segment is kept in threshold mode. */
 export const KEEP_THRESHOLD = 0.5;
 /** A run grows to at least this many seconds before score-gating further growth. */
@@ -151,4 +153,51 @@ export function selectKeepSpans({
 	}
 
 	return spansFromSelected({ segments, selected });
+}
+
+/** Sort + merge overlapping/adjacent keep spans into a clean, timeline-ordered set. */
+export function mergeSpans(spans: readonly KeepSpan[]): KeepSpan[] {
+	const sorted = [...spans]
+		.filter((s) => s.endSec > s.startSec)
+		.sort((a, b) => a.startSec - b.startSec);
+	const out: KeepSpan[] = [];
+	for (const s of sorted) {
+		const last = out[out.length - 1];
+		if (last && s.startSec <= last.endSec) last.endSec = Math.max(last.endSec, s.endSec);
+		else out.push({ startSec: s.startSec, endSec: s.endSec });
+	}
+	return out;
+}
+
+/**
+ * Assemble the final Highlight keep set + preview stats (U7). Channel split (KTD4/KTD5):
+ *  - WITH a budget ("make a ~Ns short"): the deterministic contiguity-aware selection
+ *    drives it — the LLM doesn't know the budget and coherence/length dominate.
+ *  - WITHOUT a budget ("keep the best parts"): LLM-PRIMARY — the LLM's load-bearing
+ *    keep spans, unioned with the deterministic emphasis floor as a backstop.
+ * Pure; the orchestrator supplies `llmKeepSpans` from the planner's keep ops.
+ */
+export function buildHighlightKeeps({
+	segments,
+	importance,
+	totalSec,
+	budgetSec,
+	llmKeepSpans,
+}: {
+	segments: readonly KeepSelectSegment[];
+	importance: readonly number[];
+	totalSec: number;
+	budgetSec?: number;
+	llmKeepSpans?: readonly KeepSpan[];
+}): { keeps: KeepSpan[]; preview: HighlightPreview } {
+	const keeps =
+		budgetSec !== undefined
+			? selectKeepSpans({ segments, importance, budgetSec })
+			: mergeSpans([...(llmKeepSpans ?? []), ...selectKeepSpans({ segments, importance })]);
+
+	const keptSec = keeps.reduce((acc, s) => acc + (s.endSec - s.startSec), 0);
+	return {
+		keeps,
+		preview: { keptCount: keeps.length, totalCount: segments.length, keptSec, totalSec },
+	};
 }
