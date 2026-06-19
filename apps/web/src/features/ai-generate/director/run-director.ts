@@ -38,6 +38,7 @@ import { groupTranscriptByAsset } from "./source-map";
 import { buildTakeClusters } from "./take-clusters";
 import { detectRedundancyCuts } from "./redundancy";
 import { buildAssetCatalog } from "./asset-catalog";
+import { scoreImportance, selectProtectedSpans } from "./importance";
 
 /**
  * Plan a Director's cut and open the Review modal. Resolves once the plan is on
@@ -101,6 +102,13 @@ export async function runDirector({
 	});
 	const features = computeSpeechFeatures({ segments, samples, sampleRate });
 
+	// Keep-side signal (Phase B / U1-U4): score each segment's emphasis/anchor
+	// importance. It rides the signal table as an advisory "imp" column and yields a
+	// CAPPED set of high-value spans (never the whole timeline) that the merge below
+	// protects from removal — alongside the take-cluster keepers and the LLM keep ops.
+	const importance = scoreImportance({ segments, features });
+	const protectedSpans = selectProtectedSpans({ segments, importance });
+
 	// Take-aware redundancy (U4/U6): cluster same-line spans across the assembled
 	// clips (and far apart within one), rank the best take, and flag the redundant
 	// ones as review ops. Keeper spans are protected in the merge below so a cluster
@@ -149,6 +157,7 @@ export async function runDirector({
 		features,
 		elements: tracks.main.elements,
 		clusterIds,
+		importance,
 	});
 	abort();
 
@@ -211,14 +220,27 @@ export async function runDirector({
 	const planOps = usedVision
 		? rawPlanOps.map((op: Record<string, unknown>) => ({ ...op, category: "vision" }))
 		: rawPlanOps;
+	// The LLM's keep ops (U4) mark load-bearing spans the imp score may underrate;
+	// they protect (never remove), so fold them into the keeper set alongside the
+	// take-cluster keepers and the capped high-value spans (U3).
+	const llmKeepSpans: KeeperSpan[] = [];
+	for (const op of planOps) {
+		if (op?.op === "keep") {
+			const startSec = Number(op.startSec);
+			const endSec = Number(op.endSec);
+			if (Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec) {
+				llmKeepSpans.push({ startSec, endSec });
+			}
+		}
+	}
 	// Fold the deterministic cuts (word/phrase/dead-air/filler/pacing + the new
 	// take/repeat redundancy ops) into the LLM plan, dropping any that overlap a cut
-	// it already made AND any that would delete a take-cluster keeper (KTD7), then
-	// hand off to the Review modal — apply (and the taste capture) happen on accept.
+	// it already made AND any that would delete a protected span — take-cluster keeper,
+	// capped high-value span, or LLM keep (KTD2/KTD7) — then hand off to the Review modal.
 	const operations = mergeDetectedCuts({
 		planOps,
 		extraOps: [...detectedCuts, ...redundancyOps],
-		keepers,
-	});
+		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
+	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
 	useDirectorPlanStore.getState().openWith({ plan: { operations }, nearTies });
 }
