@@ -72,4 +72,27 @@ describe("buildSignalTable", () => {
 		});
 		expect(second.silenceBeforeSec).toBeUndefined();
 	});
+
+	test("annotates a row with its cluster id when a clusterIds map is supplied", () => {
+		const table = buildSignalTable({
+			segments: [
+				{ start: 0.5, end: 3.5, text: "hello" },
+				{ start: 4.5, end: 7.5, text: "world" },
+			],
+			features: [],
+			elements,
+			clusterIds: new Map([[0.5, "C1"]]),
+		});
+		expect(table[0].clusterId).toBe("C1");
+		expect(table[1].clusterId).toBeUndefined(); // not in the map
+	});
+
+	test("leaves clusterId unset when no map is supplied (regression-safe)", () => {
+		const [row] = buildSignalTable({
+			segments: [{ start: 0, end: 2, text: "x" }],
+			features: [],
+			elements,
+		});
+		expect(row.clusterId).toBeUndefined();
+	});
 });

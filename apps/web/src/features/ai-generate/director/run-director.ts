@@ -17,7 +17,7 @@ import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
-import type { DirectorVisionFrame } from "@framecut/hf-bridge";
+import type { DirectorAssetSummary, DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeSpeechFeatures } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
@@ -37,6 +37,7 @@ import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
 import { buildTakeClusters } from "./take-clusters";
 import { detectRedundancyCuts } from "./redundancy";
+import { buildAssetCatalog } from "./asset-catalog";
 
 /**
  * Plan a Director's cut and open the Review modal. Resolves once the plan is on
@@ -99,19 +100,12 @@ export async function runDirector({
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
 	const features = computeSpeechFeatures({ segments, samples, sampleRate });
-	const signalTable = buildSignalTable({
-		segments,
-		features,
-		elements: tracks.main.elements,
-	});
-	abort();
 
 	// Take-aware redundancy (U4/U6): cluster same-line spans across the assembled
-	// clips (and far apart within one), then flag the redundant takes/restatements
-	// as review ops. Keeper spans are protected in the merge below so a cluster can
-	// never lose every take (KTD7). With no clusters (single-take / no repeats) this
-	// is a no-op and the merge is byte-identical to before. The LLM-prompt catalog
-	// enrichment (U5) is deliberately NOT wired yet — held by the plan's R9 gate.
+	// clips (and far apart within one), rank the best take, and flag the redundant
+	// ones as review ops. Keeper spans are protected in the merge below so a cluster
+	// can never lose every take (KTD7). With no clusters (single-take / no repeats)
+	// this is a no-op: no grp column, no catalog block — byte-identical request.
 	onProgress?.("Comparing takes...");
 	const assetTranscripts = groupTranscriptByAsset({
 		segments,
@@ -123,6 +117,38 @@ export async function runDirector({
 	const keepers: KeeperSpan[] = takeClusters.map((cluster) => {
 		const keeper = cluster.members[cluster.keeperIndex];
 		return { startSec: keeper.startSec, endSec: keeper.endSec };
+	});
+	// Map each clustered segment to a short grp id (C1, C2…) for the signal table, so
+	// the planner SEES which rows are alternate takes and skips re-cutting them (U5/KTD3).
+	const clusterIds = new Map<number, string>();
+	takeClusters.forEach((cluster, ci) => {
+		for (const member of cluster.members) {
+			clusterIds.set(Math.round(member.startSec * 1000) / 1000, `C${ci + 1}`);
+		}
+	});
+	// Per-clip catalog (U2/U5): the planner reasons over the bin, not a 6-char hash.
+	const catalog: DirectorAssetSummary[] = buildAssetCatalog({
+		assetTranscripts,
+		features,
+		assets: editor.media.getAssets().map((a) => ({
+			id: a.id,
+			name: a.name,
+			durationSec: a.duration ?? 0,
+		})),
+	}).map((entry) => ({
+		name: entry.name,
+		durationSec: entry.durationSec,
+		segmentCount: entry.segmentCount,
+		firstLine: entry.firstLine,
+		lastLine: entry.lastLine,
+	}));
+	abort();
+
+	const signalTable = buildSignalTable({
+		segments,
+		features,
+		elements: tracks.main.elements,
+		clusterIds,
 	});
 	abort();
 
@@ -153,6 +179,9 @@ export async function runDirector({
 			segments: signalTable,
 			totalSec,
 			taste: taste || undefined,
+			// Catalog only helps with ≥2 clips; omitting it for one clip keeps the
+			// single-recording request byte-identical to the pre-asset-context path.
+			...(catalog.length >= 2 ? { catalog } : {}),
 			...(frames.length > 0 ? { frames } : {}),
 		}),
 	});

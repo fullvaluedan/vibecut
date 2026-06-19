@@ -14,19 +14,22 @@ let planDirectorVisionImpl: () => Promise<unknown> = async () => ({
 	usage: null,
 	degraded: false,
 });
-// Which planner the route dispatched to (reset per test).
+// Which planner the route dispatched to + the catalog it received (reset per test).
 let lastPlanner: "text" | "vision" | null = null;
+let lastCatalog: unknown = undefined;
 
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
 mock.module("@framecut/hf-bridge", () => ({
-	planDirector: () => {
+	planDirector: (arg: { catalog?: unknown }) => {
 		lastPlanner = "text";
+		lastCatalog = arg?.catalog;
 		return planDirectorImpl();
 	},
-	planDirectorVision: () => {
+	planDirectorVision: (arg: { catalog?: unknown }) => {
 		lastPlanner = "vision";
+		lastCatalog = arg?.catalog;
 		return planDirectorVisionImpl();
 	},
 }));
@@ -80,6 +83,31 @@ describe("/api/director/plan", () => {
 		// No frames → the text planner, and degraded defaults false (R3 contract).
 		expect(lastPlanner).toBe("text");
 		expect(json.degraded).toBe(false);
+	});
+
+	test("parses and forwards a multi-clip catalog to the planner, dropping malformed entries", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		lastCatalog = undefined;
+		const catalog = [
+			{ name: "a.mp4", durationSec: 30, segmentCount: 4, firstLine: "hi", lastLine: "bye" },
+			{ name: "b.mp4", durationSec: 20, segmentCount: 2, firstLine: "yo", lastLine: "ok", junk: 1 },
+			{ name: 123 }, // malformed → dropped
+		];
+		await POST(
+			post({ segments: [{ startSec: 0, endSec: 5, text: "hi" }], totalSec: 5, catalog }),
+		);
+		expect(Array.isArray(lastCatalog)).toBe(true);
+		if (Array.isArray(lastCatalog)) {
+			expect(lastCatalog).toHaveLength(2); // the malformed third entry is dropped
+			expect(lastCatalog[0].name).toBe("a.mp4");
+		}
+	});
+
+	test("forwards no catalog when none is sent", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		lastCatalog = "sentinel";
+		await POST(post({ segments: [{ startSec: 0, endSec: 5, text: "hi" }], totalSec: 5 }));
+		expect(lastCatalog).toBeUndefined();
 	});
 
 	test("routes to the VISION planner when valid frames are present, passing degraded through", async () => {

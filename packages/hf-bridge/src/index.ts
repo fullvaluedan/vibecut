@@ -21,6 +21,7 @@ export {
 	type DirectorOp,
 	type DirectorPlan,
 	type DirectorSegment,
+	type DirectorAssetSummary,
 	type DirectorVisionFrame,
 } from "./author";
 export {
