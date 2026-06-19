@@ -112,8 +112,8 @@ export async function runDirector({
 		elements: tracks.main.elements,
 	});
 	const takeClusters = buildTakeClusters({ assetTranscripts, features });
-	// nearTies carry no removal op (manual choice); surfacing them is U7's job.
-	const { ops: redundancyOps } = detectRedundancyCuts({ clusters: takeClusters });
+	// nearTies carry no removal op — surfaced in the Review modal for manual choice (U7).
+	const { ops: redundancyOps, nearTies } = detectRedundancyCuts({ clusters: takeClusters });
 	const keepers: KeeperSpan[] = takeClusters.map((cluster) => {
 		const keeper = cluster.members[cluster.keeperIndex];
 		return { startSec: keeper.startSec, endSec: keeper.endSec };
@@ -220,5 +220,5 @@ export async function runDirector({
 		extraOps: [...detectedCuts, ...redundancyOps],
 		keepers,
 	});
-	useDirectorPlanStore.getState().openWith({ operations });
+	useDirectorPlanStore.getState().openWith({ plan: { operations }, nearTies });
 }
