@@ -205,9 +205,10 @@ export function buildTakeClusters({
 		const keeper = topMembers.reduce((latest, m) => (m.startSec > latest.startSec ? m : latest));
 		const keeperIndex = members.indexOf(keeper);
 
-		// Callback guard: a far-apart same-asset cluster is low confidence.
-		const span =
-			members[members.length - 1].startSec - members[0].endSec;
+		// Callback guard: a far-apart same-asset cluster is low confidence. Measure
+		// the cluster's start-to-start extent (not end-to-start, which a long first
+		// member would shrink below the threshold).
+		const span = members[members.length - 1].startSec - members[0].startSec;
 		const lowConfidence = kind === "repeat" && span > CALLBACK_GAP_SEC;
 
 		// Conservative cohesion: the weakest pairwise similarity in the cluster.

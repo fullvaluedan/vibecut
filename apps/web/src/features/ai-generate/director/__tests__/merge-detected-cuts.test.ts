@@ -62,16 +62,29 @@ describe("mergeDetectedCuts — keeper safety (KTD7)", () => {
 		expect(merged[0].startSec).toBe(0);
 	});
 
-	test("a detector cut overlapping a DROPPED planner removal survives", () => {
-		// The LLM removal hits a keeper and is dropped, so the detector op it
-		// overlapped is no longer suppressed by it.
+	test("a detector cut that only clips a keeper edge survives (not over-suppressed)", () => {
+		// The LLM take_select covers the whole keeper → dropped. The detector cut only
+		// clips the keeper edge (<50% coverage), so keeper-safety does NOT suppress it,
+		// and with the LLM removal gone nothing else does either.
 		const merged = mergeDetectedCuts({
 			planOps: [op({ startSec: 10, endSec: 15, op: "take_select", id: "llm" })],
 			extraOps: [op({ startSec: 14, endSec: 16, id: "det", op: "cut" })],
 			keepers: [{ startSec: 10, endSec: 15 }],
 		});
-		// det[14,16] overlaps keeper[10,15]? 14<15 → yes → also dropped (keeper safety).
-		expect(merged).toHaveLength(0);
+		expect(merged).toHaveLength(1);
+		expect(merged[0].id).toBe("det");
+	});
+
+	test("an intra-keeper micro-cut (filler) is NOT dropped by keeper safety", () => {
+		// A filler/dead-air word INSIDE the kept take must still be trimmable — the
+		// keeper protects the take as a whole, not every sub-second inside it.
+		const merged = mergeDetectedCuts({
+			planOps: [],
+			extraOps: [op({ startSec: 12.3, endSec: 12.5, id: "fil", op: "cut", category: "filler" })],
+			keepers: [{ startSec: 12, endSec: 15 }],
+		});
+		expect(merged).toHaveLength(1);
+		expect(merged[0].id).toBe("fil");
 	});
 
 	test("empty keepers reproduces the pre-cluster merge (regression)", () => {

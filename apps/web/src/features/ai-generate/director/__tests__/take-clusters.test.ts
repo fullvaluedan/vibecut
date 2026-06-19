@@ -77,6 +77,28 @@ describe("buildTakeClusters", () => {
 		expect(clusters[0].lowConfidence).toBe(true);
 	});
 
+	test("a long first member doesn't hide a far-apart callback (start-to-start span)", () => {
+		// End-to-start gap is only 15s, but the takes are 70s apart start-to-start —
+		// still callback territory, so it must stay low-confidence (KTD6).
+		const assetTranscripts: AssetTranscript[] = [
+			{
+				assetId: "a",
+				segments: [
+					{ start: 0, end: 55, text: "and that is the whole story of how we got here today", sourceStartSec: 0 },
+					{ start: 70, end: 73, text: "and that is the whole story of how we got here today", sourceStartSec: 70 },
+				],
+			},
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 55, loudnessRelative: 0.6 }),
+			feat({ startSec: 70, endSec: 73, loudnessRelative: 0.6 }),
+		];
+		const clusters = buildTakeClusters({ assetTranscripts, features });
+		expect(clusters).toHaveLength(1);
+		expect(clusters[0].kind).toBe("repeat");
+		expect(clusters[0].lowConfidence).toBe(true); // 70-0=70 > 60, not 70-55=15
+	});
+
 	test("members carry TIMELINE coordinates, not source time", () => {
 		// Source starts at 0 but the clip is placed at timeline t=50.
 		const assetTranscripts: AssetTranscript[] = [

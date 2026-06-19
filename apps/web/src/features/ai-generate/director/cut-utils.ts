@@ -35,6 +35,14 @@ export interface KeeperSpan {
 	endSec: number;
 }
 
+/**
+ * A removal must cover at least this fraction of a keeper to count as "removing the
+ * take" (and be dropped). Below it, the removal is a micro-trim INSIDE the keeper (a
+ * filler/dead-air/pacing word) and is left to do its job — protecting the take as a
+ * whole must not suppress cleaning it up.
+ */
+const KEEPER_COVER_FRACTION = 0.5;
+
 const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
 
@@ -70,20 +78,27 @@ export function mergeDetectedCuts({
 	extraOps: DirectorOp[];
 	keepers?: readonly KeeperSpan[];
 }): DirectorOp[] {
-	const hitsKeeper = (op: DirectorOp): boolean =>
-		keepers.some((k) => spansOverlap({ a: op, b: k }));
+	// A removal "covers" a keeper when it overlaps ≥ KEEPER_COVER_FRACTION of it —
+	// i.e. it would remove the take as a whole. A small intra-take trim overlaps only
+	// a sliver and is NOT protected away (it still cleans up the kept take).
+	const coversKeeper = (op: DirectorOp): boolean =>
+		keepers.some((k) => {
+			const overlap = Math.min(op.endSec, k.endSec) - Math.max(op.startSec, k.startSec);
+			const keeperLen = k.endSec - k.startSec;
+			return keeperLen > 0 && overlap / keeperLen >= KEEPER_COVER_FRACTION;
+		});
 
 	// Rule 1, planner side: drop any LLM removal that would delete a keeper.
-	const planKept = planOps.filter((op) => !(isRemoval(op) && hitsKeeper(op)));
+	const planKept = planOps.filter((op) => !(isRemoval(op) && coversKeeper(op)));
 
 	const survivingRemovals = planKept.filter(isRemoval);
 	const overlapsRemoval = (op: DirectorOp): boolean =>
 		survivingRemovals.some((r) => spansOverlap({ a: op, b: r }));
 
-	// Rule 1 (detector side) + rule 2: drop detector removals that hit a keeper or
-	// overlap a surviving planner removal.
+	// Rule 1 (detector side) + rule 2: drop detector removals that would delete a
+	// keeper, or that overlap a surviving planner removal.
 	const fresh = extraOps.filter(
-		(op) => !(isRemoval(op) && hitsKeeper(op)) && !overlapsRemoval(op),
+		(op) => !(isRemoval(op) && coversKeeper(op)) && !overlapsRemoval(op),
 	);
 
 	return [...planKept, ...fresh].sort((a, b) => a.startSec - b.startSec);
