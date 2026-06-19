@@ -29,23 +29,62 @@ export function stableCutId(input: string): string {
 	return (hash >>> 0).toString(36);
 }
 
+/** A timeline span that a take cluster decided to KEEP — never removable. */
+export interface KeeperSpan {
+	startSec: number;
+	endSec: number;
+}
+
+const isRemoval = (op: DirectorOp): boolean =>
+	op.op === "cut" || op.op === "take_select";
+
+const spansOverlap = ({
+	a,
+	b,
+}: {
+	a: { startSec: number; endSec: number };
+	b: { startSec: number; endSec: number };
+}): boolean => a.startSec < b.endSec && b.startSec < a.endSec;
+
 /**
- * Merge deterministic detector cuts into a planner's ops, dropping any that
- * overlap an existing removal (the LLM already cut that span). Returns the
- * combined op list in time order.
+ * Merge deterministic detector cuts into a planner's ops in time order, with two
+ * safety rules (KTD7):
+ *
+ * 1. **Keeper safety** — no removal (cut/take_select) from ANY source may delete a
+ *    span a take cluster chose to keep. This also makes a cluster impossible to
+ *    empty: if the LLM and the deterministic layer disagree on which take is the
+ *    keeper, the LLM's removal of the protected keeper is dropped and the cluster
+ *    keeps exactly the deterministic keeper.
+ * 2. **Dedup** — a detector cut overlapping a surviving planner removal is dropped
+ *    (the planner already cut that span).
+ *
+ * Non-removal ops (keep/reorder) always pass through. With `keepers` empty the
+ * behavior is identical to the pre-cluster merge (regression-safe).
  */
 export function mergeDetectedCuts({
 	planOps,
 	extraOps,
+	keepers = [],
 }: {
 	planOps: DirectorOp[];
 	extraOps: DirectorOp[];
+	keepers?: readonly KeeperSpan[];
 }): DirectorOp[] {
-	const removals = planOps.filter(
-		(op) => op.op === "cut" || op.op === "take_select",
+	const hitsKeeper = (op: DirectorOp): boolean =>
+		keepers.some((k) => spansOverlap({ a: op, b: k }));
+
+	// Rule 1, planner side: drop any LLM removal that would delete a keeper.
+	const planKept = planOps.filter((op) => !(isRemoval(op) && hitsKeeper(op)));
+
+	const survivingRemovals = planKept.filter(isRemoval);
+	const overlapsRemoval = (op: DirectorOp): boolean =>
+		survivingRemovals.some((r) => spansOverlap({ a: op, b: r }));
+
+	// Rule 1 (detector side) + rule 2: drop detector removals that hit a keeper or
+	// overlap a surviving planner removal.
+	const fresh = extraOps.filter(
+		(op) => !(isRemoval(op) && hitsKeeper(op)) && !overlapsRemoval(op),
 	);
-	const overlaps = (op: DirectorOp): boolean =>
-		removals.some((r) => op.startSec < r.endSec && r.startSec < op.endSec);
-	const fresh = extraOps.filter((op) => !overlaps(op));
-	return [...planOps, ...fresh].sort((a, b) => a.startSec - b.startSec);
+
+	return [...planKept, ...fresh].sort((a, b) => a.startSec - b.startSec);
 }

@@ -33,7 +33,10 @@ import { detectPhraseRepeatCuts } from "./phrase-repeat";
 import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
-import { mergeDetectedCuts } from "./cut-utils";
+import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
+import { groupTranscriptByAsset } from "./source-map";
+import { buildTakeClusters } from "./take-clusters";
+import { detectRedundancyCuts } from "./redundancy";
 
 /**
  * Plan a Director's cut and open the Review modal. Resolves once the plan is on
@@ -103,6 +106,26 @@ export async function runDirector({
 	});
 	abort();
 
+	// Take-aware redundancy (U4/U6): cluster same-line spans across the assembled
+	// clips (and far apart within one), then flag the redundant takes/restatements
+	// as review ops. Keeper spans are protected in the merge below so a cluster can
+	// never lose every take (KTD7). With no clusters (single-take / no repeats) this
+	// is a no-op and the merge is byte-identical to before. The LLM-prompt catalog
+	// enrichment (U5) is deliberately NOT wired yet — held by the plan's R9 gate.
+	onProgress?.("Comparing takes...");
+	const assetTranscripts = groupTranscriptByAsset({
+		segments,
+		elements: tracks.main.elements,
+	});
+	const takeClusters = buildTakeClusters({ assetTranscripts, features });
+	// nearTies carry no removal op (manual choice); surfacing them is U7's job.
+	const { ops: redundancyOps } = detectRedundancyCuts({ clusters: takeClusters });
+	const keepers: KeeperSpan[] = takeClusters.map((cluster) => {
+		const keeper = cluster.members[cluster.keeperIndex];
+		return { startSec: keeper.startSec, endSec: keeper.endSec };
+	});
+	abort();
+
 	// Vision pass (opt-in): sample one frame per segment so the Director's cuts can
 	// SEE the footage. With vision off, `frames` stays empty and the request body
 	// is byte-identical to the text-only path (no regression).
@@ -159,9 +182,14 @@ export async function runDirector({
 	const planOps = usedVision
 		? rawPlanOps.map((op: Record<string, unknown>) => ({ ...op, category: "vision" }))
 		: rawPlanOps;
-	// Fold the deterministic duplicate-word cuts into the LLM plan (dropping any
-	// that overlap a cut it already made), then hand off to the Review modal —
-	// apply (and the taste capture) happen on accept.
-	const operations = mergeDetectedCuts({ planOps, extraOps: detectedCuts });
+	// Fold the deterministic cuts (word/phrase/dead-air/filler/pacing + the new
+	// take/repeat redundancy ops) into the LLM plan, dropping any that overlap a cut
+	// it already made AND any that would delete a take-cluster keeper (KTD7), then
+	// hand off to the Review modal — apply (and the taste capture) happen on accept.
+	const operations = mergeDetectedCuts({
+		planOps,
+		extraOps: [...detectedCuts, ...redundancyOps],
+		keepers,
+	});
 	useDirectorPlanStore.getState().openWith({ operations });
 }
