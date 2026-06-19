@@ -262,3 +262,39 @@ export function applyDirectorPlan({
 		reorders: reorderMoves.length,
 	};
 }
+
+/** Result of applying a Highlight (keep-only) plan. */
+export interface ApplyHighlightResult {
+	/** Removal ranges applied (the complement of the kept spans). */
+	cuts: number;
+	/** Total seconds removed. */
+	removedSec: number;
+}
+
+/**
+ * Apply a Highlight plan: keep `keeps`, remove everything else. The complement is
+ * computed by `planKeepInverseRanges` (which THROWS on an empty keep set — the
+ * caller surfaces it, never removing the whole timeline) and applied as one
+ * `RemoveRangesCommand` (one undo). A full-timeline keep removes nothing.
+ */
+export function applyHighlightPlan({
+	editor,
+	keeps,
+	totalSec,
+}: {
+	editor: DirectorApplyEditor;
+	keeps: readonly InverseKeepSpan[];
+	totalSec: number;
+}): ApplyHighlightResult {
+	const { ranges, removedSec } = planKeepInverseRanges({
+		keeps,
+		totalSec,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	if (ranges.length === 0) {
+		return { cuts: 0, removedSec: 0 };
+	}
+	const command = new RemoveRangesCommand({ ranges });
+	editor.command.execute({ command });
+	return { cuts: command.getRemovedCount(), removedSec };
+}

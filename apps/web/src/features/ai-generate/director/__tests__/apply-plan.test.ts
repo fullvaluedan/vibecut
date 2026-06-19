@@ -42,7 +42,7 @@ mock.module("@/commands/timeline/element/move-elements", () => ({
 }));
 mock.module("@/commands/batch-command", () => ({ BatchCommand: FakeBatchCommand }));
 
-const { applyDirectorPlan, planRemovalRanges, planReorderMoves, planKeepInverseRanges } =
+const { applyDirectorPlan, planRemovalRanges, planReorderMoves, planKeepInverseRanges, applyHighlightPlan } =
 	await import("../apply-plan");
 
 const op = (
@@ -336,5 +336,45 @@ describe("planKeepInverseRanges (Highlight inverse apply)", () => {
 	test("idempotent: the same keep set yields the same ranges", () => {
 		const args = { keeps: [{ startSec: 3, endSec: 6 }], totalSec: 12, ticksPerSecond: TPS };
 		expect(planKeepInverseRanges(args).ranges).toEqual(planKeepInverseRanges(args).ranges);
+	});
+});
+
+describe("applyHighlightPlan (composition glue)", () => {
+	test("removes the complement of the kept spans as one RemoveRangesCommand", () => {
+		const { editor, executed } = fakeEditor();
+		const result = applyHighlightPlan({
+			editor,
+			keeps: [
+				{ startSec: 2, endSec: 5 },
+				{ startSec: 10, endSec: 12 },
+			],
+			totalSec: 15,
+		});
+		expect(executed).toHaveLength(1);
+		expect(executed[0]).toBeInstanceOf(FakeRemoveRangesCommand);
+		if (executed[0] instanceof FakeRemoveRangesCommand) {
+			expect(executed[0].ranges).toEqual([
+				{ start: 0, end: 240_000 },
+				{ start: 600_000, end: 1_200_000 },
+				{ start: 1_440_000, end: 1_800_000 },
+			]);
+		}
+		expect(result.removedSec).toBe(10);
+	});
+
+	test("a full-timeline keep executes nothing", () => {
+		const { editor, executed } = fakeEditor();
+		const result = applyHighlightPlan({
+			editor,
+			keeps: [{ startSec: 0, endSec: 12 }],
+			totalSec: 12,
+		});
+		expect(executed).toHaveLength(0);
+		expect(result).toEqual({ cuts: 0, removedSec: 0 });
+	});
+
+	test("an empty keep set throws (never removes everything)", () => {
+		const { editor } = fakeEditor();
+		expect(() => applyHighlightPlan({ editor, keeps: [], totalSec: 12 })).toThrow(/nothing to keep/);
 	});
 });
