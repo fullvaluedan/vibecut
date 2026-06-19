@@ -152,6 +152,23 @@ export async function collectAudioElements({
 	);
 	const pendingElements: Array<Promise<CollectedAudioElement | null>> = [];
 
+	// Decode each source asset's audio AT MOST ONCE. A silence-removed clip becomes
+	// many timeline elements that all reference the same asset; decoding the full
+	// asset buffer per element (in parallel, via Promise.all below) exhausts memory
+	// on long videos — "Array buffer allocation failed" / createBuffer NotSupported.
+	// The decoded buffer is shared READ-ONLY by the mix (mixAudioChannels reads the
+	// source into the output; renderRetimedBuffer returns a new buffer), so one
+	// decode safely serves every element referencing that asset. (See PATCHES.md.)
+	const assetBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+	const resolveAsset = ({ asset }: { asset: MediaAsset }): Promise<AudioBuffer | null> => {
+		let cached = assetBufferCache.get(asset.id);
+		if (!cached) {
+			cached = resolveAudioBufferForAsset({ asset, audioContext });
+			assetBufferCache.set(asset.id, cached);
+		}
+		return cached;
+	};
+
 	for (const { element, mediaAsset } of candidates) {
 		if (element.type === "audio") {
 			pendingElements.push(
@@ -159,6 +176,7 @@ export async function collectAudioElements({
 					element,
 					mediaMap,
 					audioContext,
+					resolveAsset,
 				}).then((audioBuffer) => {
 					if (!audioBuffer) return null;
 					return {
@@ -185,10 +203,7 @@ export async function collectAudioElements({
 			if (!mediaAsset || !mediaSupportsAudio({ media: mediaAsset })) continue;
 
 			pendingElements.push(
-				resolveAudioBufferForAsset({
-					asset: mediaAsset,
-					audioContext,
-				}).then((audioBuffer) => {
+				resolveAsset({ asset: mediaAsset }).then((audioBuffer) => {
 					if (!audioBuffer) return null;
 					return {
 						timelineElement: element,
@@ -230,16 +245,19 @@ async function resolveAudioBufferForElement({
 	element,
 	mediaMap,
 	audioContext,
+	resolveAsset,
 }: {
 	element: AudioElement;
 	mediaMap: Map<string, MediaAsset>;
 	audioContext: AudioContext;
+	/** Per-asset cached decode (collectAudioElements) — dedupes same-asset elements. */
+	resolveAsset: (args: { asset: MediaAsset }) => Promise<AudioBuffer | null>;
 }): Promise<AudioBuffer | null> {
 	try {
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
 			if (!asset) return null;
-			return await resolveAudioBufferForAsset({ asset, audioContext });
+			return await resolveAsset({ asset });
 		}
 
 		if (element.buffer) return element.buffer;
