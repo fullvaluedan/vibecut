@@ -30,6 +30,7 @@ import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import { detectDuplicateWordCuts } from "./duplicate-words";
 import { detectPhraseRepeatCuts } from "./phrase-repeat";
+import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { mergeDetectedCuts } from "./cut-utils";
@@ -76,6 +77,7 @@ export async function runDirector({
 	const detectedCuts = [
 		...detectDuplicateWordCuts({ words: words ?? [] }),
 		...detectPhraseRepeatCuts({ words: words ?? [] }),
+		...detectDeadAirCuts({ words: words ?? [] }),
 		...detectFillerCuts({ words: words ?? [] }),
 		...detectPacingCuts({ segments }),
 	];

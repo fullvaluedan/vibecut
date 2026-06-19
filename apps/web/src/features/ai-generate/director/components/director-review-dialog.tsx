@@ -132,6 +132,11 @@ export function DirectorReviewDialog() {
 											Repeat
 										</span>
 									) : null}
+									{op.category === "deadair" ? (
+										<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+											Dead air
+										</span>
+									) : null}
 									<span className="text-muted-foreground mr-2 text-xs">
 										{op.startSec.toFixed(1)}–{op.endSec.toFixed(1)}s
 									</span>
