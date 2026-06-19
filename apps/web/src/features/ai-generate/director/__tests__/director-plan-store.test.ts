@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	initDecisions,
+	initKeepRows,
 	selectAccepted,
+	selectAcceptedKeeps,
 	toggleDecision,
 } from "../director-plan-store";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
@@ -42,5 +44,32 @@ describe("director plan decisions", () => {
 		let d = initDecisions(plan);
 		for (const id of ["a", "b", "c"]) d = toggleDecision({ decisions: d, id });
 		expect(selectAccepted({ plan, decisions: d })).toEqual([]);
+	});
+});
+
+describe("highlight keep decisions", () => {
+	const keeps = [
+		{ startSec: 0, endSec: 3 },
+		{ startSec: 10, endSec: 12, text: "the key line" },
+	];
+
+	test("initKeepRows assigns stable ids and carries text", () => {
+		const rows = initKeepRows(keeps);
+		expect(rows.map((r) => r.id)).toEqual(["keep-0", "keep-1"]);
+		expect(rows[1].text).toBe("the key line");
+	});
+
+	test("selectAcceptedKeeps returns only accepted rows", () => {
+		const rows = initKeepRows(keeps);
+		const decisions = toggleDecision({
+			decisions: { "keep-0": true, "keep-1": true },
+			id: "keep-1",
+		});
+		expect(selectAcceptedKeeps({ keeps: rows, decisions }).map((r) => r.id)).toEqual(["keep-0"]);
+	});
+
+	test("rejecting every keep leaves nothing (caller must guard the empty apply)", () => {
+		const rows = initKeepRows(keeps);
+		expect(selectAcceptedKeeps({ keeps: rows, decisions: {} })).toEqual([]);
 	});
 });

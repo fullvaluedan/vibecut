@@ -7,9 +7,35 @@
 import { create } from "zustand";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
 import type { NearTieNote } from "./redundancy";
+import type { HighlightPreview } from "./highlight-preview";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
+
+/** One keep span shown as a row in Highlight mode (accept = keep, reject = drop). */
+export interface HighlightKeepRow {
+	id: string;
+	startSec: number;
+	endSec: number;
+	/** A transcript snippet for the span, when available. */
+	text?: string;
+}
+
+/** Assign stable ids to the keep spans, all accepted by default. */
+export function initKeepRows(keeps: readonly { startSec: number; endSec: number; text?: string }[]): HighlightKeepRow[] {
+	return keeps.map((k, i) => ({ id: `keep-${i}`, startSec: k.startSec, endSec: k.endSec, text: k.text }));
+}
+
+/** The accepted keep rows (the spans that survive into the highlight), in order. */
+export function selectAcceptedKeeps({
+	keeps,
+	decisions,
+}: {
+	keeps: readonly HighlightKeepRow[];
+	decisions: OpDecisions;
+}): HighlightKeepRow[] {
+	return keeps.filter((k) => decisions[k.id]);
+}
 
 /** Every op starts ACCEPTED — the user opts ops out, not in. */
 export function initDecisions(plan: DirectorPlan): OpDecisions {
@@ -44,32 +70,83 @@ export function selectAccepted({
 
 interface DirectorPlanState {
 	open: boolean;
+	/** "cut" = the normal Director review; "highlight" = keep-only (inverse apply). */
+	mode: "cut" | "highlight";
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
-	/** Open the modal with a fresh plan (all ops accepted) + any near-tie notes. */
+	/** Highlight mode: the keep rows, the preview stats, and the timeline length. */
+	keeps: HighlightKeepRow[];
+	preview: HighlightPreview | null;
+	totalSec: number;
+	/** Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie notes. */
 	openWith: (args: { plan: DirectorPlan; nearTies?: readonly NearTieNote[] }) => void;
-	/** Flip one op's accept/reject. */
+	/** Open the Highlight modal (KTD9): keep rows accepted by default, with preview + totalSec. */
+	openHighlight: (args: {
+		keeps: readonly { startSec: number; endSec: number; text?: string }[];
+		preview: HighlightPreview;
+		totalSec: number;
+	}) => void;
+	/** Flip one op/keep-row's accept/reject. */
 	toggle: (id: string) => void;
-	/** The currently-accepted ops. */
+	/** Set every row's decision at once (bulk select-all / deselect-all). */
+	setAll: (accepted: boolean) => void;
+	/** The currently-accepted ops (cut mode). */
 	acceptedOps: () => DirectorOp[];
+	/** The currently-accepted keep rows (highlight mode). */
+	acceptedKeeps: () => HighlightKeepRow[];
 	/** Close and clear. */
 	close: () => void;
 }
 
-export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
+const CLEARED = {
 	open: false,
+	mode: "cut" as const,
 	plan: null,
 	decisions: {},
 	nearTies: [],
+	keeps: [],
+	preview: null,
+	totalSec: 0,
+};
+
+export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
+	...CLEARED,
 	openWith: ({ plan, nearTies }) =>
-		set({ open: true, plan, decisions: initDecisions(plan), nearTies: [...(nearTies ?? [])] }),
+		set({
+			...CLEARED,
+			open: true,
+			mode: "cut",
+			plan,
+			decisions: initDecisions(plan),
+			nearTies: [...(nearTies ?? [])],
+		}),
+	openHighlight: ({ keeps, preview, totalSec }) => {
+		const rows = initKeepRows(keeps);
+		const decisions: OpDecisions = {};
+		for (const row of rows) decisions[row.id] = true;
+		set({ ...CLEARED, open: true, mode: "highlight", keeps: rows, decisions, preview, totalSec });
+	},
 	toggle: (id) =>
 		set((state) => ({ decisions: toggleDecision({ decisions: state.decisions, id }) })),
+	setAll: (accepted) =>
+		set((state) => {
+			const ids =
+				state.mode === "highlight"
+					? state.keeps.map((k) => k.id)
+					: (state.plan?.operations ?? []).map((o) => o.id);
+			const decisions: OpDecisions = { ...state.decisions };
+			for (const id of ids) decisions[id] = accepted;
+			return { decisions };
+		}),
 	acceptedOps: () => {
 		const { plan, decisions } = get();
 		return plan ? selectAccepted({ plan, decisions }) : [];
 	},
-	close: () => set({ open: false, plan: null, decisions: {}, nearTies: [] }),
+	acceptedKeeps: () => {
+		const { keeps, decisions } = get();
+		return selectAcceptedKeeps({ keeps, decisions });
+	},
+	close: () => set({ ...CLEARED }),
 }));

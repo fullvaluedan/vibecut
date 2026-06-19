@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * The Director Review modal (U4) — the keystone gate (RF1). Lists every proposed
- * op with a type badge, its reason, and a per-op accept/reject checkbox (all
- * accepted by default); "Apply accepted" applies only the checked ops as one
- * undoable step and records the decisions for the taste seed (U6). Rendered once
- * at the editor root; driven by `useDirectorPlanStore`.
+ * The Director Review modal — two modes (driven by `useDirectorPlanStore.mode`):
+ *  - "cut" (U4): lists proposed cut/take/repeat ops with accept/reject; applies the
+ *    accepted ops as one undoable step and seeds the per-category taste.
+ *  - "highlight" (KTD9): lists the KEEP spans (accept = keep, reject = drop), shows a
+ *    live "keeping N of M · −Z%" preview, and applies the inverse (remove the
+ *    complement of the accepted keeps). Distinct copy/labels so the inverted
+ *    accept-semantics is unmistakable. Rendered once at the editor root.
  */
 
 import { toast } from "sonner";
@@ -18,33 +20,141 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
-import { applyDirectorPlan } from "../apply-plan";
+import { applyDirectorPlan, applyHighlightPlan } from "../apply-plan";
 import { useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
 import { describeReviewOp } from "../review-format";
+import { formatHighlightPreview } from "../highlight-preview";
 
 export function DirectorReviewDialog() {
 	const editor = useEditor();
 	const open = useDirectorPlanStore((s) => s.open);
+	const mode = useDirectorPlanStore((s) => s.mode);
 	const plan = useDirectorPlanStore((s) => s.plan);
 	const decisions = useDirectorPlanStore((s) => s.decisions);
 	const nearTies = useDirectorPlanStore((s) => s.nearTies);
+	const keeps = useDirectorPlanStore((s) => s.keeps);
+	const totalSec = useDirectorPlanStore((s) => s.totalSec);
 	const toggle = useDirectorPlanStore((s) => s.toggle);
+	const setAll = useDirectorPlanStore((s) => s.setAll);
 	const close = useDirectorPlanStore((s) => s.close);
 
+	// ─── Highlight mode (keep-only / inverse apply) ────────────────────────────
+	if (mode === "highlight") {
+		const acceptedKeeps = keeps.filter((k) => decisions[k.id]);
+		const keptSec = acceptedKeeps.reduce((acc, k) => acc + (k.endSec - k.startSec), 0);
+		const preview = formatHighlightPreview({
+			keptCount: acceptedKeeps.length,
+			totalCount: keeps.length,
+			keptSec,
+			totalSec,
+		});
+
+		const cancelHighlight = () => {
+			close();
+			toast.info("Highlight cancelled", {
+				description: "Footage was assembled and silences removed — Ctrl+Z to undo.",
+			});
+		};
+
+		const applyHighlight = () => {
+			if (acceptedKeeps.length === 0) return;
+			try {
+				const result = applyHighlightPlan({ editor, keeps: acceptedKeeps, totalSec });
+				close();
+				toast.success(
+					`Highlight: kept ${acceptedKeeps.length} span${acceptedKeeps.length === 1 ? "" : "s"}, removed ${result.removedSec.toFixed(1)}s`,
+					{ description: "Ctrl+Z restores everything." },
+				);
+			} catch (e) {
+				close();
+				toast.error("Highlight: nothing to keep", {
+					description: e instanceof Error ? e.message : undefined,
+				});
+			}
+		};
+
+		return (
+			<Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) cancelHighlight(); }}>
+				<DialogContent className="max-w-2xl p-6">
+					<DialogTitle>Highlight — review what to keep</DialogTitle>
+					<DialogDescription>
+						{preview}. Uncheck a span to drop it from the highlight — Ctrl+Z restores
+						everything.
+					</DialogDescription>
+					{keeps.length === 0 ? (
+						<p className="text-muted-foreground py-6 text-sm">Nothing to highlight.</p>
+					) : (
+						<>
+							<div className="flex gap-2 pb-1">
+								<Button variant="ghost" size="sm" onClick={() => setAll(true)}>
+									Select all
+								</Button>
+								<Button variant="ghost" size="sm" onClick={() => setAll(false)}>
+									Deselect all
+								</Button>
+							</div>
+							<div className="-mx-1 max-h-[55vh] space-y-1 overflow-y-auto px-1">
+								{keeps.map((k) => {
+									const accepted = Boolean(decisions[k.id]);
+									return (
+										<label
+											key={k.id}
+											htmlFor={`highlight-${k.id}`}
+											className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
+										>
+											<Checkbox
+												id={`highlight-${k.id}`}
+												checked={accepted}
+												onCheckedChange={() => toggle(k.id)}
+												className="mt-1"
+											/>
+											<span className="text-foreground min-w-0 flex-1 text-sm">
+												<span
+													className={`mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold ${accepted ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground"}`}
+												>
+													{accepted ? "Keep" : "Drop"}
+												</span>
+												<span className="text-muted-foreground mr-2 text-xs">
+													{k.startSec.toFixed(1)}–{k.endSec.toFixed(1)}s
+												</span>
+												{k.text ? <>&ldquo;{k.text.trim().slice(0, 100)}&rdquo;</> : null}
+											</span>
+										</label>
+									);
+								})}
+							</div>
+						</>
+					)}
+					<div className="flex items-center justify-between gap-2 pt-2">
+						<span className="text-muted-foreground text-xs">
+							{acceptedKeeps.length === 0 ? "Select at least one span to keep" : ""}
+						</span>
+						<div className="flex gap-2">
+							<Button variant="ghost" size="sm" onClick={cancelHighlight}>
+								Cancel
+							</Button>
+							<Button size="sm" onClick={applyHighlight} disabled={acceptedKeeps.length === 0}>
+								Apply highlight
+							</Button>
+						</div>
+					</div>
+				</DialogContent>
+			</Dialog>
+		);
+	}
+
+	// ─── Cut mode (the normal Director review) ─────────────────────────────────
 	const ops = plan?.operations ?? [];
 	const acceptedCount = ops.filter((op) => decisions[op.id]).length;
 
 	// Cancelling/dismissing the modal does NOT roll back the timeline: run-director
 	// already ran assemble + remove-silences (each its own command) BEFORE opening
-	// this modal, so the footage is laid out and silences are cut. Signpost that
-	// it's reversible rather than leaving the user with a silently-mutated timeline.
-	// (One-undo rollback-on-cancel is a follow-up — see docs/TO-VERIFY.md.)
+	// this modal. Signpost that it's reversible. (One-undo rollback is a follow-up.)
 	const handleCancel = () => {
 		close();
 		toast.info("Director: review cancelled", {
-			description:
-				"Footage was assembled and silences removed — Ctrl+Z to undo.",
+			description: "Footage was assembled and silences removed — Ctrl+Z to undo.",
 		});
 	};
 
@@ -71,9 +181,7 @@ export function DirectorReviewDialog() {
 				);
 			}
 			if (result.reorders > 0) {
-				parts.push(
-					`${result.reorders} reorder${result.reorders === 1 ? "" : "s"}`,
-				);
+				parts.push(`${result.reorders} reorder${result.reorders === 1 ? "" : "s"}`);
 			}
 			toast.success(`Director: ${parts.join(", ")}`, {
 				description: "Ctrl+Z restores everything.",
