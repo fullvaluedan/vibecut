@@ -69,6 +69,72 @@ export function planRemovalRanges({
 	return { ranges, removedSec };
 }
 
+/** Complement gaps shorter than this (seconds, ~1 frame) are not worth removing. */
+const SLIVER_TOLERANCE_SEC = 1 / 30;
+
+/** A timeline span to KEEP (seconds). */
+export interface InverseKeepSpan {
+	startSec: number;
+	endSec: number;
+}
+
+/**
+ * Pure: compute the removal ranges for Highlight mode — the COMPLEMENT of the kept
+ * spans over `[0, totalSec)`. Keeps are clamped to the timeline, merged, and the
+ * gaps between/around them become removal ranges (sub-frame slivers dropped). An
+ * EMPTY keep set throws — Highlight must never silently remove the entire timeline
+ * (the safety rail behind the inverse apply). `ticksPerSecond` is injected so this
+ * is unit-testable without the opencut-wasm binary.
+ */
+export function planKeepInverseRanges({
+	keeps,
+	totalSec,
+	ticksPerSecond,
+}: {
+	keeps: readonly InverseKeepSpan[];
+	totalSec: number;
+	ticksPerSecond: number;
+}): { ranges: TimeRange[]; removedSec: number } {
+	const valid = keeps
+		.map((k) => ({
+			start: Math.max(0, Math.min(k.startSec, totalSec)),
+			end: Math.max(0, Math.min(k.endSec, totalSec)),
+		}))
+		.filter((k) => k.end > k.start)
+		.sort((a, b) => a.start - b.start);
+
+	if (valid.length === 0) {
+		throw new Error(
+			"Highlight has nothing to keep — refusing to remove the entire timeline.",
+		);
+	}
+
+	// Merge overlapping/adjacent keeps.
+	const merged: { start: number; end: number }[] = [];
+	for (const k of valid) {
+		const last = merged[merged.length - 1];
+		if (last && k.start <= last.end) last.end = Math.max(last.end, k.end);
+		else merged.push({ start: k.start, end: k.end });
+	}
+
+	// The complement: [0, firstKeepStart), each inter-keep gap, [lastKeepEnd, totalSec).
+	const ranges: TimeRange[] = [];
+	let removedSec = 0;
+	let cursor = 0;
+	const pushGap = ({ start, end }: { start: number; end: number }) => {
+		if (end - start < SLIVER_TOLERANCE_SEC) return;
+		ranges.push({ start: Math.round(start * ticksPerSecond), end: Math.round(end * ticksPerSecond) });
+		removedSec += end - start;
+	};
+	for (const m of merged) {
+		if (m.start > cursor) pushGap({ start: cursor, end: m.start });
+		cursor = Math.max(cursor, m.end);
+	}
+	if (cursor < totalSec) pushGap({ start: cursor, end: totalSec });
+
+	return { ranges, removedSec };
+}
+
 /**
  * Pure: resolve each `reorder` op to the moves it implies. An op claims the
  * elements FULLY contained in its [startSec, endSec) span (clip granularity — KTD-2)

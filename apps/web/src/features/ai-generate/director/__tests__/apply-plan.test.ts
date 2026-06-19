@@ -42,7 +42,7 @@ mock.module("@/commands/timeline/element/move-elements", () => ({
 }));
 mock.module("@/commands/batch-command", () => ({ BatchCommand: FakeBatchCommand }));
 
-const { applyDirectorPlan, planRemovalRanges, planReorderMoves } =
+const { applyDirectorPlan, planRemovalRanges, planReorderMoves, planKeepInverseRanges } =
 	await import("../apply-plan");
 
 const op = (
@@ -238,5 +238,103 @@ describe("applyDirectorPlan (composition glue)", () => {
 		});
 		expect(executed).toHaveLength(0);
 		expect(result).toEqual({ cuts: 0, removedSec: 0, reorders: 0 });
+	});
+});
+
+describe("planKeepInverseRanges (Highlight inverse apply)", () => {
+	const TPS = 120_000;
+	const rg = ([startSec, endSec]: [number, number]) => ({
+		start: startSec * TPS,
+		end: endSec * TPS,
+	});
+
+	test("removes the complement of the kept spans", () => {
+		const { ranges, removedSec } = planKeepInverseRanges({
+			keeps: [
+				{ startSec: 2, endSec: 5 },
+				{ startSec: 10, endSec: 12 },
+			],
+			totalSec: 15,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([rg([0, 2]), rg([5, 10]), rg([12, 15])]);
+		expect(removedSec).toBe(10);
+	});
+
+	test("partial acceptance: only the accepted spans survive", () => {
+		const { ranges } = planKeepInverseRanges({
+			keeps: [
+				{ startSec: 2, endSec: 5 },
+				{ startSec: 20, endSec: 25 },
+			],
+			totalSec: 30,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([rg([0, 2]), rg([5, 20]), rg([25, 30])]);
+	});
+
+	test("adjacent/overlapping keeps merge before complementing (no zero-length ranges)", () => {
+		const { ranges } = planKeepInverseRanges({
+			keeps: [
+				{ startSec: 2, endSec: 5 },
+				{ startSec: 5, endSec: 8 },
+				{ startSec: 4, endSec: 6 },
+			],
+			totalSec: 10,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([rg([0, 2]), rg([8, 10])]);
+	});
+
+	test("a full-timeline keep removes nothing", () => {
+		const { ranges, removedSec } = planKeepInverseRanges({
+			keeps: [{ startSec: 0, endSec: 12 }],
+			totalSec: 12,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([]);
+		expect(removedSec).toBe(0);
+	});
+
+	test("an empty / all-invalid keep set throws (never removes the whole timeline)", () => {
+		expect(() => planKeepInverseRanges({ keeps: [], totalSec: 15, ticksPerSecond: TPS })).toThrow(
+			/nothing to keep/,
+		);
+		expect(() =>
+			planKeepInverseRanges({
+				keeps: [{ startSec: 5, endSec: 5 }],
+				totalSec: 15,
+				ticksPerSecond: TPS,
+			}),
+		).toThrow(/nothing to keep/);
+	});
+
+	test("a sub-frame complement gap is not emitted (boundary tolerance)", () => {
+		const { ranges } = planKeepInverseRanges({
+			keeps: [
+				{ startSec: 0, endSec: 5 },
+				{ startSec: 5.02, endSec: 10 },
+			],
+			totalSec: 10,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([]);
+	});
+
+	test("keeps beyond the timeline are clamped", () => {
+		const { ranges } = planKeepInverseRanges({
+			keeps: [
+				{ startSec: 2, endSec: 5 },
+				{ startSec: 12, endSec: 20 },
+			],
+			totalSec: 15,
+			ticksPerSecond: TPS,
+		});
+		expect(ranges).toEqual([rg([0, 2]), rg([5, 12])]);
+	});
+
+	test("idempotent: the same keep set yields the same ranges", () => {
+		const args = { keeps: [{ startSec: 3, endSec: 6 }], totalSec: 12, ticksPerSecond: TPS };
+		expect(planKeepInverseRanges(args).ranges).toEqual(planKeepInverseRanges(args).ranges);
 	});
 });
