@@ -202,4 +202,17 @@ describe("buildDirectorPrompt — importance (keep-side)", () => {
 		});
 		expect(without).not.toContain('"imp" score');
 	});
+
+	test("asks for load-bearing keep ops only when importance is present (U4)", () => {
+		const withImp = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi", importance: 0.7 })],
+			totalSec: 12,
+		});
+		expect(withImp).toContain('Emit "keep" ops on the genuinely LOAD-BEARING');
+		const without = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi" })],
+			totalSec: 12,
+		});
+		expect(without).not.toContain("LOAD-BEARING");
+	});
 });

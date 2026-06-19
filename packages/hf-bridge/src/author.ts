@@ -594,6 +594,9 @@ export function buildDirectorPrompt({
 	const importanceRule = hasImportance
 		? `\n- Each row has an "imp" score (0-1): a deterministic emphasis/anchor signal (loudness + steady delivery + content density). Lean toward KEEPING high-imp rows and cutting low-imp ones when trimming for pace — but imp measures EMPHASIS, not meaning, so never cut a load-bearing line just because its imp is low.`
 		: "";
+	const keepRule = hasImportance
+		? `\n- Emit "keep" ops on the genuinely LOAD-BEARING spans — the thesis, the payoff, a landed joke, a surprising or pivotal line — ESPECIALLY ones the imp score underrates (a quiet but important moment imp can't detect). A "keep" op protects that span from removal; it never deletes anything.`
+		: "";
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
@@ -605,7 +608,7 @@ ${catalogBlock}Emit a plan of typed OPERATIONS:
 Rules:
 - Pacing beats completeness, but NEVER cut content the video's point depends on. Keep the speaker's personality; only cut what stalls the video.
 - Boundaries must align with the segment timestamps. Total duration is ${totalSec.toFixed(2)}s; every startSec/endSec/targetStartSec must be within [0, ${totalSec.toFixed(2)}].
-- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}${importanceRule}
+- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}${importanceRule}${keepRule}
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
