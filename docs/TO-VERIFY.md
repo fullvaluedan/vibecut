@@ -2,6 +2,14 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Long-video performance + transcription/preview (2026-06-20, branch `feat/director-importance`, plan `docs/plans/2026-06-20-001-...`)
+Run **AI CUT → AI Director** on the long (16-min) recording that surfaced these. Pure cores are bun-tested (probe slice, analysis-model selector, streaming resampler, seek-supersede); the rest is browser-only.
+- [ ] **U1 — single transcription pass.** The `[transcription] …word-level…falling back` warning appears ONCE and transcription does NOT run twice. On whisper-small the probe (~20s) catches the cross-attention failure before any full word pass. Wall-clock should be roughly half the doubled-pass time.
+- [ ] **U2 — honest progress.** Within seconds of decoding, the status reads "Transcribing your video — Ns elapsed (long videos take a few minutes)", NOT "Initializing speech model — 903s". The elapsed counter advances during transcription.
+- [ ] **U5 — faster model on long sources.** A >5-min timeline transcribes with **whisper-tiny** (faster); a short clip still uses **whisper-small**. Captions (Subtitles panel) are unchanged. Eyeball whether Tiny's transcript is still good enough for cut quality — if cuts get noticeably worse, raise `ANALYSIS_TINY_THRESHOLD_SECONDS` or revert to Small.
+- [ ] **U4 — no audio OOM.** The 16-min source decodes for the Director WITHOUT the `createBuffer`/allocation crash at "Extracting timeline audio". Memory stays bounded. Also sanity-check that **export** audio still sounds right (export path kept the offline render — should be unchanged). Possible risk: linear-resample aliasing slightly degrades the 16k analysis audio → if transcription accuracy drops oddly, that's the suspect.
+- [ ] **U3 — preview unfreezes (NEEDS RUNTIME CONFIRMATION).** Scrubbing the playhead across the cut 16-min timeline now UPDATES the preview frame (no freeze on frame 1). **This is the one fix I could not runtime-verify** — the root cause (same-time RAF repeats superseding a slow deep seek) is high-confidence from tracing + `window.__wasmPanic` being empty, and the fix (supersede by time, not count) is unit-tested, but confirm it on the actual long timeline. If it STILL freezes, capture console + tell me — do not assume the hypothesis held.
+
 ## AI Director — Round 2 (the cut)
 Run **AI CUT → AI Director** on a talking-head clip with speech, then check the Review modal + apply:
 

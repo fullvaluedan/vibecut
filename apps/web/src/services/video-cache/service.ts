@@ -5,6 +5,7 @@ import {
 	CanvasSink,
 	type WrappedCanvas,
 } from "mediabunny";
+import { isSeekSuperseded } from "./seek-supersede";
 
 interface VideoSinkData {
 	input: Input;
@@ -21,7 +22,11 @@ export class VideoCache {
 	private sinks = new Map<string, VideoSinkData>();
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
-	private seekGenerations = new Map<string, number>();
+	// Latest requested frame time per mediaId. A queued decode is superseded only
+	// when a DIFFERENT time has since been requested — not by same-time RAF repeats
+	// (the count-based supersession this replaced let those repeats cancel a slow
+	// deep-seek forever, freezing the preview on the first frame of a long source).
+	private latestSeekTime = new Map<string, number>();
 	// Negative cache: mediaIds whose codec can't be decoded. Without this every
 	// getFrameAt re-creates the mediabunny Input, re-throws, and the preview
 	// re-probes an undecodable clip on every frame.
@@ -43,12 +48,19 @@ export class VideoCache {
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
 
-		const generation = (this.seekGenerations.get(mediaId) ?? 0) + 1;
-		this.seekGenerations.set(mediaId, generation);
+		this.latestSeekTime.set(mediaId, time);
 
 		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
 		const current = previous.then(() => {
-			if (this.seekGenerations.get(mediaId) !== generation) {
+			// Skip only if a DIFFERENT time was requested since this one was queued.
+			// Same-time repeats from the RAF loop fall through so a slow deep seek
+			// completes and updates currentFrame instead of being cancelled forever.
+			if (
+				isSeekSuperseded({
+					requestedTime: time,
+					latestTime: this.latestSeekTime.get(mediaId),
+				})
+			) {
 				return sinkData.currentFrame ?? null;
 			}
 			return this.resolveFrame({ sinkData, time });
@@ -324,7 +336,7 @@ export class VideoCache {
 
 		this.initPromises.delete(mediaId);
 		this.frameChain.delete(mediaId);
-		this.seekGenerations.delete(mediaId);
+		this.latestSeekTime.delete(mediaId);
 		this.undecodableMediaIds.delete(mediaId);
 	}
 
