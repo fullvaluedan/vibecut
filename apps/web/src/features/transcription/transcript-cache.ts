@@ -37,6 +37,12 @@ interface CacheEntry {
 	segments: TranscriptSegmentLite[];
 	/** Present only when this entry was produced with word timestamps. */
 	words?: TranscriptWordLite[];
+	/**
+	 * Set when words were requested but this device's model couldn't produce
+	 * them. Lets a `wantWords` request count as a cache hit (so we don't
+	 * re-transcribe every run) even though no words are stored.
+	 */
+	wordsUnavailable?: boolean;
 	createdAt: number;
 }
 
@@ -141,6 +147,7 @@ export function getCachedTranscript(
 let inFlight: Promise<{
 	segments: TranscriptSegmentLite[];
 	words?: TranscriptWordLite[];
+	wordsUnavailable?: boolean;
 }> | null = null;
 let inFlightHash: string | null = null;
 let inFlightHasWords = false;
@@ -184,16 +191,24 @@ export async function ensureTimelineTranscript({
 }): Promise<{
 	segments: TranscriptSegmentLite[];
 	words?: TranscriptWordLite[];
+	/** True when words were requested but the model couldn't produce them. */
+	wordsUnavailable?: boolean;
 	fromCache: boolean;
 }> {
 	const cachedEntry = getCachedEntry(editor);
 	// A hash match is a hit even when the transcript is EMPTY (a silent /
-	// music-only timeline) — `[]` is a valid cached result. But a word-level
-	// request only counts as a hit when the entry actually carries words.
-	if (cachedEntry && (!wantWords || cachedEntry.words)) {
+	// music-only timeline) — `[]` is a valid cached result. A word-level request
+	// counts as a hit when the entry carries words OR was flagged as words-
+	// unavailable (the model can't produce them — re-running would only fail the
+	// same way and waste a full transcription).
+	if (
+		cachedEntry &&
+		(!wantWords || cachedEntry.words || cachedEntry.wordsUnavailable)
+	) {
 		return {
 			segments: cachedEntry.segments,
 			words: cachedEntry.words,
+			wordsUnavailable: cachedEntry.wordsUnavailable,
 			fromCache: true,
 		};
 	}
@@ -233,6 +248,7 @@ export async function ensureTimelineTranscript({
 	const run = async (): Promise<{
 		segments: TranscriptSegmentLite[];
 		words?: TranscriptWordLite[];
+		wordsUnavailable?: boolean;
 	}> => {
 		const totalDuration = editor.timeline.getTotalDuration();
 		if (totalDuration / TICKS_PER_SECOND < 1) {
@@ -307,8 +323,19 @@ export async function ensureTimelineTranscript({
 			const words: TranscriptWordLite[] | undefined = transcript.words?.map(
 				(word) => ({ start: word.start, end: word.end, text: word.text }),
 			);
-			writeCache(projectId, { hash, segments, words, createdAt: Date.now() });
-			return { segments, words };
+			// Only flag words-unavailable when words were actually wanted — so a
+			// plain segment-level run never poisons a later word-level request.
+			const wordsUnavailable = wantWords
+				? transcript.wordsUnavailable ?? !words
+				: undefined;
+			writeCache(projectId, {
+				hash,
+				segments,
+				words,
+				wordsUnavailable,
+				createdAt: Date.now(),
+			});
+			return { segments, words, wordsUnavailable };
 		} finally {
 			stopTicker();
 		}

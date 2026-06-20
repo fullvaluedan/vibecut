@@ -34,6 +34,12 @@ export type WorkerResponse =
 			segments: TranscriptionSegment[];
 			/** Present only when `wordTimestamps` was requested. */
 			words?: TranscriptionWord[];
+			/**
+			 * True when word timestamps were requested but this model's ONNX
+			 * export can't produce them (no cross-attention) — we degraded to
+			 * segment-level so the run still completes.
+			 */
+			wordsUnavailable?: boolean;
 	  }
 	| { type: "transcribe-error"; error: string }
 	| { type: "cancelled" };
@@ -78,7 +84,20 @@ function segmentsFromWords(
 let transcriber: AutomaticSpeechRecognitionPipeline | null = null;
 let cancelled = false;
 let lastReportedProgress = -1;
+/**
+ * Set once the loaded model is proven unable to emit word-level timestamps
+ * (its ONNX decoder lacks the cross-attention outputs DTW needs). We then skip
+ * the doomed word-mode decode on every later run this session and go straight
+ * to segment-level. Reset on init because a different model may support it.
+ */
+let wordTimestampsUnsupported = false;
 const fileBytes = new Map<string, { loaded: number; total: number }>();
+
+/** The cross-attention export some Whisper ONNX builds lack (word DTW needs it). */
+function isWordTimestampUnsupported(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /cross att|output_attentions/i.test(message);
+}
 
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 	const message = event.data;
@@ -103,6 +122,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 
 async function handleInit({ modelId }: { modelId: string }) {
 	lastReportedProgress = -1;
+	wordTimestampsUnsupported = false;
 	fileBytes.clear();
 
 	try {
@@ -165,6 +185,75 @@ async function handleInit({ modelId }: { modelId: string }) {
 	}
 }
 
+/** One decode pass at the requested timestamp granularity. */
+async function decode({
+	audio,
+	language,
+	mode,
+}: {
+	audio: Float32Array;
+	language: string;
+	mode: "word" | "segment";
+}): Promise<AutomaticSpeechRecognitionOutput> {
+	if (!transcriber) throw new Error("Model not initialized");
+	const rawResult = await transcriber(audio, {
+		chunk_length_s: DEFAULT_CHUNK_LENGTH_SECONDS,
+		stride_length_s: DEFAULT_STRIDE_SECONDS,
+		language: language === "auto" ? undefined : language,
+		return_timestamps: mode === "word" ? "word" : true,
+	});
+	return Array.isArray(rawResult) ? rawResult[0] : rawResult;
+}
+
+/**
+ * In word mode the chunks ARE words; ship them (with chunk-boundary ends
+ * repaired) for the Director's duplicate-word detector.
+ */
+function wordsFromResult(
+	result: AutomaticSpeechRecognitionOutput,
+): TranscriptionWord[] {
+	const words: TranscriptionWord[] = [];
+	const chunks = result.chunks ?? [];
+	for (let i = 0; i < chunks.length; i++) {
+		const chunk = chunks[i];
+		if (!chunk.timestamp || chunk.timestamp.length < 2) continue;
+		const start = chunk.timestamp[0] ?? 0;
+		const rawEnd = chunk.timestamp[1];
+		let end = start;
+		if (Number.isFinite(rawEnd)) {
+			end = rawEnd;
+		} else {
+			// At each 30s chunk boundary transformers.js emits a word with a
+			// null end. Don't collapse it to start (a zero-length point the
+			// duplicate detector would drop and which breaks gap math) —
+			// infer the end from the next word's start.
+			const nextStart = chunks[i + 1]?.timestamp?.[0];
+			end = nextStart != null && nextStart > start ? nextStart : start + 0.1;
+		}
+		words.push({ text: chunk.text, start, end });
+	}
+	return words;
+}
+
+/** Phrase-level segments straight from a segment-mode decode. */
+function segmentsFromResult(
+	result: AutomaticSpeechRecognitionOutput,
+): TranscriptionSegment[] {
+	const segments: TranscriptionSegment[] = [];
+	if (result.chunks) {
+		for (const chunk of result.chunks) {
+			if (chunk.timestamp && chunk.timestamp.length >= 2) {
+				segments.push({
+					text: chunk.text,
+					start: chunk.timestamp[0] ?? 0,
+					end: chunk.timestamp[1] ?? chunk.timestamp[0] ?? 0,
+				});
+			}
+		}
+	}
+	return segments;
+}
+
 async function handleTranscribe({
 	audio,
 	language,
@@ -185,70 +274,45 @@ async function handleTranscribe({
 	cancelled = false;
 
 	try {
-		const rawResult = await transcriber(audio, {
-			chunk_length_s: DEFAULT_CHUNK_LENGTH_SECONDS,
-			stride_length_s: DEFAULT_STRIDE_SECONDS,
-			language: language === "auto" ? undefined : language,
-			return_timestamps: wordTimestamps ? "word" : true,
-		});
+		// Word mode: try cross-attention word timing, but degrade to segment-level
+		// when this model's ONNX export can't emit it (the "Model outputs must
+		// contain cross attentions" / output_attentions error). The word-level
+		// detectors then simply yield nothing while AI Director/Highlight still
+		// run. `wordTimestampsUnsupported` memoizes the failure so we don't pay
+		// for a doomed word decode on every later run this session.
+		if (wordTimestamps && !wordTimestampsUnsupported) {
+			try {
+				const result = await decode({ audio, language, mode: "word" });
+				if (cancelled) return;
+				const words = wordsFromResult(result);
+				self.postMessage({
+					type: "transcribe-complete",
+					text: result.text,
+					segments: segmentsFromWords(words),
+					words,
+				} satisfies WorkerResponse);
+				return;
+			} catch (error) {
+				if (cancelled) return;
+				if (!isWordTimestampUnsupported(error)) throw error;
+				wordTimestampsUnsupported = true;
+				console.warn(
+					"[transcription] This model can't produce word-level timestamps; " +
+						"falling back to segment-level. Word-based Director detectors " +
+						"(duplicate words, filler, dead-air) will be skipped.",
+				);
+			}
+		}
 
+		const result = await decode({ audio, language, mode: "segment" });
 		if (cancelled) return;
-
-		const result: AutomaticSpeechRecognitionOutput = Array.isArray(rawResult)
-			? rawResult[0]
-			: rawResult;
-
-		if (wordTimestamps) {
-			// In word mode the chunks ARE words; rebuild phrase segments from them
-			// so segment consumers are unaffected, and ship the words for the
-			// Director's duplicate-word detector.
-			const words: TranscriptionWord[] = [];
-			const chunks = result.chunks ?? [];
-			for (let i = 0; i < chunks.length; i++) {
-				const chunk = chunks[i];
-				if (!chunk.timestamp || chunk.timestamp.length < 2) continue;
-				const start = chunk.timestamp[0] ?? 0;
-				const rawEnd = chunk.timestamp[1];
-				let end = start;
-				if (Number.isFinite(rawEnd)) {
-					end = rawEnd;
-				} else {
-					// At each 30s chunk boundary transformers.js emits a word with a
-					// null end. Don't collapse it to start (a zero-length point the
-					// duplicate detector would drop and which breaks gap math) —
-					// infer the end from the next word's start.
-					const nextStart = chunks[i + 1]?.timestamp?.[0];
-					end = nextStart != null && nextStart > start ? nextStart : start + 0.1;
-				}
-				words.push({ text: chunk.text, start, end });
-			}
-			self.postMessage({
-				type: "transcribe-complete",
-				text: result.text,
-				segments: segmentsFromWords(words),
-				words,
-			} satisfies WorkerResponse);
-			return;
-		}
-
-		const segments: TranscriptionSegment[] = [];
-
-		if (result.chunks) {
-			for (const chunk of result.chunks) {
-				if (chunk.timestamp && chunk.timestamp.length >= 2) {
-					segments.push({
-						text: chunk.text,
-						start: chunk.timestamp[0] ?? 0,
-						end: chunk.timestamp[1] ?? chunk.timestamp[0] ?? 0,
-					});
-				}
-			}
-		}
-
 		self.postMessage({
 			type: "transcribe-complete",
 			text: result.text,
-			segments,
+			segments: segmentsFromResult(result),
+			// Words were asked for but this model can't give them — tell the cache
+			// so it stops re-transcribing on every word-level request.
+			wordsUnavailable: wordTimestamps,
 		} satisfies WorkerResponse);
 	} catch (error) {
 		if (cancelled) return;

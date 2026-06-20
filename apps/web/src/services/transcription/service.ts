@@ -58,6 +58,7 @@ class TranscriptionService {
 							text: response.text,
 							segments: response.segments,
 							words: response.words,
+							wordsUnavailable: response.wordsUnavailable,
 							language,
 						});
 						break;

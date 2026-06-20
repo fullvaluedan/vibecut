@@ -20,6 +20,11 @@ export interface TranscriptionResult {
 	segments: TranscriptionSegment[];
 	/** Present only when transcription was requested with word timestamps. */
 	words?: TranscriptionWord[];
+	/**
+	 * True when word timestamps were requested but this model's ONNX export
+	 * can't produce them — the result degraded to segment-level only.
+	 */
+	wordsUnavailable?: boolean;
 	language: string;
 }
 
