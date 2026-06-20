@@ -323,6 +323,15 @@ async function handleTranscribe({
 
 	cancelled = false;
 
+	// Flip the UI off "Initializing speech model" the moment real decoding starts
+	// (the model is already loaded by now). Without this the elapsed-ticker in
+	// transcript-cache never learns transcription began and mislabels the whole
+	// (multi-minute, on long video) decode as initialization.
+	self.postMessage({
+		type: "transcribe-progress",
+		progress: 0,
+	} satisfies WorkerResponse);
+
 	try {
 		// Word mode: probe a short slice first so a model that can't emit word
 		// timestamps (the "Model outputs must contain cross attentions" /

@@ -268,13 +268,14 @@ export async function ensureTimelineTranscript({
 			sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 		});
 
-		// Live elapsed ticker so model init never LOOKS frozen.
-		let initTicker: ReturnType<typeof setInterval> | null = null;
-		let initStartedAt = 0;
+		// Live elapsed ticker so neither model init NOR a long transcription LOOKS
+		// frozen. One interval at a time; it's restarted when the phase changes.
+		let ticker: ReturnType<typeof setInterval> | null = null;
+		let transcribeStarted = false;
 		const stopTicker = () => {
-			if (initTicker) {
-				clearInterval(initTicker);
-				initTicker = null;
+			if (ticker) {
+				clearInterval(ticker);
+				ticker = null;
 			}
 		};
 		try {
@@ -284,9 +285,9 @@ export async function ensureTimelineTranscript({
 				onProgress: (p) => {
 					if (p.status === "loading-model") {
 						if (p.progress >= 100) {
-							if (!initTicker) {
-								initStartedAt = Date.now();
-								initTicker = setInterval(() => {
+							if (!ticker) {
+								const initStartedAt = Date.now();
+								ticker = setInterval(() => {
 									const sec = Math.round((Date.now() - initStartedAt) / 1000);
 									broadcastProgress({
 										phase: "initializing-model",
@@ -308,12 +309,25 @@ export async function ensureTimelineTranscript({
 								progress: p.progress / 100,
 							});
 						}
-					} else if (p.status === "transcribing") {
+					} else if (p.status === "transcribing" && !transcribeStarted) {
+						// Real decoding started — stop the init ticker and run a fresh
+						// elapsed ticker for THIS phase. Honest copy: on a long video the
+						// transcription itself takes minutes (it is not "initializing").
+						transcribeStarted = true;
 						stopTicker();
+						const startedAt = Date.now();
 						broadcastProgress({
 							phase: "transcribing",
-							detail: "Listening to your video...",
+							detail:
+								"Transcribing your video — this can take a few minutes on a long video...",
 						});
+						ticker = setInterval(() => {
+							const sec = Math.round((Date.now() - startedAt) / 1000);
+							broadcastProgress({
+								phase: "transcribing",
+								detail: `Transcribing your video — ${sec}s elapsed (long videos take a few minutes)...`,
+							});
+						}, 1000);
 					}
 				},
 			});
