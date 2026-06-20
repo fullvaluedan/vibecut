@@ -21,6 +21,8 @@ import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
+import { StreamingLinearResampler } from "./streaming-resampler";
 import { timelineAudioFrameCount } from "./timeline-audio-size";
 import {
 	computeRmsBuckets,
@@ -304,6 +306,15 @@ async function resolveAudioBufferForAsset({
 		const sink = new AudioBufferSink(audioTrack);
 		const targetSampleRate = audioContext.sampleRate;
 
+		// Heavy-downsample ANALYSIS path (→16kHz mono for transcription/silence):
+		// stream-resample each chunk straight into the output so a long source never
+		// holds its full native PCM (the prior ~3× hold OOM'd a 16-min recording at
+		// "Extracting timeline audio"). The export path (higher target rate) keeps
+		// the offline render below for quality.
+		if (targetSampleRate <= DEFAULT_TRANSCRIPTION_SAMPLE_RATE) {
+			return await streamResampleTrack({ input, sink, audioContext, targetSampleRate });
+		}
+
 		const chunks: AudioBuffer[] = [];
 		let totalSamples = 0;
 
@@ -366,6 +377,60 @@ async function resolveAudioBufferForAsset({
 	} finally {
 		input.dispose();
 	}
+}
+
+/** A few samples of slack on the pre-sized resample output for rounding. */
+const RESAMPLE_OUTPUT_SLACK = 16;
+
+/**
+ * Stream a track's audio through a linear resampler, writing each decoded chunk
+ * straight into the pre-sized output — never holding the full native PCM. Output
+ * length is pre-sized from the track duration (the resampler clamps to it).
+ */
+async function streamResampleTrack({
+	input,
+	sink,
+	audioContext,
+	targetSampleRate,
+}: {
+	input: Input;
+	sink: AudioBufferSink;
+	audioContext: AudioContext;
+	targetSampleRate: number;
+}): Promise<AudioBuffer | null> {
+	const durationSec = await input.computeDuration();
+	let resampler: StreamingLinearResampler | null = null;
+	let numChannels = 0;
+	for await (const { buffer } of sink.buffers(0)) {
+		if (!resampler) {
+			numChannels = Math.min(MAX_AUDIO_CHANNELS, buffer.numberOfChannels);
+			const maxOutputSamples =
+				Math.ceil(durationSec * targetSampleRate) + RESAMPLE_OUTPUT_SLACK;
+			resampler = new StreamingLinearResampler({
+				nativeRate: buffer.sampleRate,
+				targetRate: targetSampleRate,
+				numChannels,
+				maxOutputSamples,
+			});
+		}
+		const channels = Array.from({ length: numChannels }, (_, channel) =>
+			buffer.getChannelData(Math.min(channel, buffer.numberOfChannels - 1)),
+		);
+		resampler.push({ channels, length: buffer.length });
+	}
+	if (!resampler || resampler.outputLength === 0) return null;
+	const output = resampler.finish();
+	const outBuffer = audioContext.createBuffer(
+		numChannels,
+		output[0].length,
+		targetSampleRate,
+	);
+	for (let channel = 0; channel < numChannels; channel++) {
+		// `.set` (not copyToChannel) sidesteps the strict Float32Array<ArrayBuffer>
+		// vs <ArrayBufferLike> mismatch on the resampler's subarray views.
+		outBuffer.getChannelData(channel).set(output[channel]);
+	}
+	return outBuffer;
 }
 
 interface AudioMixSource {
