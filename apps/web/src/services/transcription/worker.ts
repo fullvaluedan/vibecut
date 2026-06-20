@@ -10,7 +10,9 @@ import type {
 import {
 	DEFAULT_CHUNK_LENGTH_SECONDS,
 	DEFAULT_STRIDE_SECONDS,
+	DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 } from "@/transcription/audio";
+import { leadingWindow, WORD_PROBE_WINDOW_SECONDS } from "@/transcription/probe";
 
 export type WorkerMessage =
 	| { type: "init"; modelId: string }
@@ -97,6 +99,19 @@ const fileBytes = new Map<string, { loaded: number; total: number }>();
 function isWordTimestampUnsupported(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /cross att|output_attentions/i.test(message);
+}
+
+/** Probe length in samples (window seconds × the fixed transcription rate). */
+const WORD_PROBE_WINDOW_SAMPLES = Math.round(
+	WORD_PROBE_WINDOW_SECONDS * DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
+);
+
+function warnWordTimestampsDegraded(): void {
+	console.warn(
+		"[transcription] This model can't produce word-level timestamps; " +
+			"falling back to segment-level. Word-based Director detectors " +
+			"(duplicate words, filler, dead-air) will be skipped.",
+	);
 }
 
 self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
@@ -254,6 +269,41 @@ function segmentsFromResult(
 	return segments;
 }
 
+/**
+ * Learn whether the loaded model can emit word timestamps WITHOUT paying for a
+ * full word-mode pass: decode a short leading slice in word mode. If it throws
+ * the cross-attention error, memoize that and the caller goes straight to
+ * segment-level for the full audio (no doubled transcription on long sources).
+ * Any other probe outcome is inconclusive — the caller's full pass stays
+ * authoritative, so the probe can never make a run WORSE than no probe.
+ */
+async function probeWordCapability({
+	audio,
+	language,
+}: {
+	audio: Float32Array;
+	language: string;
+}): Promise<void> {
+	const probe = leadingWindow({
+		samples: audio,
+		windowSamples: WORD_PROBE_WINDOW_SAMPLES,
+	});
+	// Nothing saved if the whole clip is already <= the probe window.
+	if (probe.length >= audio.length) return;
+	try {
+		await decode({ audio: probe, language, mode: "word" });
+		// Succeeded (model is word-capable) or produced nothing (silent opening,
+		// inconclusive) — either way let the full word pass decide.
+	} catch (error) {
+		if (isWordTimestampUnsupported(error)) {
+			wordTimestampsUnsupported = true;
+			warnWordTimestampsDegraded();
+		}
+		// A non-capability probe error is inconclusive; swallow it and let the
+		// full pass surface any real failure.
+	}
+}
+
 async function handleTranscribe({
 	audio,
 	language,
@@ -274,12 +324,17 @@ async function handleTranscribe({
 	cancelled = false;
 
 	try {
-		// Word mode: try cross-attention word timing, but degrade to segment-level
-		// when this model's ONNX export can't emit it (the "Model outputs must
-		// contain cross attentions" / output_attentions error). The word-level
-		// detectors then simply yield nothing while AI Director/Highlight still
-		// run. `wordTimestampsUnsupported` memoizes the failure so we don't pay
-		// for a doomed word decode on every later run this session.
+		// Word mode: probe a short slice first so a model that can't emit word
+		// timestamps (the "Model outputs must contain cross attentions" /
+		// output_attentions error) is caught from a ~20s decode rather than a full
+		// word pass that throws — no doubled transcription on long sources. The
+		// word-level detectors then simply yield nothing while AI Director still
+		// runs. `wordTimestampsUnsupported` memoizes it across runs this session.
+		if (wordTimestamps && !wordTimestampsUnsupported) {
+			await probeWordCapability({ audio, language });
+			if (cancelled) return;
+		}
+
 		if (wordTimestamps && !wordTimestampsUnsupported) {
 			try {
 				const result = await decode({ audio, language, mode: "word" });
@@ -296,11 +351,7 @@ async function handleTranscribe({
 				if (cancelled) return;
 				if (!isWordTimestampUnsupported(error)) throw error;
 				wordTimestampsUnsupported = true;
-				console.warn(
-					"[transcription] This model can't produce word-level timestamps; " +
-						"falling back to segment-level. Word-based Director detectors " +
-						"(duplicate words, filler, dead-air) will be skipped.",
-				);
+				warnWordTimestampsDegraded();
 			}
 		}
 
