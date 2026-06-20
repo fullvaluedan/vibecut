@@ -23,7 +23,7 @@ import { useEditor } from "@/editor/use-editor";
 import { applyDirectorPlan, applyHighlightPlan } from "../apply-plan";
 import { useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
-import { describeReviewOp } from "../review-format";
+import { describeReviewOp, formatTimeRange } from "../review-format";
 import { formatHighlightPreview } from "../highlight-preview";
 
 export function DirectorReviewDialog() {
@@ -116,7 +116,7 @@ export function DirectorReviewDialog() {
 													{accepted ? "Keep" : "Drop"}
 												</span>
 												<span className="text-muted-foreground mr-2 text-xs">
-													{k.startSec.toFixed(1)}–{k.endSec.toFixed(1)}s
+													{formatTimeRange({ startSec: k.startSec, endSec: k.endSec })}
 												</span>
 												{k.text ? <>&ldquo;{k.text.trim().slice(0, 100)}&rdquo;</> : null}
 											</span>
@@ -233,7 +233,7 @@ export function DirectorReviewDialog() {
 											</span>
 										) : null}
 										<span className="text-muted-foreground mr-2 text-xs">
-											{op.startSec.toFixed(1)}–{op.endSec.toFixed(1)}s
+											{formatTimeRange({ startSec: op.startSec, endSec: op.endSec })}
 										</span>
 										{op.reason}
 										{display.rejectedHint ? (
@@ -262,7 +262,7 @@ export function DirectorReviewDialog() {
 										{note.members.map((m) => (
 											<div key={m.startSec} className="text-muted-foreground">
 												<span className="text-foreground font-mono">
-													{m.startSec.toFixed(1)}–{m.endSec.toFixed(1)}s
+													{formatTimeRange({ startSec: m.startSec, endSec: m.endSec })}
 												</span>{" "}
 												&ldquo;{m.text.trim().slice(0, 80)}&rdquo;
 											</div>
