@@ -33,6 +33,7 @@ import { detectPhraseRepeatCuts } from "./phrase-repeat";
 import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
+import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
 import { buildTakeClusters } from "./take-clusters";
@@ -79,13 +80,21 @@ export async function runDirector({
 	// Deterministic word-level cuts (the LLM works at segment level and misses
 	// doubled words + standalone fillers inside a segment) — merged into the plan
 	// below, deduped against the LLM's removals.
-	const detectedCuts = [
+	const wordCuts = [
 		...detectDuplicateWordCuts({ words: words ?? [] }),
 		...detectPhraseRepeatCuts({ words: words ?? [] }),
 		...detectDeadAirCuts({ words: words ?? [] }),
 		...detectFillerCuts({ words: words ?? [] }),
 		...detectPacingCuts({ segments }),
 	];
+	// Segment-level consecutive-repeat backstop: the ONLY repeat catcher when the
+	// model can't emit word timestamps (phrase-repeat then yields nothing). Drop any
+	// that overlap a word-level cut so the two layers don't double up in the review.
+	const segmentRepeatCuts = detectSegmentRepeatCuts({ segments }).filter(
+		(op) =>
+			!wordCuts.some((w) => w.startSec < op.endSec && op.startSec < w.endSec),
+	);
+	const detectedCuts = [...wordCuts, ...segmentRepeatCuts];
 	abort();
 
 	onProgress?.("Listening to the takes...");
