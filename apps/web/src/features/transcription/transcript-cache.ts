@@ -11,6 +11,7 @@ import { decodeAudioToFloat32 } from "@/media/audio";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { transcriptionService } from "@/services/transcription/service";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
+import { selectAnalysisModel } from "@/transcription/analysis-model";
 import { TICKS_PER_SECOND } from "@/wasm";
 
 export interface TranscriptSegmentLite {
@@ -254,6 +255,11 @@ export async function ensureTimelineTranscript({
 		if (totalDuration / TICKS_PER_SECOND < 1) {
 			throw new Error("Add some footage to the timeline first.");
 		}
+		// Analysis path only: trade accuracy for speed on long sources (a 16-min
+		// recording on whisper-small takes minutes). Captions pick their own model.
+		const analysisModel = selectAnalysisModel({
+			durationSec: totalDuration / TICKS_PER_SECOND,
+		});
 		broadcastProgress({
 			phase: "extracting",
 			detail: "Extracting timeline audio...",
@@ -281,6 +287,7 @@ export async function ensureTimelineTranscript({
 		try {
 			const transcript = await transcriptionService.transcribe({
 				audioData: samples,
+				modelId: analysisModel,
 				wordTimestamps: wantWords,
 				onProgress: (p) => {
 					if (p.status === "loading-model") {
