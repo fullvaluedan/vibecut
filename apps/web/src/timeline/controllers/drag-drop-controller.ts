@@ -30,7 +30,7 @@ import type {
 import type { TimelineDragData } from "@/timeline/drag";
 import type { MediaAsset } from "@/media/types";
 import type { ProcessedMediaAsset } from "@/media/processing";
-import { roundFrameTime, type MediaTime } from "@/wasm";
+import { mediaTime, roundFrameTime, type MediaTime } from "@/wasm";
 
 // --- Config ---
 
@@ -531,6 +531,12 @@ export class DragDropController {
 			promise: async () => {
 				const processedAssets = await processMediaAssets({ files });
 
+				// Lay multiple dropped files back-to-back: without this, files 2..N
+				// all resolve to the SAME mouse position and stack on top of each
+				// other (looking like only one landed). The cursor advances by each
+				// inserted clip's duration. Stays 0 for a single-file drop.
+				let cascadeOffsetTicks = 0;
+
 				// Sequential on purpose: each iteration reads getSceneTracks()
 				// to decide placement (reuse empty main vs new track) and that
 				// decision depends on the effects of prior inserts.
@@ -573,6 +579,7 @@ export class DragDropController {
 							elementId: insertCmd.getElementId(),
 							trackId: reuseMainTrackId,
 						});
+						cascadeOffsetTicks += duration;
 						continue;
 					}
 
@@ -586,6 +593,12 @@ export class DragDropController {
 						elementDuration: duration,
 						pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 						zoomLevel: this.config.zoomLevel,
+					});
+
+					// Offset each subsequent file past the previous one so a
+					// multi-file drop lays out sequentially instead of overlapping.
+					dropTarget.xPosition = mediaTime({
+						ticks: dropTarget.xPosition + cascadeOffsetTicks,
 					});
 
 					const trackType: TrackType =
@@ -602,6 +615,7 @@ export class DragDropController {
 						trackType,
 					});
 					this.maybeSeparateAudio({ asset: createdAsset, ...inserted });
+					cascadeOffsetTicks += duration;
 				}
 
 				return {
