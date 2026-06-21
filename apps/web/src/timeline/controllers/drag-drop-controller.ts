@@ -546,13 +546,17 @@ export class DragDropController {
 	 * deletes, trims and the insert run as one BatchCommand → a single undo.
 	 *
 	 * ponytail: two known edge cases (both browser-only, tracked in TO-VERIFY):
-	 * (1) MAIN-TRACK FIRST CLIP — if the drop is on the first main clip and the new
-	 * clip straddles a later one, the main-track startTime enforce-rule
-	 * (update-pipeline.ts) snaps the head-trimmed survivor to 0, overlapping the
-	 * insert. Recoverable (one undo); fixing it needs verifying explicit-insert's
-	 * overlap behaviour, so it's flagged not blind-fixed. (2) RETIMED survivor —
-	 * planRegionOverwrite advances trimStart by timeline ticks, correct only at
-	 * rate==1; a head-trimmed retimed clip gets a wrong in-point.
+	 * (1) MAIN-TRACK earliest clip — when the head-trimmed survivor (or, for a
+	 * shorter-than-slot drop onto the only main clip, the replaced clip itself)
+	 * becomes the EARLIEST main element, the main-track startTime enforce-rule
+	 * (update-pipeline.ts:126) snaps it to 0, overlapping the insert. Recoverable
+	 * (one undo). A command reorder doesn't fix both sub-cases; the real fix is to
+	 * thread `excludeElementId` (as clip-MOVES already do via enforceMainTrackStart)
+	 * through Insert/UpdateElements so the overwrite is exempt from the snap — a
+	 * command-API change that needs browser verification, so it's flagged not
+	 * blind-fixed. (2) RETIMED survivor — planRegionOverwrite advances trimStart by
+	 * timeline ticks, correct only at rate==1; a head-trimmed retimed clip gets a
+	 * wrong in-point.
 	 */
 	private executeMediaOverwrite({
 		target,
