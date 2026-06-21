@@ -254,6 +254,10 @@ export class DragDropController {
 
 		const currentTarget = this.dropTarget;
 		this.setIdle();
+		// After a drop, focus lingers on the dragged bin tile, which makes the
+		// keybindings dispatcher bail on bare-key shortcuts (Delete, gap-delete)
+		// until the user clicks the timeline. Drop that focus so keys work now.
+		blurActiveElementForShortcuts();
 
 		try {
 			if (dragData) {
@@ -624,5 +628,22 @@ export class DragDropController {
 				};
 			},
 		});
+	}
+}
+
+/**
+ * Drop keyboard focus from a lingering control (a dragged bin tile / button) so
+ * bare-key shortcuts fire immediately after a drop. Skips text inputs so an
+ * in-progress rename isn't interrupted.
+ */
+function blurActiveElementForShortcuts(): void {
+	const active = document.activeElement;
+	if (
+		active instanceof HTMLElement &&
+		active.tagName !== "INPUT" &&
+		active.tagName !== "TEXTAREA" &&
+		!active.isContentEditable
+	) {
+		active.blur();
 	}
 }
