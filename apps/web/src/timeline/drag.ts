@@ -10,6 +10,12 @@ export interface MediaDragData extends BaseDragData {
 	type: "media";
 	mediaType: "image" | "video" | "audio";
 	targetElementTypes?: MaskableElement["type"][];
+	/**
+	 * When the dragged tile is part of a multi-selection, the ordered ids of ALL
+	 * selected assets (including `id`). Absent for a single-item drag. The drop
+	 * inserts them back-to-back.
+	 */
+	mediaIds?: string[];
 }
 
 export interface TextDragData extends BaseDragData {

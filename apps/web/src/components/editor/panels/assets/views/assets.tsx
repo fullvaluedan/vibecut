@@ -307,6 +307,12 @@ function MediaAssetDraggable({
 	isRounded?: boolean;
 }) {
 	const editor = useEditor();
+	const { isSelected, selectedIds } = useSelection();
+
+	// Dragging a tile that's part of a multi-selection drags the whole selection
+	// (so all of them land); dragging an unselected tile drags just that one.
+	const dragMediaIds =
+		isSelected(item.id) && selectedIds.length > 1 ? selectedIds : undefined;
 
 	const addElementAtTime = ({
 		asset,
@@ -331,6 +337,7 @@ function MediaAssetDraggable({
 				...(item.type !== "audio" && {
 					targetElementTypes: [...MASKABLE_ELEMENT_TYPES],
 				}),
+				...(dragMediaIds ? { mediaIds: dragMediaIds } : {}),
 			}}
 			shouldShowPlusOnDrag={false}
 			onAddToTimeline={({ currentTime }) =>

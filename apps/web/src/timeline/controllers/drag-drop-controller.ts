@@ -464,6 +464,12 @@ export class DragDropController {
 			return;
 		}
 
+		// Multi-selection drag: drop every selected asset back-to-back.
+		if (dragData.mediaIds && dragData.mediaIds.length > 1) {
+			this.insertMediaAssetsSequential({ ids: dragData.mediaIds, target });
+			return;
+		}
+
 		const mediaAsset = this.config
 			.getMediaAssets()
 			.find((asset) => asset.id === dragData.id);
@@ -480,6 +486,42 @@ export class DragDropController {
 		});
 		const inserted = this.insertAtTarget({ element, target, trackType });
 		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+	}
+
+	/** Insert several bin assets at the drop point, laid out sequentially. */
+	private insertMediaAssetsSequential({
+		ids,
+		target,
+	}: {
+		ids: string[];
+		target: DropTarget;
+	}): void {
+		const assets = this.config.getMediaAssets();
+		let cascadeOffsetTicks = 0;
+		for (const id of ids) {
+			const mediaAsset = assets.find((asset) => asset.id === id);
+			if (!mediaAsset) continue;
+			const trackType: TrackType =
+				mediaAsset.type === "audio" ? "audio" : "video";
+			const duration = toElementDurationTicks({ seconds: mediaAsset.duration });
+			const startTime = mediaTime({
+				ticks: target.xPosition + cascadeOffsetTicks,
+			});
+			const element = buildElementFromMedia({
+				mediaId: mediaAsset.id,
+				mediaType: mediaAsset.type,
+				name: mediaAsset.name,
+				duration,
+				startTime,
+			});
+			const inserted = this.insertAtTarget({
+				element,
+				target: { ...target, xPosition: startTime },
+				trackType,
+			});
+			this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+			cascadeOffsetTicks += duration;
+		}
 	}
 
 	private executeEffectDrop({
