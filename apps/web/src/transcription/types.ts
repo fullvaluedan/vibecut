@@ -45,7 +45,13 @@ export type TranscriptionModelId =
 	| "whisper-tiny"
 	| "whisper-small"
 	| "whisper-medium"
-	| "whisper-large-v3-turbo";
+	| "whisper-large-v3-turbo"
+	// Word-timestamp-capable exports (cross-attention) — candidates for the
+	// Director/analysis path so the word-level detectors can run. Verify each
+	// actually emits word timestamps in our transformers.js version (see the
+	// U1 spike) before relying on it.
+	| "whisper-base-timestamped"
+	| "whisper-medium-en-timestamped";
 
 export interface TranscriptionModel {
 	id: TranscriptionModelId;

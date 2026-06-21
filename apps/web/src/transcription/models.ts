@@ -28,6 +28,21 @@ export const TRANSCRIPTION_MODELS: TranscriptionModel[] = [
 		huggingFaceId: "onnx-community/whisper-large-v3-turbo",
 		description: "Best accuracy, requires WebGPU for good performance",
 	},
+	// Word-timestamp-capable exports (cross-attention) for the Director/analysis
+	// path. UNVERIFIED in our transformers.js version — the U1 spike confirms each
+	// actually emits word timestamps before the analysis selector adopts it.
+	{
+		id: "whisper-base-timestamped",
+		name: "Base (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-base_timestamped",
+		description: "Small, multilingual, emits word-level timestamps",
+	},
+	{
+		id: "whisper-medium-en-timestamped",
+		name: "Medium EN (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-medium.en_timestamped",
+		description: "Accurate, English-only, emits word-level timestamps",
+	},
 ];
 
 export const DEFAULT_TRANSCRIPTION_MODEL: TranscriptionModelId =
