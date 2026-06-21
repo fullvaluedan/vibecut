@@ -192,7 +192,9 @@ The whole "words back on" arc (fix repeats/fillers/dead-air) hinges on this. Two
 ## Core editing bug fixes (2026-06-20) — browser-only, live-verify
 - [ ] **Bug1 — timeline doesn't collapse on delete.** Build a long (~30 min) timeline, delete clips down to empty → the ruler stays at a sane zoom, NOT collapsed to ~30 frames. (Fix: empty timeline uses `TIMELINE_ZOOM_MIN`, not the 1s floor.)
 - [ ] **Bug2 — AI CUT respects the timeline.** Put ONE clip on the timeline (leaving other assets in the bin) → AI CUT / Director edits only that clip; it does NOT pull the rest of the bin in. On an EMPTY timeline, AI CUT still assembles the whole bin (intended).
-- [ ] **Bug3 — overwrite on drop.** Drag an asset from the bin ON TOP of an existing clip → it replaces that clip in place (same start, no neighbour shift); one Ctrl+Z restores. (v1: capped to the old clip's slot length.)
+- [ ] **Bug3 — overwrite on drop (v2, full-length region clear).** Drop a bin asset ON TOP of an existing clip → the new clip lands at the old clip's start with its OWN full length; one Ctrl+Z restores everything. Check both directions, and that nothing downstream shifts (no ripple):
+  - **Longer than the slot:** drop a long clip on a short one with clips after it → the new clip extends over them; any clip it fully covers disappears, the next partially-covered clip is head-trimmed (its remaining tail starts right where the new clip ends — no gap).
+  - **Shorter than the slot:** drop a short clip on a long one → the new clip fills only its own length; the old clip's leftover tail survives, head-trimmed to butt against the new clip (no gap, no neighbour moves).
 - [ ] **Bug4 — multi-asset drag adds all.** Select multiple bin assets, drag the group onto the timeline → ALL of them land, back-to-back. Dragging a single (or unselected) tile still adds just one.
 - [ ] **Bug5 — hotkeys work immediately after add.** Add a clip (via the "+" button OR a bin drag) then immediately press Delete / gap-delete / other shortcuts → they fire without first clicking/scrubbing the timeline.
 

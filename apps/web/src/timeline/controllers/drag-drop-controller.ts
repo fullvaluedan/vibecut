@@ -18,7 +18,9 @@ import {
 	AddTrackCommand,
 	DeleteElementsCommand,
 	InsertElementCommand,
+	UpdateElementsCommand,
 } from "@/commands/timeline";
+import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -530,10 +532,11 @@ export class DragDropController {
 	}
 
 	/**
-	 * Overwrite the clip at the drop point with the dragged asset, in place:
-	 * same start + track, duration capped to the existing slot (and the new
-	 * media's own length) so neighbouring clips don't shift. Delete + insert run
-	 * as one BatchCommand → a single undo.
+	 * Overwrite at the drop point with the dragged asset (Premiere "overwrite"):
+	 * the new clip keeps its OWN full length and starts where the old clip did.
+	 * Anything it now covers is cleared — fully-covered clips deleted, a straddled
+	 * clip head-trimmed — with NO ripple (downstream clips keep their start). The
+	 * deletes, trims and the insert run as one BatchCommand → a single undo.
 	 */
 	private executeMediaOverwrite({
 		target,
@@ -545,44 +548,81 @@ export class DragDropController {
 		const replaced = target.targetElement;
 		if (!replaced) return;
 		const sceneTracks = this.config.getSceneTracks();
-		const existing = [
+		const track = [
 			sceneTracks.main,
 			...sceneTracks.overlay,
 			...sceneTracks.audio,
-		]
-			.find((track) => track.id === replaced.trackId)
-			?.elements.find((element) => element.id === replaced.elementId);
-		if (!existing) return;
+		].find((candidate) => candidate.id === replaced.trackId);
+		const existing = track?.elements.find(
+			(element) => element.id === replaced.elementId,
+		);
+		if (!track || !existing) return;
 		const mediaAsset = this.config
 			.getMediaAssets()
 			.find((asset) => asset.id === dragData.id);
 		if (!mediaAsset) return;
 
+		// The new clip keeps its OWN full length and starts where the old clip did;
+		// everything it now covers is cleared/head-trimmed without rippling.
 		const newMediaDuration = toElementDurationTicks({
 			seconds: mediaAsset.duration,
 		});
-		const duration =
-			newMediaDuration < existing.duration ? newMediaDuration : existing.duration;
+		const regionStart = existing.startTime;
+		const regionEnd = regionStart + newMediaDuration;
+		const plan = planRegionOverwrite({
+			elements: track.elements.map((element) => ({
+				id: element.id,
+				startTime: element.startTime,
+				duration: element.duration,
+				trimStart: element.trimStart,
+			})),
+			regionStart,
+			regionEnd,
+		});
+
 		const element = buildElementFromMedia({
 			mediaId: mediaAsset.id,
 			mediaType: mediaAsset.type,
 			name: mediaAsset.name,
-			duration,
+			duration: newMediaDuration,
 			startTime: existing.startTime,
 		});
-		this.config.executeCommand(
-			new BatchCommand([
+
+		const commands: Command[] = [];
+		if (plan.deleteIds.length > 0) {
+			commands.push(
 				new DeleteElementsCommand({
-					elements: [
-						{ trackId: replaced.trackId, elementId: replaced.elementId },
+					elements: plan.deleteIds.map((elementId) => ({
+						trackId: replaced.trackId,
+						elementId,
+					})),
+				}),
+			);
+		}
+		for (const trim of plan.trims) {
+			commands.push(
+				new UpdateElementsCommand({
+					updates: [
+						{
+							trackId: replaced.trackId,
+							elementId: trim.id,
+							patch: {
+								startTime: mediaTime({ ticks: trim.startTime }),
+								trimStart: mediaTime({ ticks: trim.trimStart }),
+								duration: mediaTime({ ticks: trim.duration }),
+							},
+						},
 					],
 				}),
-				new InsertElementCommand({
-					placement: { mode: "explicit", trackId: replaced.trackId },
-					element,
-				}),
-			]),
+			);
+		}
+		commands.push(
+			new InsertElementCommand({
+				placement: { mode: "explicit", trackId: replaced.trackId },
+				element,
+			}),
 		);
+		this.config.executeCommand(new BatchCommand(commands));
 	}
 
 	private executeEffectDrop({
