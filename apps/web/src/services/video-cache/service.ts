@@ -48,6 +48,18 @@ export class VideoCache {
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
 
+		// Fast path: the already-decoded frame still covers this time → return it
+		// synchronously without touching the async decode chain. The preview RAF
+		// loop re-requests the current frame every tick (×N video nodes with an
+		// overlay + PIP); running resolveFrame each time was needless per-frame
+		// churn that made playback/scrubbing lag.
+		if (
+			sinkData.currentFrame &&
+			this.isFrameValid({ frame: sinkData.currentFrame, time })
+		) {
+			return sinkData.currentFrame;
+		}
+
 		this.latestSeekTime.set(mediaId, time);
 
 		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
