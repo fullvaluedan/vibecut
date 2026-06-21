@@ -546,11 +546,9 @@ export class DragDropController {
 	 * deletes, trims and the insert run as one BatchCommand → a single undo.
 	 *
 	 * The main-track earliest-element snap (old A1/C1 bug) is handled by the
-	 * insert-first command ordering below — see that comment.
-	 *
-	 * ponytail: one known edge case remains (browser-only, tracked in TO-VERIFY):
-	 * a RETIMED survivor — planRegionOverwrite advances trimStart by timeline ticks,
-	 * correct only at rate==1; a head-trimmed retimed clip gets a wrong in-point.
+	 * insert-first command ordering below. A head-trimmed survivor's source
+	 * in-point is retime-aware (planRegionOverwrite scales the cut by the element's
+	 * rate), so a speed-ramped clip keeps the right in-point.
 	 */
 	private executeMediaOverwrite({
 		target,
@@ -602,6 +600,8 @@ export class DragDropController {
 				startTime: element.startTime,
 				duration: element.duration,
 				trimStart: element.trimStart,
+				rate:
+					"retime" in element && element.retime ? element.retime.rate : 1,
 			})),
 			regionStart,
 			regionEnd,

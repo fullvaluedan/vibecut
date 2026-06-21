@@ -24,6 +24,8 @@ export interface OverwriteRegionElement {
 	startTime: number;
 	duration: number;
 	trimStart: number;
+	/** Retime rate (sourceDuration = timelineDuration * rate). Defaults to 1. */
+	rate?: number;
 }
 
 export interface OverwriteRegionTrim {
@@ -64,16 +66,17 @@ export function planRegionOverwrite({
 		}
 
 		// Region covers the head, the tail survives — head-trim to regionEnd.
-		// ponytail: `trimStart += cut` treats the cut as a SOURCE-tick delta, which
-		// only holds at rate==1. A retimed element (speed ramp) would get a wrong
-		// in-point here; route retimed survivors through a source-aware trim if that
-		// case ever matters. Tracked in TO-VERIFY.
+		// The new start advances by `cut` TIMELINE ticks, so the source in-point
+		// advances by the matching SOURCE span: cut * rate (sourceDuration =
+		// timelineDuration * rate). At rate==1 this is just `cut`. Matches the
+		// retime resolver's getSourceTimeAtClipTime(clipTime) = clipTime * rate.
 		if (elStart >= regionStart) {
 			const cut = regionEnd - elStart;
+			const sourceCut = Math.round(cut * (el.rate ?? 1));
 			trims.push({
 				id: el.id,
 				startTime: regionEnd,
-				trimStart: el.trimStart + cut,
+				trimStart: el.trimStart + sourceCut,
 				duration: el.duration - cut,
 			});
 			continue;

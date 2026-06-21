@@ -101,6 +101,31 @@ describe("planRegionOverwrite", () => {
 		]);
 	});
 
+	it("head-trims a RETIMED survivor by source ticks (cut * rate)", () => {
+		// rate 2 → sourceDuration = 2x timeline. Head-trimming 40 timeline ticks
+		// must advance the in-point by 40*2 = 80 source ticks, not 40.
+		const plan = planRegionOverwrite({
+			elements: [{ id: "R", startTime: 0, duration: 100, trimStart: 10, rate: 2 }],
+			regionStart: 0,
+			regionEnd: 40,
+		});
+		expect(plan.deleteIds).toEqual([]);
+		expect(plan.trims).toEqual([
+			{ id: "R", startTime: 40, trimStart: 90, duration: 60 },
+		]);
+	});
+
+	it("defaults rate to 1 when absent (in-point advances by the timeline cut)", () => {
+		const plan = planRegionOverwrite({
+			elements: [{ id: "Q", startTime: 0, duration: 100, trimStart: 5 }],
+			regionStart: 0,
+			regionEnd: 30,
+		});
+		expect(plan.trims).toEqual([
+			{ id: "Q", startTime: 30, trimStart: 35, duration: 70 },
+		]);
+	});
+
 	it("defensive: a clip starting before the region is tail-trimmed, not split", () => {
 		const plan = planRegionOverwrite({
 			elements: [{ id: "X", startTime: 50, duration: 100, trimStart: 5 }],
