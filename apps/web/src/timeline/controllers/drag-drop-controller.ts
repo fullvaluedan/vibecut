@@ -14,7 +14,11 @@ import {
 	buildElementFromMedia,
 	buildEffectElement,
 } from "@/timeline/element-utils";
-import { AddTrackCommand, InsertElementCommand } from "@/commands/timeline";
+import {
+	AddTrackCommand,
+	DeleteElementsCommand,
+	InsertElementCommand,
+} from "@/commands/timeline";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -460,7 +464,8 @@ export class DragDropController {
 		dragData: Extract<TimelineDragData, { type: "media" }>;
 	}): void {
 		if (target.targetElement) {
-			// Replace media source — not yet implemented
+			// Drop onto an existing clip → overwrite that clip in place.
+			this.executeMediaOverwrite({ target, dragData });
 			return;
 		}
 
@@ -522,6 +527,62 @@ export class DragDropController {
 			this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
 			cascadeOffsetTicks += duration;
 		}
+	}
+
+	/**
+	 * Overwrite the clip at the drop point with the dragged asset, in place:
+	 * same start + track, duration capped to the existing slot (and the new
+	 * media's own length) so neighbouring clips don't shift. Delete + insert run
+	 * as one BatchCommand → a single undo.
+	 */
+	private executeMediaOverwrite({
+		target,
+		dragData,
+	}: {
+		target: DropTarget;
+		dragData: Extract<TimelineDragData, { type: "media" }>;
+	}): void {
+		const replaced = target.targetElement;
+		if (!replaced) return;
+		const sceneTracks = this.config.getSceneTracks();
+		const existing = [
+			sceneTracks.main,
+			...sceneTracks.overlay,
+			...sceneTracks.audio,
+		]
+			.find((track) => track.id === replaced.trackId)
+			?.elements.find((element) => element.id === replaced.elementId);
+		if (!existing) return;
+		const mediaAsset = this.config
+			.getMediaAssets()
+			.find((asset) => asset.id === dragData.id);
+		if (!mediaAsset) return;
+
+		const newMediaDuration = toElementDurationTicks({
+			seconds: mediaAsset.duration,
+		});
+		const duration =
+			newMediaDuration < existing.duration ? newMediaDuration : existing.duration;
+		const element = buildElementFromMedia({
+			mediaId: mediaAsset.id,
+			mediaType: mediaAsset.type,
+			name: mediaAsset.name,
+			duration,
+			startTime: existing.startTime,
+		});
+		this.config.executeCommand(
+			new BatchCommand([
+				new DeleteElementsCommand({
+					elements: [
+						{ trackId: replaced.trackId, elementId: replaced.elementId },
+					],
+				}),
+				new InsertElementCommand({
+					placement: { mode: "explicit", trackId: replaced.trackId },
+					element,
+				}),
+			]),
+		);
 	}
 
 	private executeEffectDrop({
