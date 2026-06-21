@@ -54,15 +54,51 @@ describe("planRegionOverwrite", () => {
 		expect(plan.trims).toEqual([]);
 	});
 
-	it("leaves clips that only touch the region edge untouched", () => {
-		// Region [0,100): B starts exactly at 100 — abutting, not overlapping.
+	it("leaves a clip abutting the RIGHT edge (elStart == regionEnd) untouched", () => {
+		// Region [0,100): A fully covered, B starts exactly at 100 — abutting.
 		const plan = planRegionOverwrite({
 			elements: track,
 			regionStart: 0,
 			regionEnd: 100,
 		});
-		expect(plan.trims.some((t) => t.id === "B")).toBe(false);
-		expect(plan.deleteIds).not.toContain("B");
+		// Full-array assertions: a stray trim/delete for B would be caught.
+		expect(plan.deleteIds).toEqual(["A"]);
+		expect(plan.trims).toEqual([]);
+	});
+
+	it("leaves a clip abutting the LEFT edge (elEnd == regionStart) untouched", () => {
+		// L ends exactly at 50; region starts at 50 → L is abutting, not covered.
+		// Pins the `elEnd <= regionStart` guard arm against an accidental `<`.
+		const plan = planRegionOverwrite({
+			elements: [
+				{ id: "L", startTime: 0, duration: 50, trimStart: 0 },
+				{ id: "M", startTime: 50, duration: 100, trimStart: 0 },
+			],
+			regionStart: 50,
+			regionEnd: 120,
+		});
+		expect(plan.deleteIds).toEqual([]);
+		expect(plan.trims).toEqual([
+			{ id: "M", startTime: 120, trimStart: 70, duration: 30 },
+		]);
+	});
+
+	it("accumulates multiple trims (push, not assign)", () => {
+		// Synthetic overlapping input (not a real single-track layout) purely to
+		// force two head-trims through the region and prove both are returned.
+		const plan = planRegionOverwrite({
+			elements: [
+				{ id: "X", startTime: 0, duration: 150, trimStart: 0 },
+				{ id: "Y", startTime: 50, duration: 100, trimStart: 0 },
+			],
+			regionStart: 0,
+			regionEnd: 100,
+		});
+		expect(plan.deleteIds).toEqual([]);
+		expect(plan.trims).toEqual([
+			{ id: "X", startTime: 100, trimStart: 100, duration: 50 },
+			{ id: "Y", startTime: 100, trimStart: 50, duration: 50 },
+		]);
 	});
 
 	it("defensive: a clip starting before the region is tail-trimmed, not split", () => {

@@ -64,6 +64,10 @@ export function planRegionOverwrite({
 		}
 
 		// Region covers the head, the tail survives — head-trim to regionEnd.
+		// ponytail: `trimStart += cut` treats the cut as a SOURCE-tick delta, which
+		// only holds at rate==1. A retimed element (speed ramp) would get a wrong
+		// in-point here; route retimed survivors through a source-aware trim if that
+		// case ever matters. Tracked in TO-VERIFY.
 		if (elStart >= regionStart) {
 			const cut = regionEnd - elStart;
 			trims.push({

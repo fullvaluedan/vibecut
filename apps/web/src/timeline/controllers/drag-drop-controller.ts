@@ -21,6 +21,7 @@ import {
 	UpdateElementsCommand,
 } from "@/commands/timeline";
 import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
+import { canElementGoOnTrack } from "@/timeline/placement/compatibility";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -36,7 +37,13 @@ import type {
 import type { TimelineDragData } from "@/timeline/drag";
 import type { MediaAsset } from "@/media/types";
 import type { ProcessedMediaAsset } from "@/media/processing";
-import { mediaTime, roundFrameTime, type MediaTime } from "@/wasm";
+import {
+	mediaTime,
+	addMediaTime,
+	roundFrameTime,
+	ZERO_MEDIA_TIME,
+	type MediaTime,
+} from "@/wasm";
 
 // --- Config ---
 
@@ -537,6 +544,15 @@ export class DragDropController {
 	 * Anything it now covers is cleared — fully-covered clips deleted, a straddled
 	 * clip head-trimmed — with NO ripple (downstream clips keep their start). The
 	 * deletes, trims and the insert run as one BatchCommand → a single undo.
+	 *
+	 * ponytail: two known edge cases (both browser-only, tracked in TO-VERIFY):
+	 * (1) MAIN-TRACK FIRST CLIP — if the drop is on the first main clip and the new
+	 * clip straddles a later one, the main-track startTime enforce-rule
+	 * (update-pipeline.ts) snaps the head-trimmed survivor to 0, overlapping the
+	 * insert. Recoverable (one undo); fixing it needs verifying explicit-insert's
+	 * overlap behaviour, so it's flagged not blind-fixed. (2) RETIMED survivor —
+	 * planRegionOverwrite advances trimStart by timeline ticks, correct only at
+	 * rate==1; a head-trimmed retimed clip gets a wrong in-point.
 	 */
 	private executeMediaOverwrite({
 		target,
@@ -548,11 +564,9 @@ export class DragDropController {
 		const replaced = target.targetElement;
 		if (!replaced) return;
 		const sceneTracks = this.config.getSceneTracks();
-		const track = [
-			sceneTracks.main,
-			...sceneTracks.overlay,
-			...sceneTracks.audio,
-		].find((candidate) => candidate.id === replaced.trackId);
+		const track = orderedTracks({ sceneTracks }).find(
+			(candidate) => candidate.id === replaced.trackId,
+		);
 		const existing = track?.elements.find(
 			(element) => element.id === replaced.elementId,
 		);
@@ -562,13 +576,28 @@ export class DragDropController {
 			.find((asset) => asset.id === dragData.id);
 		if (!mediaAsset) return;
 
+		// Bail before any destructive command on an incompatible drop (e.g. a video
+		// dropped onto a graphic/text clip): the region-clear would delete the
+		// covered clips and then the type-mismatched insert would be rejected,
+		// leaving a hole. Doing nothing is safer than losing the covered clips.
+		if (
+			!canElementGoOnTrack({
+				elementType: mediaAsset.type,
+				trackType: track.type,
+			})
+		) {
+			return;
+		}
+
 		// The new clip keeps its OWN full length and starts where the old clip did;
 		// everything it now covers is cleared/head-trimmed without rippling.
 		const newMediaDuration = toElementDurationTicks({
 			seconds: mediaAsset.duration,
 		});
+		// A zero-length asset clears nothing and would drop a 0-tick clip on top.
+		if (newMediaDuration <= ZERO_MEDIA_TIME) return;
 		const regionStart = existing.startTime;
-		const regionEnd = regionStart + newMediaDuration;
+		const regionEnd = addMediaTime({ a: regionStart, b: newMediaDuration });
 		const plan = planRegionOverwrite({
 			elements: track.elements.map((element) => ({
 				id: element.id,
