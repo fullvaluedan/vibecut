@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useTimelineZoom } from "@/timeline/hooks/use-timeline-zoom";
 import {
+	memo,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -119,7 +120,7 @@ const TRACK_ICONS: Record<TimelineTrack["type"], ReactNode> = {
 	),
 };
 
-export function Timeline() {
+function TimelineImpl() {
 	const snappingEnabled = useTimelineStore((s) => s.snappingEnabled);
 	const {
 		selectedElements,
@@ -758,6 +759,15 @@ function TrackLabelsPanel({
 		</div>
 	);
 }
+
+/**
+ * Memoised: EditorLayout subscribes to playback time (for the bookmark overlay)
+ * and re-renders every frame during playback. Timeline takes NO props, so memo
+ * always bails on that parent-driven re-render — the ~137-element subtree stays
+ * put. Timeline still re-renders from its OWN hooks (edits/selection/zoom), and
+ * the playhead has its own time subscription, so the needle keeps moving.
+ */
+export const Timeline = memo(TimelineImpl);
 
 function TimelineTrackRows({
 	mainTrackId,
