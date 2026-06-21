@@ -545,18 +545,12 @@ export class DragDropController {
 	 * clip head-trimmed — with NO ripple (downstream clips keep their start). The
 	 * deletes, trims and the insert run as one BatchCommand → a single undo.
 	 *
-	 * ponytail: two known edge cases (both browser-only, tracked in TO-VERIFY):
-	 * (1) MAIN-TRACK earliest clip — when the head-trimmed survivor (or, for a
-	 * shorter-than-slot drop onto the only main clip, the replaced clip itself)
-	 * becomes the EARLIEST main element, the main-track startTime enforce-rule
-	 * (update-pipeline.ts:126) snaps it to 0, overlapping the insert. Recoverable
-	 * (one undo). A command reorder doesn't fix both sub-cases; the real fix is to
-	 * thread `excludeElementId` (as clip-MOVES already do via enforceMainTrackStart)
-	 * through Insert/UpdateElements so the overwrite is exempt from the snap — a
-	 * command-API change that needs browser verification, so it's flagged not
-	 * blind-fixed. (2) RETIMED survivor — planRegionOverwrite advances trimStart by
-	 * timeline ticks, correct only at rate==1; a head-trimmed retimed clip gets a
-	 * wrong in-point.
+	 * The main-track earliest-element snap (old A1/C1 bug) is handled by the
+	 * insert-first command ordering below — see that comment.
+	 *
+	 * ponytail: one known edge case remains (browser-only, tracked in TO-VERIFY):
+	 * a RETIMED survivor — planRegionOverwrite advances trimStart by timeline ticks,
+	 * correct only at rate==1; a head-trimmed retimed clip gets a wrong in-point.
 	 */
 	private executeMediaOverwrite({
 		target,
@@ -621,17 +615,20 @@ export class DragDropController {
 			startTime: existing.startTime,
 		});
 
-		const commands: Command[] = [];
-		if (plan.deleteIds.length > 0) {
-			commands.push(
-				new DeleteElementsCommand({
-					elements: plan.deleteIds.map((elementId) => ({
-						trackId: replaced.trackId,
-						elementId,
-					})),
-				}),
-			);
-		}
+		// Order matters: INSERT the new clip FIRST. On the main track it anchors
+		// regionStart, so a head-trimmed survivor is never the earliest element when
+		// its UpdateElementsCommand runs — otherwise the main-track startTime
+		// enforce-rule (update-pipeline.ts) snaps that survivor to 0 and overlaps the
+		// insert (the old A1/C1 bug). Explicit placement just appends (it does NOT
+		// reject the transient overlap with the not-yet-deleted clips), and the
+		// deletes run last to clear the covered region. Verified in-browser for both
+		// the longer-onto-first-clip and shorter-onto-only-clip cases.
+		const commands: Command[] = [
+			new InsertElementCommand({
+				placement: { mode: "explicit", trackId: replaced.trackId },
+				element,
+			}),
+		];
 		for (const trim of plan.trims) {
 			commands.push(
 				new UpdateElementsCommand({
@@ -649,12 +646,16 @@ export class DragDropController {
 				}),
 			);
 		}
-		commands.push(
-			new InsertElementCommand({
-				placement: { mode: "explicit", trackId: replaced.trackId },
-				element,
-			}),
-		);
+		if (plan.deleteIds.length > 0) {
+			commands.push(
+				new DeleteElementsCommand({
+					elements: plan.deleteIds.map((elementId) => ({
+						trackId: replaced.trackId,
+						elementId,
+					})),
+				}),
+			);
+		}
 		this.config.executeCommand(new BatchCommand(commands));
 	}
 
