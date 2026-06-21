@@ -14,7 +14,10 @@
  * scoring/selection/preview are tested separately.
  */
 
-import { assembleBinToTimeline } from "@/features/editing/assemble";
+import {
+	assembleBinToTimeline,
+	timelineHasContent,
+} from "@/features/editing/assemble";
 import { runRemoveSilences } from "@/features/editing/remove-silences";
 import { ensureTimelineTranscript } from "@/features/transcription/transcript-cache";
 import { extractTimelineAudio } from "@/media/mediabunny";
@@ -51,8 +54,12 @@ export async function runHighlight({
 		if (signal?.aborted) throw new Error("Cancelled");
 	};
 
-	onProgress?.("Assembling your footage...");
-	assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	// Only assemble the whole bin onto an EMPTY timeline; otherwise highlight
+	// exactly the clips the user already placed (don't pull in the rest of the bin).
+	if (!timelineHasContent({ editor })) {
+		onProgress?.("Assembling your footage...");
+		assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	}
 	abort();
 
 	onProgress?.("Removing silences...");

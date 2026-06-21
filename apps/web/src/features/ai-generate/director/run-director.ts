@@ -8,7 +8,10 @@
  * fusion (`build-signal-table`) and the planner/apply/taste are tested separately.
  */
 
-import { assembleBinToTimeline } from "@/features/editing/assemble";
+import {
+	assembleBinToTimeline,
+	timelineHasContent,
+} from "@/features/editing/assemble";
 import { runRemoveSilences } from "@/features/editing/remove-silences";
 import { ensureTimelineTranscript } from "@/features/transcription/transcript-cache";
 import { extractTimelineAudio } from "@/media/mediabunny";
@@ -59,8 +62,13 @@ export async function runDirector({
 		if (signal?.aborted) throw new Error("Cancelled");
 	};
 
-	onProgress?.("Assembling your footage...");
-	assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	// Only pull the whole bin onto the timeline when it's EMPTY. If the user
+	// already placed clips, the Director edits exactly those — it must not drag
+	// the rest of the bin in (the bug where AI CUT added every asset).
+	if (!timelineHasContent({ editor })) {
+		onProgress?.("Assembling your footage...");
+		assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	}
 	abort();
 
 	onProgress?.("Removing silences...");
