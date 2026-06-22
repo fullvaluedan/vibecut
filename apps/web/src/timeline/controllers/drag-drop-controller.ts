@@ -275,7 +275,11 @@ export class DragDropController {
 		try {
 			if (dragData) {
 				if (!currentTarget) return;
-				this.executeAssetDrop({ target: currentTarget, dragData });
+				this.executeAssetDrop({
+					target: currentTarget,
+					dragData,
+					coords: this.getMouseTimelineCoords({ event }),
+				});
 				return;
 			}
 
@@ -394,9 +398,11 @@ export class DragDropController {
 	private executeAssetDrop({
 		target,
 		dragData,
+		coords,
 	}: {
 		target: DropTarget;
 		dragData: TimelineDragData;
+		coords: TimelineCoords | null;
 	}): void {
 		switch (dragData.type) {
 			case "text":
@@ -412,7 +418,7 @@ export class DragDropController {
 				this.executeEffectDrop({ target, dragData });
 				return;
 			case "media":
-				this.executeMediaDrop({ target, dragData });
+				this.executeMediaDrop({ target, dragData, coords });
 				return;
 		}
 	}
@@ -468,9 +474,11 @@ export class DragDropController {
 	private executeMediaDrop({
 		target,
 		dragData,
+		coords,
 	}: {
 		target: DropTarget;
 		dragData: Extract<TimelineDragData, { type: "media" }>;
+		coords: TimelineCoords | null;
 	}): void {
 		if (target.targetElement) {
 			// Drop onto an existing clip → overwrite that clip in place.
@@ -480,7 +488,11 @@ export class DragDropController {
 
 		// Multi-selection drag: drop every selected asset back-to-back.
 		if (dragData.mediaIds && dragData.mediaIds.length > 1) {
-			this.insertMediaAssetsSequential({ ids: dragData.mediaIds, target });
+			this.insertMediaAssetsSequential({
+				ids: dragData.mediaIds,
+				target,
+				coords,
+			});
 			return;
 		}
 
@@ -506,9 +518,11 @@ export class DragDropController {
 	private insertMediaAssetsSequential({
 		ids,
 		target,
+		coords,
 	}: {
 		ids: string[];
 		target: DropTarget;
+		coords: TimelineCoords | null;
 	}): void {
 		const assets = this.config.getMediaAssets();
 		let cascadeOffsetTicks = 0;
@@ -518,8 +532,29 @@ export class DragDropController {
 			const trackType: TrackType =
 				mediaAsset.type === "audio" ? "audio" : "video";
 			const duration = toElementDurationTicks({ seconds: mediaAsset.duration });
+
+			// Re-resolve the drop target PER ASSET by its OWN type, re-reading tracks
+			// each iteration. Reusing the dragged tile's single static target meant a
+			// type-mismatched asset (audio onto a video track) was silently swallowed
+			// and N assets dropped on empty space each spawned their own new track.
+			// Mirrors executeFileDrop. Without coords (drop outside the lanes) fall
+			// back to the static target.
+			const assetTarget = coords
+				? computeDropTarget({
+						elementType: mediaAsset.type,
+						mouseX: coords.mouseX,
+						mouseY: coords.mouseY,
+						tracks: this.config.getSceneTracks(),
+						playheadTime: this.config.getCurrentPlayheadTime(),
+						isExternalDrop: false,
+						elementDuration: duration,
+						pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
+						zoomLevel: this.config.zoomLevel,
+					})
+				: target;
+
 			const startTime = mediaTime({
-				ticks: target.xPosition + cascadeOffsetTicks,
+				ticks: assetTarget.xPosition + cascadeOffsetTicks,
 			});
 			const element = buildElementFromMedia({
 				mediaId: mediaAsset.id,
@@ -530,11 +565,15 @@ export class DragDropController {
 			});
 			const inserted = this.insertAtTarget({
 				element,
-				target: { ...target, xPosition: startTime },
+				target: { ...assetTarget, xPosition: startTime },
 				trackType,
 			});
-			this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
-			cascadeOffsetTicks += duration;
+			// Only advance the cascade when the asset actually landed, so a skipped
+			// insert never leaves a phantom gap in the laid-out clips.
+			if (inserted.elementId) {
+				this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+				cascadeOffsetTicks += duration;
+			}
 		}
 	}
 
