@@ -25,6 +25,15 @@ export {
 	type DirectorVisionFrame,
 } from "./author";
 export {
+	planAssembly,
+	buildAssemblyPrompt,
+	renderCandidateCatalog,
+	sanitizeAssemblyPlan,
+	type AssemblyCandidate,
+	type AssemblySpan,
+	type AssemblyPlan,
+} from "./assemble";
+export {
 	renderTemplateJob,
 	renderCompDir,
 	startStudio,
