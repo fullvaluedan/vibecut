@@ -525,6 +525,15 @@ export class DragDropController {
 		coords: TimelineCoords | null;
 	}): void {
 		const assets = this.config.getMediaAssets();
+		// Build ONE BatchCommand for the whole multi-drop so a single Ctrl+Z undoes
+		// it (previously each asset was its own command — undo peeled them off one
+		// at a time). Reuse one track PER TYPE so same-type assets pack onto a
+		// single track back-to-back, and resolve each asset at its CASCADED slot
+		// (startTimeOverride) — checking the raw drop point instead made every clip
+		// after the first see the prior clip there and spawn a fresh track.
+		const commands: Command[] = [];
+		const trackForType = new Map<TrackType, string>();
+		const baseStart = target.xPosition;
 		let cascadeOffsetTicks = 0;
 		for (const id of ids) {
 			const mediaAsset = assets.find((asset) => asset.id === id);
@@ -532,13 +541,29 @@ export class DragDropController {
 			const trackType: TrackType =
 				mediaAsset.type === "audio" ? "audio" : "video";
 			const duration = toElementDurationTicks({ seconds: mediaAsset.duration });
+			const startTime = mediaTime({ ticks: baseStart + cascadeOffsetTicks });
+			const element = buildElementFromMedia({
+				mediaId: mediaAsset.id,
+				mediaType: mediaAsset.type,
+				name: mediaAsset.name,
+				duration,
+				startTime,
+			});
 
-			// Re-resolve the drop target PER ASSET by its OWN type, re-reading tracks
-			// each iteration. Reusing the dragged tile's single static target meant a
-			// type-mismatched asset (audio onto a video track) was silently swallowed
-			// and N assets dropped on empty space each spawned their own new track.
-			// Mirrors executeFileDrop. Without coords (drop outside the lanes) fall
-			// back to the static target.
+			const reuseTrackId = trackForType.get(trackType);
+			if (reuseTrackId) {
+				commands.push(
+					new InsertElementCommand({
+						element,
+						placement: { mode: "explicit", trackId: reuseTrackId },
+					}),
+				);
+				cascadeOffsetTicks += duration;
+				continue;
+			}
+
+			// First asset of this type: resolve its track at the cascaded slot so a
+			// free main track is reused rather than a new one spawned.
 			const assetTarget = coords
 				? computeDropTarget({
 						elementType: mediaAsset.type,
@@ -550,30 +575,42 @@ export class DragDropController {
 						elementDuration: duration,
 						pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 						zoomLevel: this.config.zoomLevel,
+						startTimeOverride: startTime,
 					})
-				: target;
+				: { ...target, xPosition: startTime };
 
-			const startTime = mediaTime({
-				ticks: assetTarget.xPosition + cascadeOffsetTicks,
-			});
-			const element = buildElementFromMedia({
-				mediaId: mediaAsset.id,
-				mediaType: mediaAsset.type,
-				name: mediaAsset.name,
-				duration,
-				startTime,
-			});
-			const inserted = this.insertAtTarget({
-				element,
-				target: { ...assetTarget, xPosition: startTime },
-				trackType,
-			});
-			// Only advance the cascade when the asset actually landed, so a skipped
-			// insert never leaves a phantom gap in the laid-out clips.
-			if (inserted.elementId) {
-				this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
-				cascadeOffsetTicks += duration;
+			if (assetTarget.isNewTrack) {
+				const addTrackCmd = new AddTrackCommand({
+					type: trackType,
+					index: assetTarget.trackIndex,
+				});
+				const trackId = addTrackCmd.getTrackId();
+				commands.push(addTrackCmd);
+				commands.push(
+					new InsertElementCommand({
+						element,
+						placement: { mode: "explicit", trackId },
+					}),
+				);
+				trackForType.set(trackType, trackId);
+			} else {
+				const track = orderedTracks({
+					sceneTracks: this.config.getSceneTracks(),
+				})[assetTarget.trackIndex];
+				if (!track) continue;
+				commands.push(
+					new InsertElementCommand({
+						element,
+						placement: { mode: "explicit", trackId: track.id },
+					}),
+				);
+				trackForType.set(trackType, track.id);
 			}
+			cascadeOffsetTicks += duration;
+		}
+
+		if (commands.length > 0) {
+			this.config.executeCommand(new BatchCommand(commands));
 		}
 	}
 
