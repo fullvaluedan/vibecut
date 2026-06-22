@@ -124,12 +124,30 @@ const enforceRules: ElementUpdateRule[] = [
 	},
 	{
 		triggers: ["startTime"],
-		apply: ({ element, context }) => {
+		apply: ({ element, patch, context }) => {
 			const requestedStartTime =
 				element.startTime < ZERO_MEDIA_TIME
 					? ZERO_MEDIA_TIME
 					: element.startTime;
 			if (context.trackId !== context.tracks.main.id) {
+				return {
+					element: {
+						...element,
+						startTime: requestedStartTime,
+					},
+				};
+			}
+
+			// Only a PURE MOVE is pinned to 0 (you can't drag the first main clip
+			// off the start). A trim/resize also changes the in-point or length, and
+			// head-trimming the first clip legitimately shifts its start, leaving a
+			// leading gap — a tolerated state (findTimelineGaps models "leading
+			// space"; delete leaves one; nothing assumes the first element is at 0).
+			// Pinning a resize would keep the shrunk duration while forcing start to
+			// 0, jumping the right edge left and corrupting the layout.
+			const isResize =
+				"duration" in patch || "trimStart" in patch || "trimEnd" in patch;
+			if (isResize) {
 				return {
 					element: {
 						...element,
