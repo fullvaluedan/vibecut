@@ -2,6 +2,12 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Cloud transcription — Groq backend (2026-06-22, opt-in BYO key)
+Server path fully verified live without a key (route 401/400 validation; a real WAV + a fake key reached Groq and surfaced its 401 as a 500 — so route → formData → `transcribeWithGroq` → Groq → error-propagation all work). The Groq `verbose_json` → `TranscriptionResult` normalizer is bun-tested (`providers/__tests__/groq.test.ts`, 5 cases). The editor mounts clean with the new Settings section. **Only the successful Groq call needs your key:**
+- [ ] **Cloud transcription e2e.** Settings → AI → **Cloud transcription** ON → paste a **Groq key** (console.groq.com, `gsk_...`). Run **AI CUT** on a real clip: transcription should return in **seconds, not minutes**, the Director review modal should show **word-level** cuts (duplicate/filler/dead-air rows — they re-arm because Groq emits word timestamps), and a ~16-min source should **not OOM** (audio is uploaded, not Whisper'd in-browser). Compare wall-clock vs in-browser.
+- [ ] **Toggle off still works.** Turn Cloud transcription OFF (or clear the key) → transcription falls back to the in-browser Whisper path unchanged. A user without a key is never affected (default is in-browser).
+- [ ] **Long-source size note:** Groq caps uploads at 100 MB. The extracted WAV for very long sources may approach/exceed that — if a long source errors on upload, that's the cap (a compact-WAV/downsample-before-upload follow-up would lift it).
+
 ## Long-video performance + transcription/preview (2026-06-20, branch `feat/director-importance`, plan `docs/plans/2026-06-20-001-...`)
 Run **AI CUT → AI Director** on the long (16-min) recording that surfaced these. Pure cores are bun-tested (probe slice, analysis-model selector, streaming resampler, seek-supersede); the rest is browser-only.
 - [ ] **U1 — single transcription pass.** The `[transcription] …word-level…falling back` warning appears ONCE and transcription does NOT run twice. On whisper-small the probe (~20s) catches the cross-attention failure before any full word pass. Wall-clock should be roughly half the doubled-pass time.

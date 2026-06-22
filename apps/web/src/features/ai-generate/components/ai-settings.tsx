@@ -174,6 +174,8 @@ export function AiSettingsContent() {
 
 			<BackgroundTranscriptionSection />
 
+			<CloudTranscriptionSection />
+
 			<DirectorVisionSection />
 
 			<LowPowerSection />
@@ -204,6 +206,55 @@ function DirectorVisionSection() {
 					tokens) and needs an API key or a vision-capable custom model; the
 					claude-code CLI falls back to text. Off by default.
 				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function CloudTranscriptionSection() {
+	const backend = useAiSettingsStore((s) => s.transcriptionBackend);
+	const setBackend = useAiSettingsStore((s) => s.setTranscriptionBackend);
+	const groqApiKey = useAiSettingsStore((s) => s.groqApiKey);
+	const setGroqApiKey = useAiSettingsStore((s) => s.setGroqApiKey);
+	const isCloud = backend === "cloud";
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Cloud transcription</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch
+						checked={isCloud}
+						onCheckedChange={(checked) =>
+							setBackend(checked ? "cloud" : "in-browser")
+						}
+					/>
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+				<p className="text-muted-foreground text-xs">
+					Off: transcribe in this browser (slower, segment-level only). On:
+					upload the timeline audio to Groq (whisper-large-v3-turbo) — seconds
+					instead of minutes, word-level cuts for the Director, and no
+					out-of-memory on long videos.
+				</p>
+				{isCloud && (
+					<>
+						<div className="flex flex-col gap-1">
+							<p className="text-xs font-medium">Groq API key</p>
+							<KeyInput
+								value={groqApiKey}
+								onChange={setGroqApiKey}
+								placeholder="gsk_..."
+							/>
+						</div>
+						<p className="text-muted-foreground text-xs">
+							Stored only in this browser on this device — sent only to
+							VibeCut&apos;s own <code>/api/transcribe</code> proxy, never to the
+							browser STT call. Get a key at console.groq.com. Without a key,
+							transcription stays in-browser.
+						</p>
+					</>
+				)}
 			</SectionContent>
 		</Section>
 	);

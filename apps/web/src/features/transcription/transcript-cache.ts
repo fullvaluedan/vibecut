@@ -10,6 +10,10 @@ import type { EditorCore } from "@/core";
 import { decodeAudioToFloat32 } from "@/media/audio";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { transcriptionService } from "@/services/transcription/service";
+import {
+	buildTranscribeHeaders,
+	useAiSettingsStore,
+} from "@/features/ai-generate/store";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import { TICKS_PER_SECOND } from "@/wasm";
@@ -178,6 +182,48 @@ function broadcastProgress(p: TranscribeProgress): void {
  * to look frozen at "20%"). Concurrent callers for the same timeline state
  * share one run.
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+/**
+ * Parse the /api/transcribe response (a normalized TranscriptionResult) into the
+ * cache's lite shape, dropping malformed entries. The route already normalized
+ * it; this re-validates at the boundary and keeps only the fields we cache.
+ */
+function parseCloudTranscript(payload: unknown): {
+	segments: TranscriptSegmentLite[];
+	words?: TranscriptWordLite[];
+} {
+	const segments: TranscriptSegmentLite[] = [];
+	const words: TranscriptWordLite[] = [];
+	if (isRecord(payload)) {
+		const rawSegments = Array.isArray(payload.segments) ? payload.segments : [];
+		for (const entry of rawSegments) {
+			if (
+				isRecord(entry) &&
+				typeof entry.start === "number" &&
+				typeof entry.end === "number" &&
+				typeof entry.text === "string"
+			) {
+				segments.push({ start: entry.start, end: entry.end, text: entry.text });
+			}
+		}
+		const rawWords = Array.isArray(payload.words) ? payload.words : [];
+		for (const entry of rawWords) {
+			if (
+				isRecord(entry) &&
+				typeof entry.start === "number" &&
+				typeof entry.end === "number" &&
+				typeof entry.text === "string"
+			) {
+				words.push({ start: entry.start, end: entry.end, text: entry.text });
+			}
+		}
+	}
+	return { segments, words: words.length > 0 ? words : undefined };
+}
+
 export async function ensureTimelineTranscript({
 	editor,
 	onProgress,
@@ -269,6 +315,58 @@ export async function ensureTimelineTranscript({
 			mediaAssets: editor.media.getAssets(),
 			totalDuration,
 		});
+
+		// Cloud backend (opt-in, BYO key): upload the WAV to /api/transcribe
+		// instead of decoding + running Whisper in the browser. Fast, accurate,
+		// and always word-level (re-arms the Director's word detectors), so
+		// `wantWords` is always satisfied and `wordsUnavailable` never trips.
+		const aiSettings = useAiSettingsStore.getState();
+		if (aiSettings.transcriptionBackend === "cloud" && aiSettings.groqApiKey) {
+			const startedAt = Date.now();
+			broadcastProgress({
+				phase: "transcribing",
+				detail: "Uploading audio to the cloud transcriber...",
+			});
+			const cloudTicker = setInterval(() => {
+				const sec = Math.round((Date.now() - startedAt) / 1000);
+				broadcastProgress({
+					phase: "transcribing",
+					detail: `Transcribing in the cloud — ${sec}s elapsed...`,
+				});
+			}, 1000);
+			try {
+				const form = new FormData();
+				form.append("audio", audioBlob, "timeline.wav");
+				const response = await abortable(
+					fetch("/api/transcribe", {
+						method: "POST",
+						headers: buildTranscribeHeaders(),
+						body: form,
+						signal,
+					}),
+				);
+				if (!response.ok) {
+					const detail: unknown = await response.json().catch(() => null);
+					const message =
+						isRecord(detail) && typeof detail.error === "string"
+							? detail.error
+							: `Cloud transcription failed (${response.status}).`;
+					throw new Error(message);
+				}
+				const { segments, words } = parseCloudTranscript(await response.json());
+				writeCache(projectId, {
+					hash,
+					segments,
+					words,
+					wordsUnavailable: undefined,
+					createdAt: Date.now(),
+				});
+				return { segments, words, wordsUnavailable: undefined };
+			} finally {
+				clearInterval(cloudTicker);
+			}
+		}
+
 		const { samples } = await decodeAudioToFloat32({
 			audioBlob,
 			sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,

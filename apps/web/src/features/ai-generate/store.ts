@@ -56,6 +56,18 @@ interface AiSettingsStore {
 	backgroundTranscriptionEnabled: boolean;
 	setBackgroundTranscriptionEnabled: (enabled: boolean) => void;
 	/**
+	 * Where transcription runs. "in-browser" (default) uses the local Whisper
+	 * worker — slow on long sources and segment-level only. "cloud" uploads the
+	 * timeline audio to /api/transcribe (currently Groq whisper-large-v3-turbo):
+	 * fast, accurate, and always word-level (re-arms the Director's word
+	 * detectors). Needs a Groq key. Opt-in, so a user without a key is unaffected.
+	 */
+	transcriptionBackend: "in-browser" | "cloud";
+	setTranscriptionBackend: (backend: "in-browser" | "cloud") => void;
+	/** Groq API key (BYO) for cloud transcription. Device-local, never synced. */
+	groqApiKey: string;
+	setGroqApiKey: (key: string) => void;
+	/**
 	 * Send sampled footage frames to the Director so its cuts can SEE the video
 	 * (catch off-screen / frozen / dead-air visuals). Opt-in — frames cost tokens
 	 * and only `api-key` / vision-capable `custom` backends accept them.
@@ -152,6 +164,12 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			backgroundTranscriptionEnabled: true,
 			setBackgroundTranscriptionEnabled: (backgroundTranscriptionEnabled) =>
 				set({ backgroundTranscriptionEnabled }),
+
+			transcriptionBackend: "in-browser",
+			setTranscriptionBackend: (transcriptionBackend) =>
+				set({ transcriptionBackend }),
+			groqApiKey: "",
+			setGroqApiKey: (groqApiKey) => set({ groqApiKey }),
 
 			directorVisionEnabled: false,
 			setDirectorVisionEnabled: (directorVisionEnabled) =>
@@ -311,5 +329,15 @@ export function buildAiAuthHeaders(): Record<string, string> {
 		if (customModel) headers["x-framecut-custom-model"] = customModel;
 		if (customApiKey) headers["x-framecut-custom-key"] = customApiKey;
 	}
+	return headers;
+}
+
+/** Headers carrying the device-local cloud-transcription provider + key. */
+export function buildTranscribeHeaders(): Record<string, string> {
+	const { groqApiKey } = useAiSettingsStore.getState();
+	const headers: Record<string, string> = {
+		"x-framecut-transcribe-provider": "groq",
+	};
+	if (groqApiKey) headers["x-framecut-transcribe-key"] = groqApiKey;
 	return headers;
 }
