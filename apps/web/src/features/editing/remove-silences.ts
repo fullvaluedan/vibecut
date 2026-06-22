@@ -9,12 +9,20 @@ import { extractTimelineAudio } from "@/media/mediabunny";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
+import {
+	collectVideoClipSpansSec,
+	refineSilenceRanges,
+} from "./silence-refine";
 
 const WINDOW_SEC = 0.05;
 const MIN_SILENCE_SEC = 0.6;
 /** Keep this much breathing room around speech on each side of a cut. */
 const PADDING_SEC = 0.15;
 const RMS_THRESHOLD = 0.015;
+/** Snap a cut edge this close to a clip boundary out to it (kills padding slivers). */
+const SNAP_SEC = 0.25;
+/** Drop a refined range shorter than this (matches the detector's own floor). */
+const MIN_REMOVED_SEC = 0.2;
 
 export function detectSilentRangesSec({
 	samples,
@@ -76,15 +84,27 @@ export async function runRemoveSilences({
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
 	const silent = detectSilentRangesSec({ samples, sampleRate });
-	if (!silent.length) {
+	// Issue 2: never delete a whole VIDEO clip on low audio (quiet showcase/b-roll
+	// footage), and snap cut edges to clip boundaries so a cut never leaves a
+	// ~4-frame remnant.
+	const refined = refineSilenceRanges({
+		ranges: silent,
+		clipSpans: collectVideoClipSpansSec({
+			tracks: editor.scenes.getActiveScene().tracks,
+			ticksPerSecond: TICKS_PER_SECOND,
+		}),
+		snapSec: SNAP_SEC,
+		minSec: MIN_REMOVED_SEC,
+	});
+	if (!refined.length) {
 		return { cuts: 0, removedSec: 0 };
 	}
-	const ranges: TimeRange[] = silent.map((r) => ({
+	const ranges: TimeRange[] = refined.map((r) => ({
 		start: Math.round(r.start * TICKS_PER_SECOND),
 		end: Math.round(r.end * TICKS_PER_SECOND),
 	}));
 	const command = new RemoveRangesCommand({ ranges });
 	editor.command.execute({ command });
-	const removedSec = silent.reduce((acc, r) => acc + (r.end - r.start), 0);
+	const removedSec = refined.reduce((acc, r) => acc + (r.end - r.start), 0);
 	return { cuts: command.getRemovedCount(), removedSec };
 }
