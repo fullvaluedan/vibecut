@@ -220,22 +220,29 @@ function CloudTranscriptionSection() {
 	return (
 		<Section showTopBorder={false}>
 			<SectionHeader className="justify-between">
-				<SectionTitle className="flex-1">Cloud transcription</SectionTitle>
-				<div className="flex items-center p-1">
-					<Switch
-						checked={isCloud}
-						onCheckedChange={(checked) =>
-							setBackend(checked ? "cloud" : "in-browser")
-						}
-					/>
-				</div>
+				<SectionTitle className="flex-1">Transcribe on</SectionTitle>
+				<Select
+					value={backend}
+					onValueChange={(value) =>
+						setBackend(value === "cloud" ? "cloud" : "in-browser")
+					}
+				>
+					<SelectTrigger className="bg-transparent border-none p-1 h-auto">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="in-browser">In browser</SelectItem>
+						<SelectItem value="cloud">Groq (cloud)</SelectItem>
+					</SelectContent>
+				</Select>
 			</SectionHeader>
 			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
 				<p className="text-muted-foreground text-xs">
-					Off: transcribe in this browser (slower, segment-level only). On:
-					upload the timeline audio to Groq (whisper-large-v3-turbo) — seconds
-					instead of minutes, word-level cuts for the Director, and no
-					out-of-memory on long videos.
+					In browser: transcribe locally (slower, segment-level only). Groq:
+					upload the timeline audio to whisper-large-v3-turbo — seconds instead
+					of minutes, word-level cuts for the Director, and no out-of-memory on
+					long videos. Audio is compressed before upload. More cloud providers
+					can slot in here later.
 				</p>
 				{isCloud && (
 					<>
