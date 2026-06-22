@@ -13,6 +13,7 @@ import type {
 	PlacementSubject,
 	PlacementTimeSpan,
 } from "./types";
+import { isAtVideoTrackCap, lastVideoTrackId } from "./track-cap";
 import { ZERO_MEDIA_TIME } from "@/wasm";
 
 type ResolveTrackPlacementParams = PlacementSubject & {
@@ -131,7 +132,61 @@ function getInsertDirection({
 	return hoverDirection;
 }
 
-export function resolveTrackPlacement({
+export function resolveTrackPlacement(
+	params: ResolveTrackPlacementParams,
+): PlacementResult | null {
+	const result = resolveTrackPlacementUncapped(params);
+
+	// Hard cap: never resolve to a 9th video track. Clamp the placement onto an
+	// existing video lane (first that can hold the span, else the topmost one) so
+	// drops/inserts/moves land there instead of spawning V9. Audio/text/graphic/
+	// effect placements are untouched. See `track-cap.ts`.
+	if (
+		result?.kind === "newTrack" &&
+		result.trackType === "video" &&
+		isAtVideoTrackCap(params.tracks)
+	) {
+		return clampToExistingVideoTrack({
+			tracks: params.tracks,
+			timeSpans: params.timeSpans,
+		});
+	}
+
+	return result;
+}
+
+function clampToExistingVideoTrack({
+	tracks,
+	timeSpans,
+}: {
+	tracks: SceneTracks;
+	timeSpans: PlacementTimeSpan[];
+}): PlacementResult | null {
+	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
+	const availableIndex = findFirstAvailableTrackIndex({
+		tracks: orderedTracks,
+		trackType: "video",
+		timeSpans,
+	});
+	const trackIndex =
+		availableIndex >= 0
+			? availableIndex
+			: orderedTracks.findIndex(
+					(track) => track.id === lastVideoTrackId(tracks),
+				);
+	if (trackIndex < 0) {
+		return null;
+	}
+
+	return buildExistingTrackResult({
+		track: orderedTracks[trackIndex],
+		trackIndex,
+		tracks,
+		timeSpans,
+	});
+}
+
+function resolveTrackPlacementUncapped({
 	tracks,
 	...placement
 }: ResolveTrackPlacementParams): PlacementResult | null {

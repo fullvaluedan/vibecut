@@ -699,3 +699,91 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 });
+
+describe("resolveTrackPlacement video-track cap (MAX_VIDEO_TRACKS = 8)", () => {
+	// main + 7 overlay video tracks = 8 video tracks (at the cap), each fully
+	// occupied across the probed span so a fresh placement would want a NEW track.
+	function buildCappedVideoScene(): SceneTracks {
+		const occupy = (id: string): VideoTrack["elements"] => [
+			buildElement({ id, type: "video", startTime: 0, duration: 100 }),
+		];
+		return buildSceneTracks({
+			overlay: Array.from({ length: 7 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: occupy(`vid-el-${i + 1}`),
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: occupy("vid-el-main"),
+			}),
+		});
+	}
+
+	test("clamps a would-be 9th video track onto an existing video lane", () => {
+		const result = resolveTrackPlacement({
+			tracks: buildCappedVideoScene(),
+			elementType: "video",
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+			strategy: { type: "firstAvailable" },
+		});
+		expect(result?.kind).toBe("existingTrack");
+		expect(result).toMatchObject({
+			kind: "existingTrack",
+			trackId: "video-overlay-1",
+			trackType: "video",
+		});
+	});
+
+	test("does NOT cap text/audio tracks even when video is at the cap", () => {
+		const tracks = buildCappedVideoScene();
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "text",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "text" });
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "audio",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "audio" });
+	});
+
+	test("below the cap, a video still resolves to a new track", () => {
+		const tracks = buildSceneTracks({
+			overlay: Array.from({ length: 6 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: [
+						buildElement({ id: `vid-el-${i + 1}`, type: "video", startTime: 0, duration: 100 }),
+					],
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "vid-el-main", type: "video", startTime: 0, duration: 100 }),
+				],
+			}),
+		});
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "video" });
+	});
+});

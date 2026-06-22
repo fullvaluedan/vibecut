@@ -349,6 +349,7 @@ export async function runHyperframes({
 				lanes,
 				start: startTime,
 				end: startTime + durationTime,
+				editor,
 			});
 			return new InsertElementCommand({
 				element: {

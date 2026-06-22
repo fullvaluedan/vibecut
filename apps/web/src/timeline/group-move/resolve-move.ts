@@ -5,13 +5,14 @@ import type {
 	GroupMoveResult,
 	MoveGroup,
 	PlannedElementMove,
-	PlannedTrackCreation,
 } from "./types";
 import {
 	getDisplayTracks,
 	getTrackPlacementByDisplayIndex,
 	getTrackPlacementById,
 } from "./track-placement";
+import { remainingVideoTrackBudget } from "@/timeline/placement/track-cap";
+import { planCollapsedNewTracks } from "./collapse-new-tracks";
 import {
 	addMediaTime,
 	maxMediaTime,
@@ -170,18 +171,27 @@ function resolveNewTrackMove({
 				Math.min(anchorInsertIndex - anchorMemberIndex, tracks.overlay.length),
 			);
 
-	const createTracks: PlannedTrackCreation[] = sortedMembers.map(
-		(member, memberIndex) => ({
-			id: newTrackIds[memberIndex],
-			type: getTrackTypeForElementType({
-				elementType: member.elementType,
-			}),
-			index: blockStartIndex + memberIndex,
-		}),
-	);
-	const moves = sortedMembers.map((member, memberIndex) => ({
+	// Collapse to one new track per DISTINCT SOURCE TRACK and cap new VIDEO
+	// tracks to the remaining budget (pure logic in collapse-new-tracks.ts):
+	// Track-Select-Forward grabbing N clips off a single track creates ONE new
+	// track, never N, and a move can never push past MAX_VIDEO_TRACKS. Members
+	// whose source track is capped out keep their current lane.
+	const { createTracks, newTrackIdBySourceTrackId } = planCollapsedNewTracks({
+		sortedMembers,
+		videoBudget: remainingVideoTrackBudget(tracks),
+		blockStartIndex,
+		newTrackIds,
+	});
+
+	if (createTracks.length === 0) {
+		// Every member capped out — there is no new-track move to make.
+		return null;
+	}
+
+	const moves = sortedMembers.map((member) => ({
 		sourceTrackId: member.trackId,
-		targetTrackId: newTrackIds[memberIndex],
+		targetTrackId:
+			newTrackIdBySourceTrackId.get(member.trackId) ?? member.trackId,
 		elementId: member.elementId,
 		newStartTime: addMediaTime({
 			a: clampedAnchorStartTime,

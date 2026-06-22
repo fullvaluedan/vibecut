@@ -73,6 +73,7 @@ export async function bakeAndPlaceBlock({
 		lanes,
 		start: startTime,
 		end: startTime + durationTime,
+		editor,
 	});
 
 	const insert = new InsertElementCommand({
