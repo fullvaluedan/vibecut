@@ -7,7 +7,7 @@
  * Settings → AI.
  */
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
@@ -28,13 +28,19 @@ export function BackgroundTranscriber() {
 	const aiBusy = useAiActivityStore((s) => s.busy);
 	const enabled = enabledSetting && !lowPowerMode && !aiBusy;
 	const setStatus = useTranscriptStatusStore((s) => s.setStatus);
-	const hash = useEditor((e) => {
+	// Subscribe to the cheap tracks REFERENCE (stable across scrub and selection;
+	// only a real edit replaces it) and derive the O(n) audio hash off that with
+	// useMemo — instead of recomputing the hash on every editor notify, which the
+	// previous selector form did, including on every playhead-scrub mousemove.
+	const tracks = useEditor((e) => e.scenes.getActiveSceneOrNull()?.tracks);
+	const hash = useMemo(() => {
+		if (!tracks) return "";
 		try {
-			return computeTimelineAudioHash(e);
+			return computeTimelineAudioHash(editor);
 		} catch {
 			return "";
 		}
-	});
+	}, [tracks, editor]);
 
 	useEffect(() => {
 		if (!enabled || !hash || hash.startsWith("0-")) {
