@@ -89,6 +89,40 @@ export async function decodeAudioToFloat32({
 	return { samples, sampleRate: audioBuffer.sampleRate };
 }
 
+/**
+ * Decode ONE bin asset's audio to mono Float32 at the analysis sample rate, with
+ * NO timeline/placement — works for video (mediabunny audio-track extraction)
+ * and audio assets. The per-clip primitive for bin-wide transcription/analysis
+ * (FrameCut auto-assemble). Returns null when the asset has no decodable audio.
+ */
+export async function decodeAssetAudioToFloat32({
+	asset,
+	sampleRate = DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
+}: {
+	asset: MediaAsset;
+	sampleRate?: number;
+}): Promise<DecodedAudio | null> {
+	const audioContext = createAudioContext({ sampleRate });
+	try {
+		const buffer = await resolveAudioBufferForAsset({ asset, audioContext });
+		if (!buffer) return null;
+
+		const numChannels = buffer.numberOfChannels;
+		const length = buffer.length;
+		const samples = new Float32Array(length);
+		for (let i = 0; i < length; i++) {
+			let sum = 0;
+			for (let channel = 0; channel < numChannels; channel++) {
+				sum += buffer.getChannelData(channel)[i];
+			}
+			samples[i] = sum / numChannels;
+		}
+		return { samples, sampleRate: buffer.sampleRate };
+	} finally {
+		void audioContext.close();
+	}
+}
+
 export interface AudibleElementCandidate {
 	element: AudioElement | VideoElement;
 	mediaAsset: MediaAsset | null;

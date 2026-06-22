@@ -192,7 +192,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * cache's lite shape, dropping malformed entries. The route already normalized
  * it; this re-validates at the boundary and keeps only the fields we cache.
  */
-function parseCloudTranscript(payload: unknown): {
+export function parseCloudTranscript(payload: unknown): {
 	segments: TranscriptSegmentLite[];
 	words?: TranscriptWordLite[];
 } {
