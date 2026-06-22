@@ -1,4 +1,4 @@
-import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline/types";
+import type { SceneTracks, TimelineElement } from "@/timeline/types";
 import type { RippleAdjustment } from "./apply";
 
 interface Interval {
@@ -119,6 +119,22 @@ function collectTrackIntervals({
 				intervals: vacatedIntervals,
 				startTime: afterElement.endTime,
 				endTime: beforeElement.endTime,
+			});
+		}
+
+		// A left-edge trim moves the start right while the end stays put (a resize,
+		// not a move), so the leading space it vacated must ripple too — otherwise
+		// dragging a clip's left edge right leaves a gap with ripple ON. Guard on
+		// the end NOT growing so a move-right (start and end both grow) isn't
+		// mistaken for a trim and rippled away.
+		if (
+			afterElement.startTime > beforeElement.startTime &&
+			afterElement.endTime <= beforeElement.endTime
+		) {
+			pushInterval({
+				intervals: vacatedIntervals,
+				startTime: beforeElement.startTime,
+				endTime: afterElement.startTime,
 			});
 		}
 	}
