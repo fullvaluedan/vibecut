@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import type { EditorCore } from "@/core";
 import { decodeAudioToFloat32 } from "@/media/audio";
+import { encodeAudioForUpload } from "@/media/audio-encode";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { transcriptionService } from "@/services/transcription/service";
 import {
@@ -325,7 +326,7 @@ export async function ensureTimelineTranscript({
 			const startedAt = Date.now();
 			broadcastProgress({
 				phase: "transcribing",
-				detail: "Uploading audio to the cloud transcriber...",
+				detail: "Preparing audio for the cloud transcriber...",
 			});
 			const cloudTicker = setInterval(() => {
 				const sec = Math.round((Date.now() - startedAt) / 1000);
@@ -335,8 +336,15 @@ export async function ensureTimelineTranscript({
 				});
 			}, 1000);
 			try {
+				// Compress to a small Opus/AAC blob so a long source stays under
+				// Groq's 100 MB cap; fall back to the WAV if the browser can't encode.
+				const encoded = await encodeAudioForUpload({ audioBlob });
+				const upload = encoded ?? {
+					blob: audioBlob,
+					filename: "timeline.wav",
+				};
 				const form = new FormData();
-				form.append("audio", audioBlob, "timeline.wav");
+				form.append("audio", upload.blob, upload.filename);
 				const response = await abortable(
 					fetch("/api/transcribe", {
 						method: "POST",

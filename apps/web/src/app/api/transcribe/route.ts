@@ -40,10 +40,17 @@ export async function POST(req: NextRequest) {
 		);
 	}
 
+	// Forward the uploaded filename so Groq detects the codec from its extension
+	// (.webm/.m4a/.wav). The client compresses before upload; default keeps the
+	// legacy WAV name if a plain Blob (no name) arrives.
+	const uploadedName =
+		typeof File !== "undefined" && audio instanceof File ? audio.name : "";
+	const filename = uploadedName.length > 0 ? uploadedName : "timeline.wav";
+
 	try {
 		const result = await transcribeWithGroq({
 			audio,
-			filename: "timeline.wav",
+			filename,
 			apiKey,
 			signal: req.signal,
 		});
