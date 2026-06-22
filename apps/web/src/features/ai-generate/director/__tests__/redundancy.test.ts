@@ -1,110 +1,129 @@
 import { describe, expect, test } from "bun:test";
-import { detectRedundancyCuts } from "../redundancy";
+import { detectRedundancyCuts, TAKE_WINDOW_SEC } from "../redundancy";
 import type { ClusterMember, TakeCluster } from "../take-clusters";
 
-function member(partial: Partial<ClusterMember> & { index: number; startSec: number; endSec: number; text: string }): ClusterMember {
+function member(
+	partial: Partial<ClusterMember> & {
+		index: number;
+		startSec: number;
+		endSec: number;
+		text: string;
+	},
+): ClusterMember {
 	return { assetId: "a", audioScore: 0.5, ...partial };
+}
+
+function takeCluster(
+	partial: Partial<TakeCluster> & {
+		members: ClusterMember[];
+		keeperIndex: number;
+	},
+): TakeCluster {
+	return { kind: "take", lowConfidence: false, similarity: 1, ...partial };
 }
 
 const LINE = "today we ship the brand new editor";
 
-describe("detectRedundancyCuts", () => {
-	test("a cross-asset cluster emits a take_select over the non-keeper, in timeline coords", () => {
-		const cluster: TakeCluster = {
+describe("detectRedundancyCuts (keep-last)", () => {
+	test("a cross-asset cluster cuts the EARLIER take, keeping the latest", () => {
+		const cluster = takeCluster({
 			kind: "take",
 			members: [
-				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: LINE, audioScore: 0.4 }),
-				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE, audioScore: 0.85 }),
+				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: LINE }),
+				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE }),
 			],
-			keeperIndex: 1,
-			nearTie: false,
-			lowConfidence: false,
-			similarity: 1,
-		};
+			keeperIndex: 1, // latest
+		});
 		const { ops, nearTies } = detectRedundancyCuts({ clusters: [cluster] });
 		expect(nearTies).toHaveLength(0);
 		expect(ops).toHaveLength(1);
 		expect(ops[0].op).toBe("take_select");
 		expect(ops[0].category).toBe("take");
-		expect(ops[0].startSec).toBe(0); // the non-keeper (asset a), timeline coords
+		expect(ops[0].startSec).toBe(0); // the EARLIER take is cut
 		expect(ops[0].endSec).toBe(3);
-		expect(ops[0].confidence).toBeGreaterThan(0.7);
 		expect(ops[0].reason.length).toBeGreaterThan(0);
 	});
 
-	test("a far-apart same-asset repeat emits a low-confidence cut", () => {
-		const cluster: TakeCluster = {
-			kind: "repeat",
-			members: [
-				member({ index: 0, startSec: 0, endSec: 3, text: LINE, audioScore: 0.5 }),
-				member({ index: 1, startSec: 200, endSec: 203, text: LINE, audioScore: 0.6 }),
-			],
-			keeperIndex: 1,
-			nearTie: false,
-			lowConfidence: true,
-			similarity: 1,
-		};
-		const { ops } = detectRedundancyCuts({ clusters: [cluster] });
-		expect(ops).toHaveLength(1);
-		expect(ops[0].op).toBe("cut");
-		expect(ops[0].category).toBe("repeat");
-		expect(ops[0].startSec).toBe(0); // the earlier instance is cut
-		expect(ops[0].confidence).toBeLessThanOrEqual(0.5);
-	});
-
-	test("a near-tie emits NO removal op — only an informational note", () => {
-		const cluster: TakeCluster = {
-			kind: "take",
+	test("near-identical takes no longer punt — the earlier one is cut, latest kept", () => {
+		// Previously a near-audio tie produced a "pick one yourself" note + no cut.
+		const cluster = takeCluster({
 			members: [
 				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: LINE, audioScore: 0.5 }),
 				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE, audioScore: 0.52 }),
 			],
 			keeperIndex: 1,
-			nearTie: true,
-			lowConfidence: false,
-			similarity: 1,
-		};
+		});
 		const { ops, nearTies } = detectRedundancyCuts({ clusters: [cluster] });
-		expect(ops).toHaveLength(0);
-		expect(nearTies).toHaveLength(1);
-		expect(nearTies[0].members).toHaveLength(2);
+		expect(nearTies).toHaveLength(0);
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBe(0); // earlier take cut
+	});
+
+	test("an earlier take FURTHER than the recency window is NOT cut", () => {
+		// keeper at t=200; the earlier instance at t=0 is 200s before it (> window) →
+		// probably legitimately repeated content (callback), so leave it.
+		const cluster = takeCluster({
+			kind: "repeat",
+			members: [
+				member({ index: 0, startSec: 0, endSec: 3, text: LINE }),
+				member({ index: 1, startSec: 200, endSec: 203, text: LINE }),
+			],
+			keeperIndex: 1,
+			lowConfidence: true,
+		});
+		expect(detectRedundancyCuts({ clusters: [cluster] }).ops).toHaveLength(0);
+	});
+
+	test("an earlier take JUST INSIDE the recency window IS cut", () => {
+		const keeperStart = 130;
+		const cluster = takeCluster({
+			kind: "repeat",
+			members: [
+				member({
+					index: 0,
+					startSec: keeperStart - TAKE_WINDOW_SEC + 1,
+					endSec: keeperStart - TAKE_WINDOW_SEC + 4,
+					text: LINE,
+				}),
+				member({ index: 1, startSec: keeperStart, endSec: keeperStart + 3, text: LINE }),
+			],
+			keeperIndex: 1,
+		});
+		const { ops } = detectRedundancyCuts({ clusters: [cluster] });
+		expect(ops).toHaveLength(1);
+		expect(ops[0].op).toBe("cut");
 	});
 
 	test("the precision guard skips a member not actually similar to the keeper", () => {
-		// A transitively-linked outlier whose similarity to the keeper is below the
-		// merge threshold must NOT be removed (it could be distinct content).
-		const cluster: TakeCluster = {
-			kind: "take",
+		const cluster = takeCluster({
 			members: [
-				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: "an entirely different sentence about cats", audioScore: 0.4 }),
-				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE, audioScore: 0.85 }),
+				member({
+					index: 0,
+					assetId: "a",
+					startSec: 0,
+					endSec: 3,
+					text: "an entirely different sentence about cats",
+				}),
+				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE }),
 			],
 			keeperIndex: 1,
-			nearTie: false,
-			lowConfidence: false,
 			similarity: 0.3,
-		};
-		const { ops } = detectRedundancyCuts({ clusters: [cluster] });
-		expect(ops).toHaveLength(0);
+		});
+		expect(detectRedundancyCuts({ clusters: [cluster] }).ops).toHaveLength(0);
 	});
 
-	test("a 3-take cluster yields exactly 2 removals; the keeper is never cut", () => {
-		const cluster: TakeCluster = {
-			kind: "take",
+	test("a 3-take cluster (all in window) cuts the 2 earlier takes; keeper never cut", () => {
+		const cluster = takeCluster({
 			members: [
-				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: LINE, audioScore: 0.4 }),
-				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE, audioScore: 0.6 }),
-				member({ index: 2, assetId: "c", startSec: 6, endSec: 9, text: LINE, audioScore: 0.9 }),
+				member({ index: 0, assetId: "a", startSec: 0, endSec: 3, text: LINE }),
+				member({ index: 1, assetId: "b", startSec: 3, endSec: 6, text: LINE }),
+				member({ index: 2, assetId: "c", startSec: 6, endSec: 9, text: LINE }),
 			],
-			keeperIndex: 2,
-			nearTie: false,
-			lowConfidence: false,
-			similarity: 1,
-		};
+			keeperIndex: 2, // latest
+		});
 		const { ops } = detectRedundancyCuts({ clusters: [cluster] });
 		expect(ops).toHaveLength(2);
-		// The keeper span (6–9) is never among the removals.
-		expect(ops.every((o) => o.startSec !== 6)).toBe(true);
+		expect(ops.every((o) => o.startSec !== 6)).toBe(true); // keeper span (6–9) never cut
 	});
 
 	test("no clusters → no ops, no notes", () => {

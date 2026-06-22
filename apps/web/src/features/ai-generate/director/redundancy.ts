@@ -2,16 +2,27 @@
  * Redundancy + take-selection detector (U4): turn take clusters into reviewable
  * removal ops, in TIMELINE coordinates.
  *
- * - A cross-asset cluster ("take") → `take_select` ops over each non-keeper.
- * - A far-apart same-asset cluster ("repeat") → `cut` ops over each non-keeper.
- * - A near-tie cluster → NO removal op; an informational note instead, so the
- *   user picks a take manually (KTD5 — never delete a coin-flip on batch-accept).
+ * Keep-last rule: the keeper is the LATEST take (take-clusters), and the earlier
+ * near-identical takes are cut — "the last attempt is the keeper after stumbles".
+ * - A cross-asset cluster ("take") → `take_select` ops over each earlier member.
+ * - A same-asset cluster ("repeat") → `cut` ops over each earlier member.
  *
- * Precision guard (KTD5): a member is only removed when its similarity to the
- * keeper clears HIGH_SIMILAR — a transitively-linked outlier (cluster cohesion
- * below threshold) is left for the LLM, never auto-removed. Far-apart same-asset
- * (callback) clusters get capped, low confidence (KTD6). All ops are review-
- * flagged; nothing here applies anything. Pure + wasm-free → bun-testable.
+ * TWO precision guards:
+ *  1. SIMILARITY (KTD5): a member is only removed when its similarity to the
+ *     keeper clears HIGH_SIMILAR — a transitively-linked outlier (cluster
+ *     cohesion below threshold) is left for the LLM, never auto-removed.
+ *  2. RECENCY WINDOW: only earlier takes within `TAKE_WINDOW_SEC` of the last
+ *     take are auto-cut. A near-identical phrase further than ~2 min before the
+ *     keeper is probably legitimately repeated content (a callback/recap), not a
+ *     retake, so it is left alone.
+ *
+ * The rare "stitch multiple takes" A/B choice is the LLM planner's call, not this
+ * deterministic detector — so `nearTies` is reserved for that path and this step
+ * never punts a near-tie back to the user (the default is always keep-last).
+ *
+ * Far-apart same-asset (callback) clusters that DO fall in-window get capped, low
+ * confidence (KTD6). All ops are review-flagged; nothing here applies anything.
+ * Pure + wasm-free → bun-testable.
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
@@ -19,6 +30,13 @@ import { stableCutId } from "./cut-utils";
 import { HIGH_SIMILAR, similarity } from "./text-similarity";
 import type { ClusterMember, TakeCluster } from "./take-clusters";
 
+/**
+ * Only earlier takes within this many seconds of the last take are auto-cut. A
+ * re-take usually follows a stumble within a minute or two; a near-identical
+ * phrase further apart is more likely legitimately repeated content (callback,
+ * recap, recurring segment), so we leave it.
+ */
+export const TAKE_WINDOW_SEC = 120;
 /** Confidence cap for a far-apart same-asset (callback-risk) cut. */
 const CALLBACK_CONFIDENCE_CAP = 0.45;
 /** Hard ceiling so no review-flagged op reads as certain. */
@@ -94,10 +112,13 @@ function buildOp({
 }
 
 /**
- * Map take clusters to removal ops + near-tie notes. Returns ops in input order
- * (the orchestrator's merge re-sorts and dedups). A cluster with no decisive
- * keeper yields a note and no ops; a member below the keeper-similarity guard is
- * skipped entirely.
+ * Map take clusters to removal ops (keep-last). The keeper is the cluster's
+ * LATEST take; every EARLIER member that (1) matches the keeper above
+ * HIGH_SIMILAR and (2) starts within `TAKE_WINDOW_SEC` of the keeper is cut. A
+ * member below the similarity guard, or further than the window before the
+ * keeper, is left alone. Ops come back in input order (the orchestrator's merge
+ * re-sorts and dedups). `nearTies` is always empty here — the rare A/B "stitch"
+ * choice is the LLM planner's, not this deterministic step.
  */
 export function detectRedundancyCuts({
 	clusters,
@@ -105,35 +126,22 @@ export function detectRedundancyCuts({
 	clusters: readonly TakeCluster[];
 }): { ops: DirectorOp[]; nearTies: NearTieNote[] } {
 	const ops: DirectorOp[] = [];
-	const nearTies: NearTieNote[] = [];
 
 	for (const cluster of clusters) {
 		const keeper = cluster.members[cluster.keeperIndex];
 		if (!keeper) continue;
 
-		if (cluster.nearTie) {
-			nearTies.push({
-				kind: cluster.kind,
-				similarity: cluster.similarity,
-				members: cluster.members.map((m) => ({
-					assetId: m.assetId,
-					startSec: m.startSec,
-					endSec: m.endSec,
-					text: m.text,
-				})),
-				suggestedKeeperIndex: cluster.keeperIndex,
-				reason: `${cluster.members.length} near-identical takes — pick one to cut`,
-			});
-			continue;
-		}
-
 		for (const member of cluster.members) {
 			if (member.index === keeper.index) continue;
+			// Recency window: only auto-cut earlier takes close to the last take; a
+			// near-identical phrase >2 min before the keeper is likely a legitimate
+			// callback/recap, not a retake.
+			if (keeper.startSec - member.startSec > TAKE_WINDOW_SEC) continue;
 			// Precision guard: only remove a member genuinely matching the keeper.
 			if (similarity({ a: member.text, b: keeper.text }) < HIGH_SIMILAR) continue;
 			ops.push(buildOp({ member, keeper, cluster }));
 		}
 	}
 
-	return { ops, nearTies };
+	return { ops, nearTies: [] };
 }

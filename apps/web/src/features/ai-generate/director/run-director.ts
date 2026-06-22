@@ -137,7 +137,9 @@ export async function runDirector({
 		elements: tracks.main.elements,
 	});
 	const takeClusters = buildTakeClusters({ assetTranscripts, features });
-	// nearTies carry no removal op — surfaced in the Review modal for manual choice (U7).
+	// Keep-last: each cluster keeps its LATEST take and cuts the earlier near-
+	// identical ones within the recency window. `nearTies` is empty (the rare A/B
+	// "stitch" choice is the LLM planner's, not this deterministic step).
 	const { ops: redundancyOps, nearTies } = detectRedundancyCuts({ clusters: takeClusters });
 	const keepers: KeeperSpan[] = takeClusters.map((cluster) => {
 		const keeper = cluster.members[cluster.keeperIndex];

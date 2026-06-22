@@ -18,11 +18,12 @@ function feat({
 }
 
 describe("buildTakeClusters", () => {
-	test("clusters the same line across two clips as a TAKE; keeps the louder member", () => {
+	test("clusters the same line across two clips as a TAKE; keeps the LATEST take (keep-last)", () => {
 		const assetTranscripts: AssetTranscript[] = [
 			{ assetId: "a", segments: [{ start: 0, end: 3, text: "today we ship the brand new editor", sourceStartSec: 0 }] },
 			{ assetId: "b", segments: [{ start: 3, end: 6, text: "today we ship the brand new editor", sourceStartSec: 0 }] },
 		];
+		// Asset a is LOUDER, but recency wins outright now — the later take is kept.
 		const features = [
 			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.85 }),
 			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.4 }),
@@ -33,13 +34,12 @@ describe("buildTakeClusters", () => {
 		const c = clusters[0];
 		expect(c.kind).toBe("take");
 		expect(c.members).toHaveLength(2);
-		expect(c.nearTie).toBe(false);
-		// Keeper is the louder clip (asset a).
-		expect(c.members[c.keeperIndex].assetId).toBe("a");
+		// Keeper is the LATEST take (asset b at t=3), not the louder one.
+		expect(c.members[c.keeperIndex].assetId).toBe("b");
 		expect(c.similarity).toBeGreaterThanOrEqual(0.8);
 	});
 
-	test("a near-audio tie keeps the LATER take (recency tiebreak) and flags nearTie", () => {
+	test("keeps the LATEST take regardless of which take is louder", () => {
 		const assetTranscripts: AssetTranscript[] = [
 			{ assetId: "a", segments: [{ start: 0, end: 3, text: "let me walk you through the timeline view", sourceStartSec: 0 }] },
 			{ assetId: "b", segments: [{ start: 10, end: 13, text: "let me walk you through the timeline view", sourceStartSec: 0 }] },
@@ -51,7 +51,6 @@ describe("buildTakeClusters", () => {
 
 		const clusters = buildTakeClusters({ assetTranscripts, features });
 		expect(clusters).toHaveLength(1);
-		expect(clusters[0].nearTie).toBe(true);
 		// Later take (asset b at t=10) is the keeper.
 		expect(clusters[0].members[clusters[0].keeperIndex].assetId).toBe("b");
 	});

@@ -11,10 +11,11 @@
  *
  * KTD2: every member carries its TIMELINE [startSec,endSec) — the coordinate the
  * removal path uses. (Source time is for transcript grouping only and never
- * leaves U3.) KTD5: the keeper is the audio-strongest member, with the LATEST
- * take winning a near-tie ("the LAST attempt is the keeper"); a cluster whose top
- * members are within AUDIO_EPSILON is flagged `nearTie` so U4 emits no removal.
- * KTD6: a far-apart same-asset cluster (callback/recap risk) is `lowConfidence`.
+ * leaves U3.) KTD5: the keeper is the LATEST take ("the last attempt is the
+ * keeper after stumbles") — recency wins outright, audio quality no longer
+ * overrides it. The redundancy step then cuts the earlier near-identical takes
+ * that fall within its keep-last window. KTD6: a far-apart same-asset cluster
+ * (callback/recap risk) is `lowConfidence`.
  *
  * Pure + wasm-free → bun-testable. Pre-bucketing by shared content token keeps
  * the pairwise cost off the O(n²) worst case on long, repeat-free transcripts.
@@ -22,14 +23,13 @@
 
 import { contentTokens, HIGH_SIMILAR, similarity } from "./text-similarity";
 import type { AssetTranscript } from "./source-map";
+import type { CandidateSpan } from "./candidate-pool";
 import type { SpeechFeatures } from "./types";
 
 /** Same-asset members must be at least this far apart (s) to count as a repeat. */
 export const MIN_SAME_ASSET_GAP_SEC = 3;
 /** A same-asset cluster spanning more than this (s) is callback territory → low confidence. */
 export const CALLBACK_GAP_SEC = 60;
-/** Audio scores within this band are a near-tie (no decisive keeper). */
-export const AUDIO_EPSILON = 0.1;
 /** Penalty subtracted from a member's loudness when it reads as filler. */
 const FILLER_PENALTY = 0.2;
 
@@ -53,10 +53,8 @@ export interface TakeCluster {
 	kind: "take" | "repeat";
 	/** Members sorted by timeline start. */
 	members: ClusterMember[];
-	/** Index INTO `members` of the keeper (audio-strongest; latest wins a near-tie). */
+	/** Index INTO `members` of the keeper — always the LATEST take (keep-last). */
 	keeperIndex: number;
-	/** True when the top members are within AUDIO_EPSILON — no decisive keeper. */
-	nearTie: boolean;
 	/** True for a far-apart same-asset cluster (callback/recap risk). */
 	lowConfidence: boolean;
 	/** Min pairwise similarity across the cluster (conservative cluster cohesion). */
@@ -133,6 +131,21 @@ export function buildTakeClusters({
 		}
 	}
 	if (candidates.length < 2) return [];
+	return clusterCandidates({ candidates });
+}
+
+/**
+ * Shared clustering core: token-bucket → similarity union-find → groups →
+ * TakeClusters (keeper = the latest take). Operates on pre-flattened candidates so
+ * both the timeline path (`buildTakeClusters`) and the bin-wide path
+ * (`buildTakeClustersFromPool`) reuse it verbatim.
+ */
+function clusterCandidates({
+	candidates,
+}: {
+	candidates: Candidate[];
+}): TakeCluster[] {
+	if (candidates.length < 2) return [];
 
 	// Pre-bucket: only pairs sharing a content token are worth scoring.
 	const tokenToIndices = new Map<string, number[]>();
@@ -197,13 +210,9 @@ export function buildTakeClusters({
 		const assetIds = new Set(members.map((m) => m.assetId));
 		const kind = assetIds.size >= 2 ? "take" : "repeat";
 
-		// Keeper: audio-strongest; among members within AUDIO_EPSILON of the top,
-		// the LATEST take wins (the "last attempt is the keeper" convention).
-		const maxScore = Math.max(...members.map((m) => m.audioScore));
-		const topMembers = members.filter((m) => m.audioScore >= maxScore - AUDIO_EPSILON);
-		const nearTie = topMembers.length >= 2;
-		const keeper = topMembers.reduce((latest, m) => (m.startSec > latest.startSec ? m : latest));
-		const keeperIndex = members.indexOf(keeper);
+		// Keeper: the LATEST take ("the last attempt is the keeper after stumbles").
+		// members are sorted ascending by timeline start, so the last one is latest.
+		const keeperIndex = members.length - 1;
 
 		// Callback guard: a far-apart same-asset cluster is low confidence. Measure
 		// the cluster's start-to-start extent (not end-to-start, which a long first
@@ -219,8 +228,33 @@ export function buildTakeClusters({
 			}
 		}
 
-		clusters.push({ kind, members, keeperIndex, nearTie, lowConfidence, similarity: minSim });
+		clusters.push({ kind, members, keeperIndex, lowConfidence, similarity: minSim });
 	}
 
 	return clusters;
+}
+
+/**
+ * Cluster takes across the WHOLE bin (FrameCut auto-assemble): the same candidate
+ * pool, but in SOURCE coordinates spanning every clip — so an unused retake in
+ * the bin clusters with its keeper just like a placed one. Reuses the clustering
+ * core verbatim; the keeper is still the latest take.
+ */
+export function buildTakeClustersFromPool({
+	pool,
+}: {
+	pool: readonly CandidateSpan[];
+}): TakeCluster[] {
+	const candidates: Candidate[] = pool.map((span, index) => ({
+		index,
+		assetId: span.assetId,
+		startSec: span.sourceStartSec,
+		endSec: span.sourceEndSec,
+		text: span.text,
+		audioScore: span.audio
+			? span.audio.loudnessRelative -
+				(span.audio.fillerCandidate ? FILLER_PENALTY : 0)
+			: 0,
+	}));
+	return clusterCandidates({ candidates });
 }
