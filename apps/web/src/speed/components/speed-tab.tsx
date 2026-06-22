@@ -91,16 +91,10 @@ export function SpeedTab({
 		parse: (input) => parseSpeedInput({ input }),
 		onPreview: (nextRate) => {
 			pendingRateRef.current = nextRate;
-			editor.timeline.previewElements({
-				updates: [
-					{
-						trackId,
-						elementId: element.id,
-						updates: {
-							retime: buildRetime({ rate: nextRate, maintainPitch }),
-						},
-					},
-				],
+			editor.timeline.previewElementRetime({
+				trackId,
+				elementId: element.id,
+				retime: buildRetime({ rate: nextRate, maintainPitch }),
 			});
 		},
 		onCommit: () => {

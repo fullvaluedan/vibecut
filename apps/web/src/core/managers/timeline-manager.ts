@@ -7,14 +7,17 @@ import type {
 	TimelineTrack,
 	TimelineElement,
 	RetimeConfig,
+	ElementRef,
 } from "@/timeline";
 import { calculateTotalDuration } from "@/timeline";
+import { findLinkedPartners } from "@/timeline/link-elements";
 import { TimelineDragSource } from "@/timeline/drag-source";
 import { findTrackInSceneTracks } from "@/timeline/track-element-update";
 import { lastFrameMediaTime, type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 import {
 	canElementBeHidden,
 	canElementHaveAudio,
+	isRetimableElement,
 } from "@/timeline/element-utils";
 import { isElementMuted } from "@/timeline/audio-state";
 import type {
@@ -132,6 +135,34 @@ export class TimelineManager {
 		});
 	}
 
+	/**
+	 * Retime targets = the element plus any RETIMABLE linked partners. A video
+	 * and its separated audio share a linkId and must change speed together, or
+	 * they desync (the video halves at 2x while the audio stays full length).
+	 * Mirrors how move/trim already expand to linked partners.
+	 */
+	private collectRetimeTargets({
+		trackId,
+		elementId,
+	}: {
+		trackId: string;
+		elementId: string;
+	}): ElementRef[] {
+		const self: ElementRef = { trackId, elementId };
+		const tracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		if (!tracks) return [self];
+		const partners = findLinkedPartners({ ref: self, tracks, mode: "timeline" });
+		const orderedTracks = [tracks.main, ...tracks.overlay, ...tracks.audio];
+		const elementForRef = (ref: ElementRef): TimelineElement | null =>
+			orderedTracks
+				.find((track) => track.id === ref.trackId)
+				?.elements.find((element) => element.id === ref.elementId) ?? null;
+		return [self, ...partners].filter((ref) => {
+			const element = elementForRef(ref);
+			return element !== null && isRetimableElement(element);
+		});
+	}
+
 	updateElementRetime({
 		trackId,
 		elementId,
@@ -144,16 +175,31 @@ export class TimelineManager {
 		pushHistory?: boolean;
 	}): void {
 		this.updateElements({
-			updates: [
-				{
-					trackId,
-					elementId,
-					patch: {
-						retime,
-					},
-				},
-			],
+			updates: this.collectRetimeTargets({ trackId, elementId }).map((ref) => ({
+				trackId: ref.trackId,
+				elementId: ref.elementId,
+				patch: { retime },
+			})),
 			pushHistory,
+		});
+	}
+
+	/** Live preview of a retime across the element and its linked partners. */
+	previewElementRetime({
+		trackId,
+		elementId,
+		retime,
+	}: {
+		trackId: string;
+		elementId: string;
+		retime?: RetimeConfig;
+	}): void {
+		this.previewElements({
+			updates: this.collectRetimeTargets({ trackId, elementId }).map((ref) => ({
+				trackId: ref.trackId,
+				elementId: ref.elementId,
+				updates: { retime },
+			})),
 		});
 	}
 
