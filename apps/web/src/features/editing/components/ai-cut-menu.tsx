@@ -19,6 +19,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
 import { runRemoveSilences } from "@/features/editing/remove-silences";
 import { runDirector } from "@/features/ai-generate/director/run-director";
+import { runAssemble } from "@/features/ai-generate/director/run-assemble";
 import { runHighlight } from "@/features/ai-generate/director/run-highlight";
 import { DirectorReviewDialog } from "@/features/ai-generate/director/components/director-review-dialog";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
@@ -138,6 +139,56 @@ export function AiCutMenu() {
 		}
 	};
 
+	// Auto-assemble (the headline AI feature): read the WHOLE bin (every retake +
+	// unused clip), pick the best spans, and lay a rough cut on the main track.
+	// Replaces the current main track in ONE undoable command (Ctrl+Z reverts).
+	const runAutoAssembleFlow = async () => {
+		if (busy) return;
+		const controller = new AbortController();
+		abortRef.current = controller;
+		setBusy("Auto-assemble");
+		useAiActivityStore.getState().setBusy(true);
+		setStage("Starting...");
+		const lastStage = { current: "starting" };
+		const toastId = toast.loading("Auto-assemble...");
+		try {
+			const result = await runAssemble({
+				editor,
+				onProgress: (detail) => {
+					lastStage.current = detail;
+					setStage(detail);
+				},
+				signal: controller.signal,
+			});
+			toast.success(
+				`Assembled ${result.placed} clip${result.placed === 1 ? "" : "s"}`,
+				{
+					id: toastId,
+					description: result.narrative
+						? `${result.narrative} — Ctrl+Z restores your timeline.`
+						: "Ctrl+Z restores your timeline.",
+				},
+			);
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (message === "Cancelled" || controller.signal.aborted) {
+				toast.info("Auto-assemble stopped", { id: toastId });
+			} else {
+				console.error(`Auto-assemble failed during "${lastStage.current}"`, e);
+				toast.error("Auto-assemble failed", {
+					id: toastId,
+					duration: 15000,
+					description: `While "${lastStage.current}": ${message}`,
+				});
+			}
+		} finally {
+			abortRef.current = null;
+			setBusy(null);
+			useAiActivityStore.getState().setBusy(false);
+			setStage(null);
+		}
+	};
+
 	// Highlight (keep-only): the inverse of the Director — keep the best parts, cut
 	// the rest. Opens the same Review modal in highlight mode (it owns apply).
 	const runHighlightFlow = async (budgetSec?: number) => {
@@ -209,6 +260,9 @@ export function AiCutMenu() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
+					<DropdownMenuItem onClick={() => void runAutoAssembleFlow()}>
+						Auto-assemble — build a cut from all my clips
+					</DropdownMenuItem>
 					<DropdownMenuItem onClick={() => void runDirectorFlow()}>
 						AI Director — review &amp; cut the whole video
 					</DropdownMenuItem>
