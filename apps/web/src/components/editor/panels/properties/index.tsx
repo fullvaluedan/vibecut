@@ -16,6 +16,8 @@ import { getMotionTemplate } from "@/features/motion-templates/templates";
 import type { TimelineElement, TimelineTrack } from "@/timeline";
 import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
+import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
+import { DirectorPanel } from "@/features/ai-generate/director/components/director-panel";
 
 type ElementWithTrack = { track: TimelineTrack; element: TimelineElement };
 
@@ -62,6 +64,14 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
+	const assembleSurface = useDirectorPlanStore((s) => s.surface);
+	const assembleMode = useDirectorPlanStore((s) => s.mode);
+	const assembleDraft = useDirectorPlanStore((s) => s.draft);
+
+	// Auto-assemble review takes over the whole inspector while a draft is active.
+	if (assembleSurface === "panel" && assembleMode === "assemble" && assembleDraft) {
+		return <DirectorPanel />;
+	}
 
 	if (selectedElements.length === 0) {
 		return (

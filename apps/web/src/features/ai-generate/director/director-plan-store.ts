@@ -8,6 +8,7 @@ import { create } from "zustand";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
 import type { NearTieNote } from "./redundancy";
 import type { HighlightPreview } from "./highlight-preview";
+import type { AssemblyDraft, DraftSpan } from "./assembly-draft";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
@@ -70,8 +71,10 @@ export function selectAccepted({
 
 interface DirectorPlanState {
 	open: boolean;
-	/** "cut" = the normal Director review; "highlight" = keep-only (inverse apply). */
-	mode: "cut" | "highlight";
+	/** "modal" = the cut/highlight review dialog; "panel" = the assemble review in the right inspector. */
+	surface: "modal" | "panel";
+	/** "cut"/"highlight" = the modal review; "assemble" = the right-panel auto-assemble review. */
+	mode: "cut" | "highlight" | "assemble";
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
@@ -80,6 +83,14 @@ interface DirectorPlanState {
 	keeps: HighlightKeepRow[];
 	preview: HighlightPreview | null;
 	totalSec: number;
+	/** Assemble mode: the editable rough-cut draft (ordered spans + swap alternates). */
+	draft: AssemblyDraft | null;
+	/** Open the auto-assemble REVIEW in the right panel with a fresh draft. */
+	openAssemble: (args: { draft: AssemblyDraft }) => void;
+	/** Replace the draft's spans (after a drop / re-include / swap) — the panel re-projects the timeline. */
+	applyDraftEdit: (spans: DraftSpan[]) => void;
+	/** Close the assemble panel, leaving the assembled cut on the timeline. */
+	closeAssemble: () => void;
 	/** Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie notes. */
 	openWith: (args: { plan: DirectorPlan; nearTies?: readonly NearTieNote[] }) => void;
 	/** Open the Highlight modal (KTD9): keep rows accepted by default, with preview + totalSec. */
@@ -102,6 +113,7 @@ interface DirectorPlanState {
 
 const CLEARED = {
 	open: false,
+	surface: "modal" as const,
 	mode: "cut" as const,
 	plan: null,
 	decisions: {},
@@ -109,10 +121,21 @@ const CLEARED = {
 	keeps: [],
 	preview: null,
 	totalSec: 0,
+	draft: null,
 };
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	...CLEARED,
+	// `open` stays FALSE — the panel keys off surface/mode/draft, not `open`, so
+	// the still-mounted modal DirectorReviewDialog (which renders on `open`) does
+	// NOT pop a spurious "nothing to change" dialog over the assemble panel.
+	openAssemble: ({ draft }) =>
+		set({ ...CLEARED, surface: "panel", mode: "assemble", draft }),
+	applyDraftEdit: (spans) =>
+		set((state) =>
+			state.draft ? { draft: { ...state.draft, spans } } : {},
+		),
+	closeAssemble: () => set({ ...CLEARED }),
 	openWith: ({ plan, nearTies }) =>
 		set({
 			...CLEARED,

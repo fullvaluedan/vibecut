@@ -8,6 +8,7 @@
  * keeps an undo/redo history of drafts so each edit is individually reversible.
  */
 
+import type { AssemblyCandidate, AssemblySpan } from "@framecut/hf-bridge";
 import type { AssemblySpanInput } from "./assembly-placement";
 
 /** One span in the draft. Source in/out are the IMMUTABLE original timecodes. */
@@ -39,6 +40,70 @@ export interface SpanAlternate {
 	sourceEndSec: number;
 	sourceDurationSec: number;
 	text?: string;
+}
+
+/** The review draft: the ordered spans + each take cluster's swap alternates. */
+export interface AssemblyDraft {
+	spans: DraftSpan[];
+	/** clusterId → that take cluster's spans, offered as swap alternates. */
+	alternatesByClusterId: Record<string, SpanAlternate[]>;
+}
+
+/**
+ * Build the review draft from the planner's chosen spans + the full candidate
+ * list: each chosen span becomes a DraftSpan (enriched with clip name, transcript
+ * snippet, cluster id, and source duration), and every take cluster's candidates
+ * become swap alternates. Spans whose asset has vanished are skipped. Pure.
+ */
+export function buildAssemblyDraft({
+	planSpans,
+	candidates,
+	assetInfoById,
+}: {
+	planSpans: readonly AssemblySpan[];
+	candidates: readonly AssemblyCandidate[];
+	assetInfoById: ReadonlyMap<string, { name: string; durationSec: number }>;
+}): AssemblyDraft {
+	const candidateBySpanId = new Map(candidates.map((c) => [c.spanId, c]));
+
+	const spans: DraftSpan[] = [];
+	for (const planSpan of planSpans) {
+		const info = assetInfoById.get(planSpan.assetId);
+		if (!info) continue;
+		const candidate = candidateBySpanId.get(planSpan.spanId);
+		spans.push({
+			id: planSpan.spanId,
+			assetId: planSpan.assetId,
+			clipName: candidate?.clipName ?? info.name,
+			sourceStartSec: planSpan.sourceStartSec,
+			sourceEndSec: planSpan.sourceEndSec,
+			sourceDurationSec: info.durationSec,
+			...(candidate?.text !== undefined ? { text: candidate.text } : {}),
+			...(candidate?.clusterId !== undefined
+				? { clusterId: candidate.clusterId }
+				: {}),
+			dropped: false,
+		});
+	}
+
+	const alternatesByClusterId: Record<string, SpanAlternate[]> = {};
+	for (const candidate of candidates) {
+		if (candidate.clusterId === undefined) continue;
+		const info = assetInfoById.get(candidate.assetId);
+		if (!info) continue;
+		const list = alternatesByClusterId[candidate.clusterId] ?? [];
+		list.push({
+			assetId: candidate.assetId,
+			clipName: candidate.clipName,
+			sourceStartSec: candidate.sourceStartSec,
+			sourceEndSec: candidate.sourceEndSec,
+			sourceDurationSec: info.durationSec,
+			...(candidate.text !== undefined ? { text: candidate.text } : {}),
+		});
+		alternatesByClusterId[candidate.clusterId] = list;
+	}
+
+	return { spans, alternatesByClusterId };
 }
 
 /** The spans currently IN the cut, in order. */

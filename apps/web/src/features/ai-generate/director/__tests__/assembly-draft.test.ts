@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	activeSpans,
+	buildAssemblyDraft,
 	dropSpan,
 	draftToPlacementInputs,
 	includeSpan,
@@ -8,6 +9,7 @@ import {
 	swapSpan,
 	type DraftSpan,
 } from "@/features/ai-generate/director/assembly-draft";
+import type { AssemblyCandidate, AssemblySpan } from "@framecut/hf-bridge";
 
 function draftSpan(partial: Partial<DraftSpan> & { id: string }): DraftSpan {
 	return {
@@ -87,5 +89,74 @@ describe("draftToPlacementInputs", () => {
 		const inputs = draftToPlacementInputs(dropSpan({ spans: SPANS, id: "s0" }));
 		expect(inputs.map((i) => i.mediaId)).toEqual(["a", "a"]);
 		expect(inputs[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 2 });
+	});
+});
+
+describe("buildAssemblyDraft", () => {
+	function candidate(
+		partial: Partial<AssemblyCandidate> & { spanId: string; assetId: string },
+	): AssemblyCandidate {
+		return {
+			clipName: "clip.mp4",
+			sourceStartSec: 0,
+			sourceEndSec: 2,
+			text: "a line",
+			...partial,
+		};
+	}
+	function planSpan({
+		spanId,
+		assetId,
+	}: {
+		spanId: string;
+		assetId: string;
+	}): AssemblySpan {
+		return {
+			spanId,
+			assetId,
+			sourceStartSec: 0,
+			sourceEndSec: 2,
+			reason: "",
+			confidence: 1,
+		};
+	}
+
+	test("enriches chosen spans + collects each cluster's swap alternates", () => {
+		const candidates: AssemblyCandidate[] = [
+			candidate({ spanId: "s0", assetId: "a", clusterId: "C1", text: "the line", clipName: "A.mp4" }),
+			candidate({ spanId: "s1", assetId: "b", clusterId: "C1", text: "the line", clipName: "B.mp4" }),
+			candidate({ spanId: "s2", assetId: "a", clipName: "A.mp4", text: "solo" }),
+		];
+		const draft = buildAssemblyDraft({
+			planSpans: [planSpan({ spanId: "s0", assetId: "a" }), planSpan({ spanId: "s2", assetId: "a" })],
+			candidates,
+			assetInfoById: new Map([
+				["a", { name: "A.mp4", durationSec: 30 }],
+				["b", { name: "B.mp4", durationSec: 20 }],
+			]),
+		});
+		expect(draft.spans.map((s) => s.id)).toEqual(["s0", "s2"]);
+		expect(draft.spans[0]).toMatchObject({
+			clipName: "A.mp4",
+			text: "the line",
+			clusterId: "C1",
+			sourceDurationSec: 30,
+			dropped: false,
+		});
+		// C1 has both takes available as swap alternates
+		expect(draft.alternatesByClusterId.C1).toHaveLength(2);
+		expect(draft.alternatesByClusterId.C1.map((a) => a.assetId).sort()).toEqual([
+			"a",
+			"b",
+		]);
+	});
+
+	test("skips a chosen span whose asset is gone from the bin", () => {
+		const draft = buildAssemblyDraft({
+			planSpans: [planSpan({ spanId: "s0", assetId: "a" }), planSpan({ spanId: "s9", assetId: "missing" })],
+			candidates: [candidate({ spanId: "s0", assetId: "a" })],
+			assetInfoById: new Map([["a", { name: "A.mp4", durationSec: 10 }]]),
+		});
+		expect(draft.spans.map((s) => s.id)).toEqual(["s0"]);
 	});
 });

@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import {
-	buildAssemblyCandidates,
-	resolveAssemblySpanInputs,
-} from "@/features/ai-generate/director/assembly-candidates";
+import { buildAssemblyCandidates } from "@/features/ai-generate/director/assembly-candidates";
 import type { CandidateSpan } from "@/features/ai-generate/director/candidate-pool";
 import type { TakeCluster } from "@/features/ai-generate/director/take-clusters";
-import type { AssemblySpan } from "@framecut/hf-bridge";
 
 function span({
 	id,
@@ -55,37 +51,5 @@ describe("buildAssemblyCandidates", () => {
 		});
 		expect(candidates[1].clusterId).toBeUndefined(); // not in a cluster
 		expect(candidates[2]).toMatchObject({ spanId: "s2", clusterId: "C1" });
-	});
-});
-
-describe("resolveAssemblySpanInputs", () => {
-	function planSpan(assetId: string): AssemblySpan {
-		return {
-			spanId: `span-${assetId}`,
-			assetId,
-			sourceStartSec: 1,
-			sourceEndSec: 4,
-			reason: "",
-			confidence: 1,
-		};
-	}
-
-	test("resolves name + source duration; skips spans whose asset is gone", () => {
-		const inputs = resolveAssemblySpanInputs({
-			planSpans: [planSpan("a"), planSpan("missing"), planSpan("b")],
-			assetInfoById: new Map([
-				["a", { name: "A.mp4", durationSec: 30 }],
-				["b", { name: "B.mp4", durationSec: 20 }],
-			]),
-		});
-		expect(inputs).toHaveLength(2); // "missing" dropped
-		expect(inputs[0]).toEqual({
-			mediaId: "a",
-			name: "A.mp4",
-			sourceStartSec: 1,
-			sourceEndSec: 4,
-			sourceDurationSec: 30,
-		});
-		expect(inputs[1].mediaId).toBe("b");
 	});
 });

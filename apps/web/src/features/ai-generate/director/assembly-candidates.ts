@@ -3,10 +3,9 @@
  * placement (FrameCut auto-assemble, P4). Wasm-free → bun-testable.
  */
 
-import type { AssemblyCandidate, AssemblySpan } from "@framecut/hf-bridge";
+import type { AssemblyCandidate } from "@framecut/hf-bridge";
 import type { CandidateSpan } from "./candidate-pool";
 import type { TakeCluster } from "./take-clusters";
-import type { AssemblySpanInput } from "./assembly-placement";
 
 /**
  * Build the planner's candidate list from the pool + cross-bin take clusters:
@@ -47,31 +46,4 @@ export function buildAssemblyCandidates({
 			...(span.audio?.fillerCandidate ? { fillerCandidate: true } : {}),
 		};
 	});
-}
-
-/**
- * Resolve the planner's chosen spans into placement inputs, looking up each
- * source clip's display name + full duration (for trimEnd). Spans whose asset has
- * since vanished from the bin are skipped.
- */
-export function resolveAssemblySpanInputs({
-	planSpans,
-	assetInfoById,
-}: {
-	planSpans: readonly AssemblySpan[];
-	assetInfoById: ReadonlyMap<string, { name: string; durationSec: number }>;
-}): AssemblySpanInput[] {
-	const out: AssemblySpanInput[] = [];
-	for (const span of planSpans) {
-		const info = assetInfoById.get(span.assetId);
-		if (!info) continue;
-		out.push({
-			mediaId: span.assetId,
-			name: info.name,
-			sourceStartSec: span.sourceStartSec,
-			sourceEndSec: span.sourceEndSec,
-			sourceDurationSec: info.durationSec,
-		});
-	}
-	return out;
 }
