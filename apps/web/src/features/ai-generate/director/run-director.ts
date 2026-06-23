@@ -37,6 +37,7 @@ import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
+import { snapRemovalOps } from "./snap-cut";
 import { buildOpeningDebugReport } from "./director-debug";
 
 declare global {
@@ -272,11 +273,15 @@ export async function runDirector({
 	// take/repeat redundancy ops) into the LLM plan, dropping any that overlap a cut
 	// it already made AND any that would delete a protected span — take-cluster keeper,
 	// capped high-value span, or LLM keep (KTD2/KTD7) — then hand off to the Review modal.
-	const operations = mergeDetectedCuts({
+	const mergedOps = mergeDetectedCuts({
 		planOps,
 		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
+	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
+	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
+	// guard's envelope; reorder ops are left untouched.
+	const operations = snapRemovalOps({ ops: mergedOps, envelope });
 	// Issue A investigation: opt-in opening-redundancy report (set window.__directorDebug
 	// = true in the console before running). Shows the opening transcript, pairwise
 	// similarity vs the merge bar, and whether the LLM proposed a cut there — so a
