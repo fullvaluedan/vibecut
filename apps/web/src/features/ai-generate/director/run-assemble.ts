@@ -22,6 +22,7 @@ import {
 	type DraftSpan,
 } from "./assembly-draft";
 import { planMainTrackElements } from "./assembly-placement";
+import { padAssemblyDraft } from "./assembly-pad";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import type { SpeechFeatures } from "./types";
@@ -107,12 +108,19 @@ export async function runAssemble({
 		data?.plan && Array.isArray(data.plan.spans) ? data.plan : { spans: [] };
 
 	onProgress?.("Placing the cut...");
-	const draft = buildAssemblyDraft({
-		planSpans: plan.spans,
-		candidates,
-		assetInfoById: new Map(
-			assets.map((a) => [a.id, { name: a.name, durationSec: a.duration ?? 0 }]),
-		),
+	// Issue E (Auto-assemble): expand each chosen span into its surrounding source
+	// silence so the back-to-back joins between clips land in the quiet, not mid-
+	// word. Envelope-free (assemble has no envelope at placement) — the inter-segment
+	// gaps in the transcript ARE the silence; padding is clamped to those gaps.
+	const draft = padAssemblyDraft({
+		draft: buildAssemblyDraft({
+			planSpans: plan.spans,
+			candidates,
+			assetInfoById: new Map(
+				assets.map((a) => [a.id, { name: a.name, durationSec: a.duration ?? 0 }]),
+			),
+		}),
+		pool,
 	});
 	if (draft.spans.length === 0) {
 		throw new Error("The assembler chose no usable spans.");
