@@ -56,6 +56,7 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	vision: "Vision",
 	deadair: "Dead air",
 	noise: "Noise",
+	redundancy: "Repeat",
 };
 
 function isRemoval(op: DirectorOp): boolean {

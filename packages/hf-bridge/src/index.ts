@@ -34,6 +34,16 @@ export {
 	type AssemblyPlan,
 } from "./assemble";
 export {
+	planRedundancy,
+	buildRedundancyPrompt,
+	renderRedundancyCatalog,
+	sanitizeRedundancyPlan,
+	type RedundancyLine,
+	type RedundancyMember,
+	type RedundancyGroup,
+	type RedundancyPlan,
+} from "./llm-redundancy";
+export {
 	renderTemplateJob,
 	renderCompDir,
 	startStudio,
