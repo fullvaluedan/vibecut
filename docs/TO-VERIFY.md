@@ -2,6 +2,15 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Dedicated LLM redundancy pass (2026-06-24, branch `feat/director-importance`, plan `docs/plans/2026-06-23-001-feat-director-repeat-detection-plan.md`)
+The repeat-detection rebuild (brainstorm → deepened plan → U1-U5). Pure cores are bun-tested (llm-redundancy sanitize/dedup, candidate catalog, group→cut mapping + the lexical-detector gate + swap recompute, review hint — 337 director+route tests, hf-bridge 53, tsc 0). The LLM quality + the wiring are **live-verify only** (the route + run-director cross the wasm/LLM boundary). Needs Dan's footage + an AI connection.
+- [ ] **Repeats actually caught (the whole point).** Run **AI CUT → AI Director** on the footage where repeats survived. Reworded restatements AND near-verbatim retakes should now show as **Repeat**-badge cut rows (from the dedicated `/api/director/redundancy` pass). Accept them → the redundant takes are gone. Does it catch the real repeats now?
+- [ ] **Conservative, not over-cutting.** It should NOT flag distinct-but-topically-similar lines or intentional repetition (callbacks, "as I said earlier" recaps, emphasis). If it under-catches, the `REDUNDANCY_CONFIDENCE_FLOOR` (redundancy-apply.ts, default 0.7 inclusive) loosens; if it over-cuts, raise it.
+- [ ] **Best take kept.** Where there are multiple takes of a line, the one left in should be the best-delivered (cleanest/loudest/least filler), not just the last. Rejecting a Repeat row keeps THAT take ("Keeping this take" hint).
+- [ ] **No double-flagging (S4).** Repeats appear as ONE coherent set of rows — the lexical detectors (take-clusters/phrase-repeat/segment-repeat) stay silent when the LLM pass ran; the general cut prompt no longer proposes redundancy cuts.
+- [ ] **Fallback on error.** Force the redundancy route to fail (offline / bad key) → the Director still completes and the lexical detectors run as the fallback (no crash). One extra LLM round-trip per run is expected (token cost).
+- [ ] **DEFERRED (not built): swap-to-alternate UI.** Today a wrong keeper is corrected by UN-checking that take's Repeat row. The richer per-row swap-dropdown (pick any alternate take) is the one remaining live-verify piece — `cutMembersForKeeper` + the group structure exist; the store action + dialog control aren't wired yet.
+
 ## Live-test fixes — noise take / clip border / abrupt cuts / opening repeats (2026-06-23, branch `feat/director-importance`)
 All four came from Dan's live testing today. Pure logic is bun-tested (268 director tests, tsc 0, lint clean); the behaviour on real footage is yours to confirm. Dev server: run it in YOUR OWN terminal (`cd apps/web && bun run dev -- --port 3001`) — the agent's session reaps any process it launches, so the watchdog can't keep it up past the session.
 
