@@ -22,7 +22,7 @@ import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
 import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
 import type { EditorCore } from "@/core";
-import type { DirectorAssetSummary, DirectorVisionFrame } from "@framecut/hf-bridge";
+import type { DirectorAssetSummary, DirectorOp, DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeEnergyEnvelope, computeSpeechFeatures, ENERGY_WINDOW_SEC } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
@@ -44,6 +44,8 @@ import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
+import { buildRedundancyCatalog } from "./redundancy-catalog";
+import { mapRedundancyGroups, shouldRunLexicalRepeatDetectors } from "./redundancy-apply";
 
 declare global {
 	interface Window {
@@ -159,24 +161,25 @@ export async function runDirector({
 	if (!segments.length) {
 		throw new Error("No speech found — the Director plans from the transcript.");
 	}
-	// Deterministic word-level cuts (the LLM works at segment level and misses
-	// doubled words + standalone fillers inside a segment) — merged into the plan
-	// below, deduped against the LLM's removals.
+	// Always-on word-level cleanup (NOT repeat detectors): doubled words, dead air,
+	// fillers, pacing — the LLM works at segment level and misses these. The REPEAT
+	// detectors (phrase-repeat, segment-repeat) are computed here but only INCLUDED
+	// when the dedicated LLM redundancy pass didn't run (R7 fallback, gated below).
 	const wordCuts = [
 		...detectDuplicateWordCuts({ words: words ?? [] }),
-		...detectPhraseRepeatCuts({ words: words ?? [] }),
 		...detectDeadAirCuts({ words: words ?? [] }),
 		...detectFillerCuts({ words: words ?? [] }),
 		...detectPacingCuts({ segments }),
 	];
-	// Segment-level consecutive-repeat backstop: the ONLY repeat catcher when the
-	// model can't emit word timestamps (phrase-repeat then yields nothing). Drop any
-	// that overlap a word-level cut so the two layers don't double up in the review.
+	const phraseRepeatCuts = detectPhraseRepeatCuts({ words: words ?? [] });
+	// Segment-level consecutive-repeat backstop (fallback only). Drop any that overlap
+	// a word-level / phrase-repeat cut so the layers don't double up in the review.
 	const segmentRepeatCuts = detectSegmentRepeatCuts({ segments }).filter(
 		(op) =>
-			!wordCuts.some((w) => w.startSec < op.endSec && op.startSec < w.endSec),
+			![...wordCuts, ...phraseRepeatCuts].some(
+				(w) => w.startSec < op.endSec && op.startSec < w.endSec,
+			),
 	);
-	const detectedCuts = [...wordCuts, ...segmentRepeatCuts];
 	abort();
 
 	onProgress?.("Listening to the takes...");
@@ -353,11 +356,56 @@ export async function runDirector({
 	// take/repeat redundancy ops) into the LLM plan, dropping any that overlap a cut
 	// it already made AND any that would delete a protected span — take-cluster keeper,
 	// capped high-value span, or LLM keep (KTD2/KTD7) — then hand off to the Review modal.
-	const mergedOps = mergeDetectedCuts({
+	// Dedicated LLM redundancy pass (R1) — the focused repeat-catcher. On success it is
+	// the authority and the lexical repeat detectors stay silent (R7); on a route error
+	// it falls through to them. Non-throwing (KTD-5).
+	let redundancyCuts: DirectorOp[] = [];
+	let redundancyRan = false;
+	try {
+		const redundancyLines = buildRedundancyCatalog({
+			segments,
+			features,
+			elements: tracks.main.elements,
+			clipNameByAssetId: new Map(editor.media.getAssets().map((a) => [a.id, a.name])),
+		});
+		const rRes = await fetch("/api/director/redundancy", {
+			method: "POST",
+			headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+			signal,
+			body: JSON.stringify({ lines: redundancyLines, taste: taste || undefined }),
+		});
+		if (rRes.ok) {
+			const rData = await rRes.json();
+			const groups = Array.isArray(rData?.plan?.groups) ? rData.plan.groups : [];
+			redundancyCuts = mapRedundancyGroups({ groups }).cuts;
+			redundancyRan = true;
+		}
+	} catch {
+		// route error → fall through to the lexical repeat detectors (KTD-5)
+	}
+	const runLexical = shouldRunLexicalRepeatDetectors({ redundancyRan });
+	abort();
+
+	// Fold the always-on cleanup + (ONLY on fallback) the lexical repeat detectors into
+	// the LLM plan, protecting take-cluster keepers + the importance floor + LLM keeps.
+	const lexicalRepeatCuts = runLexical
+		? [...phraseRepeatCuts, ...segmentRepeatCuts, ...redundancyOps]
+		: [];
+	const baseMerged = mergeDetectedCuts({
 		planOps,
-		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts, ...tinyClipCuts],
-		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
-	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
+		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...lexicalRepeatCuts],
+		keepers: [...(runLexical ? keepers : []), ...protectedSpans, ...llmKeepSpans],
+	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
+	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by
+	// explicit LLM keep ops — the capped importance floor must not veto them.
+	const mergedOps =
+		redundancyRan && redundancyCuts.length > 0
+			? mergeDetectedCuts({
+					planOps: baseMerged,
+					extraOps: redundancyCuts,
+					keepers: llmKeepSpans,
+				}).filter((op) => op.op !== "keep")
+			: baseMerged;
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.

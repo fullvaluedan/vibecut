@@ -15,11 +15,17 @@ let lastLines: unknown = undefined;
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
+// bun's mock.module is process-global, so when this file runs alongside the plan
+// route test (same `bun test` dir), whichever mock is active must satisfy BOTH
+// routes' imports. Stub the other planners too (inert here) to avoid a cross-file
+// "export not found" load error.
 mock.module("@framecut/hf-bridge", () => ({
 	planRedundancy: (arg: { lines?: unknown }) => {
 		lastLines = arg?.lines;
 		return planRedundancyImpl();
 	},
+	planDirector: async () => ({ plan: { operations: [] }, usage: null }),
+	planDirectorVision: async () => ({ plan: { operations: [] }, usage: null, degraded: false }),
 }));
 
 const { POST } = await import("../route");
