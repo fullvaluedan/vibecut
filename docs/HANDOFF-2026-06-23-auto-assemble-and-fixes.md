@@ -25,4 +25,13 @@ Architecture notes live in the `vibecut` memory + the plan `C:\Users\danom\.clau
 ### B. Issue 3 — playback stutter (BLOCKED here)
 Dominant cost is the wasm compositor texture pool; this worktree runs the *published* `opencut-wasm` npm with **no local Rust toolchain**, so the real fix needs a Rust+wasm-pack machine. JS-side options (memo per-element `TimelineElement`, stabilize `PreviewPanel` overlays) need a live `window.__renderPerf` profile first — see `docs/TO-VERIFY.md` #6. Don't optimize blind.
 
-### C. Push `29a5bbeb` (playback fix) when ready.
+### C. Clip border for cut visibility (UI — quick)
+On a black/dark clip thumbnail the cut boundaries are invisible (Dan's screenshot: adjacent clips blend into one black strip). Give timeline clip elements a visible border/outline so each clip's edges read against a dark background. Look in `timeline/components/timeline-element.tsx` (the clip body / `ElementInner`) — add a subtle border (e.g. `border border-white/15` or a ring) that's distinct from the blue selection ring. Upstream file → PATCHES row.
+
+### D. AI Director left a NOISE-only take (HIGH — a few frames of pure noise survived)
+A short fragment of just *noise* (no speech, high waveform energy) was left in the cut. The existing guards miss it: `dead-air.ts` cuts LOW-loudness dead time (this is HIGH energy); the take/phrase detectors need text. So a brief non-speech, high-energy blip (a bump, breath-pop, room noise) is invisible to every detector AND to the LLM (no transcript text for it). Need a **non-speech-fragment guard**: a span with high energy but no transcript words, shorter than ~N frames, between/around speech → drop it. This is the same fragment class as the 4-frame remnant (Issue 2) but driven by NOISE not silence. Likely a new detector in `director/*` (energy envelope from `audio-features.ts` over the gaps between transcript segments) or a min-fragment guard in the apply/assemble path. Pure + bun-testable.
+
+### E. Abrupt cuts — land mid-sound (MEDIUM)
+Some cuts are visibly abrupt in the waveform (the cut point lands mid-word/mid-sound, no breathing room). Director cuts are aligned to transcript SEGMENT boundaries, but a segment edge can fall mid-sound. Options: snap each cut boundary to the nearest low-energy / zero-crossing point within a small window (reuse the energy envelope in `audio-features.ts` / the silence detector), and/or add a tiny crossfade at cut joins. Remove-silences already pads ±0.15s; the Director apply path (`apply-plan.ts` → `RemoveRangesCommand`) does not. Make boundary-softening shared. Tune against Dan's recording.
+
+### F. Push — DONE this session (`29a5bbeb` playback + `5f188192`/this handoff pushed).
