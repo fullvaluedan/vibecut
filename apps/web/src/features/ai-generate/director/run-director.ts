@@ -39,6 +39,7 @@ import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
+import { detectTinyClipCuts } from "./tiny-clip";
 import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
@@ -54,6 +55,10 @@ declare global {
 /** A surviving clip sliver up to this many frames (at the project fps) is a cut
  * remnant worth swallowing — covers the reported 2-frame and 13-frame artifacts. */
 const REMNANT_FRAMES_TOLERANCE = 15;
+
+/** A standalone video clip shorter than this (frames at the project fps) is too
+ * short to be real footage — a stray fragment proposed for removal in review. */
+const MIN_USEFUL_CLIP_FRAMES = 5;
 
 /**
  * Pre-pass (live test): if a video track's clips are timestamped recordings placed
@@ -191,6 +196,18 @@ export async function runDirector({
 	// features came from and flag the fragments for review.
 	const envelope = computeEnergyEnvelope({ samples, sampleRate, windowSec: ENERGY_WINDOW_SEC });
 	const noiseCuts = detectNoiseFragmentCuts({ features, envelope, windowSec: ENERGY_WINDOW_SEC });
+
+	// Useless tiny-clip guard (live test): a stray sub-N-frame video clip (no speech,
+	// not a removal remnant) survives every other layer, and the reorder can even
+	// promote it to the head. Flag any video clip shorter than MIN_USEFUL_CLIP_FRAMES
+	// for review. clipSpans + the fps are shared with the cut-remnant snap below.
+	const fps = editor.project.getActive().settings.fps;
+	const fpsFloat = fps.denominator > 0 ? fps.numerator / fps.denominator : 30;
+	const clipSpans = collectVideoClipSpansSec({ tracks, ticksPerSecond: TICKS_PER_SECOND });
+	const tinyClipCuts = detectTinyClipCuts({
+		clips: clipSpans,
+		minDurationSec: MIN_USEFUL_CLIP_FRAMES / fpsFloat,
+	});
 
 	// Keep-side signal (Phase B / U1-U4): score each segment's emphasis/anchor
 	// importance. It rides the signal table as an advisory "imp" column and yields a
@@ -331,7 +348,7 @@ export async function runDirector({
 	// capped high-value span, or LLM keep (KTD2/KTD7) — then hand off to the Review modal.
 	const mergedOps = mergeDetectedCuts({
 		planOps,
-		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts],
+		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts, ...tinyClipCuts],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
@@ -341,10 +358,7 @@ export async function runDirector({
 	// Cut-remnant guard (live test): a removal whose boundary lands a few frames shy
 	// of a clip edge leaves a tiny sliver of that clip (the 2-frame / 13-frame bits
 	// at the start). Snap such a boundary OUT to the clip edge so the cut swallows the
-	// remnant. Tolerance is a small frame count via the project fps.
-	const fps = editor.project.getActive().settings.fps;
-	const fpsFloat = fps.denominator > 0 ? fps.numerator / fps.denominator : 30;
-	const clipSpans = collectVideoClipSpansSec({ tracks, ticksPerSecond: TICKS_PER_SECOND });
+	// remnant. Reuses the clipSpans + fps computed above.
 	const operations = snapRemovalsToClipEdges({
 		ops: energySnapped,
 		clipStartsSec: clipSpans.map((c) => c.startSec),
