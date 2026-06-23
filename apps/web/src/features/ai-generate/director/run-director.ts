@@ -18,7 +18,9 @@ import { extractTimelineAudio } from "@/media/mediabunny";
 import { decodeAudioToFloat32 } from "@/media/audio";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
-import { TICKS_PER_SECOND } from "@/wasm";
+import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
+import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
+import type { PlannedElementMove } from "@/timeline/group-move/types";
 import type { EditorCore } from "@/core";
 import type { DirectorAssetSummary, DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeEnergyEnvelope, computeSpeechFeatures, ENERGY_WINDOW_SEC } from "./audio-features";
@@ -39,6 +41,7 @@ import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
+import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
 
 declare global {
@@ -51,6 +54,45 @@ declare global {
 /** A surviving clip sliver up to this many frames (at the project fps) is a cut
  * remnant worth swallowing — covers the reported 2-frame and 13-frame artifacts. */
 const REMNANT_FRAMES_TOLERANCE = 15;
+
+/**
+ * Pre-pass (live test): if a video track's clips are timestamped recordings placed
+ * out of chronological order, re-sequence them back-to-back in timestamp order
+ * BEFORE the Director transcribes + cuts, so the cut runs on the right order. Each
+ * video track is reordered within itself (handles clips on V1 OR an overlay lane).
+ * One MoveElementCommand (one undo) covering all tracks; a no-op when clips are
+ * already ordered or aren't all timestamped. Returns the number of clips moved.
+ */
+function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
+	const tracks = editor.scenes.getActiveScene().tracks;
+	const videoTracks = [tracks.main, ...tracks.overlay].filter(
+		(track) => track.type === "video",
+	);
+	const plannedMoves: PlannedElementMove[] = [];
+	for (const track of videoTracks) {
+		const clips: ChronoClip[] = track.elements
+			.filter((element) => element.type === "video")
+			.map((element) => ({
+				elementId: element.id,
+				name: element.name,
+				startTimeTicks: element.startTime,
+				durationTicks: element.duration,
+			}));
+		const moves = planChronologicalReorder({ clips });
+		if (!moves) continue;
+		for (const move of moves) {
+			plannedMoves.push({
+				sourceTrackId: track.id,
+				targetTrackId: track.id,
+				elementId: move.elementId,
+				newStartTime: mediaTime({ ticks: move.newStartTimeTicks }),
+			});
+		}
+	}
+	if (plannedMoves.length === 0) return 0;
+	editor.command.execute({ command: new MoveElementCommand({ moves: plannedMoves }) });
+	return plannedMoves.length;
+}
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
@@ -83,6 +125,15 @@ export async function runDirector({
 	if (!timelineHasContent({ editor })) {
 		onProgress?.("Assembling your footage...");
 		assembleBinToTimeline({ editor, assets: editor.media.getAssets() });
+	}
+	abort();
+
+	// Put timestamped clips in chronological order before cutting (live test: clips
+	// placed in reverse weren't re-sequenced). No-op unless every clip on a track is
+	// timestamped and out of order; one undo with the rest of the flow.
+	const reordered = reorderClipsByTimestamp({ editor });
+	if (reordered > 0) {
+		toast.info(`Director: put ${reordered} clips in chronological order (by filename time).`);
 	}
 	abort();
 
