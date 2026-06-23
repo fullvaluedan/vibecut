@@ -584,6 +584,10 @@ export function useEditorActions() {
 				? sorted.find((t) => t > now + EPSILON_TICKS)
 				: [...sorted].reverse().find((t) => t < now - EPSILON_TICKS);
 		if (target !== undefined) {
+			// Pause before seeking — Up/Down NAVIGATES edit points (Premiere parity);
+			// landing on a cut and rolling past it isn't navigation. Pause first so
+			// the seek doesn't re-anchor a still-running playhead.
+			editor.playback.pause();
 			editor.playback.seek({ time: target as typeof now });
 		}
 	};
