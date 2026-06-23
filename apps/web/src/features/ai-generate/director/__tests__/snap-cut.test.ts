@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { nearestLowEnergyTime, snapKeepSpans, snapRemovalOps } from "../snap-cut";
+import {
+	nearestLowEnergyTime,
+	snapKeepSpans,
+	snapRemovalOps,
+	snapRemovalsToClipEdges,
+} from "../snap-cut";
 import type { DirectorOp } from "@framecut/hf-bridge";
 
 const WIN = 0.05; // ENERGY_WINDOW_SEC default
@@ -149,5 +154,58 @@ describe("snapKeepSpans", () => {
 			envelope: [],
 		});
 		expect(out).toEqual([{ startSec: 1.0, endSec: 2.0 }]);
+	});
+});
+
+describe("snapRemovalsToClipEdges", () => {
+	test("snaps a removal START back to a clip start to swallow a leading sliver", () => {
+		// Clip [0,5]; the cut starts 0.07s in, leaving a 2-frame sliver at 0.
+		const ops = snapRemovalsToClipEdges({
+			ops: [cut({ startSec: 0.07, endSec: 4.0 })],
+			clipStartsSec: [0],
+			clipEndsSec: [5],
+			toleranceSec: 0.5,
+		});
+		expect(ops[0].startSec).toBe(0);
+		expect(ops[0].endSec).toBe(4.0);
+	});
+
+	test("snaps a removal END out to a clip end to swallow a trailing sliver", () => {
+		const ops = snapRemovalsToClipEdges({
+			ops: [cut({ startSec: 1.0, endSec: 4.6 })],
+			clipStartsSec: [0],
+			clipEndsSec: [5],
+			toleranceSec: 0.5,
+		});
+		expect(ops[0].startSec).toBe(1.0);
+		expect(ops[0].endSec).toBe(5);
+	});
+
+	test("does NOT snap when the boundary is farther than the tolerance", () => {
+		const input = cut({ startSec: 1.0, endSec: 3.0 });
+		const ops = snapRemovalsToClipEdges({
+			ops: [input],
+			clipStartsSec: [0],
+			clipEndsSec: [5],
+			toleranceSec: 0.5,
+		});
+		expect(ops[0].startSec).toBe(1.0);
+		expect(ops[0].endSec).toBe(3.0);
+	});
+
+	test("leaves reorder ops untouched", () => {
+		const reorder = cut({ startSec: 0.07, endSec: 4.0, op: "reorder" });
+		const ops = snapRemovalsToClipEdges({
+			ops: [reorder],
+			clipStartsSec: [0],
+			clipEndsSec: [5],
+			toleranceSec: 0.5,
+		});
+		expect(ops[0].startSec).toBe(0.07);
+	});
+
+	test("zero tolerance is a pass-through", () => {
+		const input = [cut({ startSec: 0.07, endSec: 4.0 })];
+		expect(snapRemovalsToClipEdges({ ops: input, clipStartsSec: [0], clipEndsSec: [5], toleranceSec: 0 })).toEqual(input);
 	});
 });

@@ -37,7 +37,8 @@ import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
-import { snapRemovalOps } from "./snap-cut";
+import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
+import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { buildOpeningDebugReport } from "./director-debug";
 
 declare global {
@@ -46,6 +47,10 @@ declare global {
 		__directorDebug?: boolean;
 	}
 }
+
+/** A surviving clip sliver up to this many frames (at the project fps) is a cut
+ * remnant worth swallowing — covers the reported 2-frame and 13-frame artifacts. */
+const REMNANT_FRAMES_TOLERANCE = 15;
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
@@ -281,7 +286,20 @@ export async function runDirector({
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
-	const operations = snapRemovalOps({ ops: mergedOps, envelope });
+	const energySnapped = snapRemovalOps({ ops: mergedOps, envelope });
+	// Cut-remnant guard (live test): a removal whose boundary lands a few frames shy
+	// of a clip edge leaves a tiny sliver of that clip (the 2-frame / 13-frame bits
+	// at the start). Snap such a boundary OUT to the clip edge so the cut swallows the
+	// remnant. Tolerance is a small frame count via the project fps.
+	const fps = editor.project.getActive().settings.fps;
+	const fpsFloat = fps.denominator > 0 ? fps.numerator / fps.denominator : 30;
+	const clipSpans = collectVideoClipSpansSec({ tracks, ticksPerSecond: TICKS_PER_SECOND });
+	const operations = snapRemovalsToClipEdges({
+		ops: energySnapped,
+		clipStartsSec: clipSpans.map((c) => c.startSec),
+		clipEndsSec: clipSpans.map((c) => c.endSec),
+		toleranceSec: REMNANT_FRAMES_TOLERANCE / fpsFloat,
+	});
 	// Issue A investigation: opt-in opening-redundancy report (set window.__directorDebug
 	// = true in the console before running). Shows the opening transcript, pairwise
 	// similarity vs the merge bar, and whether the LLM proposed a cut there — so a

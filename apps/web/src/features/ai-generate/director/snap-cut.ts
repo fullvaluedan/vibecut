@@ -156,6 +156,59 @@ export function snapRemovalOps({
 }
 
 /**
+ * Snap a removal's edges OUT to a nearby CLIP edge so the cut doesn't leave a tiny
+ * remnant of that clip (issue: 2-frame / 13-frame slivers the Director's cut left
+ * at the start). When a removal's start sits just INSIDE a clip start, or its end
+ * just inside a clip end, within `toleranceSec`, the boundary is extended to the
+ * clip edge — the cut swallows the would-be sliver. Mirrors `silence-refine`'s
+ * clip-edge snap (minus the video-protection, which the Director must not apply —
+ * it removes content on purpose). Non-removal ops pass through.
+ *
+ * Conservative: only fires when the boundary is ALREADY within a remnant's length
+ * of a clip edge, so it extends a removal by at most `toleranceSec` (a few frames)
+ * to absorb the sliver — it never reaches across real kept content.
+ */
+export function snapRemovalsToClipEdges({
+	ops,
+	clipStartsSec,
+	clipEndsSec,
+	toleranceSec,
+}: {
+	ops: readonly DirectorOp[];
+	clipStartsSec: readonly number[];
+	clipEndsSec: readonly number[];
+	toleranceSec: number;
+}): DirectorOp[] {
+	if (toleranceSec <= 0) {
+		return [...ops];
+	}
+	return ops.map((op) => {
+		if (!isRemoval(op)) {
+			return op;
+		}
+		let startSec = op.startSec;
+		for (const clipStart of clipStartsSec) {
+			// start sits just inside a clip start → extend the cut back to swallow [clipStart, start)
+			if (startSec - clipStart > 0 && startSec - clipStart <= toleranceSec) {
+				startSec = clipStart;
+				break;
+			}
+		}
+		let endSec = op.endSec;
+		for (const clipEnd of clipEndsSec) {
+			// end sits just inside a clip end → extend the cut out to swallow [end, clipEnd)
+			if (clipEnd - endSec > 0 && clipEnd - endSec <= toleranceSec) {
+				endSec = clipEnd;
+				break;
+			}
+		}
+		return startSec !== op.startSec || endSec !== op.endSec
+			? { ...op, startSec, endSec }
+			: op;
+	});
+}
+
+/**
  * Snap KEEP-span edges OUTWARD to nearby low-energy troughs (Highlight mode): a
  * span's start moves only to-or-BEFORE itself and its end only to-or-AFTER, so the
  * cuts AROUND the kept span land in the quiet while the span itself never shrinks
