@@ -161,12 +161,12 @@ export function AiCutMenu() {
 				signal: controller.signal,
 			});
 			toast.success(
-				`Assembled ${result.placed} clip${result.placed === 1 ? "" : "s"}`,
+				`Assembled ${result.placed} clip${result.placed === 1 ? "" : "s"} on a new scene`,
 				{
 					id: toastId,
 					description: result.narrative
-						? `${result.narrative} — Ctrl+Z restores your timeline.`
-						: "Ctrl+Z restores your timeline.",
+						? `${result.narrative} — review it in the panel; your original timeline is untouched.`
+						: "Review it in the panel; your original timeline is untouched.",
 				},
 			);
 		} catch (e) {

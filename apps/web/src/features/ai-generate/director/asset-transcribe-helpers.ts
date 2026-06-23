@@ -8,6 +8,7 @@ import type {
 	TranscriptSegmentLite,
 	TranscriptWordLite,
 } from "@/features/transcription/transcript-cache";
+import type { SpeechFeatures } from "./types";
 
 /** One cached per-asset transcript (id is added by the IndexedDB adapter). */
 export interface AssetTranscriptEntry {
@@ -15,6 +16,8 @@ export interface AssetTranscriptEntry {
 	words?: TranscriptWordLite[];
 	/** Set when words were requested but the model couldn't produce them. */
 	wordsUnavailable?: boolean;
+	/** Per-segment audio features (loudness/wpm/filler), for take-ranking. */
+	features?: SpeechFeatures[];
 	createdAt: number;
 }
 
@@ -26,6 +29,7 @@ export interface BinClipTranscript {
 	segments: TranscriptSegmentLite[];
 	words?: TranscriptWordLite[];
 	wordsUnavailable?: boolean;
+	features?: SpeechFeatures[];
 }
 
 /** Minimal asset shape these helpers read. */

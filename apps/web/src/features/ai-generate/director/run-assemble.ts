@@ -24,6 +24,7 @@ import {
 import { planMainTrackElements } from "./assembly-placement";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
+import type { SpeechFeatures } from "./types";
 
 /**
  * Project the active draft spans onto the active scene's main track as one
@@ -77,7 +78,11 @@ export async function runAssemble({
 	}
 
 	onProgress?.("Comparing takes...");
-	const pool = buildCandidatePool({ clips });
+	const featuresByAsset = new Map<string, SpeechFeatures[]>();
+	for (const clip of clips) {
+		if (clip.features) featuresByAsset.set(clip.assetId, clip.features);
+	}
+	const pool = buildCandidatePool({ clips, featuresByAsset });
 	const clusters = buildTakeClustersFromPool({ pool });
 	const candidates = buildAssemblyCandidates({
 		pool,
@@ -112,6 +117,14 @@ export async function runAssemble({
 	if (draft.spans.length === 0) {
 		throw new Error("The assembler chose no usable spans.");
 	}
+
+	// Draft onto a FRESH scene so the user's current timeline is never touched —
+	// the rough cut is a new artifact they can keep, discard, or copy from.
+	const sceneId = await editor.scenes.createScene({
+		name: "Auto-assemble cut",
+		isMain: false,
+	});
+	await editor.scenes.switchToScene({ sceneId });
 
 	const placed = reprojectAssembly({ editor, spans: draft.spans });
 	// Hand the draft to the right-panel review (play / drop / re-include / swap).

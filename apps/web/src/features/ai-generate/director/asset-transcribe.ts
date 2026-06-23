@@ -19,6 +19,7 @@ import {
 } from "@/features/ai-generate/store";
 import { parseCloudTranscript } from "@/features/transcription/transcript-cache";
 import type { MediaAsset } from "@/media/types";
+import { computeSpeechFeatures } from "./audio-features";
 import {
 	assetContentKey,
 	float32MonoToWav,
@@ -147,30 +148,51 @@ export async function transcribeAsset({
 }): Promise<AssetTranscriptEntry | null> {
 	const key = assetContentKey(asset);
 	const cached = await getCachedAssetTranscript(key);
-	if (isAssetCacheHit(cached, wantWords)) {
+	// Fast path: the cached transcript satisfies the request AND already has the
+	// audio features — no decode needed.
+	if (isAssetCacheHit(cached, wantWords) && cached.features !== undefined) {
 		return cached;
 	}
 
 	const decoded = await decodeAssetAudioToFloat32({ asset });
-	if (!decoded) return null;
+	// No decodable audio — surface the cached transcript (sans features) if any.
+	if (!decoded) return cached ?? null;
 	throwIfAborted(signal);
 
-	const aiSettings = useAiSettingsStore.getState();
-	const useCloud =
-		aiSettings.transcriptionBackend === "cloud" && !!aiSettings.groqApiKey;
+	// Reuse a cached transcript when it already satisfies the request (just add the
+	// missing features); otherwise transcribe the decoded audio.
+	let base: AssetTranscriptEntry;
+	if (isAssetCacheHit(cached, wantWords)) {
+		base = cached;
+	} else {
+		const aiSettings = useAiSettingsStore.getState();
+		const useCloud =
+			aiSettings.transcriptionBackend === "cloud" && !!aiSettings.groqApiKey;
+		base = useCloud
+			? await transcribeViaCloud({
+					samples: decoded.samples,
+					sampleRate: decoded.sampleRate,
+					signal,
+				})
+			: await transcribeInBrowser({
+					samples: decoded.samples,
+					durationSec: asset.duration ?? 0,
+					wantWords,
+				});
+	}
 
-	const entry = useCloud
-		? await transcribeViaCloud({
-				samples: decoded.samples,
-				sampleRate: decoded.sampleRate,
-				signal,
-			})
-		: await transcribeInBrowser({
-				samples: decoded.samples,
-				durationSec: asset.duration ?? 0,
-				wantWords,
-			});
-
+	const entry: AssetTranscriptEntry = {
+		...base,
+		features: computeSpeechFeatures({
+			segments: base.segments.map((s) => ({
+				start: s.start,
+				end: s.end,
+				text: s.text,
+			})),
+			samples: decoded.samples,
+			sampleRate: decoded.sampleRate,
+		}),
+	};
 	await saveAssetTranscript({ key, entry });
 	return entry;
 }
@@ -228,6 +250,7 @@ export async function transcribeBin({
 					segments: entry.segments,
 					words: entry.words,
 					wordsUnavailable: entry.wordsUnavailable,
+					features: entry.features,
 				});
 			}
 		} catch (error) {
