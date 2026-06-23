@@ -37,6 +37,14 @@ import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
+import { buildOpeningDebugReport } from "./director-debug";
+
+declare global {
+	interface Window {
+		/** Opt-in: when truthy, the Director logs an opening-redundancy debug report (issue A). */
+		__directorDebug?: boolean;
+	}
+}
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
@@ -269,5 +277,12 @@ export async function runDirector({
 		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
+	// Issue A investigation: opt-in opening-redundancy report (set window.__directorDebug
+	// = true in the console before running). Shows the opening transcript, pairwise
+	// similarity vs the merge bar, and whether the LLM proposed a cut there — so a
+	// paraphrased opening repeat can be tuned against the REAL data, not a guess.
+	if (typeof window !== "undefined" && window.__directorDebug) {
+		console.log(buildOpeningDebugReport({ segments, planOps, operations }));
+	}
 	useDirectorPlanStore.getState().openWith({ plan: { operations }, nearTies });
 }
