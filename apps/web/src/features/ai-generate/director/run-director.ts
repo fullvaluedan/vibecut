@@ -21,7 +21,7 @@ import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/s
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
 import type { DirectorAssetSummary, DirectorVisionFrame } from "@framecut/hf-bridge";
-import { computeSpeechFeatures } from "./audio-features";
+import { computeEnergyEnvelope, computeSpeechFeatures, ENERGY_WINDOW_SEC } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
 import {
@@ -36,6 +36,7 @@ import { detectPhraseRepeatCuts } from "./phrase-repeat";
 import { detectDeadAirCuts } from "./dead-air";
 import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
+import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
 import { groupTranscriptByAsset } from "./source-map";
@@ -118,6 +119,13 @@ export async function runDirector({
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
 	const features = computeSpeechFeatures({ segments, samples, sampleRate });
+
+	// Non-speech noise guard (issue D): a short, loud, WORD-LESS blip between/around
+	// the transcript (a bump, breath-pop, room noise) is invisible to every text-
+	// driven detector and to the LLM. Scan the gaps over the same energy envelope the
+	// features came from and flag the fragments for review.
+	const envelope = computeEnergyEnvelope({ samples, sampleRate, windowSec: ENERGY_WINDOW_SEC });
+	const noiseCuts = detectNoiseFragmentCuts({ features, envelope, windowSec: ENERGY_WINDOW_SEC });
 
 	// Keep-side signal (Phase B / U1-U4): score each segment's emphasis/anchor
 	// importance. It rides the signal table as an advisory "imp" column and yields a
@@ -258,7 +266,7 @@ export async function runDirector({
 	// capped high-value span, or LLM keep (KTD2/KTD7) — then hand off to the Review modal.
 	const operations = mergeDetectedCuts({
 		planOps,
-		extraOps: [...detectedCuts, ...redundancyOps],
+		extraOps: [...detectedCuts, ...redundancyOps, ...noiseCuts],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6) — no no-op keep rows
 	useDirectorPlanStore.getState().openWith({ plan: { operations }, nearTies });
