@@ -45,7 +45,11 @@ import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
 import { buildRedundancyCatalog } from "./redundancy-catalog";
-import { mapRedundancyGroups, shouldRunLexicalRepeatDetectors } from "./redundancy-apply";
+import {
+	mapRedundancyGroups,
+	shouldRunLexicalRepeatDetectors,
+	type RedundancyReviewGroup,
+} from "./redundancy-apply";
 
 declare global {
 	interface Window {
@@ -360,6 +364,7 @@ export async function runDirector({
 	// the authority and the lexical repeat detectors stay silent (R7); on a route error
 	// it falls through to them. Non-throwing (KTD-5).
 	let redundancyCuts: DirectorOp[] = [];
+	let redundancyReviewGroups: RedundancyReviewGroup[] = [];
 	let redundancyRan = false;
 	try {
 		const redundancyLines = buildRedundancyCatalog({
@@ -377,7 +382,9 @@ export async function runDirector({
 		if (rRes.ok) {
 			const rData = await rRes.json();
 			const groups = Array.isArray(rData?.plan?.groups) ? rData.plan.groups : [];
-			redundancyCuts = mapRedundancyGroups({ groups }).cuts;
+			const mapped = mapRedundancyGroups({ groups });
+			redundancyCuts = mapped.cuts;
+			redundancyReviewGroups = mapped.groups;
 			redundancyRan = true;
 		}
 	} catch {
@@ -427,5 +434,11 @@ export async function runDirector({
 	if (typeof window !== "undefined" && window.__directorDebug) {
 		console.log(buildOpeningDebugReport({ segments, planOps, operations }));
 	}
-	useDirectorPlanStore.getState().openWith({ plan: { operations }, nearTies });
+	useDirectorPlanStore.getState().openWith({
+		plan: { operations },
+		nearTies,
+		// Carry the groups so the review can offer swap-to-alternate; a group whose
+		// cuts were all deduped/snapped away simply has no row to attach a dropdown to.
+		redundancyGroups: redundancyReviewGroups,
+	});
 }

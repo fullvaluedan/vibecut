@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyKeeperSwap,
 	cutMembersForKeeper,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
 } from "../redundancy-apply";
-import type { RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
+import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
 
 const member = ({ lineId, startSec, endSec }: { lineId: string; startSec: number; endSec: number }): RedundancyMember => ({
 	lineId,
@@ -104,6 +105,87 @@ describe("mapRedundancyGroups", () => {
 
 	test("empty groups → no cuts", () => {
 		expect(mapRedundancyGroups({ groups: [] }).cuts).toEqual([]);
+	});
+});
+
+describe("mapRedundancyGroups groupId tagging", () => {
+	test("each surviving group gets a stable id shared by its cut ops", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+				// below-floor group does NOT consume an index — ids stay g0, g1 across runs
+				group({
+					members: [member({ lineId: "L2", startSec: 9, endSec: 10 }), member({ lineId: "L3", startSec: 11, endSec: 12 })],
+					keeperLineId: "L2",
+					confidence: 0.3,
+				}),
+				group({
+					members: [member({ lineId: "L5", startSec: 20, endSec: 22 }), member({ lineId: "L6", startSec: 23, endSec: 25 })],
+					keeperLineId: "L5",
+					confidence: 0.8,
+				}),
+			],
+		});
+		expect(groups.map((g) => g.groupId)).toEqual(["g0", "g1"]);
+		expect(cuts.every((c) => c.groupId === "g0" || c.groupId === "g1")).toBe(true);
+	});
+});
+
+describe("applyKeeperSwap (rebuild a group's cuts for a new keeper)", () => {
+	test("2-take group: swapping the keeper flips which take is cut; groupId preserved", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		expect(cuts.map((c) => c.startSec)).toEqual([0]); // keeper L1 → cut L0
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L0" });
+		expect(swapped.map((c) => c.startSec)).toEqual([3]); // keeper L0 → cut L1
+		expect(swapped[0].groupId).toBe("g0");
+		expect(swapped[0].category).toBe("redundancy");
+	});
+
+	test("preserves ops OUTSIDE the group and stays start-sorted", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 10, endSec: 12 }), member({ lineId: "L1", startSec: 13, endSec: 15 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		const other: DirectorOp = { id: "x", op: "cut", startSec: 1, endSec: 2, reason: "filler", confidence: 0.8, category: "filler" };
+		const swapped = applyKeeperSwap({ operations: [other, ...cuts], group: groups[0], newKeeperLineId: "L0" });
+		expect(swapped.map((c) => c.startSec)).toEqual([1, 13]); // other kept; group rebuilt to cut L1
+		expect(swapped.find((o) => o.id === "x")).toBeTruthy();
+	});
+
+	test("3-take group: swap rebuilds BOTH new non-keeper cuts", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [
+						member({ lineId: "L0", startSec: 0, endSec: 2 }),
+						member({ lineId: "L1", startSec: 3, endSec: 5 }),
+						member({ lineId: "L2", startSec: 6, endSec: 8 }),
+					],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		expect(cuts.map((c) => c.startSec).sort((a, b) => a - b)).toEqual([0, 6]); // keeper L1
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L2" });
+		expect(swapped.map((c) => c.startSec).sort((a, b) => a - b)).toEqual([0, 3]); // keeper L2 → cut L0,L1
 	});
 });
 

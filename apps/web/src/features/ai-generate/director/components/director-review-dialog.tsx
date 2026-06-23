@@ -10,6 +10,7 @@
  *    accept-semantics is unmistakable. Rendered once at the editor root.
  */
 
+import { Fragment } from "react";
 import { toast } from "sonner";
 import {
 	Dialog,
@@ -23,7 +24,7 @@ import { useEditor } from "@/editor/use-editor";
 import { applyDirectorPlan, applyHighlightPlan } from "../apply-plan";
 import { useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
-import { describeReviewOp, formatTimeRange } from "../review-format";
+import { describeReviewOp, formatTimecode, formatTimeRange } from "../review-format";
 import { formatHighlightPreview } from "../highlight-preview";
 
 export function DirectorReviewDialog() {
@@ -38,6 +39,8 @@ export function DirectorReviewDialog() {
 	const toggle = useDirectorPlanStore((s) => s.toggle);
 	const setAll = useDirectorPlanStore((s) => s.setAll);
 	const close = useDirectorPlanStore((s) => s.close);
+	const redundancyGroups = useDirectorPlanStore((s) => s.redundancyGroups);
+	const swapRedundancyKeeper = useDirectorPlanStore((s) => s.swapRedundancyKeeper);
 
 	// ─── Highlight mode (keep-only / inverse apply) ────────────────────────────
 	if (mode === "highlight") {
@@ -148,6 +151,16 @@ export function DirectorReviewDialog() {
 	const ops = plan?.operations ?? [];
 	const acceptedCount = ops.filter((op) => decisions[op.id]).length;
 
+	// Swap-to-alternate (U5b): render ONE keeper dropdown per redundancy group, on the
+	// group's first visible row, so a 3-take group with 2 cut rows shows a single picker.
+	const groupById = new Map(redundancyGroups.map((g) => [g.groupId, g]));
+	const firstOpIdByGroup = new Map<string, string>();
+	for (const op of ops) {
+		if (op.groupId && !firstOpIdByGroup.has(op.groupId)) {
+			firstOpIdByGroup.set(op.groupId, op.id);
+		}
+	}
+
 	// Cancelling/dismissing the modal does NOT roll back the timeline: run-director
 	// already ran assemble + remove-silences (each its own command) BEFORE opening
 	// this modal. Signpost that it's reversible. (One-undo rollback is a follow-up.)
@@ -211,38 +224,66 @@ export function DirectorReviewDialog() {
 						{ops.map((op) => {
 							const accepted = Boolean(decisions[op.id]);
 							const display = describeReviewOp({ op, accepted });
+							// Show the keeper picker once per group, on its first row.
+							const swapGroup =
+								op.groupId && firstOpIdByGroup.get(op.groupId) === op.id
+									? groupById.get(op.groupId)
+									: undefined;
 							return (
-								<label
-									key={op.id}
-									htmlFor={`director-op-${op.id}`}
-									className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
-								>
-									<Checkbox
-										id={`director-op-${op.id}`}
-										checked={accepted}
-										onCheckedChange={() => toggle(op.id)}
-										className="mt-1"
-									/>
-									<span className="text-foreground min-w-0 flex-1 text-sm">
-										<span className="bg-secondary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-											{display.badge}
-										</span>
-										{display.categoryBadge ? (
-											<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
-												{display.categoryBadge}
+								<Fragment key={op.id}>
+									<label
+										htmlFor={`director-op-${op.id}`}
+										className="hover:bg-accent/40 flex cursor-pointer items-start gap-3 rounded-sm border p-2"
+									>
+										<Checkbox
+											id={`director-op-${op.id}`}
+											checked={accepted}
+											onCheckedChange={() => toggle(op.id)}
+											className="mt-1"
+										/>
+										<span className="text-foreground min-w-0 flex-1 text-sm">
+											<span className="bg-secondary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+												{display.badge}
 											</span>
-										) : null}
-										<span className="text-muted-foreground mr-2 text-xs">
-											{formatTimeRange({ startSec: op.startSec, endSec: op.endSec })}
-										</span>
-										{op.reason}
-										{display.rejectedHint ? (
-											<span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-500">
-												· {display.rejectedHint}
+											{display.categoryBadge ? (
+												<span className="bg-primary/15 text-primary mr-2 rounded-sm px-1.5 py-0.5 text-xs font-semibold">
+													{display.categoryBadge}
+												</span>
+											) : null}
+											<span className="text-muted-foreground mr-2 text-xs">
+												{formatTimeRange({ startSec: op.startSec, endSec: op.endSec })}
 											</span>
-										) : null}
-									</span>
-								</label>
+											{op.reason}
+											{display.rejectedHint ? (
+												<span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-500">
+													· {display.rejectedHint}
+												</span>
+											) : null}
+										</span>
+									</label>
+									{swapGroup ? (
+										<div className="ml-9 flex items-center gap-2 pb-1 text-xs">
+											<span className="text-muted-foreground shrink-0">Keep instead:</span>
+											<select
+												aria-label="Choose which take to keep"
+												className="border-input bg-background text-foreground min-w-0 flex-1 rounded-sm border px-1.5 py-1 text-xs"
+												value={swapGroup.keeperLineId}
+												onChange={(e) =>
+													swapRedundancyKeeper({
+														groupId: swapGroup.groupId,
+														keeperLineId: e.target.value,
+													})
+												}
+											>
+												{swapGroup.members.map((m) => (
+													<option key={m.lineId} value={m.lineId}>
+														{formatTimecode(m.startSec)} — {m.text.trim().slice(0, 60) || "(take)"}
+													</option>
+												))}
+											</select>
+										</div>
+									) : null}
+								</Fragment>
 							);
 						})}
 						{nearTies.length > 0 ? (

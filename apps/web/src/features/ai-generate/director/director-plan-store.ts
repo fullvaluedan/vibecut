@@ -9,6 +9,7 @@ import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
 import type { NearTieNote } from "./redundancy";
 import type { HighlightPreview } from "./highlight-preview";
 import type { AssemblyDraft, DraftSpan } from "./assembly-draft";
+import { applyKeeperSwap, type RedundancyReviewGroup } from "./redundancy-apply";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
@@ -79,6 +80,8 @@ interface DirectorPlanState {
 	decisions: OpDecisions;
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
+	/** Redundancy groups (keeper + all takes) backing the review's swap-to-alternate (U5b). */
+	redundancyGroups: RedundancyReviewGroup[];
 	/** Highlight mode: the keep rows, the preview stats, and the timeline length. */
 	keeps: HighlightKeepRow[];
 	preview: HighlightPreview | null;
@@ -91,8 +94,14 @@ interface DirectorPlanState {
 	applyDraftEdit: (spans: DraftSpan[]) => void;
 	/** Close the assemble panel, leaving the assembled cut on the timeline. */
 	closeAssemble: () => void;
-	/** Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie notes. */
-	openWith: (args: { plan: DirectorPlan; nearTies?: readonly NearTieNote[] }) => void;
+	/** Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie notes + redundancy groups. */
+	openWith: (args: {
+		plan: DirectorPlan;
+		nearTies?: readonly NearTieNote[];
+		redundancyGroups?: readonly RedundancyReviewGroup[];
+	}) => void;
+	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
+	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
 	/** Open the Highlight modal (KTD9): keep rows accepted by default, with preview + totalSec. */
 	openHighlight: (args: {
 		keeps: readonly { startSec: number; endSec: number; text?: string }[];
@@ -118,6 +127,7 @@ const CLEARED = {
 	plan: null,
 	decisions: {},
 	nearTies: [],
+	redundancyGroups: [],
 	keeps: [],
 	preview: null,
 	totalSec: 0,
@@ -136,7 +146,7 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openWith: ({ plan, nearTies }) =>
+	openWith: ({ plan, nearTies, redundancyGroups }) =>
 		set({
 			...CLEARED,
 			open: true,
@@ -144,6 +154,28 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			plan,
 			decisions: initDecisions(plan),
 			nearTies: [...(nearTies ?? [])],
+			redundancyGroups: [...(redundancyGroups ?? [])],
+		}),
+	swapRedundancyKeeper: ({ groupId, keeperLineId }) =>
+		set((state) => {
+			if (!state.plan) return {};
+			const group = state.redundancyGroups.find((g) => g.groupId === groupId);
+			if (!group || group.keeperLineId === keeperLineId) return {}; // unknown / no-op
+			const operations = applyKeeperSwap({
+				operations: state.plan.operations,
+				group,
+				newKeeperLineId: keeperLineId,
+			});
+			// New (rebuilt) ops default to accepted; surviving ops keep their decision.
+			const decisions: OpDecisions = {};
+			for (const op of operations) decisions[op.id] = state.decisions[op.id] ?? true;
+			return {
+				plan: { ...state.plan, operations },
+				decisions,
+				redundancyGroups: state.redundancyGroups.map((g) =>
+					g.groupId === groupId ? { ...g, keeperLineId } : g,
+				),
+			};
 		}),
 	openHighlight: ({ keeps, preview, totalSec }) => {
 		const rows = initKeepRows(keeps);

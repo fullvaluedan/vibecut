@@ -18,10 +18,40 @@ export const DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR = 0.7;
 
 /** One redundancy group as the review panel sees it (keeper + all takes). */
 export interface RedundancyReviewGroup {
+	/** Stable id (g0, g1…) shared by this group's cut ops via `op.groupId`. */
+	groupId: string;
 	keeperLineId: string;
 	members: RedundancyMember[];
 	confidence: number;
 	reason: string;
+}
+
+/** Build the single cut op for one non-keeper take. Shared by the initial mapping
+ * and the swap recompute so a swapped group's ops are byte-shaped like the originals
+ * (same id scheme, category, reason). */
+function buildRedundancyCutOp({
+	member,
+	groupId,
+	confidence,
+	reason,
+}: {
+	member: RedundancyMember;
+	groupId: string;
+	confidence: number;
+	reason: string;
+}): DirectorOp {
+	return {
+		id: `redun-${stableCutId(`${member.startSec.toFixed(3)}:${member.endSec.toFixed(3)}`)}`,
+		op: "cut",
+		startSec: member.startSec,
+		endSec: member.endSec,
+		reason: reason
+			? `Repeat — kept the best take (${reason})`.slice(0, 240)
+			: "Repeat — kept the best of the takes",
+		confidence,
+		category: "redundancy",
+		groupId,
+	};
 }
 
 export interface MappedRedundancy {
@@ -47,25 +77,27 @@ export function mapRedundancyGroups({
 	const cuts: DirectorOp[] = [];
 	const reviewGroups: RedundancyReviewGroup[] = [];
 
+	// `gi` indexes only the SURVIVING groups, so a group's id is stable across runs
+	// of the same plan (below-floor / keeper-only groups never consume an index).
+	let gi = 0;
 	for (const group of groups) {
 		if (group.confidence < confidenceFloor) continue; // below floor → drop
 		const nonKeepers = group.members.filter((m) => m.lineId !== group.keeperLineId);
 		if (nonKeepers.length === 0) continue; // keeper-only → nothing to cut (defensive)
 
+		const groupId = `g${gi++}`;
 		for (const member of nonKeepers) {
-			cuts.push({
-				id: `redun-${stableCutId(`${member.startSec.toFixed(3)}:${member.endSec.toFixed(3)}`)}`,
-				op: "cut",
-				startSec: member.startSec,
-				endSec: member.endSec,
-				reason: group.reason
-					? `Repeat — kept the best take (${group.reason})`.slice(0, 240)
-					: "Repeat — kept the best of the takes",
-				confidence: group.confidence,
-				category: "redundancy",
-			});
+			cuts.push(
+				buildRedundancyCutOp({
+					member,
+					groupId,
+					confidence: group.confidence,
+					reason: group.reason,
+				}),
+			);
 		}
 		reviewGroups.push({
+			groupId,
 			keeperLineId: group.keeperLineId,
 			members: [...group.members],
 			confidence: group.confidence,
@@ -74,6 +106,38 @@ export function mapRedundancyGroups({
 	}
 
 	return { cuts, groups: reviewGroups };
+}
+
+/**
+ * Swap-to-alternate (U5/R5): rebuild ONE group's cut ops for a newly-chosen keeper.
+ * Drops every op tagged with this group's id and re-adds a cut over each new non-
+ * keeper take, leaving every other op untouched; the result stays start-sorted for a
+ * stable review order. Pure — the store calls it, then re-defaults the new ops to
+ * accepted. (The rebuilt cuts use the takes' RAW line spans, so a swapped group is
+ * not re-run through the energy/clip-edge snap — sub-frame at line boundaries.)
+ */
+export function applyKeeperSwap({
+	operations,
+	group,
+	newKeeperLineId,
+}: {
+	operations: readonly DirectorOp[];
+	group: RedundancyReviewGroup;
+	newKeeperLineId: string;
+}): DirectorOp[] {
+	const others = operations.filter((op) => op.groupId !== group.groupId);
+	const rebuilt = cutMembersForKeeper({
+		members: group.members,
+		keeperLineId: newKeeperLineId,
+	}).map((member) =>
+		buildRedundancyCutOp({
+			member,
+			groupId: group.groupId,
+			confidence: group.confidence,
+			reason: group.reason,
+		}),
+	);
+	return [...others, ...rebuilt].sort((a, b) => a.startSec - b.startSec);
 }
 
 /**

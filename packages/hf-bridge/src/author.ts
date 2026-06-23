@@ -451,6 +451,12 @@ export interface DirectorOp {
 	targetStartSec?: number;
 	/** Cut category for taste learning (client-assigned; absent on raw LLM ops). */
 	category?: DirectorOpCategory;
+	/**
+	 * For `redundancy` cuts: the id of the redundancy GROUP this take belongs to
+	 * (client-assigned). Lets the review panel offer swap-to-alternate — picking a
+	 * different keeper rebuilds exactly this group's cut ops. Absent on every other op.
+	 */
+	groupId?: string;
 }
 
 export interface DirectorPlan {
