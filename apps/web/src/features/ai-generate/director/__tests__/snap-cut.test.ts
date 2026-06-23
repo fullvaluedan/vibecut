@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { nearestLowEnergyTime, snapRemovalOps } from "../snap-cut";
+import { nearestLowEnergyTime, snapKeepSpans, snapRemovalOps } from "../snap-cut";
 import type { DirectorOp } from "@framecut/hf-bridge";
 
 const WIN = 0.05; // ENERGY_WINDOW_SEC default
@@ -96,5 +96,58 @@ describe("snapRemovalOps", () => {
 		const original = cut({ startSec: 1.0, endSec: 1.02 });
 		const ops = snapRemovalOps({ ops: [original], envelope });
 		expect(ops[0].endSec).toBeGreaterThan(ops[0].startSec);
+	});
+});
+
+describe("snapKeepSpans", () => {
+	test("expands a kept span OUTWARD to surrounding troughs", () => {
+		const envelope = new Array<number>(80).fill(0.9);
+		envelope[18] = 0.05; // 0.9s trough — before start 1.0 → start expands earlier
+		envelope[42] = 0.05; // 2.1s trough — after end 2.0 → end expands later
+		const [span] = snapKeepSpans({
+			spans: [{ startSec: 1.0, endSec: 2.0 }],
+			envelope,
+		});
+		expect(span.startSec).toBeCloseTo((18 + 0.5) * WIN, 3); // 0.925s (earlier)
+		expect(span.endSec).toBeCloseTo((42 + 0.5) * WIN, 3); // 2.125s (later)
+	});
+
+	test("never shrinks a span into a word (start only earlier, end only later)", () => {
+		// Troughs sit INSIDE the span; directional search must ignore them — a keep
+		// must not pull its start later or its end earlier (that would clip a word).
+		const envelope = new Array<number>(80).fill(0.9);
+		envelope[22] = 0.05; // 1.1s — inside, would pull start later if undirected
+		envelope[38] = 0.05; // 1.9s — inside, would pull end earlier if undirected
+		const [span] = snapKeepSpans({
+			spans: [{ startSec: 1.0, endSec: 2.0 }],
+			envelope,
+		});
+		expect(span.startSec).toBeLessThanOrEqual(1.0);
+		expect(span.endSec).toBeGreaterThanOrEqual(2.0);
+	});
+
+	test("clamps expansion so two close kept spans stay disjoint", () => {
+		// A trough in the gap between the two spans is in BOTH expansion ranges; the
+		// neighbour clamp keeps the snapped spans from crossing.
+		const envelope = new Array<number>(120).fill(0.9);
+		envelope[29] = 0.05; // ~1.45s, in the [1.4,1.5] gap between A and B
+		const out = snapKeepSpans({
+			spans: [
+				{ startSec: 1.0, endSec: 1.4 },
+				{ startSec: 1.5, endSec: 2.0 },
+			],
+			envelope,
+		});
+		for (let i = 1; i < out.length; i++) {
+			expect(out[i].startSec).toBeGreaterThanOrEqual(out[i - 1].endSec - 1e-9);
+		}
+	});
+
+	test("empty envelope passes spans through (sorted, cleaned)", () => {
+		const out = snapKeepSpans({
+			spans: [{ startSec: 1.0, endSec: 2.0 }],
+			envelope: [],
+		});
+		expect(out).toEqual([{ startSec: 1.0, endSec: 2.0 }]);
 	});
 });

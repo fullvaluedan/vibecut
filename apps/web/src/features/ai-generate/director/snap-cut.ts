@@ -22,6 +22,54 @@ export const DEFAULT_SNAP_SEARCH_SEC = 0.1;
 
 const isRemoval = (op: DirectorOp): boolean => op.op === "cut" || op.op === "take_select";
 
+/** A timeline span to KEEP (seconds) — Highlight mode's unit. */
+export interface SnapSpan {
+	startSec: number;
+	endSec: number;
+}
+
+/**
+ * Time (seconds) of the quietest envelope window with its MIDPOINT in [fromSec,toSec],
+ * seeded at `centerSec`'s own window so it only moves to a STRICTLY quieter point (no
+ * pointless sub-window jitter). Returns `centerSec` when the envelope is empty or the
+ * boundary is already the local minimum. The shared core behind both the symmetric
+ * removal snap and the directional keep snap.
+ */
+function quietestWindowTime({
+	envelope,
+	windowSec,
+	centerSec,
+	fromSec,
+	toSec,
+}: {
+	envelope: readonly number[];
+	windowSec: number;
+	centerSec: number;
+	fromSec: number;
+	toSec: number;
+}): number {
+	if (envelope.length === 0) {
+		return centerSec;
+	}
+	const clampW = (w: number): number => Math.max(0, Math.min(envelope.length - 1, w));
+	const from = clampW(Math.floor(fromSec / windowSec));
+	const to = clampW(Math.ceil(toSec / windowSec));
+	const centerW = clampW(Math.floor(centerSec / windowSec));
+	let bestW = centerW;
+	let bestEnergy = envelope[centerW];
+	for (let w = from; w <= to; w++) {
+		if (envelope[w] < bestEnergy) {
+			bestEnergy = envelope[w];
+			bestW = w;
+		}
+	}
+	if (bestW === centerW) {
+		return centerSec;
+	}
+	// The midpoint of the quietest window — the calmest instant to cut on.
+	return (bestW + 0.5) * windowSec;
+}
+
 /**
  * Time (seconds) of the quietest envelope window within ±`searchSec` of `centerSec`.
  * Returns `centerSec` unchanged when the envelope is empty, the radius is zero, or
@@ -38,27 +86,16 @@ export function nearestLowEnergyTime({
 	centerSec: number;
 	searchSec: number;
 }): number {
-	if (envelope.length === 0 || searchSec <= 0) {
+	if (searchSec <= 0) {
 		return centerSec;
 	}
-	const clampW = (w: number): number => Math.max(0, Math.min(envelope.length - 1, w));
-	const from = clampW(Math.floor((centerSec - searchSec) / windowSec));
-	const to = clampW(Math.ceil((centerSec + searchSec) / windowSec));
-	const centerW = clampW(Math.floor(centerSec / windowSec));
-	// Seed with the boundary's own window so we only move to a STRICTLY quieter one.
-	let bestW = centerW;
-	let bestEnergy = envelope[centerW];
-	for (let w = from; w <= to; w++) {
-		if (envelope[w] < bestEnergy) {
-			bestEnergy = envelope[w];
-			bestW = w;
-		}
-	}
-	if (bestW === centerW) {
-		return centerSec;
-	}
-	// The midpoint of the quietest window — the calmest instant to cut on.
-	return (bestW + 0.5) * windowSec;
+	return quietestWindowTime({
+		envelope,
+		windowSec,
+		centerSec,
+		fromSec: centerSec - searchSec,
+		toSec: centerSec + searchSec,
+	});
 }
 
 /**
@@ -116,4 +153,61 @@ export function snapRemovalOps({
 		prevRemovalEnd = Math.max(prevRemovalEnd, result[i].endSec);
 	}
 	return result.filter((op) => !isRemoval(op) || op.endSec > op.startSec);
+}
+
+/**
+ * Snap KEEP-span edges OUTWARD to nearby low-energy troughs (Highlight mode): a
+ * span's start moves only to-or-BEFORE itself and its end only to-or-AFTER, so the
+ * cuts AROUND the kept span land in the quiet while the span itself never shrinks
+ * into a word (worst case it keeps a few frames more silence). Spans are clamped to
+ * [0, audioEnd] and to their neighbours so they stay disjoint + ordered. Empty
+ * envelope → pass-through. The directional opposite of `snapRemovalOps` — a removal
+ * lands its edges on quiet by moving symmetrically; a keep does it by expanding.
+ */
+export function snapKeepSpans({
+	spans,
+	envelope,
+	windowSec = ENERGY_WINDOW_SEC,
+	searchSec = DEFAULT_SNAP_SEARCH_SEC,
+}: {
+	spans: readonly SnapSpan[];
+	envelope: readonly number[];
+	windowSec?: number;
+	searchSec?: number;
+}): SnapSpan[] {
+	const cleaned = spans
+		.filter((s) => s.endSec > s.startSec)
+		.map((s) => ({ startSec: s.startSec, endSec: s.endSec }))
+		.sort((a, b) => a.startSec - b.startSec);
+	if (envelope.length === 0 || searchSec <= 0) {
+		return cleaned;
+	}
+	const audioEndSec = envelope.length * windowSec;
+	const out: SnapSpan[] = [];
+	let prevEnd = 0;
+	for (let i = 0; i < cleaned.length; i++) {
+		const s = cleaned[i];
+		// Start: snap EARLIER into quiet, never before the previous span's end or 0.
+		const rawStart = quietestWindowTime({
+			envelope,
+			windowSec,
+			centerSec: s.startSec,
+			fromSec: s.startSec - searchSec,
+			toSec: s.startSec,
+		});
+		const startSec = Math.max(prevEnd, 0, Math.min(rawStart, s.startSec));
+		// End: snap LATER into quiet, never past the next span's start or the audio end.
+		const nextStart = i + 1 < cleaned.length ? cleaned[i + 1].startSec : audioEndSec;
+		const rawEnd = quietestWindowTime({
+			envelope,
+			windowSec,
+			centerSec: s.endSec,
+			fromSec: s.endSec,
+			toSec: s.endSec + searchSec,
+		});
+		const endSec = Math.min(nextStart, audioEndSec, Math.max(rawEnd, s.endSec));
+		out.push({ startSec, endSec: Math.max(endSec, startSec) });
+		prevEnd = out[out.length - 1].endSec;
+	}
+	return out;
 }

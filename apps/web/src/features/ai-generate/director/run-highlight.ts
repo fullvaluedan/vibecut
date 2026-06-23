@@ -26,12 +26,13 @@ import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { buildAiAuthHeaders } from "@/features/ai-generate/store";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
-import { computeSpeechFeatures } from "./audio-features";
+import { computeEnergyEnvelope, computeSpeechFeatures } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
 import { scoreImportance } from "./importance";
 import { buildHighlightKeeps, type KeepSpan } from "./keep-select";
+import { snapKeepSpans } from "./snap-cut";
 
 /**
  * Plan a Highlight cut and open the Review modal in highlight mode. Resolves once
@@ -142,11 +143,20 @@ export async function runHighlight({
 		budgetSec,
 		llmKeepSpans,
 	});
+	// Issue E (Highlight): expand each kept span's edges to nearby low-energy troughs
+	// so the cuts AROUND it land in the quiet, not mid-word. Directional (out-only) so
+	// a keep never shrinks into a word — at worst it keeps a few frames more silence.
+	const envelope = computeEnergyEnvelope({ samples, sampleRate });
+	const snappedKeeps = snapKeepSpans({ spans: keeps, envelope });
+	// Re-derive the kept-seconds preview from the snapped spans (count is unchanged).
+	const keptSec = snappedKeeps.reduce((acc, s) => acc + (s.endSec - s.startSec), 0);
 	// Attach a transcript snippet (the first segment opening each kept span) for the rows.
-	const keepRows = keeps.map((k) => ({
+	const keepRows = snappedKeeps.map((k) => ({
 		startSec: k.startSec,
 		endSec: k.endSec,
 		text: segments.find((s) => s.start >= k.startSec - 0.001 && s.start < k.endSec)?.text,
 	}));
-	useDirectorPlanStore.getState().openHighlight({ keeps: keepRows, preview, totalSec });
+	useDirectorPlanStore
+		.getState()
+		.openHighlight({ keeps: keepRows, preview: { ...preview, keptSec }, totalSec });
 }
