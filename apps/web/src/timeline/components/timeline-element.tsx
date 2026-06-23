@@ -706,7 +706,11 @@ function ElementInner({
 			>
 				<div
 					className={cn(
-						"absolute inset-0 overflow-hidden rounded-sm",
+						// Faint hairline so each clip's edges read against the dark timeline
+						// (a black/dark thumbnail otherwise blends into the background). Sits
+						// INSIDE the blue selection ring (a boxShadow on the parent), so the
+						// two never read as the same thing.
+						"absolute inset-0 overflow-hidden rounded-sm border border-white/20",
 						isExpanded && "bg-background",
 					)}
 				>
