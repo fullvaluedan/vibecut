@@ -48,7 +48,7 @@ function quietestWindowTime({
 	fromSec: number;
 	toSec: number;
 }): number {
-	if (envelope.length === 0) {
+	if (envelope.length === 0 || !Number.isFinite(centerSec) || windowSec <= 0) {
 		return centerSec;
 	}
 	const clampW = (w: number): number => Math.max(0, Math.min(envelope.length - 1, w));
@@ -186,20 +186,26 @@ export function snapRemovalsToClipEdges({
 		if (!isRemoval(op)) {
 			return op;
 		}
+		// Snap to the NEAREST qualifying clip edge, not the first one in array order:
+		// clipStartsSec/clipEndsSec arrive in track/element order (main, then overlays),
+		// NOT sorted by time, so "first within tolerance" could be the FARTHER edge and
+		// over-cut the real content between two close clips.
 		let startSec = op.startSec;
+		let bestStartGap = Number.POSITIVE_INFINITY;
 		for (const clipStart of clipStartsSec) {
-			// start sits just inside a clip start → extend the cut back to swallow [clipStart, start)
-			if (startSec - clipStart > 0 && startSec - clipStart <= toleranceSec) {
+			const gap = op.startSec - clipStart; // start sits just inside this clip start
+			if (gap > 0 && gap <= toleranceSec && gap < bestStartGap) {
+				bestStartGap = gap;
 				startSec = clipStart;
-				break;
 			}
 		}
 		let endSec = op.endSec;
+		let bestEndGap = Number.POSITIVE_INFINITY;
 		for (const clipEnd of clipEndsSec) {
-			// end sits just inside a clip end → extend the cut out to swallow [end, clipEnd)
-			if (clipEnd - endSec > 0 && clipEnd - endSec <= toleranceSec) {
+			const gap = clipEnd - op.endSec; // end sits just inside this clip end
+			if (gap > 0 && gap <= toleranceSec && gap < bestEndGap) {
+				bestEndGap = gap;
 				endSec = clipEnd;
-				break;
 			}
 		}
 		return startSec !== op.startSec || endSec !== op.endSec
@@ -240,6 +246,13 @@ export function snapKeepSpans({
 	let prevEnd = 0;
 	for (let i = 0; i < cleaned.length; i++) {
 		const s = cleaned[i];
+		// A span lying beyond the envelope's length can't be snapped meaningfully; clamping
+		// it would collapse it to a zero-length (dropped) span. Pass it through unchanged.
+		if (s.startSec >= audioEndSec) {
+			out.push({ startSec: s.startSec, endSec: s.endSec });
+			prevEnd = s.endSec;
+			continue;
+		}
 		// Start: snap EARLIER into quiet, never before the previous span's end or 0.
 		const rawStart = quietestWindowTime({
 			envelope,

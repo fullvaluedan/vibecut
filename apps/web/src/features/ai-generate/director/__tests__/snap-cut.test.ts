@@ -47,6 +47,16 @@ describe("nearestLowEnergyTime", () => {
 		const env = new Array<number>(40).fill(0.5);
 		expect(nearestLowEnergyTime({ envelope: env, windowSec: WIN, centerSec: 1.0, searchSec: 0 })).toBe(1.0);
 	});
+
+	test("non-finite center or non-positive window returns the center unchanged", () => {
+		const env = new Array<number>(40).fill(0.5);
+		env[20] = 0.05;
+		expect(nearestLowEnergyTime({ envelope: env, windowSec: WIN, centerSec: Number.NaN, searchSec: 0.1 })).toBeNaN();
+		expect(
+			nearestLowEnergyTime({ envelope: env, windowSec: WIN, centerSec: Number.POSITIVE_INFINITY, searchSec: 0.1 }),
+		).toBe(Number.POSITIVE_INFINITY);
+		expect(nearestLowEnergyTime({ envelope: env, windowSec: 0, centerSec: 1.0, searchSec: 0.1 })).toBe(1.0);
+	});
 });
 
 describe("snapRemovalOps", () => {
@@ -68,6 +78,27 @@ describe("snapRemovalOps", () => {
 		envelope[18] = 0.05;
 		const reorder = cut({ startSec: 1.0, endSec: 2.0, op: "reorder" });
 		const ops = snapRemovalOps({ ops: [reorder], envelope });
+		expect(ops[0].startSec).toBe(1.0);
+		expect(ops[0].endSec).toBe(2.0);
+	});
+
+	test("snaps a take_select removal too (not just plain cuts)", () => {
+		const envelope = new Array<number>(80).fill(0.9);
+		envelope[18] = 0.05; // trough near start 1.0
+		envelope[42] = 0.05; // trough near end 2.0
+		const ops = snapRemovalOps({
+			ops: [cut({ startSec: 1.0, endSec: 2.0, op: "take_select" })],
+			envelope,
+		});
+		expect(ops[0].op).toBe("take_select");
+		expect(ops[0].startSec).toBeCloseTo((18 + 0.5) * WIN, 3);
+		expect(ops[0].endSec).toBeCloseTo((42 + 0.5) * WIN, 3);
+	});
+
+	test("passes a keep op through untouched", () => {
+		const envelope = new Array<number>(80).fill(0.9);
+		envelope[18] = 0.05;
+		const ops = snapRemovalOps({ ops: [cut({ startSec: 1.0, endSec: 2.0, op: "keep" })], envelope });
 		expect(ops[0].startSec).toBe(1.0);
 		expect(ops[0].endSec).toBe(2.0);
 	});
@@ -155,6 +186,14 @@ describe("snapKeepSpans", () => {
 		});
 		expect(out).toEqual([{ startSec: 1.0, endSec: 2.0 }]);
 	});
+
+	test("passes a span beyond the envelope through unchanged (no zero-collapse)", () => {
+		// envelope covers only 0.5s; the span sits at 1-2s, entirely past it. Must NOT
+		// clamp the end down to 0.5 and collapse the span to zero length (dropping it).
+		const envelope = new Array<number>(10).fill(0.5); // audioEnd = 0.5s
+		const out = snapKeepSpans({ spans: [{ startSec: 1, endSec: 2 }], envelope });
+		expect(out).toEqual([{ startSec: 1, endSec: 2 }]);
+	});
 });
 
 describe("snapRemovalsToClipEdges", () => {
@@ -179,6 +218,18 @@ describe("snapRemovalsToClipEdges", () => {
 		});
 		expect(ops[0].startSec).toBe(1.0);
 		expect(ops[0].endSec).toBe(5);
+	});
+
+	test("snaps to the NEAREST clip edge, not the first one in array order", () => {
+		// Edges arrive unsorted; start 0.40 is 0.01 from 0.39 but 0.30 from 0.10.
+		// First-match would over-cut [0.10,0.39]; nearest-match snaps to 0.39.
+		const ops = snapRemovalsToClipEdges({
+			ops: [cut({ startSec: 0.4, endSec: 4.0 })],
+			clipStartsSec: [0.1, 0.39],
+			clipEndsSec: [5],
+			toleranceSec: 0.5,
+		});
+		expect(ops[0].startSec).toBeCloseTo(0.39, 3);
 	});
 
 	test("does NOT snap when the boundary is farther than the tolerance", () => {

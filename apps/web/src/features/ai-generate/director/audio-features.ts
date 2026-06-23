@@ -199,13 +199,24 @@ export function computeSpeechFeatures({
 	samples,
 	sampleRate,
 	windowSec = ENERGY_WINDOW_SEC,
+	envelope: precomputedEnvelope,
 }: {
 	segments: readonly SpeechSegment[];
-	samples: Float32Array;
-	sampleRate: number;
+	/** Decoded mono buffer — required unless a precomputed `envelope` is supplied. */
+	samples?: Float32Array;
+	/** Sample rate of `samples` — required unless `envelope` is supplied. */
+	sampleRate?: number;
 	windowSec?: number;
+	/** Precomputed energy envelope; when supplied, skips recomputing it from `samples`. */
+	envelope?: readonly number[];
 }): SpeechFeatures[] {
-	const envelope = computeEnergyEnvelope({ samples, sampleRate, windowSec });
+	const envelope =
+		precomputedEnvelope ??
+		computeEnergyEnvelope({
+			samples: samples ?? new Float32Array(0),
+			sampleRate: sampleRate ?? 1,
+			windowSec,
+		});
 
 	const rows = segments.map((seg) => {
 		const energy = meanEnergyOverRange({

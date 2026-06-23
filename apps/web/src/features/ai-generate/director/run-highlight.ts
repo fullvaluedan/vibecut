@@ -91,7 +91,10 @@ export async function runHighlight({
 		audioBlob,
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
-	const features = computeSpeechFeatures({ segments, samples, sampleRate });
+	// Compute the energy envelope ONCE — shared by the per-segment features and the
+	// keep-span snap below (avoids a redundant O(n) pass + a windowing mismatch).
+	const envelope = computeEnergyEnvelope({ samples, sampleRate });
+	const features = computeSpeechFeatures({ segments, envelope });
 	const importance = scoreImportance({ segments, features });
 	const totalSec = (totalDuration as number) / TICKS_PER_SECOND;
 	abort();
@@ -146,7 +149,7 @@ export async function runHighlight({
 	// Issue E (Highlight): expand each kept span's edges to nearby low-energy troughs
 	// so the cuts AROUND it land in the quiet, not mid-word. Directional (out-only) so
 	// a keep never shrinks into a word — at worst it keeps a few frames more silence.
-	const envelope = computeEnergyEnvelope({ samples, sampleRate });
+	// Reuses the envelope computed above.
 	const snappedKeeps = snapKeepSpans({ spans: keeps, envelope });
 	// Re-derive the kept-seconds preview from the snapped spans (count is unchanged).
 	const keptSec = snappedKeeps.reduce((acc, s) => acc + (s.endSec - s.startSec), 0);

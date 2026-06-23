@@ -13,7 +13,9 @@
 // "2026-06-22 23-37-45" / "2026_06_22T23.37.45" etc. — date and time with separators.
 const SEPARATED = /(\d{4})-(\d{2})-(\d{2})[ _T-](\d{2})[-:.](\d{2})[-:.](\d{2})/;
 // "20260622_233745" / "20260622233745" — compact (e.g. screen-recorder names).
-const COMPACT = /(\d{4})(\d{2})(\d{2})[ _T-]?(\d{2})(\d{2})(\d{2})/;
+// Digit-anchored so a 14-digit timestamp embedded in a LONGER numeric id (e.g. a
+// 16-digit asset id) doesn't match its first 14 digits as a bogus timestamp.
+const COMPACT = /(?<!\d)(\d{4})(\d{2})(\d{2})[ _T-]?(\d{2})(\d{2})(\d{2})(?!\d)/;
 
 /**
  * A monotonic sort key derived from a date-time embedded in `name`, or null when

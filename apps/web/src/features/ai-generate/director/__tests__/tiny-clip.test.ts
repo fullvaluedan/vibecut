@@ -46,6 +46,14 @@ describe("detectTinyClipCuts", () => {
 		expect(ops).toHaveLength(0);
 	});
 
+	test("does NOT flag a zero- or negative-length clip", () => {
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 5, endSec: 5 }), span({ startSec: 8, endSec: 7 })],
+			minDurationSec: 0.167,
+		});
+		expect(ops).toHaveLength(0);
+	});
+
 	test("zero/negative threshold disables the guard", () => {
 		expect(
 			detectTinyClipCuts({ clips: [span({ startSec: 0, endSec: 0.05 })], minDurationSec: 0 }),

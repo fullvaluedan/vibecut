@@ -32,6 +32,13 @@ describe("parseClipTimestamp", () => {
 		expect(parseClipTimestamp("2026-13-40 99-99-99.mp4")).toBeNull(); // impossible fields
 	});
 
+	test("does NOT match a 14-digit timestamp embedded in a longer numeric id", () => {
+		// 16-digit id — the first 14 digits LOOK like 2026-06-22 23-37-45 but aren't a timestamp.
+		expect(parseClipTimestamp("2026062223374512.mp4")).toBeNull();
+		// a genuine 14-digit compact name still parses
+		expect(parseClipTimestamp("20260622233745.mp4")).not.toBeNull();
+	});
+
 	test("ignores a split suffix on the name", () => {
 		// after a split the editor appends "(left)"/"(right)" — the timestamp still parses
 		expect(parseClipTimestamp("2026-06-22 23-37-45 (left).mp4")).not.toBeNull();

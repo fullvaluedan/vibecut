@@ -75,14 +75,17 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 	);
 	const plannedMoves: PlannedElementMove[] = [];
 	for (const track of videoTracks) {
-		const clips: ChronoClip[] = track.elements
-			.filter((element) => element.type === "video")
-			.map((element) => ({
-				elementId: element.id,
-				name: element.name,
-				startTimeTicks: element.startTime,
-				durationTicks: element.duration,
-			}));
+		const videoElements = track.elements.filter((element) => element.type === "video");
+		// Don't reorder a track whose clips have SEPARATED linked audio — MoveElementCommand
+		// moves only the video, leaving its linked audio partner behind (A/V desync baked in
+		// before the cut). Conservative: skip rather than risk the desync.
+		if (videoElements.some((element) => element.linkId)) continue;
+		const clips: ChronoClip[] = videoElements.map((element) => ({
+			elementId: element.id,
+			name: element.name,
+			startTimeTicks: element.startTime,
+			durationTicks: element.duration,
+		}));
 		const moves = planChronologicalReorder({ clips });
 		if (!moves) continue;
 		for (const move of moves) {
@@ -188,13 +191,16 @@ export async function runDirector({
 		audioBlob,
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
-	const features = computeSpeechFeatures({ segments, samples, sampleRate });
+	// Compute the RMS energy envelope ONCE and share it: the per-segment features, the
+	// non-speech noise guard, and the cut-boundary snap all read the same envelope (so
+	// they can never disagree on windowing, and we avoid a redundant O(n) pass).
+	const envelope = computeEnergyEnvelope({ samples, sampleRate, windowSec: ENERGY_WINDOW_SEC });
+	const features = computeSpeechFeatures({ segments, envelope, windowSec: ENERGY_WINDOW_SEC });
 
 	// Non-speech noise guard (issue D): a short, loud, WORD-LESS blip between/around
 	// the transcript (a bump, breath-pop, room noise) is invisible to every text-
-	// driven detector and to the LLM. Scan the gaps over the same energy envelope the
-	// features came from and flag the fragments for review.
-	const envelope = computeEnergyEnvelope({ samples, sampleRate, windowSec: ENERGY_WINDOW_SEC });
+	// driven detector and to the LLM. Scan the gaps over the energy envelope and flag
+	// the fragments for review.
 	const noiseCuts = detectNoiseFragmentCuts({ features, envelope, windowSec: ENERGY_WINDOW_SEC });
 
 	// Useless tiny-clip guard (live test): a stray sub-N-frame video clip (no speech,
@@ -202,7 +208,8 @@ export async function runDirector({
 	// promote it to the head. Flag any video clip shorter than MIN_USEFUL_CLIP_FRAMES
 	// for review. clipSpans + the fps are shared with the cut-remnant snap below.
 	const fps = editor.project.getActive().settings.fps;
-	const fpsFloat = fps.denominator > 0 ? fps.numerator / fps.denominator : 30;
+	const fpsFloat =
+		fps.denominator > 0 && fps.numerator > 0 ? fps.numerator / fps.denominator : 30;
 	const clipSpans = collectVideoClipSpansSec({ tracks, ticksPerSecond: TICKS_PER_SECOND });
 	const tinyClipCuts = detectTinyClipCuts({
 		clips: clipSpans,
