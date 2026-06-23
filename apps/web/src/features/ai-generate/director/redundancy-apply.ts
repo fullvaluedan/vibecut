@@ -90,3 +90,19 @@ export function shouldRunLexicalRepeatDetectors({
 }): boolean {
 	return !redundancyRan;
 }
+
+/**
+ * The takes to CUT for a given keeper choice — every member except the chosen
+ * keeper. The review's swap-to-alternate (U5/R5) calls this when the user picks a
+ * different keeper: the newly-chosen take survives and the rest (including the old
+ * keeper) are cut. Swapping back to the CURRENT keeper returns the original cut set.
+ */
+export function cutMembersForKeeper({
+	members,
+	keeperLineId,
+}: {
+	members: readonly RedundancyMember[];
+	keeperLineId: string;
+}): RedundancyMember[] {
+	return members.filter((member) => member.lineId !== keeperLineId);
+}

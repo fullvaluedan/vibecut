@@ -29,6 +29,15 @@ describe("describeReviewOp", () => {
 		expect(rejected.rejectedHint).toBe("Keeping the restatement");
 	});
 
+	test("a redundancy cut shows the Repeat badge; rejecting keeps THIS take (group-aware)", () => {
+		const accepted = describeReviewOp({ op: op({ op: "cut", category: "redundancy" }), accepted: true });
+		expect(accepted.categoryBadge).toBe("Repeat");
+		expect(accepted.rejectedHint).toBe("");
+		const rejected = describeReviewOp({ op: op({ op: "cut", category: "redundancy" }), accepted: false });
+		// distinct from the per-op "repeat" hint ("Keeping the restatement")
+		expect(rejected.rejectedHint).toBe("Keeping this take");
+	});
+
 	test("a plain filler cut has no rejected hint (keeping it is obvious)", () => {
 		const d = describeReviewOp({ op: op({ op: "cut", category: "filler" }), accepted: false });
 		expect(d.rejectedHint).toBe("");

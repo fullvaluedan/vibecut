@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	cutMembersForKeeper,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
 } from "../redundancy-apply";
@@ -103,6 +104,25 @@ describe("mapRedundancyGroups", () => {
 
 	test("empty groups → no cuts", () => {
 		expect(mapRedundancyGroups({ groups: [] }).cuts).toEqual([]);
+	});
+});
+
+describe("cutMembersForKeeper (swap-to-alternate recompute)", () => {
+	const members = [
+		member({ lineId: "L0", startSec: 0, endSec: 2 }),
+		member({ lineId: "L1", startSec: 3, endSec: 5 }),
+		member({ lineId: "L2", startSec: 6, endSec: 8 }),
+	];
+
+	test("swapping to the CURRENT keeper returns the original cut set (no-op)", () => {
+		const cut = cutMembersForKeeper({ members, keeperLineId: "L1" });
+		expect(cut.map((m) => m.lineId)).toEqual(["L0", "L2"]);
+	});
+
+	test("2-take group: swapping the keeper flips which take is cut", () => {
+		const two = [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })];
+		expect(cutMembersForKeeper({ members: two, keeperLineId: "L1" }).map((m) => m.lineId)).toEqual(["L0"]);
+		expect(cutMembersForKeeper({ members: two, keeperLineId: "L0" }).map((m) => m.lineId)).toEqual(["L1"]);
 	});
 });
 

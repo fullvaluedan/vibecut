@@ -84,6 +84,9 @@ export function describeReviewOp({
 			rejectedHint = "Keeping both takes";
 		} else if (op.category === "repeat") {
 			rejectedHint = "Keeping the restatement";
+		} else if (op.category === "redundancy") {
+			// A group's non-keeper take: rejecting it keeps that take in the cut.
+			rejectedHint = "Keeping this take";
 		}
 	}
 
