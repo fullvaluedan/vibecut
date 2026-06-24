@@ -82,6 +82,15 @@ interface AiSettingsStore {
 	directorVadDeadAirEnabled: boolean;
 	setDirectorVadDeadAirEnabled: (enabled: boolean) => void;
 	/**
+	 * Opt-in (default off): VAD-gated transcription on the analysis path — run the
+	 * Silero VAD first and transcribe ONLY the speech intervals (concatenated),
+	 * remapping word/segment times back to the timeline. Faster + no silence
+	 * hallucination on long sources. Falls back to full-audio transcription if VAD
+	 * is off or fails. Analysis path only; captions are unaffected.
+	 */
+	directorVadGatedTranscriptionEnabled: boolean;
+	setDirectorVadGatedTranscriptionEnabled: (enabled: boolean) => void;
+	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -185,6 +194,11 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			directorVadDeadAirEnabled: false,
 			setDirectorVadDeadAirEnabled: (directorVadDeadAirEnabled) =>
 				set({ directorVadDeadAirEnabled }),
+
+			directorVadGatedTranscriptionEnabled: false,
+			setDirectorVadGatedTranscriptionEnabled: (
+				directorVadGatedTranscriptionEnabled,
+			) => set({ directorVadGatedTranscriptionEnabled }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),

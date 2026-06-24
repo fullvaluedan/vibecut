@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildConcatSegments, remapBufferTimes } from "../vad-remap";
+import { buildConcatSegments, concatSpeechSamples, remapBufferTimes } from "../vad-remap";
 
 const t = (start: number, end: number, text: string) => ({ start, end, text });
 
@@ -17,6 +17,57 @@ describe("buildConcatSegments", () => {
 
 	test("skips zero/negative-length intervals", () => {
 		expect(buildConcatSegments([{ startSec: 5, endSec: 5 }])).toEqual([]);
+	});
+});
+
+describe("concatSpeechSamples", () => {
+	// sampleRate 10 → 1 sample = 0.1s; samples[i] = i so slices are verifiable.
+	const samples = Float32Array.from({ length: 100 }, (_, i) => i);
+
+	test("slices speech out of the samples + builds a sample-accurate concat map", () => {
+		const { buffer, segments } = concatSpeechSamples({
+			samples,
+			sampleRate: 10,
+			speech: [
+				{ startSec: 0, endSec: 2 }, // samples 0..20
+				{ startSec: 5, endSec: 7 }, // samples 50..70
+			],
+		});
+		expect(buffer.length).toBe(40);
+		expect(buffer[0]).toBe(0); // first sample of interval 1
+		expect(buffer[20]).toBe(50); // first sample of interval 2 sits right after
+		expect(segments).toEqual([
+			{ bufferStartSec: 0, timelineStartSec: 0, durationSec: 2 },
+			{ bufferStartSec: 2, timelineStartSec: 5, durationSec: 2 },
+		]);
+	});
+
+	test("round-trips: a word in the concatenated buffer remaps to its real timeline spot", () => {
+		const { segments } = concatSpeechSamples({
+			samples,
+			sampleRate: 10,
+			speech: [{ startSec: 0, endSec: 2 }, { startSec: 5, endSec: 7 }],
+		});
+		// buffer 2.5s = 0.5s into the 2nd interval → timeline 5.5s
+		const out = remapBufferTimes({ times: [{ start: 2.5, end: 2.9, text: "x" }], segments });
+		expect(out[0].start).toBeCloseTo(5.5, 5);
+		expect(out[0].end).toBeCloseTo(5.9, 5);
+	});
+
+	test("clamps out-of-range intervals + skips empties", () => {
+		const { buffer, segments } = concatSpeechSamples({
+			samples,
+			sampleRate: 10,
+			speech: [{ startSec: 8, endSec: 20 }, { startSec: 3, endSec: 3 }],
+		});
+		expect(buffer.length).toBe(20); // 8..10s clamped to samples 80..100; zero-length dropped
+		expect(segments).toHaveLength(1);
+	});
+
+	test("no speech → empty buffer + no segments", () => {
+		const { buffer, segments } = concatSpeechSamples({ samples, sampleRate: 10, speech: [] });
+		expect(buffer.length).toBe(0);
+		expect(segments).toEqual([]);
 	});
 });
 

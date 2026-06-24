@@ -11,6 +11,8 @@ import { decodeAudioToFloat32 } from "@/media/audio";
 import { encodeAudioForUpload } from "@/media/audio-encode";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { transcriptionService } from "@/services/transcription/service";
+import { vadService } from "@/services/vad/service";
+import { concatSpeechSamples, remapBufferTimes, type ConcatSegment } from "./vad-remap";
 import {
 	buildTranscribeHeaders,
 	useAiSettingsStore,
@@ -375,10 +377,40 @@ export async function ensureTimelineTranscript({
 			}
 		}
 
-		const { samples } = await decodeAudioToFloat32({
+		const { samples, sampleRate } = await decodeAudioToFloat32({
 			audioBlob,
 			sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 		});
+
+		// VAD-gated transcription (Plan A / U4, OPT-IN — default off): transcribe ONLY
+		// the speech (silence never reaches Whisper → faster, no silence hallucination
+		// on long sources). Times come back in concatenated-buffer time and are remapped
+		// to timeline-absolute below. Falls back to the full audio if VAD is off OR
+		// fails — so it can never make a transcription worse than today.
+		let audioData = samples;
+		let remapSegments: ConcatSegment[] | null = null;
+		if (useAiSettingsStore.getState().directorVadGatedTranscriptionEnabled) {
+			try {
+				const { speech } = await vadService.detectSpeechGaps({
+					samples,
+					sampleRate,
+					totalSec: totalDuration / TICKS_PER_SECOND,
+				});
+				if (speech.length > 0) {
+					const { buffer, segments } = concatSpeechSamples({
+						samples,
+						sampleRate,
+						speech,
+					});
+					if (buffer.length > 0) {
+						audioData = buffer;
+						remapSegments = segments;
+					}
+				}
+			} catch {
+				// VAD unavailable / failed — transcribe the full audio (unchanged).
+			}
+		}
 
 		// Live elapsed ticker so neither model init NOR a long transcription LOOKS
 		// frozen. One interval at a time; it's restarted when the phase changes.
@@ -392,7 +424,7 @@ export async function ensureTimelineTranscript({
 		};
 		try {
 			const transcript = await transcriptionService.transcribe({
-				audioData: samples,
+				audioData,
 				modelId: analysisModel,
 				wordTimestamps: wantWords,
 				onProgress: (p) => {
@@ -444,12 +476,26 @@ export async function ensureTimelineTranscript({
 					}
 				},
 			});
-			const segments: TranscriptSegmentLite[] = transcript.segments.map(
-				(s) => ({ start: s.start, end: s.end, text: s.text }),
-			);
-			const words: TranscriptWordLite[] | undefined = transcript.words?.map(
-				(word) => ({ start: word.start, end: word.end, text: word.text }),
-			);
+			const rawSegments = transcript.segments.map((s) => ({
+				start: s.start,
+				end: s.end,
+				text: s.text,
+			}));
+			const rawWords = transcript.words?.map((word) => ({
+				start: word.start,
+				end: word.end,
+				text: word.text,
+			}));
+			// VAD-gated runs return buffer-time; remap back to timeline-absolute. A
+			// full-audio run (remapSegments null) passes the times through unchanged.
+			const segments: TranscriptSegmentLite[] = remapSegments
+				? remapBufferTimes({ times: rawSegments, segments: remapSegments })
+				: rawSegments;
+			const words: TranscriptWordLite[] | undefined = rawWords
+				? remapSegments
+					? remapBufferTimes({ times: rawWords, segments: remapSegments })
+					: rawWords
+				: undefined;
 			// Only flag words-unavailable when words were actually wanted — so a
 			// plain segment-level run never poisons a later word-level request.
 			const wordsUnavailable = wantWords

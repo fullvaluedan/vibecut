@@ -180,6 +180,8 @@ export function AiSettingsContent() {
 
 			<DirectorVadDeadAirSection />
 
+			<DirectorVadGatedTranscriptionSection />
+
 			<LowPowerSection />
 
 			<IntegrationsSection />
@@ -230,6 +232,32 @@ function DirectorVadDeadAirSection() {
 					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
 					candidates (a small model downloads once). Off by default; failures are
 					ignored so the Director still runs.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadGatedTranscriptionSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadGatedTranscriptionEnabled);
+	const setEnabled = useAiSettingsStore(
+		(s) => s.setDirectorVadGatedTranscriptionEnabled,
+	);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Speech-only transcription (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs voice-activity detection first and transcribes only the spoken
+					parts (skipping silence) on the analysis path — faster on long, gappy
+					recordings, and avoids hallucinated text over silence. Falls back to
+					full-audio transcription if VAD is off or fails. Off by default;
+					captions are unaffected.
 				</p>
 			</SectionContent>
 		</Section>

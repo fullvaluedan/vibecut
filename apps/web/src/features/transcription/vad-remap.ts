@@ -81,3 +81,47 @@ export function buildConcatSegments(
 	}
 	return segments;
 }
+
+/**
+ * Slice the SPEECH intervals out of the decoded samples and concatenate them
+ * back-to-back into one buffer for VAD-gated transcription (U4) — so a long
+ * source's silence is never fed to Whisper. Returns the buffer AND the matching
+ * concat map, both derived from the SAME sample-accurate slice boundaries (so
+ * `remapBufferTimes` lines up exactly with what was transcribed — no rounding
+ * drift between the two). Intervals are clamped to the sample range; empty/zero
+ * slices are skipped.
+ */
+export function concatSpeechSamples({
+	samples,
+	sampleRate,
+	speech,
+}: {
+	samples: Float32Array;
+	sampleRate: number;
+	speech: readonly { startSec: number; endSec: number }[];
+}): { buffer: Float32Array; segments: ConcatSegment[] } {
+	const slices: { from: number; to: number; timelineStartSec: number }[] = [];
+	let total = 0;
+	for (const iv of speech) {
+		const from = Math.max(0, Math.round(iv.startSec * sampleRate));
+		const to = Math.min(samples.length, Math.round(iv.endSec * sampleRate));
+		if (to > from) {
+			slices.push({ from, to, timelineStartSec: iv.startSec });
+			total += to - from;
+		}
+	}
+	const buffer = new Float32Array(total);
+	const segments: ConcatSegment[] = [];
+	let cursor = 0;
+	for (const slice of slices) {
+		buffer.set(samples.subarray(slice.from, slice.to), cursor);
+		const length = slice.to - slice.from;
+		segments.push({
+			bufferStartSec: cursor / sampleRate,
+			timelineStartSec: slice.timelineStartSec,
+			durationSec: length / sampleRate,
+		});
+		cursor += length;
+	}
+	return { buffer, segments };
+}
