@@ -178,6 +178,8 @@ export function AiSettingsContent() {
 
 			<DirectorVisionSection />
 
+			<DirectorVadDeadAirSection />
+
 			<LowPowerSection />
 
 			<IntegrationsSection />
@@ -205,6 +207,29 @@ function DirectorVisionSection() {
 					moments — not just what the audio says. Costs more (frames use extra
 					tokens) and needs an API key or a vision-capable custom model; the
 					claude-code CLI falls back to text. Off by default.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadDeadAirSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadDeadAirEnabled);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorVadDeadAirEnabled);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Director dead-air (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs a voice-activity pass during the Director&apos;s analysis to flag
+					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
+					candidates (a small model downloads once). Off by default; failures are
+					ignored so the Director still runs.
 				</p>
 			</SectionContent>
 		</Section>

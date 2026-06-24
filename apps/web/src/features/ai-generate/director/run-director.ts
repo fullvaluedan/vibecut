@@ -40,6 +40,8 @@ import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectTinyClipCuts } from "./tiny-clip";
+import { detectVadDeadAirCuts } from "./vad-dead-air";
+import { vadService } from "@/services/vad/service";
 import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
@@ -223,6 +225,32 @@ export async function runDirector({
 		minDurationSec: MIN_USEFUL_CLIP_FRAMES / fpsFloat,
 	});
 
+	// VAD dead-air (Plan A / U5, OPT-IN — default off): a Silero VAD pass over the
+	// decoded audio surfaces long NON-speech gaps as reviewable "dead air" cuts —
+	// the silent "just sitting there" a transcript can't see. Runs in its own worker;
+	// NON-throwing (a VAD failure must never break the Director) and overlap-filtered
+	// against the other detected cuts so it can't double with pacing / dead-air.
+	let vadDeadAirCuts: DirectorOp[] = [];
+	if (useAiSettingsStore.getState().directorVadDeadAirEnabled) {
+		onProgress?.("Scanning for dead air...");
+		try {
+			const { gaps } = await vadService.detectSpeechGaps({
+				samples,
+				sampleRate,
+				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
+			});
+			vadDeadAirCuts = detectVadDeadAirCuts({ gaps }).filter(
+				(op) =>
+					![...wordCuts, ...noiseCuts, ...tinyClipCuts].some(
+						(other) => other.startSec < op.endSec && op.startSec < other.endSec,
+					),
+			);
+		} catch {
+			// VAD unavailable / failed — skip; the Director runs normally.
+		}
+		abort();
+	}
+
 	// Keep-side signal (Phase B / U1-U4): score each segment's emphasis/anchor
 	// importance. It rides the signal table as an advisory "imp" column and yields a
 	// CAPPED set of high-value spans (never the whole timeline) that the merge below
@@ -400,7 +428,7 @@ export async function runDirector({
 		: [];
 	const baseMerged = mergeDetectedCuts({
 		planOps,
-		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...lexicalRepeatCuts],
+		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...vadDeadAirCuts, ...lexicalRepeatCuts],
 		keepers: [...(runLexical ? keepers : []), ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
 	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by

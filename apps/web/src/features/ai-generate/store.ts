@@ -75,6 +75,13 @@ interface AiSettingsStore {
 	directorVisionEnabled: boolean;
 	setDirectorVisionEnabled: (enabled: boolean) => void;
 	/**
+	 * Opt-in (default off): run a Silero VAD pass during AI Director analysis to
+	 * surface long NON-speech gaps as reviewable "dead air" cut candidates. The
+	 * VAD runs in its own worker; failures are swallowed (the Director still runs).
+	 */
+	directorVadDeadAirEnabled: boolean;
+	setDirectorVadDeadAirEnabled: (enabled: boolean) => void;
+	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -174,6 +181,10 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			directorVisionEnabled: false,
 			setDirectorVisionEnabled: (directorVisionEnabled) =>
 				set({ directorVisionEnabled }),
+
+			directorVadDeadAirEnabled: false,
+			setDirectorVadDeadAirEnabled: (directorVadDeadAirEnabled) =>
+				set({ directorVadDeadAirEnabled }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),
