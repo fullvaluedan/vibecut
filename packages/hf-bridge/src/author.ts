@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
+import { resolveClaude } from "./renderer";
 import type {
 	ClaudeAuth,
 	EffectPlan,
@@ -172,8 +173,9 @@ function planViaClaudeCode(
 	prompt: string,
 ): Promise<{ raw: unknown; usage: TokenUsage | null }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("claude", ["-p", "--output-format", "json"], {
-			shell: true,
+		const { command, useShell } = resolveClaude();
+		const child = spawn(command, ["-p", "--output-format", "json"], {
+			shell: useShell,
 			stdio: ["pipe", "pipe", "pipe"],
 			env: { ...process.env, NO_COLOR: "1" },
 		});
@@ -184,7 +186,12 @@ function planViaClaudeCode(
 		child.on("error", reject);
 		child.on("close", (code) => {
 			if (code !== 0) {
-				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}`));
+				// A wiped/missing CLI binary surfaces as "not recognized"/ENOENT — point
+				// at the escape hatch rather than a cryptic shell error.
+				const hint = /not recognized|ENOENT|not found|cannot find/i.test(err)
+					? " — the claude CLI isn't runnable (a failed update may have wiped its binary). Set FRAMECUT_CLAUDE to a working claude path, or restore the CLI."
+					: "";
+				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}${hint}`));
 				return;
 			}
 			try {

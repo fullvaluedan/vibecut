@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { findHyperframesPackageDir } from "./renderer";
+import { findHyperframesPackageDir, resolveClaude } from "./renderer";
 
 export interface DoctorReport {
 	node: { ok: boolean; detail: string };
@@ -10,10 +10,10 @@ export interface DoctorReport {
 	claudeCli: { ok: boolean; detail: string };
 }
 
-function probe(command: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
+function probe(command: string, args: string[], useShell = true): Promise<{ ok: boolean; detail: string }> {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
-			shell: true,
+			shell: useShell,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let out = "";
@@ -47,9 +47,10 @@ export async function runDoctor(): Promise<DoctorReport> {
 		hyperframes = { ok: false, detail: `not installed: ${String(e).slice(0, 80)}` };
 	}
 
+	const claude = resolveClaude();
 	const [ffmpeg, claudeCli] = await Promise.all([
 		probe("ffmpeg", ["-version"]),
-		probe("claude", ["--version"]),
+		probe(claude.command, ["--version"], claude.useShell),
 	]);
 
 	return { node, hyperframes, ffmpeg, claudeCli };

@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { generatedRoot } from "./renderer";
+import { generatedRoot, resolveClaude } from "./renderer";
 import { customChatUrl } from "./author";
 import type { ClaudeAuth } from "./types";
 
@@ -142,8 +142,9 @@ function authorViaClaudeCode(
 			reject(new Error("Cancelled"));
 			return;
 		}
-		const child = spawn("claude", ["-p"], {
-			shell: true,
+		const { command, useShell } = resolveClaude();
+		const child = spawn(command, ["-p"], {
+			shell: useShell,
 			// posix: own process group so killTree can signal the whole tree.
 			// win32: never detach (it would pop a new console window) — taskkill
 			// /T handles the tree there instead.

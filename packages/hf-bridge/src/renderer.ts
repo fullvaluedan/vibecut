@@ -69,6 +69,22 @@ function nodeBinary(): string {
 	return isBun ? "node" : process.execPath;
 }
 
+/**
+ * The `claude` CLI command + spawn mode for the AI steps that shell out to it
+ * (planEffects, authorComposition, the doctor). `FRAMECUT_CLAUDE` overrides the
+ * binary — the escape hatch when a failed CLI auto-update wipes the default
+ * Windows shim's target and `claude` becomes "not recognized" (a recurring break).
+ * With an explicit path we skip the shell so a direct `.exe` (and paths with
+ * spaces) work; bare `claude` still needs the shell on Windows to resolve its
+ * `.cmd` shim via PATHEXT.
+ */
+export function resolveClaude(): { command: string; useShell: boolean } {
+	const override = process.env.FRAMECUT_CLAUDE?.trim();
+	return override
+		? { command: override, useShell: false }
+		: { command: "claude", useShell: true };
+}
+
 export function runNode(args: string[], cwd: string): Promise<{ code: number; output: string }> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(nodeBinary(), args, {
