@@ -436,7 +436,20 @@ export async function runDirector({
 	const mergedOps =
 		redundancyRan && redundancyCuts.length > 0
 			? mergeDetectedCuts({
-					planOps: baseMerged,
+					// A redundancy take is removed WHOLE. Drop any cleaning removal
+					// (filler/pause/dead-air) fully INSIDE a redundancy span first —
+					// otherwise that small contained cut would dedup the bigger redundancy
+					// cut away (mergeDetectedCuts drops an extraOp overlapping a surviving
+					// removal), leaving most of the take in AND killing its review row. The
+					// redundancy cut subsumes the contained one, so nothing is lost. Reorders
+					// are never removals — always keep them.
+					planOps: baseMerged.filter(
+						(op) =>
+							op.op === "reorder" ||
+							!redundancyCuts.some(
+								(rc) => rc.startSec <= op.startSec && op.endSec <= rc.endSec,
+							),
+					),
 					extraOps: redundancyCuts,
 					keepers: llmKeepSpans,
 				}).filter((op) => op.op !== "keep")

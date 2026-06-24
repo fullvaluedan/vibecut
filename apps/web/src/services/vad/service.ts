@@ -11,6 +11,10 @@ export interface SpeechGaps {
 	gaps: Interval[];
 }
 
+/** A wedged VAD worker (CDN WASM never loads, onnxruntime aborts the thread)
+ * must not hang the caller forever — bound every run. */
+const VAD_TIMEOUT_MS = 60_000;
+
 class VadService {
 	private worker: Worker | null = null;
 
@@ -26,17 +30,41 @@ class VadService {
 	}): Promise<SpeechGaps> {
 		const worker = this.ensureWorker();
 		return new Promise((resolve, reject) => {
-			const handle = (event: MessageEvent<VadWorkerResponse>) => {
+			let settled = false;
+			const cleanup = () => {
+				clearTimeout(timer);
+				worker.removeEventListener("message", onMessage);
+				worker.removeEventListener("error", onError);
+				worker.removeEventListener("messageerror", onError);
+			};
+			// A WORKER-LEVEL failure (module-load throw, WASM init abort, timeout)
+			// surfaces as 'error'/'messageerror' or never settles — NOT a posted
+			// vad-error. Handle those too, else the promise hangs and the caller's
+			// try/catch (which only catches a rejection) can't degrade. Terminate so
+			// a half-initialized worker isn't reused next run (mirrors transcription).
+			const fail = (message: string) => {
+				if (settled) return;
+				settled = true;
+				cleanup();
+				this.terminate();
+				reject(new Error(message));
+			};
+			const onMessage = (event: MessageEvent<VadWorkerResponse>) => {
 				const response = event.data;
 				if (response.type === "vad-complete") {
-					worker.removeEventListener("message", handle);
+					if (settled) return;
+					settled = true;
+					cleanup();
 					resolve({ speech: response.speech, gaps: response.gaps });
 				} else if (response.type === "vad-error") {
-					worker.removeEventListener("message", handle);
-					reject(new Error(response.error));
+					fail(response.error);
 				}
 			};
-			worker.addEventListener("message", handle);
+			const onError = () => fail("VAD worker failed");
+			const timer = setTimeout(() => fail("VAD timed out"), VAD_TIMEOUT_MS);
+			worker.addEventListener("message", onMessage);
+			worker.addEventListener("error", onError);
+			worker.addEventListener("messageerror", onError);
 			worker.postMessage({
 				type: "detect",
 				samples,

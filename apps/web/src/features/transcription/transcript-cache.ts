@@ -391,11 +391,15 @@ export async function ensureTimelineTranscript({
 		let remapSegments: ConcatSegment[] | null = null;
 		if (useAiSettingsStore.getState().directorVadGatedTranscriptionEnabled) {
 			try {
-				const { speech } = await vadService.detectSpeechGaps({
-					samples,
-					sampleRate,
-					totalSec: totalDuration / TICKS_PER_SECOND,
-				});
+				// abortable() so a cancel (or the worker's watchdog timeout) interrupts
+				// the VAD pass instead of the pipeline waiting on it indefinitely.
+				const { speech } = await abortable(
+					vadService.detectSpeechGaps({
+						samples,
+						sampleRate,
+						totalSec: totalDuration / TICKS_PER_SECOND,
+					}),
+				);
 				if (speech.length > 0) {
 					const { buffer, segments } = concatSpeechSamples({
 						samples,
@@ -407,7 +411,9 @@ export async function ensureTimelineTranscript({
 						remapSegments = segments;
 					}
 				}
-			} catch {
+			} catch (error) {
+				// Honor a real cancel — don't swallow it into a full transcription.
+				if (signal?.aborted) throw error;
 				// VAD unavailable / failed — transcribe the full audio (unchanged).
 			}
 		}

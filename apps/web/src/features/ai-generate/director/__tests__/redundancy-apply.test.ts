@@ -169,6 +169,21 @@ describe("applyKeeperSwap (rebuild a group's cuts for a new keeper)", () => {
 		expect(swapped.find((o) => o.id === "x")).toBeTruthy();
 	});
 
+	test("a keeper that isn't a member is a no-op (never cuts the whole group)", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		// "L9" is not in the group → must NOT cut every take; ops unchanged.
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L9" });
+		expect(swapped).toEqual(cuts);
+	});
+
 	test("3-take group: swap rebuilds BOTH new non-keeper cuts", () => {
 		const { cuts, groups } = mapRedundancyGroups({
 			groups: [

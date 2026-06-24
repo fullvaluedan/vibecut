@@ -60,29 +60,6 @@ export function remapBufferTimes({
 }
 
 /**
- * Build the concat map from speech intervals (ascending, timeline-time): laying
- * them back-to-back in a single buffer. The Nth interval's `bufferStart` is the
- * running sum of the prior durations.
- */
-export function buildConcatSegments(
-	speech: readonly { startSec: number; endSec: number }[],
-): ConcatSegment[] {
-	const segments: ConcatSegment[] = [];
-	let bufferCursor = 0;
-	for (const iv of speech) {
-		const durationSec = iv.endSec - iv.startSec;
-		if (durationSec <= 0) continue;
-		segments.push({
-			bufferStartSec: bufferCursor,
-			timelineStartSec: iv.startSec,
-			durationSec,
-		});
-		bufferCursor += durationSec;
-	}
-	return segments;
-}
-
-/**
  * Slice the SPEECH intervals out of the decoded samples and concatenate them
  * back-to-back into one buffer for VAD-gated transcription (U4) — so a long
  * source's silence is never fed to Whisper. Returns the buffer AND the matching

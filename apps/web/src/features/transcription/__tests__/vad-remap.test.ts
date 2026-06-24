@@ -1,24 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildConcatSegments, concatSpeechSamples, remapBufferTimes } from "../vad-remap";
+import { concatSpeechSamples, remapBufferTimes } from "../vad-remap";
 
 const t = (start: number, end: number, text: string) => ({ start, end, text });
-
-describe("buildConcatSegments", () => {
-	test("lays speech intervals back-to-back; bufferStart = running duration sum", () => {
-		const segs = buildConcatSegments([
-			{ startSec: 10, endSec: 13 }, // 3s
-			{ startSec: 20, endSec: 24 }, // 4s
-		]);
-		expect(segs).toEqual([
-			{ bufferStartSec: 0, timelineStartSec: 10, durationSec: 3 },
-			{ bufferStartSec: 3, timelineStartSec: 20, durationSec: 4 },
-		]);
-	});
-
-	test("skips zero/negative-length intervals", () => {
-		expect(buildConcatSegments([{ startSec: 5, endSec: 5 }])).toEqual([]);
-	});
-});
 
 describe("concatSpeechSamples", () => {
 	// sampleRate 10 → 1 sample = 0.1s; samples[i] = i so slices are verifiable.
@@ -72,10 +55,11 @@ describe("concatSpeechSamples", () => {
 });
 
 describe("remapBufferTimes", () => {
-	const segs = buildConcatSegments([
-		{ startSec: 10, endSec: 13 }, // buffer 0..3   → timeline 10..13
-		{ startSec: 20, endSec: 24 }, // buffer 3..7   → timeline 20..24
-	]);
+	// buffer 0..3 → timeline 10..13; buffer 3..7 → timeline 20..24
+	const segs = [
+		{ bufferStartSec: 0, timelineStartSec: 10, durationSec: 3 },
+		{ bufferStartSec: 3, timelineStartSec: 20, durationSec: 4 },
+	];
 
 	test("single-interval offset", () => {
 		const out = remapBufferTimes({ times: [t(0.5, 1.5, "hi")], segments: segs });

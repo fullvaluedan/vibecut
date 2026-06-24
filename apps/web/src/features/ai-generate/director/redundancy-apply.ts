@@ -125,6 +125,12 @@ export function applyKeeperSwap({
 	group: RedundancyReviewGroup;
 	newKeeperLineId: string;
 }): DirectorOp[] {
+	// Defensive: a keeper that isn't a member of the group would make
+	// cutMembersForKeeper cut EVERY take (total group loss). Treat an unknown
+	// keeper as a no-op rather than deleting the whole group.
+	if (!group.members.some((member) => member.lineId === newKeeperLineId)) {
+		return [...operations];
+	}
 	const others = operations.filter((op) => op.groupId !== group.groupId);
 	const rebuilt = cutMembersForKeeper({
 		members: group.members,
