@@ -46,10 +46,12 @@ export type TranscriptionModelId =
 	| "whisper-small"
 	| "whisper-medium"
 	| "whisper-large-v3-turbo"
-	// Word-timestamp-capable exports (cross-attention) — candidates for the
-	// Director/analysis path so the word-level detectors can run. Verify each
-	// actually emits word timestamps in our transformers.js version (see the
-	// U1 spike) before relying on it.
+	// Word-timestamp-capable exports (cross-attention) for the Director/analysis
+	// path so the word-level detectors can run. `whisper-tiny-timestamped` is
+	// VERIFIED to emit word timestamps in our transformers.js (U1 spike,
+	// 2026-06-24); base/medium remain unverified candidates (base failed a
+	// headless load — confirm in-app before adopting).
+	| "whisper-tiny-timestamped"
 	| "whisper-base-timestamped"
 	| "whisper-medium-en-timestamped";
 

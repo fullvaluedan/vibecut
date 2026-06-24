@@ -29,8 +29,16 @@ export const TRANSCRIPTION_MODELS: TranscriptionModel[] = [
 		description: "Best accuracy, requires WebGPU for good performance",
 	},
 	// Word-timestamp-capable exports (cross-attention) for the Director/analysis
-	// path. UNVERIFIED in our transformers.js version — the U1 spike confirms each
-	// actually emits word timestamps before the analysis selector adopts it.
+	// path. `whisper-tiny-timestamped` is VERIFIED (U1 spike, 2026-06-24: loads +
+	// emits word timestamps in our transformers.js) and is the analysis default;
+	// base/medium remain UNVERIFIED (base failed a headless load — confirm in-app
+	// before the selector adopts them).
+	{
+		id: "whisper-tiny-timestamped",
+		name: "Tiny (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-tiny_timestamped",
+		description: "Fast, multilingual, emits word-level timestamps — the analysis-path default",
+	},
 	{
 		id: "whisper-base-timestamped",
 		name: "Base (word timestamps)",
