@@ -26,6 +26,7 @@ import {
 } from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
+import { loadFonts } from "@/fonts/google-fonts";
 import { buildAiLanes, claimLane } from "@/features/ai-generate/placement";
 import { getMotionTemplate } from "@/features/motion-templates/templates";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
@@ -195,6 +196,9 @@ export async function runHyperframes({
 	// (unless the planner chose its own accent).
 	const themeStyle = getStyleById(useAiSettingsStore.getState().styleId);
 	const themeAccent = themeStyle.accent;
+	// Templates can use a Google font (kinetic-title defaults to Inter); fetch the
+	// fonts they need so AI-placed text renders in the right face, not a fallback.
+	void loadFonts({ families: ["Inter", themeStyle.fontFamily] });
 	for (const item of plan.items) {
 		if (item.variables.accent === undefined) {
 			item.variables.accent = themeAccent;

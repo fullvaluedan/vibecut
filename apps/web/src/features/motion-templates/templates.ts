@@ -84,12 +84,25 @@ const CORNER_OPTIONS = [
 	{ value: "bottom-left", label: "Bottom left" },
 	{ value: "bottom-right", label: "Bottom right" },
 ];
+const FONT_OPTIONS = [
+	{ value: "Inter", label: "Inter" },
+	{ value: "Poppins", label: "Poppins" },
+	{ value: "Montserrat", label: "Montserrat" },
+	{ value: "Oswald", label: "Oswald" },
+	{ value: "Bebas Neue", label: "Bebas Neue" },
+	{ value: "Anton", label: "Anton" },
+	{ value: "Georgia", label: "Georgia" },
+];
 const ALIGN_OPTIONS = [
 	{ value: "left", label: "Left" },
 	{ value: "right", label: "Right" },
 ];
 
-function str(variables: TemplateVariables, key: string, fallback: string): string {
+function str(
+	variables: TemplateVariables,
+	key: string,
+	fallback: string,
+): string {
 	const value = variables[key];
 	return typeof value === "string" && value.trim() ? value : fallback;
 }
@@ -270,9 +283,15 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 		fields: [
 			{ key: "text", label: "Title", type: "text", default: "TITLE" },
 			{ key: "color", label: "Text color", type: "color", default: "#ffffff" },
+			{
+				key: "font",
+				label: "Font",
+				type: "enum",
+				options: FONT_OPTIONS,
+				default: "Inter",
+			},
 		],
 		build: (args) => {
-			const k = canvasScale(args.canvasSize, args.scale);
 			const channels = popIn({ durationSec: args.durationSec });
 			const element = buildTemplateText({
 				args,
@@ -281,7 +300,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 				durationSec: args.durationSec,
 				params: {
 					content: str(args.variables, "text", "TITLE").toUpperCase(),
-					fontSize: Math.round(25 * fontScale(args.scale)),
+					fontFamily: str(args.variables, "font", "Inter"),
+					fontSize: Math.round(20 * fontScale(args.scale)),
 					fontWeight: "bold",
 					color: str(args.variables, "color", "#ffffff"),
 					textAlign: "center",
@@ -454,7 +474,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			const groupId = args.groupId ?? generateUUID();
 			const shared = { ...args, groupId };
 			const { enter, exit } = resolveEnterExit(args.durationSec);
-				const out = Math.max(enter + 0.1, args.durationSec - exit);
+			const out = Math.max(enter + 0.1, args.durationSec - exit);
 			const end = Math.max(out + 0.05, args.durationSec - 0.05);
 			// The pill background growing from zero paddingX reads as a native
 			// grow-from-center wipe (background.paddingX is keyframable and
@@ -713,7 +733,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 			const k = canvasScale(args.canvasSize, args.scale);
 			const y = height / 2 - 150 * k;
 			const { enter, exit } = resolveEnterExit(args.durationSec);
-				const out = Math.max(enter + 0.1, args.durationSec - exit);
+			const out = Math.max(enter + 0.1, args.durationSec - exit);
 			const end = Math.max(out + 0.05, args.durationSec - 0.05);
 			const channels: TemplateChannels = {
 				opacity: [
