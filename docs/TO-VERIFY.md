@@ -2,6 +2,14 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Audio-separation regression on multi/selected bin drags (2026-06-24, commit `ab77bcd5`)
+Fixed: the multi-asset drag path stopped separating source audio (regression from `6ac45541`), so dragging selected clips combined audio into the video. Now separates in-batch onto a shared audio track. Drag-drop is DOM-bound → live-verify in-app:
+- [ ] **The regression:** select 2-3 videos in the bin, drag one onto the timeline → all land, each with its audio on a **separate audio track**, video+audio **linked** (move/trim together).
+- [ ] **One undo:** a single Ctrl+Z removes the whole multi-drop (clips + separated audio + any new tracks).
+- [ ] **No explosion:** all separated audio packs onto **one** shared audio track, not one per clip.
+- [ ] **Single unselected drag** still separates (the path that already worked). If it does NOT, that's a separate bug in `maybeSeparateAudio`/the `separateSourceAudio` wiring — flag it.
+- [ ] **Audio-only assets** dragged in a multi-selection add normally (no phantom separated-audio track); a **video with no audio** (`hasAudio:false`) adds no empty audio track.
+
 ## AI CUT words-on (Plan A U1/U2/U5, 2026-06-24, commit `bdebf823`)
 The Director's analysis transcription now uses a WORD-CAPABLE model so the word-level detectors re-arm. U1 spike confirmed `whisper-tiny_timestamped` emits word timestamps headlessly; in-app uses onnxruntime-web (parity expected but unverified).
 - [ ] **tiny-timestamped LOADS in-app** — run AI CUT / AI Director and confirm the analysis transcription completes (no init-error). If it fails to load, revert the one-line `selectAnalysisModel` change or fall back to a registered words-off model. (The shipped probe-degrade only catches word-*capability* at decode, NOT a model load failure — this is the one real risk of U2.)
