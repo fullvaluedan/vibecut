@@ -16,6 +16,45 @@ function baseInput(
 	};
 }
 
+describe("compileHyperframesPrompt — reference compositions", () => {
+	test("embeds picked assets' HTML under a REFERENCE COMPOSITIONS heading", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				referenceCompositions: [
+					{
+						name: "swiss-grid",
+						title: "Swiss Grid",
+						html: "<html>GRID-LAYOUT</html>",
+					},
+				],
+			}),
+		);
+		expect(out).toContain("REFERENCE COMPOSITIONS");
+		expect(out).toContain("Swiss Grid (swiss-grid)");
+		expect(out).toContain("GRID-LAYOUT");
+	});
+
+	test("omits the section when none are picked", () => {
+		expect(compileHyperframesPrompt(baseInput())).not.toContain(
+			"REFERENCE COMPOSITIONS",
+		);
+		expect(
+			compileHyperframesPrompt(baseInput({ referenceCompositions: [] })),
+		).not.toContain("REFERENCE COMPOSITIONS");
+	});
+
+	test("truncates very long composition HTML", () => {
+		const huge = "x".repeat(20000);
+		const out = compileHyperframesPrompt(
+			baseInput({
+				referenceCompositions: [{ name: "big", title: "Big", html: huge }],
+			}),
+		);
+		expect(out).toContain("truncated");
+		expect(out).not.toContain("x".repeat(20000));
+	});
+});
+
 describe("compileHyperframesPrompt — learned preferences", () => {
 	test("renders a LEARNED PREFERENCES section with each note", () => {
 		const out = compileHyperframesPrompt(
@@ -66,9 +105,13 @@ describe("compileHyperframesPrompt — learned preferences", () => {
 describe("compileHyperframesPrompt — density hint", () => {
 	test("emits a DENSITY line when a hint is given", () => {
 		const out = compileHyperframesPrompt(
-			baseInput({ densityHint: "Aim for ~6 timed graphics across this 80s segment." }),
+			baseInput({
+				densityHint: "Aim for ~6 timed graphics across this 80s segment.",
+			}),
 		);
-		expect(out).toContain("DENSITY: Aim for ~6 timed graphics across this 80s segment.");
+		expect(out).toContain(
+			"DENSITY: Aim for ~6 timed graphics across this 80s segment.",
+		);
 	});
 
 	test("omits the DENSITY line when no hint is given", () => {

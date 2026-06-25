@@ -67,7 +67,16 @@ export interface CompileHyperframesPromptInput {
 	 * is how a whole-video run used to yield a single graphic.
 	 */
 	densityHint?: string;
+	/**
+	 * Real registry compositions the user PICKED — their actual HTML, for the
+	 * author to adapt (keep the design, retarget the content). Truncated per-comp
+	 * by the renderer to stay within the token budget.
+	 */
+	referenceCompositions?: { name: string; title: string; html: string }[];
 }
+
+/** Per-composition HTML cap in the brief, so picked references don't blow the token budget. */
+const REFERENCE_HTML_MAX_CHARS = 12000;
 
 function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
@@ -104,8 +113,17 @@ function renderSelectionGroup(assets: HfSelectionAsset[]): string {
 export function compileHyperframesPrompt(
 	input: CompileHyperframesPromptInput,
 ): string {
-	const { selections, look, direction, scope, transcript, canvas, preferenceNotes, densityHint } =
-		input;
+	const {
+		selections,
+		look,
+		direction,
+		scope,
+		transcript,
+		canvas,
+		preferenceNotes,
+		densityHint,
+		referenceCompositions,
+	} = input;
 	const durationSec = Math.max(0, scope.endSec - scope.startSec);
 
 	const lines: string[] = [];
@@ -147,6 +165,26 @@ export function compileHyperframesPrompt(
 		lines.push(
 			`No specific assets were selected — use your own judgment to add tasteful overlays (lower-thirds, kinetic titles, callouts) where the transcript warrants them.`,
 		);
+	}
+
+	// Reference compositions — the real picked assets, for the author to adapt.
+	const refs = (referenceCompositions ?? []).filter((r) => r.html.trim());
+	if (refs.length) {
+		lines.push("");
+		lines.push(
+			`REFERENCE COMPOSITIONS: the user PICKED these real HyperFrames assets. ADAPT their visual design to the transcript below — keep their layout, type system, and animation style, but retarget the text/data to the spoken content. Do NOT invent a different design, and do NOT place them verbatim: author ONE coherent overlay timed to the moments, informed by these.`,
+		);
+		for (const ref of refs) {
+			const html =
+				ref.html.length > REFERENCE_HTML_MAX_CHARS
+					? `${ref.html.slice(0, REFERENCE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`
+					: ref.html;
+			lines.push("");
+			lines.push(`--- ${ref.title} (${ref.name}) ---`);
+			lines.push("```html");
+			lines.push(html);
+			lines.push("```");
+		}
 	}
 
 	// Look.

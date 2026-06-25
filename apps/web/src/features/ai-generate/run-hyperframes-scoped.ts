@@ -65,13 +65,16 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 	try {
 		const res = await fetch("/api/hyperframes/registry");
 		if (!res.ok) return [];
-		const all = (await res.json()) as {
-			name: string;
-			type: string;
-			title: string;
-			description: string;
-			tags?: string[];
-		}[];
+		const data = (await res.json()) as {
+			items?: {
+				name: string;
+				type: string;
+				title: string;
+				description: string;
+				tags?: string[];
+			}[];
+		};
+		const all = data.items ?? [];
 		const want = new Set(picks);
 		return all
 			.filter((a) => want.has(a.name))
@@ -79,9 +82,7 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 				const kind = a.type.split(":")[1];
 				return {
 					name: a.name,
-					kind: (kind === "block" ||
-					kind === "component" ||
-					kind === "example"
+					kind: (kind === "block" || kind === "component" || kind === "example"
 						? kind
 						: "block") as HfSelectionAsset["kind"],
 					title: a.title,
@@ -94,6 +95,41 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 	} catch {
 		return [];
 	}
+}
+
+const MAX_REFERENCE_COMPS = 3;
+
+/**
+ * Fetch the REAL composition HTML for the user's picked registry assets (capped),
+ * so the author adapts the genuine asset instead of reinventing it from a name.
+ * Best-effort: a fetch failure drops that reference (the pick still appears as a
+ * named preference). The server route does the cross-origin registry fetch.
+ */
+async function fetchReferenceCompositions(
+	picks: HfSelectionAsset[],
+): Promise<{ name: string; title: string; html: string }[]> {
+	const want = picks.slice(0, MAX_REFERENCE_COMPS);
+	const fetched = await Promise.all(
+		want.map(async (p) => {
+			try {
+				const res = await fetch("/api/hyperframes/registry-comp", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: p.name, type: `hyperframes:${p.kind}` }),
+				});
+				if (!res.ok) return null;
+				const data = (await res.json()) as { title?: string; html?: string };
+				return data.html
+					? { name: p.name, title: p.title, html: data.html }
+					: null;
+			} catch {
+				return null;
+			}
+		}),
+	);
+	return fetched.filter(
+		(c): c is { name: string; title: string; html: string } => c !== null,
+	);
 }
 
 /** Segments scoped to [startSec, endSec], offset to 0, as bracketed text. */
@@ -208,8 +244,11 @@ export async function runHyperframesOnClip({
 			controller.signal,
 		);
 		const registrySelections = await pickedRegistrySelections();
+		const referenceCompositions =
+			await fetchReferenceCompositions(registrySelections);
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
+			referenceCompositions,
 			look: {
 				name: look.name,
 				description: look.description,
@@ -303,10 +342,16 @@ export async function runHyperframesOnClip({
 interface SharedAuthorInputs {
 	segments: { start: number; end: number; text: string }[];
 	selections: HfSelectionAsset[];
-	look: { name: string; description: string; accent?: string; fontFamily?: string };
+	look: {
+		name: string;
+		description: string;
+		accent?: string;
+		fontFamily?: string;
+	};
 	direction: string;
 	canvas: { width: number; height: number; fps: number };
 	preferenceNotes: string[];
+	referenceCompositions: { name: string; title: string; html: string }[];
 }
 
 /** Transcribe once + gather the selections/look/direction shared by every chunk. */
@@ -326,11 +371,14 @@ async function buildSharedInputs({
 	await gatherClipTranscript(editor, 0, totalSec, signal);
 	const segments = getCachedTranscript(editor) ?? [];
 	const registrySelections = await pickedRegistrySelections();
+	const referenceCompositions =
+		await fetchReferenceCompositions(registrySelections);
 	const { styleId, hfDirection } = useAiSettingsStore.getState();
 	const look = getStyleById(styleId);
 	return {
 		segments,
 		selections: [...enabledSelections(), ...registrySelections],
+		referenceCompositions,
 		look: {
 			name: look.name,
 			description: look.description,
@@ -339,7 +387,9 @@ async function buildSharedInputs({
 		},
 		direction: hfDirection,
 		canvas: { width, height, fps },
-		preferenceNotes: usePreferenceStore.getState().buildPreferenceNotes("graphics"),
+		preferenceNotes: usePreferenceStore
+			.getState()
+			.buildPreferenceNotes("graphics"),
 	};
 }
 
@@ -381,12 +431,17 @@ async function authorChunks({
 	await runWithConcurrency(chunks, concurrency, async (chunk) => {
 		if (signal?.aborted) throw new Error("Cancelled");
 		const chunkLen = chunk.endSec - chunk.startSec;
-		const transcript = scopeSegments(shared.segments, chunk.startSec, chunk.endSec);
+		const transcript = scopeSegments(
+			shared.segments,
+			chunk.startSec,
+			chunk.endSec,
+		);
 		const direction = angle
 			? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
 			: shared.direction;
 		const prompt = compileHyperframesPrompt({
 			selections: shared.selections,
+			referenceCompositions: shared.referenceCompositions,
 			look: shared.look,
 			direction,
 			scope: {
@@ -401,10 +456,15 @@ async function authorChunks({
 			densityHint: `Aim for ~${Math.max(1, Math.round(chunkLen / 15))} timed graphics across this ${Math.round(chunkLen)}s segment — spread them out, at least one early.`,
 		});
 		try {
-			logRun(`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label})…`);
+			logRun(
+				`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label})…`,
+			);
 			const res = await fetch("/api/hyperframes/author", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: {
+					"content-type": "application/json",
+					...buildAiAuthHeaders(),
+				},
 				body: JSON.stringify({
 					prompt,
 					fps: shared.canvas.fps,
@@ -521,7 +581,9 @@ export async function runHyperframesWholeTimeline({
 		})),
 	});
 	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
-	logRun(`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`);
+	logRun(
+		`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`,
+	);
 	onProgress({
 		stage: "done",
 		detail: `Placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video.`,
@@ -588,7 +650,11 @@ export async function runHyperframesVariants({
 		if (signal?.aborted) throw new Error("Cancelled");
 		const angle = VARIANT_ANGLES[i];
 		logRun(`— Version ${i + 1}/${n}: ${angle.split(" — ")[0]}`);
-		const { rendered, skipped, tokensUsed: t } = await authorChunks({
+		const {
+			rendered,
+			skipped,
+			tokensUsed: t,
+		} = await authorChunks({
 			chunks,
 			shared,
 			angle,
