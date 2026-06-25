@@ -59,4 +59,11 @@ export {
 	type BakeJob,
 	type BakeOutcome,
 } from "./bake";
+export {
+	fetchRegistryComposition,
+	registryKindDir,
+	type RegistryComposition,
+	type RegistryItemMeta,
+	type RegistryCompositionFile,
+} from "./registry-fetch";
 export { runDoctor, type DoctorReport } from "./doctor";
