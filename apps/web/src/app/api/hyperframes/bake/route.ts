@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
-import { bakeRegistryBlock } from "@framecut/hf-bridge";
+import { bakeRegistryItem } from "@framecut/hf-bridge";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -11,13 +11,18 @@ export const maxDuration = 600;
  * instantly (x-framecut-cached: 1).
  */
 export async function POST(req: NextRequest) {
-	const body = (await req.json()) as { name?: unknown; fps?: unknown };
+	const body = (await req.json()) as {
+		name?: unknown;
+		fps?: unknown;
+		type?: unknown;
+	};
 	if (typeof body?.name !== "string" || !body.name) {
-		return NextResponse.json({ error: "Missing block name" }, { status: 400 });
+		return NextResponse.json({ error: "Missing asset name" }, { status: 400 });
 	}
 	const fps = Number.isFinite(body.fps) ? (body.fps as number) : 30;
+	const type = typeof body.type === "string" ? body.type : undefined;
 	try {
-		const outcome = await bakeRegistryBlock({ name: body.name, fps });
+		const outcome = await bakeRegistryItem({ name: body.name, fps, type });
 		const bytes = await readFile(outcome.videoPath);
 		return new NextResponse(new Uint8Array(bytes), {
 			headers: {

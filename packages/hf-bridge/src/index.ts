@@ -54,6 +54,7 @@ export {
 	type AuthoredComposition,
 } from "./author-composition";
 export {
+	bakeRegistryItem,
 	bakeRegistryBlock,
 	bakedRoot,
 	type BakeJob,

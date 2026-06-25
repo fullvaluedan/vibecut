@@ -25,9 +25,12 @@ export interface BakeResult {
 export async function bakeAndPlaceBlock({
 	editor,
 	name,
+	type,
 }: {
 	editor: EditorCore;
 	name: string;
+	/** Registry item type (e.g. "hyperframes:example"); defaults to a block. */
+	type?: string;
 }): Promise<BakeResult> {
 	const project = editor.project.getActive();
 	const projectId = project.metadata.id;
@@ -36,7 +39,7 @@ export async function bakeAndPlaceBlock({
 	const res = await fetch("/api/hyperframes/bake", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ name, fps }),
+		body: JSON.stringify({ name, fps, type }),
 	});
 	if (!res.ok) {
 		const err = (await res.json().catch(() => null)) as { error?: string } | null;
