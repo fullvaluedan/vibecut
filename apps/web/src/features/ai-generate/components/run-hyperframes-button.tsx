@@ -25,6 +25,8 @@ import {
 	runHyperframesVariants,
 } from "@/features/ai-generate/run-hyperframes-scoped";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
+import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
+import { resolveHfRunEngine } from "@/features/ai-generate/run-engine";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import {
 	VariantPickerDialog,
@@ -37,7 +39,9 @@ export function RunHyperframesButton() {
 	const abortRef = useRef<AbortController | null>(null);
 	const engine = useAiSettingsStore((s) => s.hfEngine);
 	const isRunning =
-		progress !== null && progress.stage !== "done" && progress.stage !== "error";
+		progress !== null &&
+		progress.stage !== "done" &&
+		progress.stage !== "error";
 
 	const handleRun = async () => {
 		if (isRunning) return;
@@ -53,7 +57,27 @@ export function RunHyperframesButton() {
 					p.progress != null ? ` (${Math.round(p.progress * 100)}%)` : "";
 				logRun(`${p.stage}: ${p.detail}${pct}`);
 			};
-			const engine = useAiSettingsStore.getState().hfEngine;
+			const { hfEngine, disabledTemplateIds, hfDirection, promptHfAssets } =
+				useAiSettingsStore.getState();
+			const allowedTemplateCount = describeTemplateCatalog().filter(
+				(t) => !disabledTemplateIds.includes(t.id),
+			).length;
+			const decision = resolveHfRunEngine({
+				engine: hfEngine,
+				allowedTemplateCount,
+				hasDirection: hfDirection.trim().length > 0,
+				pickedAssetCount: promptHfAssets.length,
+			});
+			if ("error" in decision) {
+				throw new Error(decision.error);
+			}
+			if (decision.fellBackToAuthored) {
+				logRun(
+					"No template checked: using the Authored engine to render your style/picks (in-browser, slower than native).",
+					"warn",
+				);
+			}
+			const engine = decision.engine;
 			const result =
 				engine === "authored"
 					? await runHyperframesWholeTimeline({
@@ -137,7 +161,9 @@ export function RunHyperframesButton() {
 				signal: controller.signal,
 			});
 			useVariantPickerStore.getState().open(versions);
-			toast.success(`${versions.length} version${versions.length === 1 ? "" : "s"} ready — pick one`);
+			toast.success(
+				`${versions.length} version${versions.length === 1 ? "" : "s"} ready — pick one`,
+			);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			if (message === "Cancelled" || abortRef.current?.signal.aborted) {
@@ -209,43 +235,43 @@ export function RunHyperframesButton() {
 
 	return (
 		<div className="flex items-center gap-1">
-		<TooltipProvider delayDuration={300}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						variant="default"
-						size="sm"
-						disabled={isRunning}
-						onClick={handleRun}
-						className={cn(
-							"relative gap-1.5 overflow-hidden rounded-sm font-semibold",
-							isRunning && "opacity-90",
+			<TooltipProvider delayDuration={300}>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="default"
+							size="sm"
+							disabled={isRunning}
+							onClick={handleRun}
+							className={cn(
+								"relative gap-1.5 overflow-hidden rounded-sm font-semibold",
+								isRunning && "opacity-90",
+							)}
+						>
+							{isRunning && (
+								<span
+									className="absolute inset-y-0 left-0 bg-foreground/15 transition-[width] duration-300"
+									style={{ width: `${percent}%` }}
+								/>
+							)}
+							<HugeiconsIcon icon={MagicWand05Icon} size={14} />
+							{isRunning && stageLabel
+								? `${stageLabel}... ${percent}%`
+								: "RUN HYPERFRAMES"}
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent className="max-w-72">
+						{isRunning && progress ? (
+							<div className="flex w-56 flex-col gap-1.5">
+								<span className="text-xs">{progress.detail}</span>
+								<Progress value={renderProgressFraction() * 100} />
+							</div>
+						) : (
+							"Transcribe the timeline and let Claude add HyperFrames motion graphics"
 						)}
-					>
-						{isRunning && (
-							<span
-								className="absolute inset-y-0 left-0 bg-foreground/15 transition-[width] duration-300"
-								style={{ width: `${percent}%` }}
-							/>
-						)}
-						<HugeiconsIcon icon={MagicWand05Icon} size={14} />
-						{isRunning && stageLabel
-							? `${stageLabel}... ${percent}%`
-							: "RUN HYPERFRAMES"}
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent className="max-w-72">
-					{isRunning && progress ? (
-						<div className="flex w-56 flex-col gap-1.5">
-							<span className="text-xs">{progress.detail}</span>
-							<Progress value={renderProgressFraction() * 100} />
-						</div>
-					) : (
-						"Transcribe the timeline and let Claude add HyperFrames motion graphics"
-					)}
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
+					</TooltipContent>
+				</Tooltip>
+			</TooltipProvider>
 			{isRunning && (
 				<Button
 					variant="destructive"

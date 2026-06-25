@@ -20,7 +20,10 @@ import {
 	mediaTimeFromSeconds,
 } from "@/wasm";
 import { generateUUID } from "@/utils/id";
-import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
+import {
+	buildAiAuthHeaders,
+	useAiSettingsStore,
+} from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
 import { buildAiLanes, claimLane } from "@/features/ai-generate/placement";
@@ -136,10 +139,13 @@ export async function runHyperframes({
 		.filter((id) => !disabledTemplateIds.includes(id));
 	if (!allowedTemplateIds.length) {
 		throw new Error(
-			"All templates are unchecked in the HyperFrames panel — check at least one.",
+			"Check at least one template, or pick a style/asset and let the Authored engine use it.",
 		);
 	}
-	onProgress({ stage: "planning", detail: "Claude is planning your effects..." });
+	onProgress({
+		stage: "planning",
+		detail: "Claude is planning your effects...",
+	});
 	const activeLook = getStyleById(useAiSettingsStore.getState().styleId);
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
@@ -156,7 +162,9 @@ export async function runHyperframes({
 		}),
 	});
 	if (!planRes.ok) {
-		const err = (await planRes.json().catch(() => null)) as { error?: string } | null;
+		const err = (await planRes.json().catch(() => null)) as {
+			error?: string;
+		} | null;
 		throw new Error(err?.error ?? `Planning failed (${planRes.status})`);
 	}
 	const plan = (await planRes.json().catch(() => null)) as {
@@ -173,7 +181,13 @@ export async function runHyperframes({
 		useAiSettingsStore.getState().addTokensUsed(tokensUsed);
 	}
 	if (!plan.items.length) {
-		throw new Error("Claude found no moments that need an effect. Try longer footage.");
+		// An empty plan is NOT a "too short" problem (it fires on long clips too):
+		// the planner returned nothing for a too-rough transcript (analysis uses the
+		// fast low-accuracy model), an over-narrow template selection, or genuinely no
+		// fitting moment. Say what to try, honestly.
+		throw new Error(
+			"The planner didn't mark any moments with the templates you allowed. Try checking more templates, adding a Direction (tell it what you want), or raising transcription accuracy: on a long clip a rough transcript can hide moments.",
+		);
 	}
 
 	// 3. Render each effect locally, then place all clips in one batch.
