@@ -17,6 +17,8 @@ export interface RegistryAsset {
 	/** Registry tags (e.g. "transition", "shader", "data") — used to route each
 	 *  asset to the right mechanism (overlay-droppable vs transition vs effect). */
 	tags: string[];
+	/** True when the item has a composition file, so it can bake to a droppable clip. */
+	renderable: boolean;
 }
 
 let cache: { at: number; items: RegistryAsset[] } | null = null;
@@ -31,7 +33,10 @@ async function fetchJson(url: string): Promise<unknown | null> {
 	}
 }
 
-async function enrich(item: { name: string; type: string }): Promise<RegistryAsset> {
+async function enrich(item: {
+	name: string;
+	type: string;
+}): Promise<RegistryAsset> {
 	const kind = item.type.split(":")[1] ?? item.type;
 	const detail = (await fetchJson(
 		`${REGISTRY_BASE}/${kind}s/${item.name}/registry-item.json`,
@@ -40,6 +45,7 @@ async function enrich(item: { name: string; type: string }): Promise<RegistryAss
 		description?: string;
 		duration?: number;
 		tags?: string[];
+		files?: { type?: string }[];
 		preview?: { video?: string; poster?: string };
 	} | null;
 	return {
@@ -51,6 +57,9 @@ async function enrich(item: { name: string; type: string }): Promise<RegistryAss
 		previewPoster: detail?.preview?.poster ?? null,
 		durationSec: detail?.duration ?? null,
 		tags: Array.isArray(detail?.tags) ? detail.tags : [],
+		renderable: Array.isArray(detail?.files)
+			? detail.files.some((f) => f?.type === "hyperframes:composition")
+			: false,
 	};
 }
 

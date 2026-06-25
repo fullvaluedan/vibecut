@@ -44,6 +44,8 @@ interface RegistryAsset {
 	previewPoster: string | null;
 	durationSec: number | null;
 	tags?: string[];
+	/** True when the item has a composition file (can bake to a droppable clip). */
+	renderable?: boolean;
 }
 
 /**
@@ -232,9 +234,7 @@ function Preview({
 			<video
 				src={item.previewVideo}
 				poster={
-					item.previewPoster && !posterFailed
-						? item.previewPoster
-						: undefined
+					item.previewPoster && !posterFailed ? item.previewPoster : undefined
 				}
 				className={cn(base, "object-cover")}
 				autoPlay
@@ -274,8 +274,7 @@ function Preview({
 	}
 	// No hosted preview (e.g. the example styles): a deterministic gradient
 	// tile from the asset name, so nothing reads as broken or missing.
-	const hue =
-		[...item.id].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
+	const hue = [...item.id].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
 	return (
 		<div
 			className={cn(base, "flex items-center justify-center")}
@@ -687,14 +686,22 @@ export function HyperframesPanel() {
 
 	const editor = useEditor();
 	const [bakingName, setBakingName] = useState<string | null>(null);
-	const addBlock = async (name: string, title: string) => {
+	const addBlock = async ({
+		name,
+		title,
+		type,
+	}: {
+		name: string;
+		title: string;
+		type: string;
+	}) => {
 		setBakingName(name);
 		const toastId = toast.loading(`Baking ${title}...`, {
 			description:
 				"First bake renders once on your computer (~10-30s), then it's instant.",
 		});
 		try {
-			const result = await bakeAndPlaceBlock({ editor, name });
+			const result = await bakeAndPlaceBlock({ editor, name, type });
 			toast.success(`Added ${result.title}`, {
 				id: toastId,
 				description: result.cached
@@ -702,7 +709,7 @@ export function HyperframesPanel() {
 					: "Baked once and cached — next time is instant.",
 			});
 		} catch (e) {
-			toast.error("Could not add block", {
+			toast.error("Could not add asset", {
 				id: toastId,
 				description: e instanceof Error ? e.message : String(e),
 			});
@@ -761,11 +768,13 @@ export function HyperframesPanel() {
 				previewPoster:
 					a.previewPoster ??
 					(kind === "example" ? `/hf-demos/styles/${a.name}.png` : null),
-				// Only OVERLAY-SAFE blocks (graphics/cards, not transitions) get an
-				// Add — transitions bake to a self-demo, not a usable overlay.
-				...(kind === "block" && !isTransitionBlock(a)
+				// Any renderable, non-transition item (block, full-frame example, or
+				// composition-bearing component) gets an Add — it bakes to a droppable
+				// clip. Transitions still need a between-clips slot, so they get none.
+				...(a.renderable && !isTransitionBlock(a)
 					? {
-							onAdd: () => void addBlock(a.name, a.title),
+							onAdd: () =>
+								void addBlock({ name: a.name, title: a.title, type: a.type }),
 							adding: bakingName === a.name,
 						}
 					: {}),
@@ -830,7 +839,7 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Styles"
-					subtitle="looks — apply to your whole edit (coming soon)"
+					subtitle="full-frame layouts; Add drops one on the timeline"
 					items={registryItems("example")}
 					view={view}
 					onSetAll={(enabled) =>
@@ -868,7 +877,7 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Components"
-					subtitle="captions & effects — not droppable yet"
+					subtitle="caption & effect graphics; Add drops one on the timeline"
 					items={registryItems("component")}
 					view={view}
 					onSetAll={(enabled) =>
@@ -879,7 +888,9 @@ export function HyperframesPanel() {
 					}
 				/>
 				{registryError && (
-					<p className="text-muted-foreground text-[0.65rem]">{registryError}</p>
+					<p className="text-muted-foreground text-[0.65rem]">
+						{registryError}
+					</p>
 				)}
 
 				<div className="pt-2">
@@ -909,10 +920,12 @@ export function HyperframesPanel() {
 						))}
 					</div>
 					<p className="text-muted-foreground mt-1.5 text-[0.65rem]">
-						<span className="text-foreground">{getStyleById(styleId).name}</span>
+						<span className="text-foreground">
+							{getStyleById(styleId).name}
+						</span>
 						{" — "}
-						{getStyleById(styleId).fontFamily} type + accent.
-						Sets every template&apos;s font + color and biases RUN HYPERFRAMES.
+						{getStyleById(styleId).fontFamily} type + accent. Sets every
+						template&apos;s font + color and biases RUN HYPERFRAMES.
 					</p>
 				</div>
 
@@ -929,12 +942,11 @@ export function HyperframesPanel() {
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
 					Checked templates are the palette RUN HYPERFRAMES picks from today.
-					<span className="text-foreground"> Blocks</span> (graphics & cards) bake
-					once on your computer and drop straight onto the timeline (cached after
-					the first render). Transitions, styles, and components can&apos;t be
-					dropped yet — transitions need a between-clips slot, styles apply as a
-					whole look, and components are caption/effect layers. Claude usage on
-					this device: ~{tokensUsedTotal.toLocaleString()} tokens.
+					<span className="text-foreground"> Add</span> bakes a block, style, or
+					component once on your computer and drops it on the timeline (cached
+					after the first render). Transitions still need a between-clips slot,
+					so they can&apos;t be dropped yet. Claude usage on this device: ~
+					{tokensUsedTotal.toLocaleString()} tokens.
 				</p>
 			</div>
 		</PanelView>
