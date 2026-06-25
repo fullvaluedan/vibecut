@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HF_TEMPLATES, renderTemplateJob, bakeRegistryBlock } from "../src/index.ts";
+import { HF_TEMPLATES, renderTemplateJob, bakeRegistryItem } from "../src/index.ts";
 
 type Probe = {
 	durationSec: number;
@@ -139,19 +139,39 @@ try {
 			signal: AbortSignal.timeout(15000),
 		})
 	).json();
-	const blocks = (idx.items || []).filter((i: any) => i.type === "hyperframes:block").slice(0, 4);
-	console.log(`=== bakes: ${blocks.length} registry blocks ===`);
-	for (const b of blocks) {
-		const id = `bake · ${b.name}`;
+	const byType = (t: string, n: number) =>
+		(idx.items || []).filter((i: any) => i.type === t).slice(0, n);
+	// Cover all three droppable kinds: block, full-frame example, component.
+	const toBake = [
+		...byType("hyperframes:block", 3),
+		...byType("hyperframes:example", 1),
+		...byType("hyperframes:component", 1),
+	];
+	console.log(
+		`=== bakes: ${toBake.length} registry items (block / example / component) ===`,
+	);
+	for (const b of toBake) {
+		const id = `bake · ${b.type.split(":")[1]} · ${b.name}`;
 		const t0 = Date.now();
 		try {
-			const { videoPath } = await bakeRegistryBlock({ name: b.name, fps: 30 });
+			const { videoPath } = await bakeRegistryItem({
+				name: b.name,
+				type: b.type,
+				fps: 30,
+			});
 			const probe = ffprobe(videoPath);
 			const ok =
 				!!probe && probe.sizeBytes > 2048 && !!probe.codec && Number.isFinite(probe.durationSec) && probe.durationSec > 0.2;
 			record(id, "bake", ok, Date.now() - t0, { probe });
 		} catch (e: any) {
-			record(id, "bake", false, Date.now() - t0, { error: String(e?.message || e).slice(0, 300) });
+			const msg = String(e?.message || e);
+			// A snippet-only component legitimately has no standalone composition —
+			// log + skip, don't count it as a render failure.
+			if (/no composition file/.test(msg)) {
+				console.log(`bake skipped (${b.name}): snippet-only, no composition`);
+				continue;
+			}
+			record(id, "bake", false, Date.now() - t0, { error: msg.slice(0, 300) });
 		}
 	}
 } catch (e: any) {
