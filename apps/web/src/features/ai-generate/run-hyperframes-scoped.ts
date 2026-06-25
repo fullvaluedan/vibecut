@@ -107,6 +107,7 @@ const MAX_REFERENCE_COMPS = 3;
  */
 async function fetchReferenceCompositions(
 	picks: HfSelectionAsset[],
+	signal?: AbortSignal,
 ): Promise<{ name: string; title: string; html: string }[]> {
 	const want = picks.slice(0, MAX_REFERENCE_COMPS);
 	const fetched = await Promise.all(
@@ -116,6 +117,7 @@ async function fetchReferenceCompositions(
 					method: "POST",
 					headers: { "content-type": "application/json" },
 					body: JSON.stringify({ name: p.name, type: `hyperframes:${p.kind}` }),
+					signal,
 				});
 				if (!res.ok) return null;
 				const data = (await res.json()) as { title?: string; html?: string };
@@ -244,8 +246,10 @@ export async function runHyperframesOnClip({
 			controller.signal,
 		);
 		const registrySelections = await pickedRegistrySelections();
-		const referenceCompositions =
-			await fetchReferenceCompositions(registrySelections);
+		const referenceCompositions = await fetchReferenceCompositions(
+			registrySelections,
+			controller.signal,
+		);
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
 			referenceCompositions,
@@ -371,8 +375,10 @@ async function buildSharedInputs({
 	await gatherClipTranscript(editor, 0, totalSec, signal);
 	const segments = getCachedTranscript(editor) ?? [];
 	const registrySelections = await pickedRegistrySelections();
-	const referenceCompositions =
-		await fetchReferenceCompositions(registrySelections);
+	const referenceCompositions = await fetchReferenceCompositions(
+		registrySelections,
+		signal,
+	);
 	const { styleId, hfDirection } = useAiSettingsStore.getState();
 	const look = getStyleById(styleId);
 	return {

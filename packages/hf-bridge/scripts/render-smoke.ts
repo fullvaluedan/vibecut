@@ -141,15 +141,11 @@ try {
 	).json();
 	const byType = (t: string, n: number) =>
 		(idx.items || []).filter((i: any) => i.type === t).slice(0, n);
-	// Cover all three droppable kinds: block, full-frame example, component.
-	const toBake = [
-		...byType("hyperframes:block", 3),
-		...byType("hyperframes:example", 1),
-		...byType("hyperframes:component", 1),
-	];
-	console.log(
-		`=== bakes: ${toBake.length} registry items (block / example / component) ===`,
-	);
+	// Only BLOCKS bake to a standalone droppable clip. Examples are whole-video
+	// templates (sub-comps + a __VIDEO_SRC__ placeholder) and components are
+	// snippets — neither renders standalone, so the bake smoke covers blocks.
+	const toBake = byType("hyperframes:block", 4);
+	console.log(`=== bakes: ${toBake.length} registry blocks ===`);
 	for (const b of toBake) {
 		const id = `bake · ${b.type.split(":")[1]} · ${b.name}`;
 		const t0 = Date.now();

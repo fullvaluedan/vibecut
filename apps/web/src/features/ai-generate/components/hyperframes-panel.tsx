@@ -839,7 +839,7 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Styles"
-					subtitle="full-frame layouts; Add drops one on the timeline"
+					subtitle="whole-video looks; pick (☆) + RUN HYPERFRAMES to restyle"
 					items={registryItems("example")}
 					view={view}
 					onSetAll={(enabled) =>
@@ -877,7 +877,7 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Components"
-					subtitle="caption & effect graphics; Add drops one on the timeline"
+					subtitle="caption & effect snippets; named in the RUN HYPERFRAMES brief"
 					items={registryItems("component")}
 					view={view}
 					onSetAll={(enabled) =>
@@ -942,10 +942,11 @@ export function HyperframesPanel() {
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
 					Checked templates are the palette RUN HYPERFRAMES picks from today.
-					<span className="text-foreground"> Add</span> bakes a block, style, or
-					component once on your computer and drops it on the timeline (cached
-					after the first render). Transitions still need a between-clips slot,
-					so they can&apos;t be dropped yet. Claude usage on this device: ~
+					<span className="text-foreground"> Add</span> bakes a block once on
+					your computer and drops it on the timeline (cached after the first
+					render). Styles are whole-video looks: pick one (☆) and RUN
+					HYPERFRAMES adapts it over your footage. Components and transitions
+					aren&apos;t droppable. Claude usage on this device: ~
 					{tokensUsedTotal.toLocaleString()} tokens.
 				</p>
 			</div>

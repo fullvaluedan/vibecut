@@ -53,6 +53,22 @@ describe("compileHyperframesPrompt — reference compositions", () => {
 		expect(out).toContain("truncated");
 		expect(out).not.toContain("x".repeat(20000));
 	});
+
+	test("embeds multiple reference compositions in order", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				referenceCompositions: [
+					{ name: "a", title: "Alpha", html: "AAA" },
+					{ name: "b", title: "Beta", html: "BBB" },
+				],
+			}),
+		);
+		expect(out).toContain("--- Alpha (a) ---");
+		expect(out).toContain("--- Beta (b) ---");
+		expect(out.indexOf("Alpha")).toBeLessThan(out.indexOf("Beta"));
+		expect(out).toContain("AAA");
+		expect(out).toContain("BBB");
+	});
 });
 
 describe("compileHyperframesPrompt — learned preferences", () => {

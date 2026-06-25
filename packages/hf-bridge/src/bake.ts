@@ -69,16 +69,20 @@ export async function bakeRegistryItem(job: BakeJob): Promise<BakeOutcome> {
 	const dir = registryKindDir(type);
 
 	const { compFile, compHtml, files, title, width, height, durationSec } =
-		await fetchRegistryComposition({ name: job.name, type, registryBase: base });
+		await fetchRegistryComposition({
+			name: job.name,
+			type,
+			registryBase: base,
+		});
 	if (!compFile) {
 		throw new Error(
-			`"${job.name}" has no composition file to render — it cannot be baked standalone.`,
+			`"${job.name}" has no composition file to render. It cannot be baked standalone.`,
 		);
 	}
 
 	const hash = createHash("sha256")
 		.update(compHtml)
-		.update(`|${width}x${height}@${fps}`)
+		.update(`|${width}x${height}@${fps}|${type}`)
 		.digest("hex")
 		.slice(0, 16);
 	const bakeKey = `${job.name}-${width}x${height}-${fps}-${hash}`;
@@ -108,7 +112,15 @@ export async function bakeRegistryItem(job: BakeJob): Promise<BakeOutcome> {
 				await fetchOk(`${base}/${dir}/${job.name}/${f.path}`)
 			).arrayBuffer(),
 		);
-		const target = path.join(compDir, f.target ?? f.path);
+		// The registry-supplied target/path is untrusted — contain it inside the
+		// bake dir so a crafted entry can't write attacker bytes elsewhere on disk.
+		const target = path.resolve(compDir, f.target ?? f.path);
+		const root = path.resolve(compDir);
+		if (target !== root && !target.startsWith(root + path.sep)) {
+			throw new Error(
+				`Refusing to write a registry file outside the bake dir: ${f.target ?? f.path}`,
+			);
+		}
 		await mkdir(path.dirname(target), { recursive: true });
 		await writeFile(target, buf);
 	}

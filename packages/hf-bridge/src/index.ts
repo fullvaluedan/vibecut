@@ -1,5 +1,9 @@
 ﻿export * from "./types";
-export { HF_TEMPLATES, getTemplate, describeTemplateCatalog } from "./templates/index";
+export {
+	HF_TEMPLATES,
+	getTemplate,
+	describeTemplateCatalog,
+} from "./templates/index";
 export {
 	planEffects,
 	planRepeatCuts,
@@ -63,6 +67,9 @@ export {
 export {
 	fetchRegistryComposition,
 	registryKindDir,
+	isValidRegistryName,
+	isValidRegistryType,
+	KNOWN_REGISTRY_KINDS,
 	type RegistryComposition,
 	type RegistryItemMeta,
 	type RegistryCompositionFile,

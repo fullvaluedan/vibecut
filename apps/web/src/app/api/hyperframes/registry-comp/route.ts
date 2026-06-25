@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchRegistryComposition } from "@framecut/hf-bridge";
+import {
+	fetchRegistryComposition,
+	isValidRegistryName,
+	isValidRegistryType,
+} from "@framecut/hf-bridge";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 /**
  * Returns a single registry item's REAL composition HTML (server-side fetch, so
@@ -17,12 +22,20 @@ export async function POST(req: NextRequest) {
 	) {
 		return NextResponse.json({ error: "Missing name/type" }, { status: 400 });
 	}
+	if (!isValidRegistryName(body.name) || !isValidRegistryType(body.type)) {
+		return NextResponse.json({ error: "Invalid name/type" }, { status: 400 });
+	}
 	try {
-		const { compHtml, title } = await fetchRegistryComposition({
+		const { compHtml, title, compFile } = await fetchRegistryComposition({
 			name: body.name,
 			type: body.type,
 		});
-		return NextResponse.json({ name: body.name, title, html: compHtml });
+		return NextResponse.json({
+			name: body.name,
+			title,
+			html: compHtml,
+			renderable: compFile !== null,
+		});
 	} catch (e) {
 		return NextResponse.json(
 			{ error: e instanceof Error ? e.message : String(e) },

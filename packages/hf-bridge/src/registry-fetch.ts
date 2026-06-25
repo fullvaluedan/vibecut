@@ -11,6 +11,27 @@
 const REGISTRY_BASE =
 	"https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
 
+/** Registry item kinds VibeCut understands (drives the `${kind}s/` directory). */
+export const KNOWN_REGISTRY_KINDS = ["block", "example", "component"] as const;
+
+/**
+ * A registry item name must be a simple slug. Rejecting anything else stops a
+ * crafted name (e.g. "../", an absolute path, URL injection) from traversing the
+ * fetch URL path OR the bake directory it is later interpolated into.
+ */
+export function isValidRegistryName(name: string): boolean {
+	return /^[a-z0-9][a-z0-9-]*$/i.test(name);
+}
+
+/** A type must be `hyperframes:<known-kind>` so the fetched `${kind}s/` dir is bounded. */
+export function isValidRegistryType(type: string): boolean {
+	const kind = type.split(":")[1] ?? "";
+	return (
+		type.startsWith("hyperframes:") &&
+		(KNOWN_REGISTRY_KINDS as readonly string[]).includes(kind)
+	);
+}
+
 export interface RegistryCompositionFile {
 	path: string;
 	target?: string;
@@ -71,6 +92,12 @@ export async function fetchRegistryComposition({
 	type: string;
 	registryBase?: string;
 }): Promise<RegistryComposition> {
+	if (!isValidRegistryName(name)) {
+		throw new Error(`Invalid registry item name: ${JSON.stringify(name)}`);
+	}
+	if (!isValidRegistryType(type)) {
+		throw new Error(`Invalid registry item type: ${JSON.stringify(type)}`);
+	}
 	const dir = registryKindDir(type);
 	const item = (await (
 		await fetchOk(`${registryBase}/${dir}/${name}/registry-item.json`)

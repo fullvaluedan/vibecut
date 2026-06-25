@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
-import { bakeRegistryItem } from "@framecut/hf-bridge";
+import {
+	bakeRegistryItem,
+	isValidRegistryName,
+	isValidRegistryType,
+} from "@framecut/hf-bridge";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -21,6 +25,12 @@ export async function POST(req: NextRequest) {
 	}
 	const fps = Number.isFinite(body.fps) ? (body.fps as number) : 30;
 	const type = typeof body.type === "string" ? body.type : undefined;
+	if (!isValidRegistryName(body.name)) {
+		return NextResponse.json({ error: "Invalid asset name" }, { status: 400 });
+	}
+	if (type !== undefined && !isValidRegistryType(type)) {
+		return NextResponse.json({ error: "Invalid asset type" }, { status: 400 });
+	}
 	try {
 		const outcome = await bakeRegistryItem({ name: body.name, fps, type });
 		const bytes = await readFile(outcome.videoPath);

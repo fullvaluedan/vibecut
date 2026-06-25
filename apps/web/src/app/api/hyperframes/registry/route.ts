@@ -57,9 +57,14 @@ async function enrich(item: {
 		previewPoster: detail?.preview?.poster ?? null,
 		durationSec: detail?.duration ?? null,
 		tags: Array.isArray(detail?.tags) ? detail.tags : [],
-		renderable: Array.isArray(detail?.files)
-			? detail.files.some((f) => f?.type === "hyperframes:composition")
-			: false,
+		// Bakeable to a droppable clip = has a composition file AND is not a whole-
+		// video example. Examples reference sub-compositions + a video placeholder,
+		// so they cannot render standalone (verified) — they are used via RUN
+		// HYPERFRAMES instead. Components are snippets with no composition file.
+		renderable:
+			item.type !== "hyperframes:example" &&
+			Array.isArray(detail?.files) &&
+			detail.files.some((f) => f?.type === "hyperframes:composition"),
 	};
 }
 

@@ -115,4 +115,24 @@ describe("fetchRegistryComposition", () => {
 			}),
 		).rejects.toThrow(/Could not fetch/);
 	});
+
+	it("rejects a traversal name before fetching", async () => {
+		await expect(
+			fetchRegistryComposition({
+				name: "../../etc",
+				type: "hyperframes:block",
+				registryBase: BASE,
+			}),
+		).rejects.toThrow(/Invalid registry item name/);
+	});
+
+	it("rejects an unknown type", async () => {
+		await expect(
+			fetchRegistryComposition({
+				name: "ok",
+				type: "hyperframes:evil",
+				registryBase: BASE,
+			}),
+		).rejects.toThrow(/Invalid registry item type/);
+	});
 });
