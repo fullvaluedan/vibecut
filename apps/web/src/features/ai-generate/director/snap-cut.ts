@@ -16,9 +16,12 @@
 import type { DirectorOp } from "@framecut/hf-bridge";
 import { ENERGY_WINDOW_SEC } from "./audio-features";
 
-/** How far (seconds) on each side of a boundary to look for a quieter point. Small
- * so a cut never jumps into a different word — just to the adjacent inter-word gap. */
-export const DEFAULT_SNAP_SEARCH_SEC = 0.1;
+/** How far (seconds) on each side of a boundary to look for a quieter point. At
+ * 0.1s a cut landing mid-phrase couldn't reach the real inter-sentence pause, so the
+ * join still sounded abrupt; 0.25s reaches a natural breath/pause while the
+ * quietest-window pick still lands in a gap, not a different word. (A short audio
+ * crossfade at the join is the complete fix for back-to-back joins with no pause.) */
+export const DEFAULT_SNAP_SEARCH_SEC = 0.25;
 
 const isRemoval = (op: DirectorOp): boolean => op.op === "cut" || op.op === "take_select";
 
