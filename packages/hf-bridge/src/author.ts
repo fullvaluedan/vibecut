@@ -185,6 +185,40 @@ function planViaClaudeCode(
 		child.stderr.on("data", (d) => (err += d.toString()));
 		child.on("error", reject);
 		child.on("close", (code) => {
+			// claude-code `--output-format json` reports API/auth errors in the STDOUT
+			// JSON (`is_error` / `api_error_status` / `result`) — typically with a
+			// NON-zero exit and EMPTY stderr. Parse stdout FIRST so we surface the real
+			// reason (e.g. a 401 auth failure) instead of a bare "exited 1:".
+			let wrapper: {
+				result?: string;
+				is_error?: boolean;
+				api_error_status?: number;
+				usage?: { input_tokens?: number; output_tokens?: number };
+			} | null = null;
+			try {
+				wrapper = JSON.parse(out);
+			} catch {
+				wrapper = null;
+			}
+
+			if (wrapper?.is_error === true) {
+				const status = wrapper.api_error_status;
+				const detail =
+					typeof wrapper.result === "string"
+						? wrapper.result
+						: `claude CLI error (exit ${code})`;
+				const authHint =
+					status === 401 || /authenticat|invalid auth|credential/i.test(detail)
+						? " — the claude CLI is not signed in. Run `claude setup-token` (or `claude` then /login) in a terminal, or switch Settings → AI to an Anthropic API key."
+						: "";
+				reject(
+					new Error(
+						`Claude planning failed${status ? ` (API ${status})` : ""}: ${detail}${authHint}`,
+					),
+				);
+				return;
+			}
+
 			if (code !== 0) {
 				// A wiped/missing CLI binary surfaces as "not recognized"/ENOENT — point
 				// at the escape hatch rather than a cryptic shell error.
@@ -194,13 +228,11 @@ function planViaClaudeCode(
 				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}${hint}`));
 				return;
 			}
+
 			try {
-				const wrapper = JSON.parse(out) as {
-					result?: string;
-					usage?: { input_tokens?: number; output_tokens?: number };
-				};
-				const text = typeof wrapper.result === "string" ? wrapper.result : out;
-				const usage = normalizeAnthropicUsage(wrapper.usage);
+				const text =
+					typeof wrapper?.result === "string" ? wrapper.result : out;
+				const usage = normalizeAnthropicUsage(wrapper?.usage);
 				resolve({ raw: extractJson(text), usage });
 			} catch (e) {
 				reject(new Error(`Could not parse claude CLI output: ${String(e)}`));

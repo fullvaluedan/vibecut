@@ -196,11 +196,19 @@ function authorViaClaudeCode(
 			settled = true;
 			cleanup();
 			if (code !== 0) {
+				// Text-mode `claude -p` prints an API/auth failure (e.g. 401) to STDOUT
+				// and exits non-zero with EMPTY stderr — surface that reason, not a bare
+				// "exited 1:". (The Director's JSON path parses this from is_error.)
+				const authFail = /401|invalid auth|authenticat|credential/i.test(
+					`${out}\n${err}`,
+				);
 				reject(
 					new Error(
 						code === 127 || CLI_MISSING.test(err)
 							? CLI_MISSING_HELP
-							: `claude CLI exited ${code}: ${err.slice(0, 800)}`,
+							: authFail
+								? `Claude authoring failed (auth): the claude CLI is not signed in. Run \`claude setup-token\` (or \`claude\` then /login) in a terminal, or switch Settings → AI to an Anthropic API key.`
+								: `claude CLI exited ${code}: ${err.slice(0, 800)}`,
 					),
 				);
 				return;
