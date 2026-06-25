@@ -21,6 +21,7 @@ import {
 	UpdateElementsCommand,
 } from "@/commands/timeline";
 import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
+import { buildSeparatedVideoAudioPair } from "@/timeline/audio-separation";
 import { canElementGoOnTrack } from "@/timeline/placement/compatibility";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
@@ -533,6 +534,18 @@ export class DragDropController {
 		// after the first see the prior clip there and spawn a fresh track.
 		const commands: Command[] = [];
 		const trackForType = new Map<TrackType, string>();
+		// All separated source-audio from this drop packs onto ONE shared audio track
+		// (created once, reused) so N videos never explode into N audio tracks — the
+		// reason the per-asset toggle was dropped from this path. Lazy, so a drop with
+		// no separable video adds no empty audio track.
+		let separatedAudioTrackId: string | null = null;
+		const ensureSeparatedAudioTrack = (): string => {
+			if (separatedAudioTrackId) return separatedAudioTrackId;
+			const addAudioTrack = new AddTrackCommand({ type: "audio" });
+			separatedAudioTrackId = addAudioTrack.getTrackId();
+			commands.push(addAudioTrack);
+			return separatedAudioTrackId;
+		};
 		const baseStart = target.xPosition;
 		let cascadeOffsetTicks = 0;
 		for (const id of ids) {
@@ -550,61 +563,67 @@ export class DragDropController {
 				startTime,
 			});
 
-			const reuseTrackId = trackForType.get(trackType);
-			if (reuseTrackId) {
-				commands.push(
-					new InsertElementCommand({
-						element,
-						placement: { mode: "explicit", trackId: reuseTrackId },
-					}),
-				);
-				cascadeOffsetTicks += duration;
-				continue;
+			// Premiere-style audio separation (parity with the single-asset + "+"
+			// paths): a video's source audio is split onto the shared audio track,
+			// linked to the (pre-marked) video — all within this one batch, so the
+			// drop stays a single undo. Regression restored from the one-undo refactor.
+			const pair =
+				element.type === "video"
+					? buildSeparatedVideoAudioPair({ videoElement: element, mediaAsset })
+					: null;
+			const elementToInsert = pair ? pair.video : element;
+
+			// Resolve the track for this type ONCE (reuse, or create at the cascaded
+			// slot so a free main track is reused rather than a new one spawned).
+			let trackId = trackForType.get(trackType) ?? null;
+			if (!trackId) {
+				const assetTarget = coords
+					? computeDropTarget({
+							elementType: mediaAsset.type,
+							mouseX: coords.mouseX,
+							mouseY: coords.mouseY,
+							tracks: this.config.getSceneTracks(),
+							playheadTime: this.config.getCurrentPlayheadTime(),
+							isExternalDrop: false,
+							elementDuration: duration,
+							pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
+							zoomLevel: this.config.zoomLevel,
+							startTimeOverride: startTime,
+						})
+					: { ...target, xPosition: startTime };
+				if (assetTarget.isNewTrack) {
+					const addTrackCmd = new AddTrackCommand({
+						type: trackType,
+						index: assetTarget.trackIndex,
+					});
+					trackId = addTrackCmd.getTrackId();
+					commands.push(addTrackCmd);
+				} else {
+					const track = orderedTracks({
+						sceneTracks: this.config.getSceneTracks(),
+					})[assetTarget.trackIndex];
+					if (!track) continue;
+					trackId = track.id;
+				}
+				trackForType.set(trackType, trackId);
 			}
 
-			// First asset of this type: resolve its track at the cascaded slot so a
-			// free main track is reused rather than a new one spawned.
-			const assetTarget = coords
-				? computeDropTarget({
-						elementType: mediaAsset.type,
-						mouseX: coords.mouseX,
-						mouseY: coords.mouseY,
-						tracks: this.config.getSceneTracks(),
-						playheadTime: this.config.getCurrentPlayheadTime(),
-						isExternalDrop: false,
-						elementDuration: duration,
-						pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
-						zoomLevel: this.config.zoomLevel,
-						startTimeOverride: startTime,
-					})
-				: { ...target, xPosition: startTime };
-
-			if (assetTarget.isNewTrack) {
-				const addTrackCmd = new AddTrackCommand({
-					type: trackType,
-					index: assetTarget.trackIndex,
-				});
-				const trackId = addTrackCmd.getTrackId();
-				commands.push(addTrackCmd);
+			commands.push(
+				new InsertElementCommand({
+					element: elementToInsert,
+					placement: { mode: "explicit", trackId },
+				}),
+			);
+			if (pair) {
 				commands.push(
 					new InsertElementCommand({
-						element,
-						placement: { mode: "explicit", trackId },
+						element: pair.audio,
+						placement: {
+							mode: "explicit",
+							trackId: ensureSeparatedAudioTrack(),
+						},
 					}),
 				);
-				trackForType.set(trackType, trackId);
-			} else {
-				const track = orderedTracks({
-					sceneTracks: this.config.getSceneTracks(),
-				})[assetTarget.trackIndex];
-				if (!track) continue;
-				commands.push(
-					new InsertElementCommand({
-						element,
-						placement: { mode: "explicit", trackId: track.id },
-					}),
-				);
-				trackForType.set(trackType, track.id);
 			}
 			cascadeOffsetTicks += duration;
 		}
