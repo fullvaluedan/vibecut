@@ -37,6 +37,7 @@ import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
 import { runWithConcurrency } from "@/features/ai-generate/concurrency";
 import {
 	planAuthorChunks,
+	planAuthorChunksOver,
 	VARIANT_CHUNK_SEC,
 	type AuthorChunk,
 } from "@/features/ai-generate/chunk-plan";
@@ -545,20 +546,34 @@ export async function runHyperframesWholeTimeline({
 	editor,
 	onProgress,
 	signal,
+	range,
 }: {
 	editor: EditorCore;
 	onProgress: (p: RunProgress) => void;
 	signal?: AbortSignal;
+	/**
+	 * When set, author graphics ONLY across this [startSec, endSec] section of the
+	 * timeline (the "Run Selected Video ONLY" mode) instead of the whole timeline.
+	 * The transcript still covers everything; only these chunks get graphics.
+	 */
+	range?: { startSec: number; endSec: number };
 }): Promise<{ placed: number; skipped: string[]; tokensUsed: number }> {
 	const totalSec = editor.timeline.getTotalDuration() / TICKS_PER_SECOND;
 	if (totalSec < 1) {
 		throw new Error("Add some footage to the timeline first.");
 	}
-	const chunks = planAuthorChunks(totalSec);
+	if (range && range.endSec - range.startSec < 1) {
+		throw new Error("Select at least ~1s of footage to run on.");
+	}
+	const chunks = range
+		? planAuthorChunksOver({ startSec: range.startSec, endSec: range.endSec })
+		: planAuthorChunks(totalSec);
 
 	useRunLogStore.getState().setOpen(true);
 	logRun(
-		`▶ RUN HYPERFRAMES — authoring graphics across the whole video (${chunks.length} segment${chunks.length === 1 ? "" : "s"})`,
+		`▶ RUN HYPERFRAMES — authoring graphics across ${
+			range ? "the selected section" : "the whole video"
+		} (${chunks.length} segment${chunks.length === 1 ? "" : "s"})`,
 	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });

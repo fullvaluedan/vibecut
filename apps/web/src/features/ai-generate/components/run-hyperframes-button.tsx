@@ -32,6 +32,39 @@ import {
 	VariantPickerDialog,
 	useVariantPickerStore,
 } from "@/features/ai-generate/components/variant-picker-dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TICKS_PER_SECOND } from "@/wasm";
+import type { EditorCore } from "@/core";
+
+/**
+ * Bounding [startSec, endSec] of the selected video clips, or null when nothing
+ * runnable is selected — drives "Run Selected Video ONLY".
+ */
+function selectedVideoRange(
+	editor: EditorCore,
+): { startSec: number; endSec: number } | null {
+	const refs = editor.selection.getSelectedElements();
+	if (!refs.length) return null;
+	const ids = new Set(refs.map((r) => r.elementId));
+	const scene = editor.scenes.getActiveScene();
+	let lo = Number.POSITIVE_INFINITY;
+	let hi = Number.NEGATIVE_INFINITY;
+	for (const track of [scene.tracks.main, ...scene.tracks.overlay]) {
+		for (const el of track.elements) {
+			if (el.type === "video" && ids.has(el.id)) {
+				lo = Math.min(lo, el.startTime);
+				hi = Math.max(hi, el.startTime + el.duration);
+			}
+		}
+	}
+	if (!Number.isFinite(lo) || hi <= lo) return null;
+	return { startSec: lo / TICKS_PER_SECOND, endSec: hi / TICKS_PER_SECOND };
+}
 
 export function RunHyperframesButton() {
 	const editor = useEditor();
@@ -43,13 +76,15 @@ export function RunHyperframesButton() {
 		progress.stage !== "done" &&
 		progress.stage !== "error";
 
-	const handleRun = async () => {
+	const handleRun = async (range?: { startSec: number; endSec: number }) => {
 		if (isRunning) return;
 		const controller = new AbortController();
 		abortRef.current = controller;
 		useAiActivityStore.getState().setBusy(true);
 		useRunLogStore.getState().setOpen(true);
-		logRun("▶ RUN HYPERFRAMES started");
+		logRun(
+			range ? "▶ RUN HYPERFRAMES — selected section" : "▶ RUN HYPERFRAMES started",
+		);
 		try {
 			const onProgress = (p: RunProgress) => {
 				setProgress(p);
@@ -57,39 +92,50 @@ export function RunHyperframesButton() {
 					p.progress != null ? ` (${Math.round(p.progress * 100)}%)` : "";
 				logRun(`${p.stage}: ${p.detail}${pct}`);
 			};
-			const { hfEngine, disabledTemplateIds, hfDirection, promptHfAssets } =
-				useAiSettingsStore.getState();
-			const allowedTemplateCount = describeTemplateCatalog().filter(
-				(t) => !disabledTemplateIds.includes(t.id),
-			).length;
-			const decision = resolveHfRunEngine({
-				engine: hfEngine,
-				allowedTemplateCount,
-				hasDirection: hfDirection.trim().length > 0,
-				pickedAssetCount: promptHfAssets.length,
-			});
-			if ("error" in decision) {
-				throw new Error(decision.error);
+			let result: { placed: number; skipped: string[]; tokensUsed: number };
+			if (range) {
+				// "Run Selected Video ONLY" — always the authored (skill) path; it
+				// supports a sub-range, the native template engine does not.
+				result = await runHyperframesWholeTimeline({
+					editor,
+					onProgress,
+					signal: controller.signal,
+					range,
+				});
+			} else {
+				const { hfEngine, disabledTemplateIds, hfDirection, promptHfAssets } =
+					useAiSettingsStore.getState();
+				const allowedTemplateCount = describeTemplateCatalog().filter(
+					(t) => !disabledTemplateIds.includes(t.id),
+				).length;
+				const decision = resolveHfRunEngine({
+					engine: hfEngine,
+					allowedTemplateCount,
+					hasDirection: hfDirection.trim().length > 0,
+					pickedAssetCount: promptHfAssets.length,
+				});
+				if ("error" in decision) {
+					throw new Error(decision.error);
+				}
+				if (decision.fellBackToAuthored) {
+					logRun(
+						"No template checked: using the Authored engine to render your style/picks (in-browser, slower than native).",
+						"warn",
+					);
+				}
+				result =
+					decision.engine === "authored"
+						? await runHyperframesWholeTimeline({
+								editor,
+								onProgress,
+								signal: controller.signal,
+							})
+						: await runHyperframes({
+								editor,
+								onProgress,
+								signal: controller.signal,
+							});
 			}
-			if (decision.fellBackToAuthored) {
-				logRun(
-					"No template checked: using the Authored engine to render your style/picks (in-browser, slower than native).",
-					"warn",
-				);
-			}
-			const engine = decision.engine;
-			const result =
-				engine === "authored"
-					? await runHyperframesWholeTimeline({
-							editor,
-							onProgress,
-							signal: controller.signal,
-						})
-					: await runHyperframes({
-							editor,
-							onProgress,
-							signal: controller.signal,
-						});
 			logRun(
 				result.placed > 0
 					? `✓ placed ${result.placed} effect(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ""}`
@@ -140,6 +186,19 @@ export function RunHyperframesButton() {
 			useAiActivityStore.getState().setBusy(false);
 			setTimeout(() => setProgress(null), 1500);
 		}
+	};
+
+	const handleRunSelected = () => {
+		if (isRunning) return;
+		const range = selectedVideoRange(editor);
+		if (!range) {
+			toast.info("Select a clip in the timeline first", {
+				description:
+					'Click a video clip (or a few), then choose "Run Selected Video ONLY".',
+			});
+			return;
+		}
+		void handleRun(range);
 	};
 
 	const handleRunVersions = async () => {
@@ -235,6 +294,7 @@ export function RunHyperframesButton() {
 
 	return (
 		<div className="flex items-center gap-1">
+			<div className="flex items-center">
 			<TooltipProvider delayDuration={300}>
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -242,9 +302,9 @@ export function RunHyperframesButton() {
 							variant="default"
 							size="sm"
 							disabled={isRunning}
-							onClick={handleRun}
+							onClick={() => handleRun()}
 							className={cn(
-								"relative gap-1.5 overflow-hidden rounded-sm font-semibold",
+								"relative gap-1.5 overflow-hidden rounded-l-sm rounded-r-none font-semibold",
 								isRunning && "opacity-90",
 							)}
 						>
@@ -272,6 +332,30 @@ export function RunHyperframesButton() {
 					</TooltipContent>
 				</Tooltip>
 			</TooltipProvider>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="default"
+						size="sm"
+						disabled={isRunning}
+						className="rounded-l-none rounded-r-sm border-l border-background/25 px-1.5"
+						title="Run options"
+					>
+						<span aria-hidden className="text-[10px] leading-none">
+							▾
+						</span>
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuItem onClick={() => handleRun()}>
+						Run Entire Timeline
+					</DropdownMenuItem>
+					<DropdownMenuItem onClick={handleRunSelected}>
+						Run Selected Video ONLY
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			</div>
 			{isRunning && (
 				<Button
 					variant="destructive"
