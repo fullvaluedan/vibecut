@@ -68,16 +68,39 @@ async function testAsset(item: { name: string; type: string }): Promise<Row> {
 		);
 		const rendered = code === 0 && existsSync(out);
 		const bytes = rendered ? statSync(out).size : 0;
+
+		// A render that emits bytes can still be BLANK: if the root is missing the
+		// contract (data-start/width/height) the runtime never starts playback and
+		// gsap.from(opacity:0) entrances stay invisible. The skill's inspect surfaces
+		// those StaticGuard violations + a timeline-registration failure, so use it
+		// as the real quality gate, not just byte count.
+		let contractOk = true;
+		let contractMsg = "";
+		if (rendered) {
+			try {
+				const ins = await runNode([cli, "inspect", "--at", "1.5", "--json"], compDir);
+				const m = ins.output.match(
+					/missing data-start|missing `data-width`|reading 'totalDuration'/i,
+				);
+				if (m) {
+					contractOk = false;
+					contractMsg = m[0];
+				}
+			} catch {
+				/* inspect is best-effort; don't fail the asset on inspect crashes */
+			}
+		}
+
 		return {
 			name: item.name,
 			kind,
-			ok: rendered && bytes > 2048,
-			stage: rendered ? undefined : "render",
+			ok: rendered && bytes > 2048 && contractOk,
+			stage: !rendered ? "render" : !contractOk ? "blank" : undefined,
 			authoredMs,
 			totalMs: Date.now() - t0,
 			bytes,
 			compDir,
-			err: rendered ? undefined : output.slice(-200),
+			err: !rendered ? output.slice(-200) : !contractOk ? contractMsg : undefined,
 		};
 	} catch (e) {
 		return {
