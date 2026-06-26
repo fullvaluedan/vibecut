@@ -66,6 +66,7 @@ export function VariantPickerDialog() {
 					compId: r.compId,
 					templateId: `authored:${r.compId ?? r.chunk.index}`,
 					name: `HyperFrames: ${r.chunk.label}`,
+					brief: r.brief,
 				})),
 			});
 			if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();

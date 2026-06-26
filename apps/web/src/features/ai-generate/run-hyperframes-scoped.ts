@@ -404,6 +404,8 @@ interface AuthoredChunkRender {
 	chunk: AuthorChunk;
 	file: File;
 	compId?: string;
+	/** The compiled prompt for this chunk — carried onto the clip for re-editing. */
+	brief?: string;
 }
 
 /** Author every chunk (bounded concurrency); local renders serialize in the bridge. */
@@ -493,6 +495,7 @@ async function authorChunks({
 			rendered.push({
 				chunk,
 				compId,
+				brief: prompt,
 				file: new File([blob], `hf-authored-${chunk.index}.webm`, {
 					type: "video/webm",
 				}),
@@ -585,6 +588,7 @@ export async function runHyperframesWholeTimeline({
 			compId: r.compId,
 			templateId: `authored:${r.compId ?? r.chunk.index}`,
 			name: `HyperFrames: ${r.chunk.label}`,
+			brief: r.brief,
 		})),
 	});
 	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
