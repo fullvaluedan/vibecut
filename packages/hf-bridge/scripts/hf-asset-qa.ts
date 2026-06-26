@@ -45,14 +45,24 @@ async function testAsset(item: { name: string; type: string }): Promise<Row> {
 	const kind = item.type.split(":")[1] ?? item.type;
 	const t0 = Date.now();
 	try {
-		const { compDir } = await authorComposition({
-			prompt: briefFor(item),
-			fps: 30,
-			width: 1920,
-			height: 1080,
-			durationSec: 3,
-			auth: { mode: "claude-code" as const },
-		});
+		const authorOnce = () =>
+			authorComposition({
+				prompt: briefFor(item),
+				fps: 30,
+				width: 1920,
+				height: 1080,
+				durationSec: 3,
+				auth: { mode: "claude-code" as const },
+			});
+		// "claude exited 1" happens transiently under concurrency (rate limit /
+		// resource contention). One retry keeps a flaky CLI call from masquerading
+		// as a real asset failure.
+		let compDir: string;
+		try {
+			({ compDir } = await authorOnce());
+		} catch {
+			({ compDir } = await authorOnce());
+		}
 		const authoredMs = Date.now() - t0;
 		const indexPath = path.join(compDir, "index.html");
 		if (!existsSync(indexPath)) {
