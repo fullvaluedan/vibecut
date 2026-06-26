@@ -144,6 +144,12 @@ export interface VideoElement extends BaseTimelineElement {
 		 * panel offers a re-bake instead of an inapplicable template swap.
 		 */
 		registryBlock?: string;
+		/**
+		 * The authoring brief (the compiled HyperFrames prompt) for a skill-authored
+		 * clip. Lets the properties panel show an editable prompt and regenerate the
+		 * graphic through the skill with the user's edits. Set on `authored:*` clips.
+		 */
+		brief?: string;
 	};
 }
 

@@ -300,6 +300,7 @@ export async function runHyperframesOnClip({
 			compId,
 			templateId: `authored:${compId ?? "clip"}`,
 			name: `HyperFrames: ${scope.label}`,
+			brief: prompt,
 		});
 		// Self-learning: an authored graphic landed — a later delete is the
 		// "didn't like it" signal that balances this against the keep count.

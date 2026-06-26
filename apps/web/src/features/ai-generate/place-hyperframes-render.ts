@@ -52,6 +52,7 @@ export async function placeHyperframesRender({
 	templateId,
 	compId,
 	name,
+	brief,
 }: {
 	editor: EditorCore;
 	/** The rendered video file (transparent WebM for overlays, etc.). */
@@ -62,6 +63,8 @@ export async function placeHyperframesRender({
 	compId?: string;
 	/** Clip label on the timeline. */
 	name?: string;
+	/** The authoring brief — lets the panel show an editable prompt + regenerate. */
+	brief?: string;
 }): Promise<PlacedRender> {
 	const project = editor.project.getActive();
 
@@ -107,6 +110,7 @@ export async function placeHyperframesRender({
 				templateId: templateId ?? `hyperframes:${scope.kind}`,
 				variables: {},
 				groupId: generateUUID(),
+				brief,
 			},
 		},
 		placement: { mode: "explicit", trackId },
@@ -147,6 +151,8 @@ export interface ChunkRenderInput {
 	compId?: string;
 	templateId?: string;
 	name?: string;
+	/** The authoring brief for this chunk — drives the panel's editable prompt. */
+	brief?: string;
 }
 
 /**
@@ -178,6 +184,7 @@ export async function placeHyperframesRenders({
 		compId?: string;
 		templateId?: string;
 		name?: string;
+		brief?: string;
 	}[] = [];
 	for (const r of renders) {
 		const [processed] = await processMediaAssets({ files: [r.file] });
@@ -197,6 +204,7 @@ export async function placeHyperframesRenders({
 			compId: r.compId,
 			templateId: r.templateId,
 			name: r.name,
+			brief: r.brief,
 		});
 	}
 	if (!assets.length) return 0;
@@ -222,6 +230,7 @@ export async function placeHyperframesRenders({
 						templateId: a.templateId ?? "authored:chunk",
 						variables: {},
 						groupId: generateUUID(),
+						brief: a.brief,
 					},
 				},
 				placement: { mode: "explicit", trackId },
