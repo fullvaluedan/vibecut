@@ -1,14 +1,18 @@
 /**
- * Skill-as-producer: turn a compiled HyperFrames prompt into a rendered
- * composition by asking Claude to AUTHOR the composition HTML (text output —
- * the same safe pattern as the planner; Claude never writes files, the product
- * does). The returned comp dir is then rendered by renderCompDir().
+ * Skill-as-producer: turn a compiled HyperFrames brief into a rendered
+ * composition. In claude-code mode this drives the REAL `hyperframes` skill,
+ * which AUTHORS index.html into the comp dir (Skill + file tools only, no
+ * permission bypass) — so it applies the skill's layout/style/quality knowledge.
+ * api-key/custom modes can't load Claude Code skills, so they fall back to an
+ * inline format-rules prompt and the product writes the returned HTML. The comp
+ * dir is then rendered by renderCompDir().
  *
- * This is what makes "RUN HYPERFRAMES on this clip" produce a CUSTOM graphic
- * tailored to the brief, instead of a fixed template.
+ * This is what makes "RUN HYPERFRAMES" produce a CUSTOM graphic tailored to the
+ * brief + the user's picked style, instead of a fixed template.
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -58,27 +62,48 @@ export async function authorComposition({
 	 */
 	signal?: AbortSignal;
 }): Promise<AuthoredComposition> {
-	const rules = FORMAT_RULES.replace(/__W__/g, String(width))
-		.replace(/__H__/g, String(height))
-		.replace(/__D__/g, String(Math.max(1, Math.round(durationSec * 10) / 10)));
-	const fullPrompt = `${rules}\n\nBRIEF:\n${prompt}`;
-
-	const { html, usage } =
-		auth.mode === "api-key"
-			? await authorViaApi(fullPrompt, auth.apiKey, signal)
-			: auth.mode === "custom"
-				? await authorViaCustom(fullPrompt, auth, signal)
-				: await authorViaClaudeCode(fullPrompt, signal);
-
-	const cleaned = stripToHtml(html);
-	if (!/^\s*<(!doctype|html)/i.test(cleaned)) {
-		throw new Error("The author did not return an HTML document.");
-	}
-
 	const compId = `authored-${randomUUID()}`;
 	const compDir = path.join(generatedRoot(), compId);
 	await mkdir(compDir, { recursive: true });
-	await writeFile(path.join(compDir, "index.html"), cleaned, "utf8");
+	const indexPath = path.join(compDir, "index.html");
+
+	let usage: { inputTokens: number; outputTokens: number } | null = null;
+	if (auth.mode === "claude-code") {
+		// Drive the REAL hyperframes skill — it AUTHORS index.html into compDir,
+		// applying the skill's layout/style/quality knowledge to the panel brief.
+		await authorViaSkill({
+			brief: prompt,
+			compDir,
+			width,
+			height,
+			durationSec,
+			signal,
+		});
+	} else {
+		// api-key / custom hit a raw chat API and can't load Claude Code skills,
+		// so they fall back to the inline format rules + returned-HTML capture.
+		const rules = FORMAT_RULES.replace(/__W__/g, String(width))
+			.replace(/__H__/g, String(height))
+			.replace(
+				/__D__/g,
+				String(Math.max(1, Math.round(durationSec * 10) / 10)),
+			);
+		const fullPrompt = `${rules}\n\nBRIEF:\n${prompt}`;
+		const res =
+			auth.mode === "api-key"
+				? await authorViaApi(fullPrompt, auth.apiKey, signal)
+				: await authorViaCustom(fullPrompt, auth, signal);
+		usage = res.usage;
+		const cleaned = stripToHtml(res.html);
+		if (!/^\s*<(!doctype|html)/i.test(cleaned)) {
+			throw new Error("The author did not return an HTML document.");
+		}
+		await writeFile(indexPath, cleaned, "utf8");
+	}
+
+	if (!existsSync(indexPath)) {
+		throw new Error("Authoring did not produce an index.html composition.");
+	}
 	await writeFile(
 		path.join(compDir, "framecut.json"),
 		JSON.stringify({ fps }),
@@ -133,25 +158,82 @@ function killTree(child: ReturnType<typeof spawn>): void {
 	}
 }
 
-function authorViaClaudeCode(
-	prompt: string,
-	signal?: AbortSignal,
-): Promise<{ html: string; usage: null }> {
+/** Wrap the panel brief in a skill-triggering request for one overlay composition. */
+function buildSkillBrief({
+	width,
+	height,
+	durationSec,
+	brief,
+}: {
+	width: number;
+	height: number;
+	durationSec: number;
+	brief: string;
+}): string {
+	const d = Math.max(1, Math.round(durationSec * 10) / 10);
+	return `Use the hyperframes skill to author ONE HyperFrames composition for a video editor (VibeCut). Write the single composition to ./index.html in the CURRENT directory.
+
+It is a SINGLE short TRANSPARENT OVERLAY graphic over existing footage (not a multi-scene video, so no scene transitions): ${width}x${height}, ${d}s total. Keep the background fully transparent (no full-frame fill) unless a selected full-frame style is meant to reframe the shot. Put the data-composition-id="root" div directly in <body> (no <template> wrapper), build ONE paused GSAP timeline registered on window.__timelines["root"], and keep it deterministic (no Math.random or Date.now). Use the user's selected assets/style below FAITHFULLY: if they picked a named style, match it, do not improvise a different look.
+
+Do NOT run npx, render, lint, or init a project. ONLY write ./index.html, then stop.
+
+BRIEF:
+${brief}`;
+}
+
+/**
+ * Drive the REAL `hyperframes` Claude Code skill to author the composition. The
+ * skill (loaded via the Skill tool) writes index.html into compDir, applying its
+ * layout/style/quality knowledge to the brief. Only the Skill + file tools are
+ * allowed (no Bash, no permission bypass), so it authors the file but never runs
+ * the CLI/render itself — VibeCut renders the result. Resolves once index.html
+ * exists; success is the WRITTEN file, not the exit code.
+ */
+function authorViaSkill({
+	brief,
+	compDir,
+	width,
+	height,
+	durationSec,
+	signal,
+}: {
+	brief: string;
+	compDir: string;
+	width: number;
+	height: number;
+	durationSec: number;
+	signal?: AbortSignal;
+}): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(new Error("Cancelled"));
 			return;
 		}
 		const { command, useShell } = resolveClaude();
-		const child = spawn(command, ["-p"], {
-			shell: useShell,
-			// posix: own process group so killTree can signal the whole tree.
-			// win32: never detach (it would pop a new console window) — taskkill
-			// /T handles the tree there instead.
-			detached: process.platform !== "win32",
-			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, NO_COLOR: "1" },
-		});
+		const child = spawn(
+			command,
+			[
+				"-p",
+				"--allowedTools",
+				"Skill",
+				"Write",
+				"Edit",
+				"Read",
+				"Glob",
+				"Grep",
+				"--max-turns",
+				"30",
+			],
+			{
+				// cwd = compDir so the skill's `./index.html` lands in the comp dir
+				// (claude restricts writes to cwd without a permission bypass).
+				cwd: compDir,
+				shell: useShell,
+				detached: process.platform !== "win32",
+				stdio: ["pipe", "pipe", "pipe"],
+				env: { ...process.env, NO_COLOR: "1" },
+			},
+		);
 		let out = "";
 		let err = "";
 		let settled = false;
@@ -159,7 +241,6 @@ function authorViaClaudeCode(
 			clearTimeout(timer);
 			signal?.removeEventListener("abort", onAbort);
 		};
-		// Don't let a hung CLI hold the request for the full route maxDuration.
 		const timer = setTimeout(() => {
 			if (settled) return;
 			settled = true;
@@ -169,8 +250,6 @@ function authorViaClaudeCode(
 				new Error("Authoring timed out — claude did not respond in time."),
 			);
 		}, AUTHOR_TIMEOUT_MS);
-		// Client cancel / disconnect (route forwards req.signal) — kill the model
-		// call instead of letting it run to completion unobserved.
 		const onAbort = () => {
 			if (settled) return;
 			settled = true;
@@ -179,8 +258,6 @@ function authorViaClaudeCode(
 			reject(new Error("Cancelled"));
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
-		// After killTree the stdin pipe can emit a late EPIPE; swallow it so it
-		// never surfaces as an unhandled 'error' that takes down the dev server.
 		child.stdin.on("error", () => {});
 		child.stdout.on("data", (d) => (out += d.toString()));
 		child.stderr.on("data", (d) => (err += d.toString()));
@@ -195,27 +272,24 @@ function authorViaClaudeCode(
 			if (settled) return;
 			settled = true;
 			cleanup();
-			if (code !== 0) {
-				// Text-mode `claude -p` prints an API/auth failure (e.g. 401) to STDOUT
-				// and exits non-zero with EMPTY stderr — surface that reason, not a bare
-				// "exited 1:". (The Director's JSON path parses this from is_error.)
-				const authFail = /401|invalid auth|authenticat|credential/i.test(
-					`${out}\n${err}`,
-				);
-				reject(
-					new Error(
-						code === 127 || CLI_MISSING.test(err)
-							? CLI_MISSING_HELP
-							: authFail
-								? `Claude authoring failed (auth): the claude CLI is not signed in. Run \`claude setup-token\` (or \`claude\` then /login) in a terminal, or switch Settings → AI to an Anthropic API key.`
-								: `claude CLI exited ${code}: ${err.slice(0, 800)}`,
-					),
-				);
+			if (existsSync(path.join(compDir, "index.html"))) {
+				resolve();
 				return;
 			}
-			resolve({ html: out, usage: null });
+			const authFail = /401|invalid auth|authenticat|credential/i.test(
+				`${out}\n${err}`,
+			);
+			reject(
+				new Error(
+					code === 127 || CLI_MISSING.test(err)
+						? CLI_MISSING_HELP
+						: authFail
+							? `Claude authoring failed (auth): the claude CLI is not signed in. Run \`claude setup-token\` (or \`claude\` then /login) in a terminal, or switch Settings → AI to an Anthropic API key.`
+							: `The HyperFrames skill did not write a composition (claude exited ${code}): ${(out || err).slice(-800)}`,
+				),
+			);
 		});
-		child.stdin.write(prompt);
+		child.stdin.write(buildSkillBrief({ width, height, durationSec, brief }));
 		child.stdin.end();
 	});
 }
