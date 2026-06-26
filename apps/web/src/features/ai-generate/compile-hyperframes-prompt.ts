@@ -73,6 +73,14 @@ export interface CompileHyperframesPromptInput {
 	 * by the renderer to stay within the token budget.
 	 */
 	referenceCompositions?: { name: string; title: string; html: string }[];
+	/**
+	 * Movement-aware safe-zone instruction from vision speaker detection
+	 * (`computeSafeZone`), e.g. "the left third stays clear … place the graphic
+	 * there". Present only when Director Vision is on; omitted otherwise so the
+	 * brief's robust lower-third default applies. The skill brief honors a named
+	 * SPEAKER LOCATION precisely.
+	 */
+	speakerSafeZone?: string;
 }
 
 /** Per-composition HTML cap in the brief, so picked references don't blow the token budget. */
@@ -140,6 +148,11 @@ export function compileHyperframesPrompt(
 	);
 	if (densityHint?.trim()) {
 		lines.push(`DENSITY: ${densityHint.trim()}`);
+	}
+	if (input.speakerSafeZone?.trim()) {
+		lines.push(
+			`SPEAKER LOCATION / SAFE ZONE (detected from this clip's footage — honor it precisely; keep the graphic entirely out of the speaker's region): ${input.speakerSafeZone.trim()}`,
+		);
 	}
 
 	// Selections — grouped by kind, framed as preferences.

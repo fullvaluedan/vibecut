@@ -1,5 +1,16 @@
 ﻿export * from "./types";
 export {
+	computeSafeZone,
+	type HZone,
+	type FrameSpeaker,
+	type SafeZone,
+} from "./speaker-zone";
+export {
+	detectSpeakerZonesFromFrames,
+	safeZoneFromModelFrames,
+	type SpeakerDetectFrame,
+} from "./speaker-detect";
+export {
 	HF_TEMPLATES,
 	getTemplate,
 	describeTemplateCatalog,

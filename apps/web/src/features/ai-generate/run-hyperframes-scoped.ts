@@ -27,6 +27,7 @@ import {
 	compileHyperframesPrompt,
 	type HfSelectionAsset,
 } from "@/features/ai-generate/compile-hyperframes-prompt";
+import { detectSpeakerZone } from "@/features/ai-generate/detect-speaker-zone";
 import {
 	placeHyperframesRender,
 	placeHyperframesRenders,
@@ -250,6 +251,16 @@ export async function runHyperframesOnClip({
 			registrySelections,
 			controller.signal,
 		);
+		// Speaker-aware placement: when Director Vision is on, locate the speaker in
+		// this clip's footage so the brief can keep clear of them (and their path).
+		// Best-effort — null falls back to the brief's robust lower-third default.
+		const speakerSafeZone = useAiSettingsStore.getState().directorVisionEnabled
+			? ((await detectSpeakerZone({
+					editor,
+					element,
+					signal: controller.signal,
+				})) ?? undefined)
+			: undefined;
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
 			referenceCompositions,
@@ -263,6 +274,7 @@ export async function runHyperframesOnClip({
 			scope: { kind: "clip", label: `clip "${scope.label}"`, startSec, endSec },
 			transcript,
 			canvas: { width, height, fps },
+			speakerSafeZone,
 			preferenceNotes: usePreferenceStore
 				.getState()
 				.buildPreferenceNotes("graphics"),
