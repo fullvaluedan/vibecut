@@ -171,11 +171,11 @@ function buildSkillBrief({
 	brief: string;
 }): string {
 	const d = Math.max(1, Math.round(durationSec * 10) / 10);
-	return `Use the hyperframes skill to author ONE HyperFrames composition for a video editor (VibeCut). Write the single composition to ./index.html in the CURRENT directory.
+	return `Author ONE short HyperFrames overlay composition with the hyperframes skill. This is a TINY single graphic, NOT a multi-scene video, so SKIP the heavy workflow: no discovery, no prompt-expansion, no design-picker, no beat-direction, and no lint/inspect/validate/animation-map steps. Do NOT read extra reference files. Author the composition HTML DIRECTLY in ONE pass and write it to ./index.html in the CURRENT directory.
 
-It is a SINGLE short TRANSPARENT OVERLAY graphic over existing footage (not a multi-scene video, so no scene transitions): ${width}x${height}, ${d}s total. Keep the background fully transparent (no full-frame fill) unless a selected full-frame style is meant to reframe the shot. Put the data-composition-id="root" div directly in <body> (no <template> wrapper), build ONE paused GSAP timeline registered on window.__timelines["root"], and keep it deterministic (no Math.random or Date.now). Use the user's selected assets/style below FAITHFULLY: if they picked a named style, match it, do not improvise a different look.
+Composition rules: ${width}x${height}, ${d}s total, TRANSPARENT background (it overlays footage; no full-frame fill unless a selected full-frame style is meant to reframe the shot). Put the data-composition-id="root" div directly in <body> (no <template> wrapper), build ONE paused GSAP timeline registered on window.__timelines["root"], and keep it deterministic (no Math.random or Date.now). Use the user's selected assets/style below FAITHFULLY: if they named a style, match it, do not improvise a different look.
 
-Do NOT run npx, render, lint, or init a project. ONLY write ./index.html, then stop.
+Write ./index.html now and stop. Do not run npx, render, lint, or init.
 
 BRIEF:
 ${brief}`;
@@ -222,7 +222,7 @@ function authorViaSkill({
 				"Glob",
 				"Grep",
 				"--max-turns",
-				"30",
+				"8",
 			],
 			{
 				// cwd = compDir so the skill's `./index.html` lands in the comp dir
