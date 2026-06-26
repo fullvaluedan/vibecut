@@ -11,6 +11,6 @@
 		"./templates": "./src/templates/index.ts"
 	},
 	"dependencies": {
-		"hyperframes": "0.7.4"
+		"hyperframes": "0.7.10"
 	}
 }
