@@ -115,21 +115,15 @@ interface AiSettingsStore {
 	disabledTemplateIds: string[];
 	toggleTemplate: (id: string) => void;
 	/**
-	 * Registry asset names UNCHECKED in the Effects-tab HyperFrames browser
-	 * (deny-list, like disabledTemplateIds).
-	 */
-	disabledHfAssets: string[];
-	toggleHfAsset: (name: string) => void;
-	/**
-	 * Registry asset names the user explicitly PICKED to feed the RUN
-	 * HYPERFRAMES authoring brief (an ALLOW-list — distinct from the disabled
-	 * deny-list). Lets a user say "author something using swiss-grid / us-map".
+	 * Registry asset names the user CHECKED to feed the RUN HYPERFRAMES authoring
+	 * brief (an allow-list; default off). Checking an asset means "use this in the
+	 * Authored run" (e.g. author something using swiss-grid / us-map).
 	 */
 	promptHfAssets: string[];
 	togglePromptHfAsset: (name: string) => void;
 	/** Bulk check/uncheck for a whole browser section. */
 	setTemplatesEnabled: (ids: string[], enabled: boolean) => void;
-	setHfAssetsEnabled: (names: string[], enabled: boolean) => void;
+	setPromptHfAssetsEnabled: (names: string[], enabled: boolean) => void;
 	/** HyperFrames browser layout. */
 	hfBrowserView: "grid" | "list";
 	setHfBrowserView: (view: "grid" | "list") => void;
@@ -203,7 +197,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),
 
-			hfEngine: "native",
+			hfEngine: "authored",
 			setHfEngine: (hfEngine) => set({ hfEngine }),
 
 			backend: "local",
@@ -221,14 +215,6 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 					activeHfPresetId: null,
 				})),
 
-			disabledHfAssets: [],
-			toggleHfAsset: (name) =>
-				set((state) => ({
-					disabledHfAssets: state.disabledHfAssets.includes(name)
-						? state.disabledHfAssets.filter((n) => n !== name)
-						: [...state.disabledHfAssets, name],
-				})),
-
 			promptHfAssets: [],
 			togglePromptHfAsset: (name) =>
 				set((state) => ({
@@ -244,11 +230,12 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 						: [...new Set([...state.disabledTemplateIds, ...ids])],
 					activeHfPresetId: null,
 				})),
-			setHfAssetsEnabled: (names, enabled) =>
+			setPromptHfAssetsEnabled: (names, enabled) =>
 				set((state) => ({
-					disabledHfAssets: enabled
-						? state.disabledHfAssets.filter((n) => !names.includes(n))
-						: [...new Set([...state.disabledHfAssets, ...names])],
+					promptHfAssets: enabled
+						? [...new Set([...state.promptHfAssets, ...names])]
+						: state.promptHfAssets.filter((n) => !names.includes(n)),
+					activeHfPresetId: null,
 				})),
 
 			hfBrowserView: "grid",
@@ -330,6 +317,17 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 		}),
 		{
 			name: "framecut-ai-settings",
+			version: 1,
+			migrate: (persisted, version) => {
+				// v1: the default effect engine moved to Authored (it runs the skill
+				// on your checked assets). Flip a stored legacy "native" default so
+				// existing devices pick up the new behavior too.
+				const s = (persisted ?? {}) as Record<string, unknown>;
+				if (version < 1 && s.hfEngine === "native") {
+					s.hfEngine = "authored";
+				}
+				return s as unknown as AiSettingsStore;
+			},
 		},
 	),
 );

@@ -72,9 +72,6 @@ interface BrowserItem {
 	/** Bake library: when present, an "Add" action drops this onto the timeline. */
 	onAdd?: () => void;
 	adding?: boolean;
-	/** Allow-list pick: when present, a star toggles this into the author brief. */
-	pinned?: boolean;
-	onPin?: () => void;
 }
 
 /** "Add to timeline" button shown on bakeable items (registry blocks). */
@@ -95,34 +92,6 @@ function AddButton({ item }: { item: BrowserItem }) {
 		>
 			{item.adding ? <Spinner className="size-3" /> : "Add"}
 		</Button>
-	);
-}
-
-/** Star toggle: pick this registry asset into the RUN HYPERFRAMES brief. */
-function PinButton({ item }: { item: BrowserItem }) {
-	if (!item.onPin) return null;
-	return (
-		<button
-			type="button"
-			className={cn(
-				"shrink-0 rounded px-1 text-sm leading-none",
-				item.pinned
-					? "text-yellow-400"
-					: "text-muted-foreground hover:text-foreground",
-			)}
-			title={
-				item.pinned
-					? "Picked for the RUN HYPERFRAMES brief — click to remove"
-					: "Use this asset in the RUN HYPERFRAMES brief"
-			}
-			onClick={(e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				item.onPin?.();
-			}}
-		>
-			{item.pinned ? "★" : "☆"}
-		</button>
 	);
 }
 
@@ -303,7 +272,6 @@ function GridCard({ item }: { item: BrowserItem }) {
 				<Checkbox checked={item.checked} onCheckedChange={item.onToggle} />
 				<span className="truncate text-xs">{item.title}</span>
 				<span className="ml-auto" />
-				<PinButton item={item} />
 				<AddButton item={item} />
 			</div>
 		</label>
@@ -329,7 +297,6 @@ function ListRow({ item }: { item: BrowserItem }) {
 					</div>
 				)}
 			</div>
-			<PinButton item={item} />
 			<AddButton item={item} />
 		</label>
 	);
@@ -636,9 +603,9 @@ function EngineSection() {
 			<div className="bg-foreground/5 flex rounded-md p-0.5">
 				{(
 					[
+						["authored", "Authored"],
 						["native", "Instant"],
 						["cinematic", "Cinematic"],
-						["authored", "Authored"],
 					] as const
 				).map(([value, label]) => (
 					<button
@@ -657,11 +624,11 @@ function EngineSection() {
 				))}
 			</div>
 			<p className="text-muted-foreground text-[10px] leading-snug">
-				{engine === "native"
-					? "Places editable motion-template elements instantly — exports at full speed."
-					: engine === "cinematic"
-						? "Renders each effect with HyperFrames (~real time per effect) and burns them in at export."
-						: "Claude AUTHORS one custom composition for the whole video from your selections + picks + transcript, on a new track. Slower, fully bespoke."}
+				{engine === "authored"
+					? "Default. Claude authors a custom composition from your checked assets, direction, and transcript, overlaid on your footage. Runs the HyperFrames skill; slower in-browser render."
+					: engine === "native"
+						? "Fast: places editable motion-template elements instantly. Ignores your style and asset picks."
+						: "Renders the built-in templates with HyperFrames and burns them in at export. Ignores your style and asset picks."}
 			</p>
 		</div>
 	);
@@ -670,8 +637,6 @@ function EngineSection() {
 export function HyperframesPanel() {
 	const disabledTemplateIds = useAiSettingsStore((s) => s.disabledTemplateIds);
 	const toggleTemplate = useAiSettingsStore((s) => s.toggleTemplate);
-	const disabledHfAssets = useAiSettingsStore((s) => s.disabledHfAssets);
-	const toggleHfAsset = useAiSettingsStore((s) => s.toggleHfAsset);
 	const promptHfAssets = useAiSettingsStore((s) => s.promptHfAssets);
 	const togglePromptHfAsset = useAiSettingsStore((s) => s.togglePromptHfAsset);
 	const styleId = useAiSettingsStore((s) => s.styleId);
@@ -682,7 +647,9 @@ export function HyperframesPanel() {
 	const view = useAiSettingsStore((s) => s.hfBrowserView);
 	const setView = useAiSettingsStore((s) => s.setHfBrowserView);
 	const setTemplatesEnabled = useAiSettingsStore((s) => s.setTemplatesEnabled);
-	const setHfAssetsEnabled = useAiSettingsStore((s) => s.setHfAssetsEnabled);
+	const setPromptHfAssetsEnabled = useAiSettingsStore(
+		(s) => s.setPromptHfAssetsEnabled,
+	);
 
 	const editor = useEditor();
 	const [bakingName, setBakingName] = useState<string | null>(null);
@@ -756,10 +723,8 @@ export function HyperframesPanel() {
 				id: a.name,
 				title: a.title,
 				description: a.description,
-				checked: !disabledHfAssets.includes(a.name),
-				onToggle: () => toggleHfAsset(a.name),
-				pinned: promptHfAssets.includes(a.name),
-				onPin: () => togglePromptHfAsset(a.name),
+				checked: promptHfAssets.includes(a.name),
+				onToggle: () => togglePromptHfAsset(a.name),
 				// Example styles publish no preview media — we bake posters and
 				// short hover clips locally from real renders (hf-demos/styles/).
 				previewVideo:
@@ -839,11 +804,11 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Styles"
-					subtitle="whole-video looks; pick (☆) + RUN HYPERFRAMES to restyle"
+					subtitle="whole-video looks; check to use, RUN authors it over your footage"
 					items={registryItems("example")}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("example").map((i) => i.id),
 							enabled,
 						)
@@ -851,11 +816,11 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Blocks"
-					subtitle="graphics & cards — Add drops on the timeline"
+					subtitle="graphics & cards; Add drops one, or check to use in RUN"
 					items={registryItems("block", (a) => !isTransitionBlock(a))}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("block", (a) => !isTransitionBlock(a)).map(
 								(i) => i.id,
 							),
@@ -869,7 +834,7 @@ export function HyperframesPanel() {
 					items={registryItems("block", isTransitionBlock)}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("block", isTransitionBlock).map((i) => i.id),
 							enabled,
 						)
@@ -877,11 +842,11 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Components"
-					subtitle="caption & effect snippets; named in the RUN HYPERFRAMES brief"
+					subtitle="caption & effect snippets; check to use in the RUN prompt"
 					items={registryItems("component")}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("component").map((i) => i.id),
 							enabled,
 						)
@@ -942,12 +907,12 @@ export function HyperframesPanel() {
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
 					Checked templates are the palette RUN HYPERFRAMES picks from today.
-					<span className="text-foreground"> Add</span> bakes a block once on
-					your computer and drops it on the timeline (cached after the first
-					render). Styles are whole-video looks: pick one (☆) and RUN
-					HYPERFRAMES adapts it over your footage. Components and transitions
-					aren&apos;t droppable. Claude usage on this device: ~
-					{tokensUsedTotal.toLocaleString()} tokens.
+					<span className="text-foreground">Check</span> any style, block, or
+					component to add it to the RUN HYPERFRAMES prompt; the Authored engine
+					(default) authors them over your footage. Instant and Cinematic are
+					fast modes that ignore picks. Blocks can also be dropped with Add.
+					Claude usage on this device: ~{tokensUsedTotal.toLocaleString()}{" "}
+					tokens.
 				</p>
 			</div>
 		</PanelView>
