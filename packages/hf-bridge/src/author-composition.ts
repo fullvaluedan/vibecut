@@ -175,6 +175,10 @@ function buildSkillBrief({
 
 Composition rules: ${width}x${height}, ${d}s total, TRANSPARENT background (it overlays footage; no full-frame fill unless a selected full-frame style is meant to reframe the shot). Put the data-composition-id="root" div directly in <body> (no <template> wrapper), build ONE paused GSAP timeline registered on window.__timelines["root"], and keep it deterministic (no Math.random or Date.now). Use the user's selected assets/style below FAITHFULLY: if they named a style, match it, do not improvise a different look.
 
+PLACEMENT (critical): this overlays a TALKING-HEAD video. Assume the SPEAKER occupies the CENTER third of the frame (roughly x from 33% to 67%). Place the graphic in a SAFE ZONE that does NOT cover the speaker: a lower third, a top band, or a side margin/column. NEVER put a large graphic dead-center over the speaker's face. A full-frame style (e.g. a grid/layout that reframes the shot) is the only exception.
+
+INTENT: the graphic should HELP the viewer grasp the spoken point, not distract or interrupt. Keep it clean and minimal: short text (<= 5 words per line), clear hierarchy, on-brand with the selected style, high contrast against busy footage (a solid bar/box behind text, never a full-frame fill). Animate it IN, hold briefly, then animate it OUT within the ${d}s so it never lingers.
+
 Write ./index.html now and stop. Do not run npx, render, lint, or init.
 
 BRIEF:
