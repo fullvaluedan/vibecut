@@ -151,7 +151,23 @@ export function compileHyperframesPrompt(
 	);
 	lines.push("");
 	lines.push(
-		`GOAL: graphics that sit OVER existing footage as a NEW overlay track. The composition's background MUST be fully transparent (no opaque full-frame fill) so the footage shows through — EXCEPT where a selected full-frame asset is deliberately used to reframe the shot.`,
+		`GOAL: author graphics that HELP THE VIEWER FOLLOW AND RECAP the content. Every graphic must carry INFORMATION the viewer cannot get from the audio alone — a structured summary of the points being made, a chart of data/comparison mentioned, or a diagram that explains a concept. A graphic that only labels what the speaker is already saying is worthless — do NOT make it. These overlay the footage on a NEW transparent track (no opaque full-frame fill unless a selected full-frame asset deliberately reframes the shot).`,
+	);
+	lines.push("");
+	lines.push(`WHAT TO BUILD — pick the form that genuinely helps THIS content:`);
+	lines.push(
+		`  - RECAP / KEY-POINTS LIST: when the speaker makes several points on a topic, show a 3-5 item list summarizing them so the viewer can follow. Reveal items as each is discussed and keep the list on screen while the topic continues — a running recap, not a single line.`,
+	);
+	lines.push(
+		`  - DATA CHART: when there are numbers, a comparison, or change over time (scores, dates, before/after, model-vs-model), build an animated chart from the REAL numbers in the transcript — bars, a line, or a progress fill. No pie charts, dashboards, gridlines, legends, or chart-library output; build it with SVG/CSS.`,
+	);
+	lines.push(
+		`  - EXPLANATORY CARD: when a concept needs unpacking, show its structure — a labeled A-vs-B comparison, a before/after, or the parts of the thing.`,
+	);
+	lines.push(`Prefer FEWER, information-dense graphics, each held long enough to read.`);
+	lines.push("");
+	lines.push(
+		`NEVER author: a segment or section title, a single-label "pill", a numbered "01 / 02 / 03" section break, a generic "KEY POINT" eyebrow card, or anything that merely restates the spoken line. Those add nothing and are banned.`,
 	);
 	lines.push(
 		`RENDER TARGET: ${canvas.width}x${canvas.height} @ ${canvas.fps}fps, total duration ${secs(durationSec)}s. Author every animation seekable and within [0, ${secs(durationSec)}]s — the editor places this composition at ${secs(scope.startSec)}s on ${scope.label}.`,
@@ -175,7 +191,7 @@ export function compileHyperframesPrompt(
 	if (styles.length) {
 		const names = styles.map((s) => `"${s.title}"`).join(", ");
 		lines.push(
-			`PRIMARY STYLE — REQUIRED: the user explicitly chose ${names} as the visual style. MATCH it. Apply this style's visual language — its grid, typography, color/accent, and motion — to EVERY graphic so each one unmistakably reads as ${names}. Do NOT substitute a different aesthetic, and do NOT skip the style. If a chosen style's reference is a FULL-FRAME layout, TRANSLATE its design language into the TRANSPARENT overlay (a lower-third or corner card rendered in that style) — keep the look, just don't reframe the whole shot unless the user explicitly asked for a full-frame treatment.`,
+			`PRIMARY STYLE — REQUIRED: the user explicitly chose ${names} as the visual style. MATCH its LOOK — grid, typography, color/accent, and motion — so every graphic unmistakably reads as ${names}; do NOT substitute a different aesthetic. But the style is the LOOK, not the layout: within it, build the informative STRUCTURE the content calls for (a 3-5 point recap LIST, a real DATA CHART, an explanatory diagram) — you are NOT limited to a single label or card. If a chosen style is a data-chart style, build an actual chart; if it is an editorial grid, build a structured list/grid. Translate any full-frame design into the TRANSPARENT overlay (don't reframe the whole shot unless asked).`,
 		);
 		lines.push("");
 		lines.push(`Chosen style${styles.length > 1 ? "s" : ""}:`);
@@ -201,11 +217,11 @@ export function compileHyperframesPrompt(
 		);
 	}
 
-	// Reference compositions. The PICKED STYLE's composition is the BASE the skill
-	// EDITS — it preserves the base's <style>/fonts/layout verbatim and only changes
-	// the content. The old "author informed by this, do NOT place verbatim" framing
-	// let the skill drift to its own aesthetic (e.g. a terminal/monospace look) and
-	// ignore the chosen style. Other references stay as loose inspiration.
+	// Reference compositions. The PICKED STYLE's composition is the skill's STYLE
+	// SOURCE — it must copy the base's design system (fonts, colors, type scale,
+	// motion) EXACTLY (anti-drift: this is what stopped the skill inventing a
+	// terminal/monospace look), but build the informative STRUCTURE the content
+	// needs rather than copy the base's single layout. Others stay loose inspiration.
 	const refs = (referenceCompositions ?? []).filter((r) => r.html.trim());
 	const primaryStyleName = styles[0]?.name;
 	const baseRef = primaryStyleName
@@ -220,11 +236,11 @@ export function compileHyperframesPrompt(
 				: baseRef.html;
 		lines.push("");
 		lines.push(
-			`BASE COMPOSITION — START HERE AND EDIT IT (do not author a new look from scratch). This is the user's chosen "${baseRef.title}" style, below. Build each graphic by taking this composition and changing ONLY the visible text/data (and timing) to fit the spoken moment. Keep the <style> block, every font-family, every color, the grid, and the class structure BYTE-FOR-BYTE — do NOT switch fonts (never a monospace/terminal/code look unless this base uses one), do NOT restyle or "improve" it. Every graphic MUST still read as "${baseRef.title}".`,
+			`STYLE SOURCE — the user's chosen "${baseRef.title}" composition is below. COPY its DESIGN SYSTEM exactly: reuse its font-family declarations, color values, type scale, spacing, and motion language VERBATIM, and use ONLY those — never introduce a different font (no monospace/terminal/code) or a different palette. But do NOT just copy its single layout with new text: BUILD the structure THIS content needs (a 3-5 point recap list, a data chart, a labeled diagram) IN that exact design system. Same design system, right structure — every graphic must still read unmistakably as "${baseRef.title}".`,
 		);
 		lines.push("");
 		lines.push(
-			`--- ${baseRef.title} (${baseRef.name}) — BASE, preserve its style VERBATIM ---`,
+			`--- ${baseRef.title} (${baseRef.name}) — STYLE SOURCE: copy its design system, build the right structure ---`,
 		);
 		lines.push("```html");
 		lines.push(html);
@@ -291,7 +307,10 @@ export function compileHyperframesPrompt(
 		"- Transparent background; these are overlays, not a full-frame scene (unless a selected full-frame asset is explicitly used to reframe the footage).",
 	);
 	lines.push(
-		"- Time each graphic to the spoken moment it supports. Keep on-screen text short (titles ≤ 5 words). Copy any numbers EXACTLY as spoken.",
+		"- Time each graphic to the moment it supports and HOLD it long enough to read (a list or chart needs several seconds on screen). Build it from the REAL content of the transcript — the actual points, numbers, names — never invent data; copy numbers and names EXACTLY as spoken.",
+	);
+	lines.push(
+		"- A recap list = 3-5 short items, not one. A chart = the real values plotted. An explanatory card = the actual comparison. If you cannot make a graphic that adds information beyond the spoken words, make NOTHING for that moment — silence beats a useless title.",
 	);
 	lines.push(
 		"- When overlay text needs contrast, place a solid color bar/box BEHIND the text only — never fill the whole frame.",

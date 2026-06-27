@@ -475,7 +475,7 @@ async function authorChunks({
 			transcript,
 			canvas: shared.canvas,
 			preferenceNotes: shared.preferenceNotes,
-			densityHint: `Aim for ~${Math.max(1, Math.round(chunkLen / 15))} timed graphics across this ${Math.round(chunkLen)}s segment — spread them out, at least one early.`,
+			densityHint: `At most ~${Math.max(1, Math.round(chunkLen / 45))} SUBSTANTIVE graphics across this ${Math.round(chunkLen)}s segment — a recap list, a data chart, or an explanatory card, NOT title pills. Quality over quantity: a topic earns at most one strong graphic, held long enough to read. Make fewer (or none) rather than pad with labels.`,
 		});
 		try {
 			logRun(

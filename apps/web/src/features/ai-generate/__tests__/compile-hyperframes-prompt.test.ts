@@ -101,8 +101,10 @@ describe("compileHyperframesPrompt — learned preferences", () => {
 		);
 		expect(out).toContain("LEARNED PREFERENCES");
 		expect(out).toContain("real note");
-		// Only the one real note is bulleted under the heading.
-		expect(out.match(/\n {2}- /g)?.length).toBe(1);
+		// Only the one real note is bulleted under the LEARNED PREFERENCES heading
+		// (slice past the GOAL's WHAT-TO-BUILD bullets, which also use "  - ").
+		const prefSection = out.slice(out.indexOf("LEARNED PREFERENCES"));
+		expect(prefSection.match(/\n {2}- /g)?.length).toBe(1);
 	});
 
 	test("preferences are framed as subordinate to the user direction", () => {
@@ -159,8 +161,8 @@ describe("compileHyperframesPrompt — picked style is required, not skippable",
 
 	test("a full-frame style is told to translate into the transparent overlay", () => {
 		const out = compileHyperframesPrompt(baseInput({ selections: [swiss] }));
-		expect(out).toContain("FULL-FRAME");
-		expect(out).toContain("TRANSLATE");
+		expect(out).toContain("full-frame");
+		expect(out).toContain("TRANSPARENT overlay");
 	});
 
 	test("blocks/components stay optional helpers that never override the style", () => {
@@ -179,7 +181,7 @@ describe("compileHyperframesPrompt — picked style is required, not skippable",
 	});
 });
 
-describe("compileHyperframesPrompt — picked style is a verbatim BASE to edit", () => {
+describe("compileHyperframesPrompt — picked style is the STYLE SOURCE (design copied, structure free)", () => {
 	const swissSel = {
 		name: "swiss-grid",
 		kind: "example" as const,
@@ -192,13 +194,13 @@ describe("compileHyperframesPrompt — picked style is a verbatim BASE to edit",
 		html: "<style>.x{font-family:Helvetica}</style><div>GRID-CONTENT</div>",
 	};
 
-	test("a picked style with a matching reference becomes the BASE, preserved verbatim", () => {
+	test("a picked style with a matching reference becomes the STYLE SOURCE (copy the design system, build the right structure)", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({ selections: [swissSel], referenceCompositions: [swissRef] }),
 		);
-		expect(out).toContain("BASE COMPOSITION — START HERE AND EDIT IT");
-		expect(out).toContain("BYTE-FOR-BYTE");
-		expect(out).toContain("preserve its style VERBATIM");
+		expect(out).toContain("STYLE SOURCE");
+		expect(out).toContain("COPY its DESIGN SYSTEM exactly");
+		expect(out).toContain("BUILD the structure THIS content needs");
 		expect(out).toContain("font-family:Helvetica"); // the base HTML is embedded
 		// Must NOT carry the old "informed by, do not place verbatim" license.
 		expect(out).not.toContain("do NOT place them verbatim");
@@ -209,10 +211,10 @@ describe("compileHyperframesPrompt — picked style is a verbatim BASE to edit",
 			baseInput({ referenceCompositions: [swissRef] }),
 		);
 		expect(out).toContain("REFERENCE COMPOSITIONS (loose inspiration");
-		expect(out).not.toContain("BASE COMPOSITION");
+		expect(out).not.toContain("STYLE SOURCE");
 	});
 
-	test("non-primary references stay inspiration alongside the BASE", () => {
+	test("non-primary references stay inspiration alongside the STYLE SOURCE", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({
 				selections: [swissSel],
@@ -222,8 +224,33 @@ describe("compileHyperframesPrompt — picked style is a verbatim BASE to edit",
 				],
 			}),
 		);
-		expect(out).toContain("BASE COMPOSITION");
+		expect(out).toContain("STYLE SOURCE");
 		expect(out).toContain("REFERENCE COMPOSITIONS (loose inspiration");
 		expect(out).toContain("NYT Graph (nyt-graph)");
+	});
+});
+
+describe("compileHyperframesPrompt — informative substance, not title pills", () => {
+	test("GOAL demands information beyond the audio + lists the substantive forms", () => {
+		const out = compileHyperframesPrompt(baseInput());
+		expect(out).toContain("HELP THE VIEWER FOLLOW AND RECAP");
+		expect(out).toContain("WHAT TO BUILD");
+		expect(out).toContain("RECAP / KEY-POINTS LIST");
+		expect(out).toContain("DATA CHART");
+		expect(out).toContain("EXPLANATORY CARD");
+	});
+
+	test("the GOAL hard-bans segment titles, pills, and numbered section breaks", () => {
+		const out = compileHyperframesPrompt(baseInput());
+		expect(out).toContain("NEVER author");
+		expect(out).toContain("single-label");
+		expect(out).toContain('"01 / 02 / 03"');
+		expect(out).toContain('"KEY POINT"');
+	});
+
+	test("requirements demand real data + bar a graphic that just restates the line", () => {
+		const out = compileHyperframesPrompt(baseInput());
+		expect(out).toContain("never invent data");
+		expect(out).toContain("silence beats a useless title");
 	});
 });
