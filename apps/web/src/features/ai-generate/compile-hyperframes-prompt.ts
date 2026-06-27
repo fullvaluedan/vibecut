@@ -156,7 +156,7 @@ export function compileHyperframesPrompt(
 	lines.push("");
 	lines.push(`WHAT TO BUILD — pick the form that genuinely helps THIS content:`);
 	lines.push(
-		`  - RECAP / KEY-POINTS LIST: when the speaker makes several points on a topic, show a 3-5 item list summarizing them so the viewer can follow. Reveal items as each is discussed and keep the list on screen while the topic continues — a running recap, not a single line.`,
+		`  - RECAP / KEY-POINTS LIST: when the speaker makes several points on a topic, show a 3-5 item list summarizing them so the viewer can follow. Reveal items as each is discussed and keep the list on screen while the topic continues — a running recap, not a single line. Do NOT number the items (no "01/02/03") — the points stand on their own; separate them with a small accent dot, a thin rule, or whitespace.`,
 	);
 	lines.push(
 		`  - DATA CHART: when there are numbers, a comparison, or change over time (scores, dates, before/after, model-vs-model), build an animated chart from the REAL numbers in the transcript — bars, a line, or a progress fill. No pie charts, dashboards, gridlines, legends, or chart-library output; build it with SVG/CSS.`,
