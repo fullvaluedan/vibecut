@@ -17,37 +17,46 @@ function baseInput(
 }
 
 describe("compileHyperframesPrompt — reference compositions", () => {
-	test("embeds picked assets' HTML under a REFERENCE COMPOSITIONS heading", () => {
+	test("a single picked style + matching reference embeds the HTML as STYLE SOURCE", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({
+				selections: [
+					{ name: "swiss-grid", kind: "example", title: "Swiss Grid" },
+				],
 				referenceCompositions: [
-					{
-						name: "swiss-grid",
-						title: "Swiss Grid",
-						html: "<html>GRID-LAYOUT</html>",
-					},
+					{ name: "swiss-grid", title: "Swiss Grid", html: "<html>GRID-LAYOUT</html>" },
 				],
 			}),
 		);
-		// No selection → references render as design references to MATCH if used.
-		expect(out).toContain("REFERENCE DESIGNS");
+		expect(out).toContain("STYLE SOURCE");
 		expect(out).toContain("Swiss Grid (swiss-grid)");
 		expect(out).toContain("GRID-LAYOUT");
 	});
 
-	test("omits the section when none are picked", () => {
-		expect(compileHyperframesPrompt(baseInput())).not.toContain(
-			"REFERENCE DESIGNS",
+	test("a reference is NOT embedded without a single-example selection (palette names assets instead)", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				referenceCompositions: [
+					{ name: "swiss-grid", title: "Swiss Grid", html: "<html>GRID-LAYOUT</html>" },
+				],
+			}),
 		);
-		expect(
-			compileHyperframesPrompt(baseInput({ referenceCompositions: [] })),
-		).not.toContain("REFERENCE DESIGNS");
+		expect(out).not.toContain("STYLE SOURCE");
+		expect(out).not.toContain("GRID-LAYOUT");
 	});
 
-	test("truncates very long composition HTML", () => {
+	test("omits embedding when none are picked", () => {
+		expect(compileHyperframesPrompt(baseInput())).not.toContain("STYLE SOURCE");
+		expect(
+			compileHyperframesPrompt(baseInput({ referenceCompositions: [] })),
+		).not.toContain("STYLE SOURCE");
+	});
+
+	test("truncates very long STYLE SOURCE HTML", () => {
 		const huge = "x".repeat(20000);
 		const out = compileHyperframesPrompt(
 			baseInput({
+				selections: [{ name: "big", kind: "example", title: "Big" }],
 				referenceCompositions: [{ name: "big", title: "Big", html: huge }],
 			}),
 		);
@@ -55,16 +64,17 @@ describe("compileHyperframesPrompt — reference compositions", () => {
 		expect(out).not.toContain("x".repeat(20000));
 	});
 
-	test("embeds multiple reference compositions in order", () => {
+	test("STYLE SOURCE first, then loose-inspiration references, in order", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({
+				selections: [{ name: "a", kind: "example", title: "Alpha" }],
 				referenceCompositions: [
 					{ name: "a", title: "Alpha", html: "AAA" },
 					{ name: "b", title: "Beta", html: "BBB" },
 				],
 			}),
 		);
-		expect(out).toContain("--- Alpha (a) ---");
+		expect(out).toContain("Alpha (a)");
 		expect(out).toContain("--- Beta (b) ---");
 		expect(out.indexOf("Alpha")).toBeLessThan(out.indexOf("Beta"));
 		expect(out).toContain("AAA");
@@ -220,12 +230,12 @@ describe("compileHyperframesPrompt — picked style is the STYLE SOURCE (design 
 		expect(out).not.toContain("do NOT place them verbatim");
 	});
 
-	test("a reference WITHOUT a single-example selection is a design reference, not the STYLE SOURCE", () => {
+	test("a reference WITHOUT a single-example selection is not embedded at all", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({ referenceCompositions: [swissRef] }),
 		);
-		expect(out).toContain("REFERENCE DESIGNS");
 		expect(out).not.toContain("STYLE SOURCE");
+		expect(out).not.toContain("font-family:Helvetica"); // html not embedded
 	});
 
 	test("non-primary references stay inspiration alongside the STYLE SOURCE", () => {

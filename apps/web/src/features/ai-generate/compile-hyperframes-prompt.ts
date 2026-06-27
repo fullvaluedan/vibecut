@@ -134,7 +134,7 @@ export function compileHyperframesPrompt(
 	const lines: string[] = [];
 
 	lines.push(
-		`Author a HyperFrames overlay composition for a video editor (VibeCut).`,
+		`Author a HyperFrames overlay GRAPHIC that recaps or visualizes the SPOKEN CONTENT of ONE video. It overlays that video's footage and is ABOUT what the speaker actually says in the TRANSCRIPT below — NOT about the video editor, this tool, or generic advice. If the transcript is about anagrams, the graphics are about anagrams; never invent a different topic (e.g. editing tips, product features).`,
 	);
 	lines.push("");
 	lines.push(
@@ -249,12 +249,15 @@ export function compileHyperframesPrompt(
 		lines.push(html);
 		lines.push("```");
 	}
-	if (otherRefs.length) {
+	// Only embed reference HTML alongside a single-example STYLE SOURCE. In palette
+	// mode embedding several full compositions bloated the brief to ~38k chars and
+	// buried the real transcript (the skill then hallucinated off-topic content) —
+	// there the asset names + descriptions above are enough; the skill builds each
+	// form from its own knowledge.
+	if (baseRef && otherRefs.length) {
 		lines.push("");
 		lines.push(
-			baseRef
-				? `REFERENCE COMPOSITIONS (loose inspiration only — the STYLE SOURCE above wins any conflict):`
-				: `REFERENCE DESIGNS — the real design of selected assets. When you choose one of these for a moment, COPY its fonts, colors, and layout exactly (retarget only the content) — never invent a different look for it:`,
+			`REFERENCE COMPOSITIONS (loose inspiration only — the STYLE SOURCE above wins any conflict):`,
 		);
 		for (const ref of otherRefs) {
 			const html =
@@ -301,7 +304,7 @@ export function compileHyperframesPrompt(
 	// Transcript.
 	lines.push("");
 	lines.push(
-		`TRANSCRIPT of ${scope.label} (timestamps in seconds, relative to this segment):`,
+		`TRANSCRIPT of ${scope.label} — THIS IS THE SOURCE OF TRUTH for the graphics. Every word, number, and name on screen MUST come from here. Build the recap/list/chart from THESE spoken points only; do NOT borrow sample text from any reference design, and do NOT invent a topic that is not in this transcript. (timestamps in seconds, relative to this segment):`,
 	);
 	lines.push(transcript.trim() || "(no speech in this segment)");
 
