@@ -46,11 +46,19 @@ export function computeSafeZone(frames: readonly FrameSpeaker[]): SafeZone {
 	for (const f of frames) {
 		for (const z of f.occupies) occupied.add(z);
 	}
-	const occupiedAcrossClip = ALL.filter((z) => occupied.has(z));
-	const safeColumns = ALL.filter((z) => !occupied.has(z));
+	// The speaker can MOVE between samples, so the unsafe region is the contiguous
+	// SPAN from the leftmost to the rightmost third they were seen in — they
+	// crossed the columns in between. Seen in {left, right} ⇒ they passed through
+	// center ⇒ all three unsafe. So occupiedAcrossClip is the span, and the safe
+	// columns are its complement.
+	const idxs = ALL.map((z, i) => (occupied.has(z) ? i : -1)).filter((i) => i >= 0);
+	const lo = idxs.length ? Math.min(...idxs) : Number.POSITIVE_INFINITY;
+	const hi = idxs.length ? Math.max(...idxs) : Number.NEGATIVE_INFINITY;
+	const occupiedAcrossClip = ALL.filter((_, i) => i >= lo && i <= hi);
+	const safeColumns = ALL.filter((_, i) => i < lo || i > hi);
 
-	// No frames, or the speaker has been seen in every column at some point →
-	// no vertical column is safe for the whole clip; only a horizontal band is.
+	// No frames, or the speaker's span covers every column → no vertical column is
+	// safe for the whole clip; only a horizontal band is.
 	const bandOnly = frames.length === 0 || safeColumns.length === 0;
 
 	let instruction: string;
