@@ -100,19 +100,6 @@ function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
 }
 
-function groupHeading(kind: HfSelectionAsset["kind"]): string {
-	switch (kind) {
-		case "template":
-			return "Motion templates (transparent text/graphic overlays)";
-		case "block":
-			return "Blocks (self-contained graphics)";
-		case "component":
-			return "Components (effect snippets to layer in)";
-		case "example":
-			return "Whole-video templates (they REFRAME the footage into a designed layout)";
-	}
-}
-
 function renderSelectionGroup(assets: HfSelectionAsset[]): string {
 	return assets
 		.map((a) => {
@@ -181,39 +168,52 @@ export function compileHyperframesPrompt(
 		);
 	}
 
-	// Selections. A picked STYLE (an example/look) is a REQUIRED primary the skill
-	// must match — NOT a skippable preference (that framing let the skill ignore a
-	// chosen look like Swiss Grid and improvise its own). Blocks/components/templates
-	// stay optional helpers.
+	// Selections. ONE pick → use it (the user's deliberate choice, honored — this is
+	// what stopped Swiss Grid being silently skipped). MANY picks → a PALETTE: the
+	// skill chooses the best-fitting FORM per moment (code → code window, data →
+	// chart, several points → recap list), so no single style is forced onto every
+	// moment. Examples are LOOKS; blocks are ready GRAPHIC FORMS; components, effects.
 	lines.push("");
-	const styles = selections.filter((s) => s.kind === "example");
-	const helpers = selections.filter((s) => s.kind !== "example");
-	if (styles.length) {
-		const names = styles.map((s) => `"${s.title}"`).join(", ");
+	const examples = selections.filter((s) => s.kind === "example");
+	const blocks = selections.filter((s) => s.kind === "block");
+	const components = selections.filter((s) => s.kind === "component" || s.kind === "template");
+
+	if (selections.length > 1) {
 		lines.push(
-			`PRIMARY STYLE — REQUIRED: the user explicitly chose ${names} as the visual style. MATCH its LOOK — grid, typography, color/accent, and motion — so every graphic unmistakably reads as ${names}; do NOT substitute a different aesthetic. But the style is the LOOK, not the layout: within it, build the informative STRUCTURE the content calls for (a 3-5 point recap LIST, a real DATA CHART, an explanatory diagram) — you are NOT limited to a single label or card. If a chosen style is a data-chart style, build an actual chart; if it is an editorial grid, build a structured list/grid. Translate any full-frame design into the TRANSPARENT overlay (don't reframe the whole shot unless asked).`,
+			`ASSET PALETTE — the user selected these as the options for this video. For EACH moment, build the ONE graphic whose FORM best fits the spoken content, chosen from this palette. Pick the best fit EVERY time — do NOT force one asset, and do NOT default to the same look repeatedly; vary it with the content.`,
 		);
-		lines.push("");
-		lines.push(`Chosen style${styles.length > 1 ? "s" : ""}:`);
-		lines.push(renderSelectionGroup(styles));
-	}
-	if (helpers.length) {
-		lines.push("");
-		lines.push(
-			`ALSO SELECTED (optional helpers — use where one genuinely fits a spoken moment, skip any that don't suit; these never override the PRIMARY STYLE):`,
-		);
-		const order: HfSelectionAsset["kind"][] = ["template", "block", "component"];
-		for (const kind of order) {
-			const group = helpers.filter((s) => s.kind === kind);
-			if (!group.length) continue;
+		if (examples.length) {
 			lines.push("");
-			lines.push(`${groupHeading(kind)}:`);
-			lines.push(renderSelectionGroup(group));
+			lines.push(
+				`STYLES / LOOKS (full editorial designs — use one for a recap LIST of several key points, or a data chart in that style):`,
+			);
+			lines.push(renderSelectionGroup(examples));
 		}
-	}
-	if (!styles.length && !helpers.length) {
+		if (blocks.length) {
+			lines.push("");
+			lines.push(
+				`GRAPHIC FORMS (ready-made graphics — use the one whose form matches the content):`,
+			);
+			lines.push(renderSelectionGroup(blocks));
+		}
+		if (components.length) {
+			lines.push("");
+			lines.push(`EFFECTS / SNIPPETS (layer subtly, only when they suit):`);
+			lines.push(renderSelectionGroup(components));
+		}
+		lines.push("");
 		lines.push(
-			`No specific assets were selected — use your own judgment to add tasteful overlays (lower-thirds, kinetic titles, callouts) where the transcript warrants them.`,
+			`MATCH BY CONTENT: several points on a topic → a recap LIST in a style; numbers, a trend, or a comparison → a data CHART; code → a code-snippet form; a place or region → the matching map; a social post or app shown on screen → that app's block; a name or quote → a lower-third; a brand/logo → the logo form; a process or decision → a flowchart/decision-tree. A moment with no strong fit gets NOTHING.`,
+		);
+	} else if (selections.length === 1) {
+		const only = selections[0];
+		lines.push(
+			`SELECTED ASSET — the user explicitly chose "${only.title}" (${only.name}). USE it: build its graphic in its exact design wherever the content fits, and do NOT substitute a different aesthetic. The style is the LOOK, not the layout — within it, build the informative STRUCTURE the content needs (a recap LIST, a real DATA CHART, an explanatory diagram). Where the content does not suit this asset, make NOTHING rather than forcing it.`,
+		);
+		lines.push(renderSelectionGroup(selections));
+	} else {
+		lines.push(
+			`No specific assets were selected — use your own judgment to add tasteful, INFORMATIVE overlays (recap lists, data charts, explanatory cards) where the transcript warrants them.`,
 		);
 	}
 
@@ -223,11 +223,14 @@ export function compileHyperframesPrompt(
 	// terminal/monospace look), but build the informative STRUCTURE the content
 	// needs rather than copy the base's single layout. Others stay loose inspiration.
 	const refs = (referenceCompositions ?? []).filter((r) => r.html.trim());
-	const primaryStyleName = styles[0]?.name;
-	const baseRef = primaryStyleName
-		? refs.find((r) => r.name === primaryStyleName)
-		: undefined;
-	const inspirationRefs = refs.filter((r) => r !== baseRef);
+	// A SINGLE chosen example is the STYLE SOURCE (copy its design system exactly).
+	// In palette mode the references are real designs to MATCH when that asset is the
+	// one chosen for a moment — no single style is forced.
+	const baseRef =
+		selections.length === 1 && examples.length === 1
+			? refs.find((r) => r.name === examples[0].name)
+			: undefined;
+	const otherRefs = refs.filter((r) => r !== baseRef);
 
 	if (baseRef) {
 		const html =
@@ -246,12 +249,14 @@ export function compileHyperframesPrompt(
 		lines.push(html);
 		lines.push("```");
 	}
-	if (inspirationRefs.length) {
+	if (otherRefs.length) {
 		lines.push("");
 		lines.push(
-			`REFERENCE COMPOSITIONS (loose inspiration only — informed by, never copied; the PRIMARY STYLE / BASE above wins any conflict):`,
+			baseRef
+				? `REFERENCE COMPOSITIONS (loose inspiration only — the STYLE SOURCE above wins any conflict):`
+				: `REFERENCE DESIGNS — the real design of selected assets. When you choose one of these for a moment, COPY its fonts, colors, and layout exactly (retarget only the content) — never invent a different look for it:`,
 		);
-		for (const ref of inspirationRefs) {
+		for (const ref of otherRefs) {
 			const html =
 				ref.html.length > REFERENCE_HTML_MAX_CHARS
 					? `${ref.html.slice(0, REFERENCE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`

@@ -29,18 +29,19 @@ describe("compileHyperframesPrompt — reference compositions", () => {
 				],
 			}),
 		);
-		expect(out).toContain("REFERENCE COMPOSITIONS");
+		// No selection → references render as design references to MATCH if used.
+		expect(out).toContain("REFERENCE DESIGNS");
 		expect(out).toContain("Swiss Grid (swiss-grid)");
 		expect(out).toContain("GRID-LAYOUT");
 	});
 
 	test("omits the section when none are picked", () => {
 		expect(compileHyperframesPrompt(baseInput())).not.toContain(
-			"REFERENCE COMPOSITIONS",
+			"REFERENCE DESIGNS",
 		);
 		expect(
 			compileHyperframesPrompt(baseInput({ referenceCompositions: [] })),
-		).not.toContain("REFERENCE COMPOSITIONS");
+		).not.toContain("REFERENCE DESIGNS");
 	});
 
 	test("truncates very long composition HTML", () => {
@@ -137,47 +138,60 @@ describe("compileHyperframesPrompt — density hint", () => {
 	});
 });
 
-describe("compileHyperframesPrompt — picked style is required, not skippable", () => {
+describe("compileHyperframesPrompt — single pick honored, many = palette (no hardcoded style)", () => {
 	const swiss = {
 		name: "swiss-grid",
 		kind: "example" as const,
 		title: "Swiss Grid",
 		fullFrame: true,
 	};
-	const block = {
+	const dataChart = {
 		name: "data-chart",
 		kind: "block" as const,
 		title: "Data Chart",
 	};
+	const codeSnippet = {
+		name: "code-snippet",
+		kind: "block" as const,
+		title: "Code Snippet",
+	};
 
-	test("a picked style (example) is framed as a REQUIRED primary the skill must MATCH", () => {
+	test("a SINGLE picked asset is honored — used, never skipped", () => {
 		const out = compileHyperframesPrompt(baseInput({ selections: [swiss] }));
-		expect(out).toContain("PRIMARY STYLE — REQUIRED");
+		expect(out).toContain("SELECTED ASSET");
 		expect(out).toContain('"Swiss Grid"');
-		expect(out).toContain("MATCH it");
-		// It must NOT tell the skill it can skip the chosen style.
-		expect(out).not.toContain("SKIP any that don't suit the content");
+		expect(out).toContain("USE it");
+		expect(out).not.toContain("ASSET PALETTE");
 	});
 
-	test("a full-frame style is told to translate into the transparent overlay", () => {
-		const out = compileHyperframesPrompt(baseInput({ selections: [swiss] }));
-		expect(out).toContain("full-frame");
-		expect(out).toContain("TRANSPARENT overlay");
+	test("a single picked BLOCK is also honored (not demoted to a helper)", () => {
+		const out = compileHyperframesPrompt(baseInput({ selections: [dataChart] }));
+		expect(out).toContain("SELECTED ASSET");
+		expect(out).toContain('"Data Chart"');
+		expect(out).not.toContain("ASSET PALETTE");
 	});
 
-	test("blocks/components stay optional helpers that never override the style", () => {
+	test("MANY picks form a PALETTE the skill chooses from per moment — no forced style", () => {
 		const out = compileHyperframesPrompt(
-			baseInput({ selections: [swiss, block] }),
+			baseInput({ selections: [swiss, dataChart, codeSnippet] }),
 		);
-		expect(out).toContain("ALSO SELECTED (optional helpers");
-		expect(out).toContain("never override the PRIMARY STYLE");
+		expect(out).toContain("ASSET PALETTE");
+		expect(out).toContain("STYLES / LOOKS");
+		expect(out).toContain("GRAPHIC FORMS");
+		expect(out).toContain("MATCH BY CONTENT");
+		expect(out).toContain("Swiss Grid (swiss-grid)");
 		expect(out).toContain("Data Chart (data-chart)");
+		expect(out).toContain("Code Snippet (code-snippet)");
+		// No single style forced — the old swiss-grid-hardcode framing is gone.
+		expect(out).not.toContain("PRIMARY STYLE");
 	});
 
-	test("with no style picked there is no PRIMARY STYLE block", () => {
-		const out = compileHyperframesPrompt(baseInput({ selections: [block] }));
-		expect(out).not.toContain("PRIMARY STYLE — REQUIRED");
-		expect(out).toContain("ALSO SELECTED (optional helpers");
+	test("the palette must not be forced onto every moment", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swiss, dataChart] }),
+		);
+		expect(out).toContain("do NOT force one asset");
+		expect(out).toContain("A moment with no strong fit gets NOTHING");
 	});
 });
 
@@ -206,11 +220,11 @@ describe("compileHyperframesPrompt — picked style is the STYLE SOURCE (design 
 		expect(out).not.toContain("do NOT place them verbatim");
 	});
 
-	test("a reference WITHOUT a matching style selection stays loose inspiration", () => {
+	test("a reference WITHOUT a single-example selection is a design reference, not the STYLE SOURCE", () => {
 		const out = compileHyperframesPrompt(
 			baseInput({ referenceCompositions: [swissRef] }),
 		);
-		expect(out).toContain("REFERENCE COMPOSITIONS (loose inspiration");
+		expect(out).toContain("REFERENCE DESIGNS");
 		expect(out).not.toContain("STYLE SOURCE");
 	});
 

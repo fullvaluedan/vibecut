@@ -111,7 +111,12 @@ async function fetchReferenceCompositions(
 	picks: HfSelectionAsset[],
 	signal?: AbortSignal,
 ): Promise<{ name: string; title: string; html: string }[]> {
-	const want = picks.slice(0, MAX_REFERENCE_COMPS);
+	// Examples (the LOOKS) first, so the few fetched references are the design
+	// sources the skill matches — not arbitrary blocks from the front of the list.
+	const want = [
+		...picks.filter((p) => p.kind === "example"),
+		...picks.filter((p) => p.kind !== "example"),
+	].slice(0, MAX_REFERENCE_COMPS);
 	const fetched = await Promise.all(
 		want.map(async (p) => {
 			try {
