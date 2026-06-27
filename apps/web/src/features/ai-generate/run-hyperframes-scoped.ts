@@ -530,9 +530,13 @@ async function authorChunks({
 	return { rendered, skipped, tokensUsed };
 }
 
-/** claude-code spawns a local CLI per call → 1; hosted endpoints parallelize → 2. */
+/**
+ * Author chunks in parallel to cut the whole-timeline run's wall-clock. Each
+ * claude-code call spawns a local CLI, so 2 keeps the machine sane while roughly
+ * halving a multi-segment run; hosted endpoints parallelize more cheaply → 3.
+ */
 function authorConcurrency(): number {
-	return useAiSettingsStore.getState().authMode === "claude-code" ? 1 : 2;
+	return useAiSettingsStore.getState().authMode === "claude-code" ? 2 : 3;
 }
 
 /**
