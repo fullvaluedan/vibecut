@@ -178,3 +178,52 @@ describe("compileHyperframesPrompt — picked style is required, not skippable",
 		expect(out).toContain("ALSO SELECTED (optional helpers");
 	});
 });
+
+describe("compileHyperframesPrompt — picked style is a verbatim BASE to edit", () => {
+	const swissSel = {
+		name: "swiss-grid",
+		kind: "example" as const,
+		title: "Swiss Grid",
+		fullFrame: true,
+	};
+	const swissRef = {
+		name: "swiss-grid",
+		title: "Swiss Grid",
+		html: "<style>.x{font-family:Helvetica}</style><div>GRID-CONTENT</div>",
+	};
+
+	test("a picked style with a matching reference becomes the BASE, preserved verbatim", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swissSel], referenceCompositions: [swissRef] }),
+		);
+		expect(out).toContain("BASE COMPOSITION — START HERE AND EDIT IT");
+		expect(out).toContain("BYTE-FOR-BYTE");
+		expect(out).toContain("preserve its style VERBATIM");
+		expect(out).toContain("font-family:Helvetica"); // the base HTML is embedded
+		// Must NOT carry the old "informed by, do not place verbatim" license.
+		expect(out).not.toContain("do NOT place them verbatim");
+	});
+
+	test("a reference WITHOUT a matching style selection stays loose inspiration", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ referenceCompositions: [swissRef] }),
+		);
+		expect(out).toContain("REFERENCE COMPOSITIONS (loose inspiration");
+		expect(out).not.toContain("BASE COMPOSITION");
+	});
+
+	test("non-primary references stay inspiration alongside the BASE", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [swissSel],
+				referenceCompositions: [
+					swissRef,
+					{ name: "nyt-graph", title: "NYT Graph", html: "<div>NYT</div>" },
+				],
+			}),
+		);
+		expect(out).toContain("BASE COMPOSITION");
+		expect(out).toContain("REFERENCE COMPOSITIONS (loose inspiration");
+		expect(out).toContain("NYT Graph (nyt-graph)");
+	});
+});

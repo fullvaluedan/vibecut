@@ -84,11 +84,17 @@ export interface CompileHyperframesPromptInput {
 }
 
 /**
- * Per-composition HTML cap in the brief. Kept modest on purpose: the skill only
- * needs the reference's DESIGN LANGUAGE (layout, type, color, motion), not every
- * line — and a smaller brief authors much faster (large briefs were taking minutes).
+ * Cap for LOOSE-inspiration reference HTML. Kept modest: the skill only needs the
+ * design language (layout, type, color, motion), and a smaller brief authors faster.
  */
 const REFERENCE_HTML_MAX_CHARS = 6000;
+
+/**
+ * Cap for the BASE composition (the user's chosen style). Larger, because the skill
+ * must preserve its <style> block VERBATIM — truncating the CSS would force it to
+ * improvise the missing styles, which is exactly the drift we're preventing.
+ */
+const BASE_HTML_MAX_CHARS = 16000;
 
 function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
@@ -195,14 +201,41 @@ export function compileHyperframesPrompt(
 		);
 	}
 
-	// Reference compositions — the real picked assets, for the author to adapt.
+	// Reference compositions. The PICKED STYLE's composition is the BASE the skill
+	// EDITS — it preserves the base's <style>/fonts/layout verbatim and only changes
+	// the content. The old "author informed by this, do NOT place verbatim" framing
+	// let the skill drift to its own aesthetic (e.g. a terminal/monospace look) and
+	// ignore the chosen style. Other references stay as loose inspiration.
 	const refs = (referenceCompositions ?? []).filter((r) => r.html.trim());
-	if (refs.length) {
+	const primaryStyleName = styles[0]?.name;
+	const baseRef = primaryStyleName
+		? refs.find((r) => r.name === primaryStyleName)
+		: undefined;
+	const inspirationRefs = refs.filter((r) => r !== baseRef);
+
+	if (baseRef) {
+		const html =
+			baseRef.html.length > BASE_HTML_MAX_CHARS
+				? `${baseRef.html.slice(0, BASE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`
+				: baseRef.html;
 		lines.push("");
 		lines.push(
-			`REFERENCE COMPOSITIONS: the user PICKED these real HyperFrames assets. ADAPT their visual design to the transcript below — keep their layout, type system, and animation style, but retarget the text/data to the spoken content. Do NOT invent a different design, and do NOT place them verbatim: author ONE coherent overlay timed to the moments, informed by these.`,
+			`BASE COMPOSITION — START HERE AND EDIT IT (do not author a new look from scratch). This is the user's chosen "${baseRef.title}" style, below. Build each graphic by taking this composition and changing ONLY the visible text/data (and timing) to fit the spoken moment. Keep the <style> block, every font-family, every color, the grid, and the class structure BYTE-FOR-BYTE — do NOT switch fonts (never a monospace/terminal/code look unless this base uses one), do NOT restyle or "improve" it. Every graphic MUST still read as "${baseRef.title}".`,
 		);
-		for (const ref of refs) {
+		lines.push("");
+		lines.push(
+			`--- ${baseRef.title} (${baseRef.name}) — BASE, preserve its style VERBATIM ---`,
+		);
+		lines.push("```html");
+		lines.push(html);
+		lines.push("```");
+	}
+	if (inspirationRefs.length) {
+		lines.push("");
+		lines.push(
+			`REFERENCE COMPOSITIONS (loose inspiration only — informed by, never copied; the PRIMARY STYLE / BASE above wins any conflict):`,
+		);
+		for (const ref of inspirationRefs) {
 			const html =
 				ref.html.length > REFERENCE_HTML_MAX_CHARS
 					? `${ref.html.slice(0, REFERENCE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`
