@@ -134,3 +134,47 @@ describe("compileHyperframesPrompt — density hint", () => {
 		expect(compileHyperframesPrompt(baseInput())).not.toContain("DENSITY:");
 	});
 });
+
+describe("compileHyperframesPrompt — picked style is required, not skippable", () => {
+	const swiss = {
+		name: "swiss-grid",
+		kind: "example" as const,
+		title: "Swiss Grid",
+		fullFrame: true,
+	};
+	const block = {
+		name: "data-chart",
+		kind: "block" as const,
+		title: "Data Chart",
+	};
+
+	test("a picked style (example) is framed as a REQUIRED primary the skill must MATCH", () => {
+		const out = compileHyperframesPrompt(baseInput({ selections: [swiss] }));
+		expect(out).toContain("PRIMARY STYLE — REQUIRED");
+		expect(out).toContain('"Swiss Grid"');
+		expect(out).toContain("MATCH it");
+		// It must NOT tell the skill it can skip the chosen style.
+		expect(out).not.toContain("SKIP any that don't suit the content");
+	});
+
+	test("a full-frame style is told to translate into the transparent overlay", () => {
+		const out = compileHyperframesPrompt(baseInput({ selections: [swiss] }));
+		expect(out).toContain("FULL-FRAME");
+		expect(out).toContain("TRANSLATE");
+	});
+
+	test("blocks/components stay optional helpers that never override the style", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swiss, block] }),
+		);
+		expect(out).toContain("ALSO SELECTED (optional helpers");
+		expect(out).toContain("never override the PRIMARY STYLE");
+		expect(out).toContain("Data Chart (data-chart)");
+	});
+
+	test("with no style picked there is no PRIMARY STYLE block", () => {
+		const out = compileHyperframesPrompt(baseInput({ selections: [block] }));
+		expect(out).not.toContain("PRIMARY STYLE — REQUIRED");
+		expect(out).toContain("ALSO SELECTED (optional helpers");
+	});
+});

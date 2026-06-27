@@ -83,8 +83,12 @@ export interface CompileHyperframesPromptInput {
 	speakerSafeZone?: string;
 }
 
-/** Per-composition HTML cap in the brief, so picked references don't blow the token budget. */
-const REFERENCE_HTML_MAX_CHARS = 12000;
+/**
+ * Per-composition HTML cap in the brief. Kept modest on purpose: the skill only
+ * needs the reference's DESIGN LANGUAGE (layout, type, color, motion), not every
+ * line — and a smaller brief authors much faster (large briefs were taking minutes).
+ */
+const REFERENCE_HTML_MAX_CHARS = 6000;
 
 function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
@@ -155,26 +159,37 @@ export function compileHyperframesPrompt(
 		);
 	}
 
-	// Selections — grouped by kind, framed as preferences.
+	// Selections. A picked STYLE (an example/look) is a REQUIRED primary the skill
+	// must match — NOT a skippable preference (that framing let the skill ignore a
+	// chosen look like Swiss Grid and improvise its own). Blocks/components/templates
+	// stay optional helpers.
 	lines.push("");
-	if (selections.length) {
+	const styles = selections.filter((s) => s.kind === "example");
+	const helpers = selections.filter((s) => s.kind !== "example");
+	if (styles.length) {
+		const names = styles.map((s) => `"${s.title}"`).join(", ");
 		lines.push(
-			`SELECTED ASSETS (the user checked these in the HyperFrames panel). Treat them as PREFERENCES, not a checklist: use your best judgment, fit them to the spoken moments below, and SKIP any that don't suit the content. You do not have to use all of them.`,
+			`PRIMARY STYLE — REQUIRED: the user explicitly chose ${names} as the visual style. MATCH it. Apply this style's visual language — its grid, typography, color/accent, and motion — to EVERY graphic so each one unmistakably reads as ${names}. Do NOT substitute a different aesthetic, and do NOT skip the style. If a chosen style's reference is a FULL-FRAME layout, TRANSLATE its design language into the TRANSPARENT overlay (a lower-third or corner card rendered in that style) — keep the look, just don't reframe the whole shot unless the user explicitly asked for a full-frame treatment.`,
 		);
-		const order: HfSelectionAsset["kind"][] = [
-			"template",
-			"block",
-			"component",
-			"example",
-		];
+		lines.push("");
+		lines.push(`Chosen style${styles.length > 1 ? "s" : ""}:`);
+		lines.push(renderSelectionGroup(styles));
+	}
+	if (helpers.length) {
+		lines.push("");
+		lines.push(
+			`ALSO SELECTED (optional helpers — use where one genuinely fits a spoken moment, skip any that don't suit; these never override the PRIMARY STYLE):`,
+		);
+		const order: HfSelectionAsset["kind"][] = ["template", "block", "component"];
 		for (const kind of order) {
-			const group = selections.filter((s) => s.kind === kind);
+			const group = helpers.filter((s) => s.kind === kind);
 			if (!group.length) continue;
 			lines.push("");
 			lines.push(`${groupHeading(kind)}:`);
 			lines.push(renderSelectionGroup(group));
 		}
-	} else {
+	}
+	if (!styles.length && !helpers.length) {
 		lines.push(
 			`No specific assets were selected — use your own judgment to add tasteful overlays (lower-thirds, kinetic titles, callouts) where the transcript warrants them.`,
 		);
