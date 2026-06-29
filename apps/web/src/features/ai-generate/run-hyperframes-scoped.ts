@@ -170,9 +170,17 @@ async function gatherTimelineSegments(
 ): Promise<{ start: number; end: number; text: string }[]> {
 	if (timelineHasAudio(editor)) {
 		try {
+			// Log only PHASE changes, not the ~1/second elapsed ticks. The cloud and
+			// local transcribers both emit a per-second "…Ns elapsed" update that
+			// otherwise floods the run log with dozens of near-identical lines.
+			let lastPhase = "";
 			const { segments } = await ensureTimelineTranscript({
 				editor,
-				onProgress: (p) => logRun(`${p.phase}: ${p.detail}`),
+				onProgress: (p) => {
+					if (p.phase === lastPhase) return;
+					lastPhase = p.phase;
+					logRun(`${p.phase}: ${p.detail}`);
+				},
 				signal,
 			});
 			return segments;
