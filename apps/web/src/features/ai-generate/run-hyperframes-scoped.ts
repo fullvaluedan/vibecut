@@ -42,6 +42,10 @@ import {
 	type AuthorChunk,
 } from "@/features/ai-generate/chunk-plan";
 import type { RunProgress } from "@/features/ai-generate/run-hyperframes";
+import {
+	scopeSegments,
+	hasAuthorableContent,
+} from "@/features/ai-generate/transcript-scope";
 
 /** Enabled native templates → selection hints for the author brief. */
 function enabledSelections(): HfSelectionAsset[] {
@@ -141,24 +145,6 @@ async function fetchReferenceCompositions(
 	);
 }
 
-/** Segments scoped to [startSec, endSec], offset to 0, as bracketed text. */
-function scopeSegments(
-	segments: { start: number; end: number; text: string }[],
-	startSec: number,
-	endSec: number,
-): string {
-	return segments
-		.filter((s) => s.end > startSec && s.start < endSec)
-		.map(
-			(s) =>
-				`[${Math.max(0, s.start - startSec).toFixed(1)}–${Math.max(
-					0,
-					s.end - startSec,
-				).toFixed(1)}] ${s.text.trim()}`,
-		)
-		.join("\n");
-}
-
 /** Does the timeline have any audio worth transcribing? */
 function timelineHasAudio(editor: EditorCore): boolean {
 	const t = editor.scenes.getActiveScene().tracks;
@@ -171,17 +157,17 @@ function timelineHasAudio(editor: EditorCore): boolean {
 }
 
 /**
- * Transcript for the clip so the authored graphic reflects what's SAID in it.
- * Transcribes on demand (cached after the first run) when the timeline has
- * audio; otherwise best-effort from cache. Never blocks authoring — a failure
- * just means the graphic is authored from the selections + look alone.
+ * Raw timeline transcript segments: transcribe on demand (cached after the
+ * first run) when the timeline has audio; otherwise best-effort from cache.
+ * Never blocks authoring — a failure falls through to whatever is cached. The
+ * RAW segments let callers slice any window AND check whether there is ANY
+ * speech to author from (an empty result is the real cause of the "no
+ * transcript" author failures).
  */
-async function gatherClipTranscript(
+async function gatherTimelineSegments(
 	editor: EditorCore,
-	startSec: number,
-	endSec: number,
 	signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ start: number; end: number; text: string }[]> {
 	if (timelineHasAudio(editor)) {
 		try {
 			const { segments } = await ensureTimelineTranscript({
@@ -189,7 +175,7 @@ async function gatherClipTranscript(
 				onProgress: (p) => logRun(`${p.phase}: ${p.detail}`),
 				signal,
 			});
-			return scopeSegments(segments, startSec, endSec);
+			return segments;
 		} catch (e) {
 			// A user cancel during transcription must abort the whole run — only
 			// a genuine transcript failure falls through to best-effort cache.
@@ -200,7 +186,35 @@ async function gatherClipTranscript(
 			);
 		}
 	}
-	return scopeSegments(getCachedTranscript(editor) ?? [], startSec, endSec);
+	return getCachedTranscript(editor) ?? [];
+}
+
+/** Clip transcript: the raw segments scoped to [startSec, endSec], offset to 0. */
+async function gatherClipTranscript(
+	editor: EditorCore,
+	startSec: number,
+	endSec: number,
+	signal?: AbortSignal,
+): Promise<string> {
+	return scopeSegments(
+		await gatherTimelineSegments(editor, signal),
+		startSec,
+		endSec,
+	);
+}
+
+/**
+ * Graphics recap SPOKEN content, so a run with NO transcript AND no user
+ * direction has nothing to author — every chunk would spawn a `claude -p` that
+ * correctly refuses ("(no speech in this segment)"). Fail fast with the actual
+ * reason instead of flooding the log with N identical refusals.
+ */
+function noAuthorableContentError(editor: EditorCore): Error {
+	return new Error(
+		timelineHasAudio(editor)
+			? "No speech was found in this video, so there's nothing to recap. If it has talking, the transcript came back empty — try Settings → AI → cloud transcription, or type a direction in the HyperFrames panel to author from. (Music-only clips have nothing to caption.)"
+			: "No audio is enabled on the timeline. HyperFrames graphics recap what's SAID — enable the clip's source audio (or add its audio track), or type a direction in the HyperFrames panel, then run again.",
+	);
 }
 
 let clipRunInFlight = false;
@@ -252,6 +266,11 @@ export async function runHyperframesOnClip({
 			endSec,
 			controller.signal,
 		);
+		// Nothing said in this clip and no direction to author from → the skill
+		// would just refuse. Fail fast with the reason instead of a doomed author.
+		if (!hasAuthorableContent(transcript, hfDirection)) {
+			throw noAuthorableContentError(editor);
+		}
 		const registrySelections = await pickedRegistrySelections();
 		const referenceCompositions = await fetchReferenceCompositions(
 			registrySelections,
@@ -380,19 +399,16 @@ interface SharedAuthorInputs {
 /** Transcribe once + gather the selections/look/direction shared by every chunk. */
 async function buildSharedInputs({
 	editor,
-	totalSec,
 	signal,
 }: {
 	editor: EditorCore;
-	totalSec: number;
 	signal?: AbortSignal;
 }): Promise<SharedAuthorInputs> {
 	const project = editor.project.getActive();
 	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
 	const { width, height } = project.settings.canvasSize;
-	// Warm the transcript cache once; chunks slice from it via scopeSegments.
-	await gatherClipTranscript(editor, 0, totalSec, signal);
-	const segments = getCachedTranscript(editor) ?? [];
+	// One transcription for the whole run; chunks slice it via scopeSegments.
+	const segments = await gatherTimelineSegments(editor, signal);
 	const registrySelections = await pickedRegistrySelections();
 	const referenceCompositions = await fetchReferenceCompositions(
 		registrySelections,
@@ -416,6 +432,25 @@ async function buildSharedInputs({
 			.getState()
 			.buildPreferenceNotes("graphics"),
 	};
+}
+
+/**
+ * R2 observability: log the transcript state ONCE per run so an empty transcript
+ * is diagnosable from the run log — never produced (no segments) vs lost in
+ * scoping (segments present but per-chunk char counts zero, logged in authorChunks).
+ */
+function logTranscriptSummary(segments: SharedAuthorInputs["segments"]): void {
+	if (!segments.length) {
+		logRun("transcript: no segments (nothing to author from)", "warn");
+		return;
+	}
+	const first = segments[0].start;
+	const last = segments[segments.length - 1].end;
+	logRun(
+		`transcript: ${segments.length} segment${
+			segments.length === 1 ? "" : "s"
+		}, ${first.toFixed(1)}s–${last.toFixed(1)}s`,
+	);
 }
 
 interface AuthoredChunkRender {
@@ -463,6 +498,16 @@ async function authorChunks({
 			chunk.startSec,
 			chunk.endSec,
 		);
+		// A silent segment (gap, music, intro) has nothing to recap and the skill
+		// would only refuse — skip it instead of a doomed author, unless the user
+		// gave a direction to author from (an angle alone is not content).
+		if (!hasAuthorableContent(transcript, shared.direction)) {
+			skipped.push(`segment ${chunk.label}: no speech in this segment`);
+			logRun(`${pre}— skipped ${chunk.label} (no speech)`, "warn");
+			done++;
+			onChunkDone?.(done, chunks.length);
+			return;
+		}
 		const direction = angle
 			? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
 			: shared.direction;
@@ -484,7 +529,7 @@ async function authorChunks({
 		});
 		try {
 			logRun(
-				`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label})…`,
+				`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label}) — ${transcript.trim().length} transcript chars…`,
 			);
 			const res = await fetch("/api/hyperframes/author", {
 				method: "POST",
@@ -586,7 +631,21 @@ export async function runHyperframesWholeTimeline({
 	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
-	const shared = await buildSharedInputs({ editor, totalSec, signal });
+	const shared = await buildSharedInputs({ editor, signal });
+	logTranscriptSummary(shared.segments);
+
+	// No speech across the run's span (and no direction) → don't spawn one doomed
+	// author per segment. Fail fast with the reason (run-log + the thrown toast).
+	const spanStart = range ? range.startSec : 0;
+	const spanEnd = range ? range.endSec : totalSec;
+	if (
+		!hasAuthorableContent(
+			scopeSegments(shared.segments, spanStart, spanEnd),
+			shared.direction,
+		)
+	) {
+		throw noAuthorableContentError(editor);
+	}
 
 	onProgress({
 		stage: "rendering",
@@ -684,7 +743,19 @@ export async function runHyperframesVariants({
 	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
-	const shared = await buildSharedInputs({ editor, totalSec, signal });
+	const shared = await buildSharedInputs({ editor, signal });
+	logTranscriptSummary(shared.segments);
+
+	// Whole-video pass with no speech (and no direction) → every version's every
+	// segment would refuse. Fail fast with the reason instead of N×M doomed authors.
+	if (
+		!hasAuthorableContent(
+			scopeSegments(shared.segments, 0, totalSec),
+			shared.direction,
+		)
+	) {
+		throw noAuthorableContentError(editor);
+	}
 
 	const versions: AuthoredVersion[] = [];
 	let tokensUsed = 0;
