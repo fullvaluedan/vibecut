@@ -14,7 +14,6 @@
  */
 
 import { useState } from "react";
-import { create } from "zustand";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -23,51 +22,14 @@ import type { EditorCore } from "@/core";
 import { placeHyperframesRenders } from "@/features/ai-generate/place-hyperframes-render";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import type { AuthoredVersion } from "@/features/ai-generate/run-hyperframes-scoped";
+import {
+	useVariantPickerStore,
+	buildVersionPlacements,
+} from "@/features/ai-generate/variant-picker-store";
 
-interface VariantPickerStore {
-	/** The generated drafts. Survives modal close; only discard()/apply clears it. */
-	versions: AuthoredVersion[] | null;
-	/** Modal visibility — independent of whether drafts exist. */
-	isOpen: boolean;
-	/** One object URL per render File, shared by every preview surface. */
-	urls: Map<File, string>;
-	/** Set fresh drafts (revoking any previous URLs) and open the modal. */
-	open: (versions: AuthoredVersion[]) => void;
-	/** Reopen the modal with the retained drafts (no-op if none). */
-	show: () => void;
-	/** Hide the modal but KEEP the drafts + URLs (recoverable). */
-	close: () => void;
-	/** Clear the drafts and revoke their URLs (the only destructive exit). */
-	discard: () => void;
-}
-
-function buildUrls(versions: AuthoredVersion[]): Map<File, string> {
-	const m = new Map<File, string>();
-	for (const v of versions) {
-		for (const r of v.renders) m.set(r.file, URL.createObjectURL(r.file));
-	}
-	return m;
-}
-
-function revokeUrls(urls: Map<File, string>): void {
-	for (const u of urls.values()) URL.revokeObjectURL(u);
-}
-
-export const useVariantPickerStore = create<VariantPickerStore>((set, get) => ({
-	versions: null,
-	isOpen: false,
-	urls: new Map(),
-	open: (versions) => {
-		revokeUrls(get().urls);
-		set({ versions, urls: buildUrls(versions), isOpen: true });
-	},
-	show: () => set((s) => (s.versions ? { isOpen: true } : {})),
-	close: () => set({ isOpen: false }),
-	discard: () => {
-		revokeUrls(get().urls);
-		set({ versions: null, urls: new Map(), isOpen: false });
-	},
-}));
+// The draft store + object-URL lifecycle live in variant-picker-store.ts (pure,
+// unit-tested). Re-exported so existing importers keep their import path.
+export { useVariantPickerStore };
 
 /** Short title from an angle string like "bold / high-energy — punchy …". */
 function angleTitle(angle: string): string {
@@ -84,14 +46,7 @@ export async function applyVariantVersion(
 ): Promise<void> {
 	const placed = await placeHyperframesRenders({
 		editor,
-		renders: v.renders.map((r) => ({
-			file: r.file,
-			startSec: r.chunk.startSec,
-			compId: r.compId,
-			templateId: `authored:${r.compId ?? r.chunk.index}`,
-			name: `HyperFrames: ${r.chunk.label}`,
-			brief: r.brief,
-		})),
+		renders: buildVersionPlacements(v),
 	});
 	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
 	toast.success(

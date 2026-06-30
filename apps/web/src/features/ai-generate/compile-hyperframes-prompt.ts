@@ -111,6 +111,24 @@ function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
 }
 
+/**
+ * Order picks so the FORM assets the content->form rubric is most likely to use
+ * come first: editorial/grid LOOKS (examples), then ready GRAPHIC FORMS (blocks:
+ * chart, diagram, map), then components/snippets. Capped to `max`. In palette mode
+ * only the first 1-2 become embedded FORM exemplars, so this ordering (not raw
+ * list order) decides which forms the skill gets a concrete exemplar to build.
+ */
+export function prioritizeFormPicks(
+	picks: HfSelectionAsset[],
+	max: number,
+): HfSelectionAsset[] {
+	return [
+		...picks.filter((p) => p.kind === "example"),
+		...picks.filter((p) => p.kind === "block"),
+		...picks.filter((p) => p.kind !== "example" && p.kind !== "block"),
+	].slice(0, max);
+}
+
 function renderSelectionGroup(assets: HfSelectionAsset[]): string {
 	return assets
 		.map((a) => {

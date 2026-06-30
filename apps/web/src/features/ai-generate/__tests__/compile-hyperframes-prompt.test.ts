@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	compileHyperframesPrompt,
+	prioritizeFormPicks,
 	type CompileHyperframesPromptInput,
+	type HfSelectionAsset,
 } from "../compile-hyperframes-prompt";
 
 function baseInput(
@@ -430,5 +432,52 @@ describe("compileHyperframesPrompt — informative substance, not title pills", 
 		const out = compileHyperframesPrompt(baseInput());
 		expect(out).toContain("never invent data");
 		expect(out).toContain("silence beats a useless title");
+	});
+});
+
+describe("prioritizeFormPicks — FORM-relevant ordering for exemplar embedding", () => {
+	const pick = (
+		name: string,
+		kind: HfSelectionAsset["kind"],
+	): HfSelectionAsset => ({ name, kind, title: name });
+
+	test("orders examples, then blocks, then everything else; caps at max", () => {
+		const picks = [
+			pick("snippet", "component"),
+			pick("chart", "block"),
+			pick("swiss", "example"),
+			pick("map", "block"),
+			pick("tmpl", "template"),
+			pick("editorial", "example"),
+		];
+		expect(prioritizeFormPicks(picks, 3).map((p) => p.name)).toEqual([
+			"swiss",
+			"editorial",
+			"chart",
+		]);
+	});
+
+	test("components/templates fill the cap only after examples + blocks", () => {
+		const picks = [pick("snippet", "component"), pick("chart", "block")];
+		expect(prioritizeFormPicks(picks, 5).map((p) => p.name)).toEqual([
+			"chart",
+			"snippet",
+		]);
+	});
+
+	test("caps to max even with more form picks than slots", () => {
+		const picks = [
+			pick("e1", "example"),
+			pick("e2", "example"),
+			pick("b1", "block"),
+		];
+		expect(prioritizeFormPicks(picks, 2).map((p) => p.name)).toEqual([
+			"e1",
+			"e2",
+		]);
+	});
+
+	test("empty picks yield empty", () => {
+		expect(prioritizeFormPicks([], 3)).toEqual([]);
 	});
 });
