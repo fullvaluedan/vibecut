@@ -203,7 +203,7 @@ export function compileHyperframesPrompt(
 		}
 		lines.push("");
 		lines.push(
-			`MATCH BY CONTENT: several points on a topic → a recap LIST in a style; numbers, a trend, or a comparison → a data CHART; code → a code-snippet form; a place or region → the matching map; a social post or app shown on screen → that app's block; a name or quote → a lower-third; a brand/logo → the logo form; a process or decision → a flowchart/decision-tree. A moment with no strong fit gets NOTHING.`,
+			`MATCH BY CONTENT (pick the ONE form that fits — vary it, do not default to a text card): several points on a topic → an editorial / SWISS-GRID key-points CARD (a 3–5 item list, accent rules, NOT numbered "01/02/03"); numbers, a trend, or a comparison → a data CHART built from the real values; a process or cause→effect → a DIAGRAM with connected nodes; a place or region → the matching MAP; code → a CODE card; a social post or app shown on screen → that app's block; a name or quote → a lower-third; a brand/logo → the logo form. A moment with no strong fit gets NOTHING.`,
 		);
 	} else if (selections.length === 1) {
 		const only = selections[0];

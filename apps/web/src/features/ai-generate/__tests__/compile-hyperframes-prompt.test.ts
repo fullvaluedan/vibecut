@@ -203,6 +203,22 @@ describe("compileHyperframesPrompt — single pick honored, many = palette (no h
 		expect(out).toContain("do NOT force one asset");
 		expect(out).toContain("A moment with no strong fit gets NOTHING");
 	});
+
+	test("MATCH BY CONTENT names the concrete VARIED forms (rubric), not just text", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swiss, dataChart, codeSnippet] }),
+		);
+		const match = out.slice(out.indexOf("MATCH BY CONTENT"));
+		// The content→form rubric: a chart, an editorial/swiss key-points card, a
+		// diagram, a map, and a code form must all be nameable so the skill varies
+		// the form by content instead of collapsing to a uniform text card.
+		expect(match).toContain("CHART");
+		expect(match).toContain("key-points CARD");
+		expect(match).toContain("SWISS-GRID");
+		expect(match).toContain("DIAGRAM");
+		expect(match).toContain("MAP");
+		expect(match).toContain("CODE card");
+	});
 });
 
 describe("compileHyperframesPrompt — picked style is the STYLE SOURCE (design copied, structure free)", () => {

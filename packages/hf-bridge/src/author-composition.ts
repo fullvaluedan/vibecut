@@ -171,7 +171,16 @@ function buildSkillBrief({
 	brief: string;
 }): string {
 	const d = Math.max(1, Math.round(durationSec * 10) / 10);
-	return `Author ONE short HyperFrames overlay composition with the hyperframes skill. This is a TINY single graphic, NOT a multi-scene video, so SKIP the heavy workflow: no discovery, no prompt-expansion, no design-picker, no beat-direction, and no lint/inspect/validate/animation-map steps. Do NOT read extra reference files. Author the composition HTML DIRECTLY in ONE pass and write it to ./index.html in the CURRENT directory.
+	return `Author ONE short HyperFrames overlay composition with the hyperframes skill. This is a TINY single graphic, NOT a multi-scene video, so SKIP the slow multi-scene MACHINERY: no beat-direction, no prompt-expansion, no lint/inspect/validate/animation-map steps. Author the composition HTML DIRECTLY in ONE pass and write it to ./index.html in the CURRENT directory. But DO use your content→form judgment: a graphic is only worth making if its FORM fits what is being said.
+
+CHOOSE THE FORM BY CONTENT (pick exactly ONE per moment — this is the whole point, do NOT collapse everything to a text card):
+- numbers / a trend / a comparison (scores, dates, before→after, X-vs-Y) → an animated CHART built from the REAL values in the brief (bars, a line, or a progress fill, in SVG/CSS — no chart libraries, legends, or gridlines).
+- a list of several points on one topic → an editorial / SWISS-GRID key-points card (asymmetric type, a 3–5 item list, accent rules) — NOT numbered "01/02/03".
+- a process or cause→effect → a small DIAGRAM with real connected nodes / labeled steps.
+- a place or region → a MAP form.
+- code → a CODE card.
+- a single strong idea with no structure above → a designed TYPOGRAPHIC hero — real hierarchy and motion, NEVER a bare line of text.
+Use the form knowledge you already have; if a concrete GRAPHIC FORM is named in the brief (map, chart, flowchart, diagram, logo, swiss-grid), build THAT form with the moment's content and do not downgrade it to a generic text callout unless the moment genuinely has no data for it.
 
 Composition rules: ${width}x${height}, ${d}s total, TRANSPARENT background (it overlays footage; no full-frame fill unless a selected full-frame style is meant to reframe the shot). The ROOT element MUST carry the FULL contract or the graphic renders BLANK — put it directly in <body> (no <template> wrapper) exactly as: <div data-composition-id="root" data-start="0" data-width="${width}" data-height="${height}" data-duration="${d}"> … </div>. data-start="0" is REQUIRED: without it the runtime never starts playback, so any entrance built with gsap.from(opacity:0) stays invisible and the render is empty. Build ONE paused GSAP timeline registered on window.__timelines["root"], and keep it deterministic (no Math.random or Date.now). Do NOT GSAP-animate transform/x/y on an element that is centered with a CSS transform (e.g. translateX(-50%)) — GSAP overwrites the whole transform and breaks the centering; animate a child wrapper, or use xPercent/top/left + autoAlpha. Use the user's selected assets/style below FAITHFULLY: if they named a style, match it, do not improvise a different look.
 
@@ -181,9 +190,7 @@ PLACEMENT (critical): this overlays a TALKING-HEAD video. The speaker is NOT alw
 - Do NOT default to a tall side card — that only works if you KNOW the speaker is on the opposite side, and a moving or off-center speaker breaks it. Use a side/corner card only when the brief's safe zone confirms that side is clear.
 - Never cover the vertical-center region where a face typically sits. A full-frame style (a grid/layout meant to reframe the shot) is the only exception.
 
-FAITHFUL TO CONCRETE ASSETS: if a selected asset is a concrete GRAPHIC FORM (a map, chart, flowchart, diagram, or logo), build THAT form and fit the moment's content to it — e.g. a us-map asset means an actual US map, a flowchart means real connected nodes. Do not silently downgrade it to a generic text callout unless the moment genuinely has no data for that form.
-
-INTENT: the graphic should HELP the viewer grasp the spoken point, not distract or interrupt. Keep it clean and minimal: short text (<= 5 words per line), clear hierarchy, on-brand with the selected style, high contrast against busy footage (a solid bar/box behind text, never a full-frame fill). Animate it IN, hold briefly, then animate it OUT within the ${d}s so it never lingers.
+INTENT: the graphic should HELP the viewer grasp the spoken point, not distract or interrupt — it must carry INFORMATION the audio alone does not (a structured recap, a chart of the numbers, a diagram of the concept), in the form chosen above. Keep clear hierarchy and high contrast against busy footage (a solid bar/box behind text, never a full-frame fill). Animate it IN, hold long enough to read, then animate it OUT within the ${d}s so it never lingers.
 
 Write ./index.html now and stop. Do not run npx, render, lint, or init.
 
