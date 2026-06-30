@@ -96,6 +96,17 @@ const REFERENCE_HTML_MAX_CHARS = 6000;
  */
 const BASE_HTML_MAX_CHARS = 16000;
 
+/**
+ * Palette-mode FORM exemplars: how many, and how hard each is truncated. Kept SMALL
+ * and FEW on purpose — embedding several full compositions once bloated the brief to
+ * ~38k chars and buried the transcript (the skill then hallucinated off-topic). These
+ * are concrete forms (a chart, a swiss/editorial card) to INSTANTIATE with the
+ * transcript's content, not to copy verbatim, and they sit AFTER the transcript so
+ * grounding always comes first.
+ */
+const PALETTE_EXEMPLAR_COUNT = 2;
+const PALETTE_EXEMPLAR_MAX_CHARS = 3500;
+
 function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
 }
@@ -307,6 +318,34 @@ export function compileHyperframesPrompt(
 		`TRANSCRIPT of ${scope.label} — THIS IS THE SOURCE OF TRUTH for the graphics. Every word, number, and name on screen MUST come from here. Build the recap/list/chart from THESE spoken points only; do NOT borrow sample text from any reference design, and do NOT invent a topic that is not in this transcript. (timestamps in seconds, relative to this segment):`,
 	);
 	lines.push(transcript.trim() || "(no speech in this segment)");
+
+	// Palette-mode FORM exemplars. In palette mode there is no single STYLE SOURCE,
+	// so the skill otherwise has the asset NAME ("data-chart", "swiss-grid") but no
+	// HTML to instantiate — and was forbidden from reading the files. Embed a SMALL,
+	// capped set of the picked FORM compositions AFTER the transcript (grounding stays
+	// first), clearly framed as forms to INSTANTIATE with the transcript's content,
+	// never to copy. baseRef is only set in single-example mode, so this never
+	// double-embeds the STYLE SOURCE.
+	if (!baseRef && selections.length > 1 && refs.length) {
+		const exemplars = refs.slice(0, PALETTE_EXEMPLAR_COUNT);
+		lines.push("");
+		lines.push(
+			`FORM EXEMPLARS — concrete HTML for ${exemplars.length === 1 ? "a" : "the"} picked FORM${exemplars.length === 1 ? "" : "s"} below. When you choose this form for a moment (per MATCH BY CONTENT), INSTANTIATE its layout/structure with the TRANSCRIPT's real content — do NOT copy its sample text, numbers, or topic (that is placeholder). The transcript above is the only source of truth; these show the FORM, not the words.`,
+		);
+		for (const ref of exemplars) {
+			const html =
+				ref.html.length > PALETTE_EXEMPLAR_MAX_CHARS
+					? `${ref.html.slice(0, PALETTE_EXEMPLAR_MAX_CHARS)}\n<!-- ...truncated... -->`
+					: ref.html;
+			lines.push("");
+			lines.push(
+				`--- ${ref.title} (${ref.name}) — FORM to instantiate with transcript content ---`,
+			);
+			lines.push("```html");
+			lines.push(html);
+			lines.push("```");
+		}
+	}
 
 	// Hard requirements.
 	lines.push("");

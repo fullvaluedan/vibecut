@@ -82,6 +82,92 @@ describe("compileHyperframesPrompt — reference compositions", () => {
 	});
 });
 
+describe("compileHyperframesPrompt — palette-mode FORM exemplars", () => {
+	const swiss = {
+		name: "swiss-grid",
+		kind: "example" as const,
+		title: "Swiss Grid",
+		fullFrame: true,
+	};
+	const dataChart = {
+		name: "data-chart",
+		kind: "block" as const,
+		title: "Data Chart",
+	};
+
+	test("palette mode embeds a picked FORM's HTML as a form-to-instantiate, AFTER the transcript", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [swiss, dataChart],
+				transcript: "[0.0–2.0] We scored 42 then 88",
+				referenceCompositions: [
+					{ name: "data-chart", title: "Data Chart", html: "<div>CHART-FORM</div>" },
+				],
+			}),
+		);
+		expect(out).toContain("FORM EXEMPLARS");
+		expect(out).toContain("Data Chart (data-chart)");
+		expect(out).toContain("CHART-FORM");
+		expect(out).toContain("INSTANTIATE");
+		// Grounding first: the transcript must appear BEFORE any embedded exemplar HTML.
+		expect(out.indexOf("We scored 42")).toBeLessThan(out.indexOf("CHART-FORM"));
+		// Palette mode is NOT the single-example STYLE SOURCE path.
+		expect(out).not.toContain("STYLE SOURCE");
+	});
+
+	test("embedded exemplar HTML is truncated to the per-exemplar cap", () => {
+		const huge = "y".repeat(20000);
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [swiss, dataChart],
+				referenceCompositions: [{ name: "data-chart", title: "Data Chart", html: huge }],
+			}),
+		);
+		expect(out).toContain("truncated");
+		expect(out).not.toContain("y".repeat(20000));
+	});
+
+	test("at most two FORM exemplars are embedded even with more picks", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [
+					swiss,
+					dataChart,
+					{ name: "code-snippet", kind: "block", title: "Code Snippet" },
+				],
+				referenceCompositions: [
+					{ name: "swiss-grid", title: "Swiss Grid", html: "<div>EX-ONE</div>" },
+					{ name: "data-chart", title: "Data Chart", html: "<div>EX-TWO</div>" },
+					{ name: "code-snippet", title: "Code Snippet", html: "<div>EX-THREE</div>" },
+				],
+			}),
+		);
+		expect(out).toContain("EX-ONE");
+		expect(out).toContain("EX-TWO");
+		expect(out).not.toContain("EX-THREE");
+	});
+
+	test("single-example selection still uses STYLE SOURCE, not a FORM EXEMPLAR (no double-embed)", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [swiss],
+				referenceCompositions: [
+					{ name: "swiss-grid", title: "Swiss Grid", html: "<div>GRID</div>" },
+				],
+			}),
+		);
+		expect(out).toContain("STYLE SOURCE");
+		expect(out).not.toContain("FORM EXEMPLARS");
+	});
+
+	test("no reference compositions → no exemplar block, no crash", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swiss, dataChart] }),
+		);
+		expect(out).not.toContain("FORM EXEMPLARS");
+	});
+});
+
 describe("compileHyperframesPrompt — learned preferences", () => {
 	test("renders a LEARNED PREFERENCES section with each note", () => {
 		const out = compileHyperframesPrompt(

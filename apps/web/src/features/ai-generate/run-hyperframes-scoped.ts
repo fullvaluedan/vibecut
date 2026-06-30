@@ -115,11 +115,15 @@ async function fetchReferenceCompositions(
 	picks: HfSelectionAsset[],
 	signal?: AbortSignal,
 ): Promise<{ name: string; title: string; html: string }[]> {
-	// Examples (the LOOKS) first, so the few fetched references are the design
-	// sources the skill matches — not arbitrary blocks from the front of the list.
+	// Prioritize FORM relevance, not list order: editorial/grid LOOKS (examples)
+	// first, then ready GRAPHIC FORMS (blocks: chart, diagram, map), then components.
+	// In palette mode only the top 1–2 of these become embedded FORM exemplars, so the
+	// few fetched references must be the forms the content→form rubric actually uses —
+	// not arbitrary effects/snippets from the front of the list.
 	const want = [
 		...picks.filter((p) => p.kind === "example"),
-		...picks.filter((p) => p.kind !== "example"),
+		...picks.filter((p) => p.kind === "block"),
+		...picks.filter((p) => p.kind !== "example" && p.kind !== "block"),
 	].slice(0, MAX_REFERENCE_COMPS);
 	const fetched = await Promise.all(
 		want.map(async (p) => {
