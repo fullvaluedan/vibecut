@@ -356,6 +356,51 @@ describe("compileHyperframesPrompt — picked style is the STYLE SOURCE (design 
 	});
 });
 
+describe("compileHyperframesPrompt — standing regression set (form variety must not regress)", () => {
+	const swiss = {
+		name: "swiss-grid",
+		kind: "example" as const,
+		title: "Swiss Grid",
+		fullFrame: true,
+	};
+	const dataChart = {
+		name: "data-chart",
+		kind: "block" as const,
+		title: "Data Chart",
+	};
+
+	test("the new form rubric and the old substance guards COEXIST (variety added, grounding kept)", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({ selections: [swiss, dataChart] }),
+		);
+		// Variety: the content→form rubric is present…
+		expect(out).toContain("MATCH BY CONTENT");
+		expect(out).toContain("CHART");
+		expect(out).toContain("DIAGRAM");
+		// …without dropping the substance/no-pill guards.
+		expect(out).toContain("NEVER author");
+		expect(out).toContain('"01 / 02 / 03"');
+		expect(out).toContain("never invent data");
+		expect(out).toContain("THIS IS THE SOURCE OF TRUTH");
+	});
+
+	test("the transcript always precedes any embedded FORM EXEMPLAR heading (grounding first)", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				selections: [swiss, dataChart],
+				transcript: "[0.0–2.0] UNIQUE-TRANSCRIPT-MARKER",
+				referenceCompositions: [
+					{ name: "data-chart", title: "Data Chart", html: "<div>X</div>" },
+				],
+			}),
+		);
+		expect(out).toContain("FORM EXEMPLARS");
+		expect(out.indexOf("UNIQUE-TRANSCRIPT-MARKER")).toBeLessThan(
+			out.indexOf("FORM EXEMPLARS"),
+		);
+	});
+});
+
 describe("compileHyperframesPrompt — informative substance, not title pills", () => {
 	test("GOAL demands information beyond the audio + lists the substantive forms", () => {
 		const out = compileHyperframesPrompt(baseInput());
