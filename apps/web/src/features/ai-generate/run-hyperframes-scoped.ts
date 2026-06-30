@@ -174,15 +174,25 @@ async function gatherTimelineSegments(
 ): Promise<{ start: number; end: number; text: string }[]> {
 	if (timelineHasAudio(editor)) {
 		try {
-			// Log only PHASE changes, not the ~1/second elapsed ticks. The cloud and
-			// local transcribers both emit a per-second "…Ns elapsed" update that
-			// otherwise floods the run log with dozens of near-identical lines.
+			// Collapse the per-second "…Ns elapsed" tickers (initializing-model,
+			// transcribing repeat the same phase with a changing elapsed count) to one
+			// line each, but let the model-download phase's live percentage through — a
+			// fresh ~40MB download is the one long first-run step where visible progress
+			// matters, and it repeats the same phase with a changing "% downloaded".
 			let lastPhase = "";
+			let lastDetail = "";
 			const { segments } = await ensureTimelineTranscript({
 				editor,
 				onProgress: (p) => {
-					if (p.phase === lastPhase) return;
+					const carriesProgress = p.phase === "downloading-model";
+					if (
+						p.phase === lastPhase &&
+						!(carriesProgress && p.detail !== lastDetail)
+					) {
+						return;
+					}
 					lastPhase = p.phase;
+					lastDetail = p.detail;
 					logRun(`${p.phase}: ${p.detail}`);
 				},
 				signal,

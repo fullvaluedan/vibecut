@@ -62,6 +62,9 @@ describe("compileHyperframesPrompt — reference compositions", () => {
 		);
 		expect(out).toContain("truncated");
 		expect(out).not.toContain("x".repeat(20000));
+		// Pin the cap: exactly BASE_HTML_MAX_CHARS (16000) of the input is kept.
+		expect(out).toContain("x".repeat(16000));
+		expect(out).not.toContain("x".repeat(16001));
 	});
 
 	test("STYLE SOURCE first, then loose-inspiration references, in order", () => {
@@ -125,6 +128,10 @@ describe("compileHyperframesPrompt — palette-mode FORM exemplars", () => {
 		);
 		expect(out).toContain("truncated");
 		expect(out).not.toContain("y".repeat(20000));
+		// Pin the cap: exactly PALETTE_EXEMPLAR_MAX_CHARS (3500) is kept — a silent
+		// regression to a larger cap (e.g. 16000) is the bloat this guards against.
+		expect(out).toContain("y".repeat(3500));
+		expect(out).not.toContain("y".repeat(3501));
 	});
 
 	test("at most two FORM exemplars are embedded even with more picks", () => {
