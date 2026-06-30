@@ -71,6 +71,10 @@ export function RunHyperframesButton() {
 	const [progress, setProgress] = useState<RunProgress | null>(null);
 	const abortRef = useRef<AbortController | null>(null);
 	const engine = useAiSettingsStore((s) => s.hfEngine);
+	// Drafts persist after the picker closes — surface a re-open affordance so a
+	// closed picker (and the tokens/render time it cost) is recoverable.
+	const draftCount = useVariantPickerStore((s) => s.versions?.length ?? 0);
+	const showPicker = useVariantPickerStore((s) => s.show);
 	const isRunning =
 		progress !== null &&
 		progress.stage !== "done" &&
@@ -385,6 +389,27 @@ export function RunHyperframesButton() {
 							Generate 3 distinct versions of the whole video and pick the one
 							you like. Renders one at a time (light on your machine) — slower
 							than a single run, but easy on resources.
+						</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			)}
+			{draftCount > 0 && (
+				<TooltipProvider delayDuration={300}>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="secondary"
+								size="sm"
+								onClick={showPicker}
+								className="rounded-sm"
+							>
+								Versions (ready) ▸
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							Reopen your {draftCount} generated version
+							{draftCount === 1 ? "" : "s"} to review and pick one — they stay
+							here until you apply or discard them.
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
