@@ -961,12 +961,18 @@ export class DragDropController {
 				elements: rippleAudioTrack.elements,
 				insertStart,
 			});
-			if (straddler) {
-				const split = computeStraddleSplit({
-					element: straddler,
-					insertStart,
-					shiftDuration: summedDuration,
-				});
+			const split = straddler
+				? computeStraddleSplit({
+						element: straddler,
+						insertStart,
+						shiftDuration: summedDuration,
+					})
+				: null;
+			// Order: head-shrink → downstream shifts → tail insert. Emitting the shifts
+			// BEFORE the tail insert means the tail lands into an already-open hole with
+			// no transient in-batch overlap (both resolve correctly either way, but this
+			// keeps every intermediate state gap-free).
+			if (split) {
 				commands.push(
 					new UpdateElementsCommand({
 						updates: [
@@ -980,10 +986,6 @@ export class DragDropController {
 								},
 							},
 						],
-					}),
-					new InsertElementCommand({
-						element: split.tail,
-						placement: { mode: "explicit", trackId: rippleAudioTrack.id },
 					}),
 				);
 			}
@@ -1000,6 +1002,14 @@ export class DragDropController {
 							elementId: shift.id,
 							patch: { startTime: shift.startTime },
 						})),
+					}),
+				);
+			}
+			if (split) {
+				commands.push(
+					new InsertElementCommand({
+						element: split.tail,
+						placement: { mode: "explicit", trackId: rippleAudioTrack.id },
 					}),
 				);
 			}
