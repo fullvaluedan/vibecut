@@ -515,6 +515,18 @@ export class DragDropController {
 		mode: DragDropMode;
 	}): void {
 		if (target.targetElement) {
+			// Authored / HyperFrames overlay clips are an invariant: never ripple or
+			// overwrite them from a bin drop. Media drags hit-test [video,image,
+			// graphic], and a HyperFrames render is a `video` clip on an overlay lane
+			// (carries `framecutAi`), so it CAN be hit here. If the covered clip is
+			// authored, divert: drop the media onto its OWN new track at the drop
+			// point instead (never touch the authored clip, never silently lose the
+			// dragged media).
+			if (this.isCoveredClipAuthored({ targetElement: target.targetElement })) {
+				this.insertMediaOnNewTrack({ target, dragData });
+				return;
+			}
+
 			// A clip sits under the cursor (video/image hit-test).
 			// OVERWRITE (Ctrl/Cmd): clear that region in place, no ripple.
 			// INSERT (default): push it + everything downstream right to make room.
@@ -575,6 +587,67 @@ export class DragDropController {
 		});
 		const inserted = this.insertAtTarget({ element, target, trackType });
 		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+	}
+
+	/**
+	 * Is the clip under the cursor an authored / HyperFrames-provenance clip? Such
+	 * clips carry `framecutAi` (HyperFrames renders + baked registry blocks are
+	 * `video` elements with it set), and must never be rippled or overwritten by a
+	 * bin drop.
+	 */
+	private isCoveredClipAuthored({
+		targetElement,
+	}: {
+		targetElement: { trackId: string; elementId: string };
+	}): boolean {
+		const track = orderedTracks({
+			sceneTracks: this.config.getSceneTracks(),
+		}).find((candidate) => candidate.id === targetElement.trackId);
+		const element = track?.elements.find(
+			(candidate) => candidate.id === targetElement.elementId,
+		);
+		return !!element && "framecutAi" in element && element.framecutAi != null;
+	}
+
+	/**
+	 * Drop the dragged media onto its OWN new track (default position for its type),
+	 * ignoring the covered clip entirely. Used to divert a drop off an authored
+	 * clip: the media lands (never silently lost) and the authored clip is
+	 * untouched. AddTrackCommand with no explicit index picks the default insert
+	 * slot for the type.
+	 */
+	private insertMediaOnNewTrack({
+		target,
+		dragData,
+	}: {
+		target: DropTarget;
+		dragData: Extract<TimelineDragData, { type: "media" }>;
+	}): void {
+		const mediaAsset = this.config
+			.getMediaAssets()
+			.find((asset) => asset.id === dragData.id);
+		if (!mediaAsset) return;
+
+		const trackType: TrackType =
+			dragData.mediaType === "audio" ? "audio" : "video";
+		const element = buildElementFromMedia({
+			mediaId: mediaAsset.id,
+			mediaType: mediaAsset.type,
+			name: mediaAsset.name,
+			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
+			startTime: target.xPosition,
+		});
+		const addTrackCmd = new AddTrackCommand({ type: trackType });
+		const insertCmd = new InsertElementCommand({
+			element,
+			placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
+		});
+		this.config.executeCommand(new BatchCommand([addTrackCmd, insertCmd]));
+		this.maybeSeparateAudio({
+			asset: mediaAsset,
+			elementId: insertCmd.getElementId(),
+			trackId: addTrackCmd.getTrackId(),
+		});
 	}
 
 	/**

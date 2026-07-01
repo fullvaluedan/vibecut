@@ -638,3 +638,120 @@ describe("findOccupiedLaneForInsert", () => {
 		expect(found).toBe("audio-2");
 	});
 });
+
+describe("authored / HyperFrames clip guard (never ripple/overwrite)", () => {
+	function authoredVideoClip({
+		id,
+		startTime,
+		duration,
+	}: {
+		id: string;
+		startTime: number;
+		duration: number;
+	}): VideoElement {
+		return {
+			...videoClip({ id, startTime, duration }),
+			framecutAi: {
+				compId: "comp-1",
+				templateId: "hyperframes:overlay",
+				variables: {},
+				groupId: "group-1",
+			},
+		};
+	}
+
+	function makeAuthoredScene() {
+		// An authored HyperFrames render (video + framecutAi) on an overlay lane,
+		// plus an empty main track. A media drop hit-tests the overlay video clip.
+		const overlay: VideoTrack = {
+			id: "overlay-authored",
+			type: "video",
+			name: "overlay-authored",
+			muted: false,
+			hidden: false,
+			elements: [authoredVideoClip({ id: "hf", startTime: 0, duration: TPS })],
+		};
+		const tracks: SceneTracks = {
+			overlay: [overlay],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [],
+		};
+		return makeController({
+			tracks,
+			assets: [asset({ id: "dropped", type: "video", duration: 1 })],
+		});
+	}
+
+	function drop(
+		controller: DragDropController,
+		mode: "insert" | "overwrite",
+	): void {
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "overlay-authored", elementId: "hf" },
+		};
+		(
+			controller as unknown as {
+				executeMediaDrop: (args: {
+					target: typeof target;
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					coords: { mouseX: number; mouseY: number } | null;
+					mode: "insert" | "overwrite";
+				}) => void;
+			}
+		).executeMediaDrop({
+			target,
+			dragData: {
+				type: "media",
+				id: "dropped",
+				mediaType: "video",
+				name: "dropped",
+			},
+			coords: { mouseX: 0, mouseY: 0 },
+			mode,
+		});
+	}
+
+	test("INSERT onto an authored clip diverts to a new track (no ripple of the authored clip)", () => {
+		const { controller, executed } = makeAuthoredScene();
+		drop(controller, "insert");
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// Diverted: a fresh track is added + the media inserted onto it. No
+		// UpdateElementsCommand (which is how a ripple would shift the authored clip).
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(true);
+		expect(cmds.some((c) => c instanceof InsertElementCommand)).toBe(true);
+		expect(cmds.some((c) => c instanceof UpdateElementsCommand)).toBe(false);
+		// The insert targets the NEW track, never the authored overlay lane.
+		const insert = cmds.find(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as { placement: { trackId: string } };
+		expect(insert.placement.trackId).not.toBe("overlay-authored");
+	});
+
+	test("OVERWRITE onto an authored clip also diverts (never clears the authored clip)", () => {
+		const { controller, executed } = makeAuthoredScene();
+		drop(controller, "overwrite");
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// No DeleteElementsCommand => the authored clip is never cleared. It diverts
+		// to a new track exactly like the insert case.
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(true);
+		const insert = cmds.find(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as { placement: { trackId: string } };
+		expect(insert.placement.trackId).not.toBe("overlay-authored");
+	});
+});
