@@ -209,6 +209,50 @@ describe("drag-to-insert (U5) BatchCommand shape", () => {
 		expect(cmds[0]).toBeInstanceOf(InsertElementCommand);
 	});
 
+	test("insert onto the earliest main clip (start != 0) lands at that start, not 0", () => {
+		// Main clip starts at TPS (a leading gap). Dropping on it anchors insertStart
+		// = TPS and ripples the clip right. The inserted clip must land at TPS: it
+		// carries skipMainTrackStart so the main-track snap-to-0 rule doesn't slide
+		// it to 0 (which would also desync it from its linked audio).
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [videoClip({ id: "a", startTime: TPS, duration: TPS })],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "new", duration: 1 })],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: { type: "media", id: "new", mediaType: "video", name: "new" },
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		const cmds = batchCommands(executed[0]);
+		const insert = cmds.find(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as {
+			element: { startTime: number };
+			placement: { mode: string; trackId: string; skipMainTrackStart?: boolean };
+		};
+		expect(insert.element.startTime).toBe(TPS);
+		expect(insert.placement.skipMainTrackStart).toBe(true);
+	});
+
 	test("audio insert on an occupied lane ripples that lane, no AddTrack", () => {
 		const audioTrack: AudioTrack = {
 			id: "audio-1",

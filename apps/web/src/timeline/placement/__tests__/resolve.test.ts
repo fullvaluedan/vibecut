@@ -719,6 +719,42 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 
+	test("explicit skipMainTrackStart leaves the requested start unsnapped (ripple-insert)", () => {
+		// Main clip starts at tick 5 (a leading gap, i.e. does NOT start at 0).
+		// Requesting an insert at 5 would normally snap to 0 (see the test above).
+		// With skipMainTrackStart the ripple's already-opened hole is honored: no
+		// adjustedStartTime, so the clip lands at 5, not 0.
+		const tracks = buildSceneTracks({
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "a", type: "video", startTime: 5, duration: 5 }),
+				],
+			}),
+		});
+
+		const result = resolveTrackPlacement({
+			tracks,
+			elementType: "video",
+			timeSpans: [buildTimeSpan({ startTime: 5, duration: 2 })],
+			strategy: {
+				type: "explicit",
+				trackId: "video-main",
+				skipMainTrackStart: true,
+			},
+		});
+		expect(result).toEqual({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackIndex: 0,
+			trackType: "video",
+		});
+		expect(
+			(result as { adjustedStartTime?: number }).adjustedStartTime,
+		).toBeUndefined();
+	});
+
 	test("preferIndex uses vertical drag direction when hovered track is incompatible", () => {
 		const tracks = buildSceneTracks({
 			overlay: [buildTrack({ id: "text-1", type: "text" })],

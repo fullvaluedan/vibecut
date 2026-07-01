@@ -30,20 +30,24 @@ function buildExistingTrackResult({
 	trackIndex,
 	tracks,
 	timeSpans,
+	skipMainTrackStart = false,
 }: {
 	track: TimelineTrack;
 	trackIndex: number;
 	tracks: SceneTracks;
 	timeSpans: PlacementTimeSpan[];
+	skipMainTrackStart?: boolean;
 }): PlacementResult {
 	const firstSpan = timeSpans[0];
 	const requestedStartTime = firstSpan?.startTime ?? ZERO_MEDIA_TIME;
-	const adjustedStartTime = enforceMainTrackStart({
-		tracks,
-		targetTrackId: track.id,
-		requestedStartTime,
-		excludeElementId: firstSpan?.excludeElementId,
-	});
+	const adjustedStartTime = skipMainTrackStart
+		? requestedStartTime
+		: enforceMainTrackStart({
+				tracks,
+				targetTrackId: track.id,
+				requestedStartTime,
+				excludeElementId: firstSpan?.excludeElementId,
+			});
 	return {
 		kind: "existingTrack",
 		trackId: track.id,
@@ -227,6 +231,7 @@ function resolveTrackPlacementUncapped({
 			trackIndex,
 			tracks,
 			timeSpans,
+			skipMainTrackStart: strategy.skipMainTrackStart,
 		});
 	}
 

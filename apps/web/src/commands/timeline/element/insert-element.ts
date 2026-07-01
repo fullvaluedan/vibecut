@@ -21,7 +21,7 @@ import {
 import { roundMediaTime } from "@/wasm";
 
 type InsertElementPlacement =
-	| { mode: "explicit"; trackId: string }
+	| { mode: "explicit"; trackId: string; skipMainTrackStart?: boolean }
 	| { mode: "auto"; trackType?: TrackType; insertIndex?: number };
 
 export interface InsertElementParams {
@@ -238,7 +238,11 @@ export class InsertElementCommand extends Command {
 			],
 			strategy:
 				placement.mode === "explicit"
-					? { type: "explicit", trackId: placement.trackId }
+					? {
+							type: "explicit",
+							trackId: placement.trackId,
+							skipMainTrackStart: placement.skipMainTrackStart,
+						}
 					: { type: "firstAvailable" },
 		});
 		if (!placementResult) {

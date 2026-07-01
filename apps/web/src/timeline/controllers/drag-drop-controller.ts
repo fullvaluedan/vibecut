@@ -697,11 +697,19 @@ export class DragDropController {
 			);
 		}
 
-		// 2) Insert the (video) clip at the hole.
+		// 2) Insert the (video) clip at the hole. Skip the main-track snap-to-0
+		// rule: the ripple already opened a gap-free hole at exactly insertStart, so
+		// enforcing "no leading gap" here would slide the new clip to 0 whenever it
+		// lands on the (post-shift) earliest main clip — misplacing it and desyncing
+		// it from its linked audio, which inserts unsnapped at insertStart.
 		commands.push(
 			new InsertElementCommand({
 				element: elementToInsert,
-				placement: { mode: "explicit", trackId: track.id },
+				placement: {
+					mode: "explicit",
+					trackId: track.id,
+					skipMainTrackStart: true,
+				},
 			}),
 		);
 
