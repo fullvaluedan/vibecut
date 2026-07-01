@@ -832,35 +832,44 @@ export class DragDropController {
 		if (!track) return;
 
 		// Multi-select drags carry the whole selection; a single drag carries only
-		// its own id. Resolve each to a track-compatible asset with a real duration,
-		// preserving the drag order so the cascade matches the bin selection.
+		// its own id. Resolve each to an asset with a real duration, preserving the
+		// drag order so the cascade matches the bin selection.
 		const ids =
 			dragData.mediaIds && dragData.mediaIds.length > 1
 				? dragData.mediaIds
 				: [dragData.id];
 		const allAssets = this.config.getMediaAssets();
-		const inserts = ids
+		const resolved = ids
 			.map((id) => allAssets.find((candidate) => candidate.id === id))
-			.filter((mediaAsset): mediaAsset is MediaAsset => {
-				if (!mediaAsset) return false;
-				if (
-					!canElementGoOnTrack({
-						elementType: mediaAsset.type,
-						trackType: track.type,
-					})
-				) {
-					return false;
-				}
-				return (
+			.filter(
+				(mediaAsset): mediaAsset is MediaAsset =>
+					!!mediaAsset &&
 					toElementDurationTicks({ seconds: mediaAsset.duration }) >
-					ZERO_MEDIA_TIME
-				);
-			})
+						ZERO_MEDIA_TIME,
+			)
 			.map((mediaAsset) => ({
 				mediaAsset,
 				duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
 			}));
-		if (inserts.length === 0) return;
+		// Members compatible with the target lane type ripple into it (the same-type
+		// and single-asset paths hit this exclusively). Track-incompatible members of
+		// a MIXED multi-select (e.g. an audio file dropped with a video onto a video
+		// lane) must NOT be silently dropped — they divert onto a fresh track of their
+		// own type in this SAME batch (see the divert loop below).
+		const inserts = resolved.filter(({ mediaAsset }) =>
+			canElementGoOnTrack({
+				elementType: mediaAsset.type,
+				trackType: track.type,
+			}),
+		);
+		const diverted = resolved.filter(
+			({ mediaAsset }) =>
+				!canElementGoOnTrack({
+					elementType: mediaAsset.type,
+					trackType: track.type,
+				}),
+		);
+		if (inserts.length === 0 && diverted.length === 0) return;
 
 		// The lane must open ONE hole wide enough for every asset, so it ripples by
 		// the SUMMED duration; the same summed shift drives the audio lane's ripple
@@ -1052,6 +1061,61 @@ export class DragDropController {
 				);
 			}
 			cascade = addMediaTime({ a: cascade, b: duration });
+		}
+
+		// 4) A MIXED multi-select drops members whose type can't live on the ripple
+		// lane (e.g. an audio file alongside a video, dropped onto a video lane). Never
+		// discard them: lay each out on a FRESH track of its own type (packed per type,
+		// cascaded from insertStart) inside THIS batch, so nothing is lost and it stays
+		// one undo. A diverted video keeps its separated audio ganged on its own fresh
+		// audio lane. The ripple lane is untouched by these (its type differs).
+		if (diverted.length > 0) {
+			const divertTrackForType = new Map<TrackType, string>();
+			const ensureDivertTrack = (type: TrackType): string => {
+				const existing = divertTrackForType.get(type);
+				if (existing) return existing;
+				const addTrackCmd = new AddTrackCommand({ type });
+				divertTrackForType.set(type, addTrackCmd.getTrackId());
+				commands.push(addTrackCmd);
+				return addTrackCmd.getTrackId();
+			};
+			let divertCascade = insertStart;
+			for (const { mediaAsset, duration } of diverted) {
+				const element = buildElementFromMedia({
+					mediaId: mediaAsset.id,
+					mediaType: mediaAsset.type,
+					name: mediaAsset.name,
+					duration,
+					startTime: divertCascade,
+				});
+				const pair =
+					element.type === "video"
+						? buildSeparatedVideoAudioPair({ videoElement: element, mediaAsset })
+						: null;
+				const trackType: TrackType =
+					mediaAsset.type === "audio" ? "audio" : "video";
+				commands.push(
+					new InsertElementCommand({
+						element: pair ? pair.video : element,
+						placement: {
+							mode: "explicit",
+							trackId: ensureDivertTrack(trackType),
+						},
+					}),
+				);
+				if (pair) {
+					commands.push(
+						new InsertElementCommand({
+							element: pair.audio,
+							placement: {
+								mode: "explicit",
+								trackId: ensureDivertTrack("audio"),
+							},
+						}),
+					);
+				}
+				divertCascade = addMediaTime({ a: divertCascade, b: duration });
+			}
 		}
 
 		if (commands.length > 0) {

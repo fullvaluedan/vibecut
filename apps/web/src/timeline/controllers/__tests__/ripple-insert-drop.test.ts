@@ -314,6 +314,188 @@ describe("drag-to-insert (U5) BatchCommand shape", () => {
 		}
 	});
 
+	test("(F3) mixed-type multi-select onto an occupied video clip lands BOTH: video rippled in-lane, audio-file diverted to an audio track, nothing dropped, one undo", () => {
+		// Lane: video 'a' [0, TPS], 'b' [TPS, 2*TPS]. Drop a MIXED selection onto 'b'
+		// (insertStart = TPS): a video 'v' (compatible) plus an audio FILE 'af'
+		// (incompatible with the video lane). The pre-fix ripple path filtered 'af'
+		// out and silently dropped it. Now 'v' ripple-inserts into the video lane and
+		// 'af' diverts onto a fresh audio track — both in ONE BatchCommand (one undo).
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "a", startTime: 0, duration: TPS }),
+				videoClip({ id: "b", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [
+				asset({ id: "v", type: "video", duration: 1 }),
+				asset({ id: "af", type: "audio", duration: 1 }),
+			],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: {
+						type: "media";
+						id: string;
+						mediaType: string;
+						name: string;
+						mediaIds: string[];
+					};
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: {
+				type: "media",
+				id: "v",
+				mediaType: "video",
+				name: "v",
+				mediaIds: ["v", "af"],
+			},
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		// ONE executed command => single Ctrl+Z undoes the whole mixed drop.
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+
+		// The video member ripples the video lane by its own duration only: 'b' shifts
+		// TPS -> 2*TPS (the audio file adds no video-lane duration).
+		const shifts = cmds.filter(
+			(c) => c instanceof UpdateElementsCommand,
+		) as unknown as Array<{
+			updates: Array<{
+				trackId: string;
+				elementId: string;
+				patch: { startTime?: number };
+			}>;
+		}>;
+		const bShift = shifts
+			.flatMap((c) => c.updates)
+			.find((u) => u.elementId === "b");
+		expect(bShift?.patch.startTime).toBe(2 * TPS);
+
+		// A fresh audio track is created for the diverted audio file.
+		const addTracks = cmds.filter(
+			(c) => c instanceof AddTrackCommand,
+		) as unknown as AddTrackCommand[];
+		expect(addTracks).toHaveLength(1);
+		const audioTrackId = addTracks[0].getTrackId();
+
+		const inserts = cmds
+			.filter((c) => c instanceof InsertElementCommand)
+			.map(
+				(c) =>
+					(c as unknown as {
+						element: { type: string; mediaId: string; startTime: number };
+						placement: { trackId: string };
+					}),
+			);
+		// BOTH assets land: video 'v' on the rippled video lane at TPS, audio 'af' on
+		// the new audio track at TPS. Nothing is silently dropped.
+		const videoInsert = inserts.find((c) => c.element.mediaId === "v");
+		const audioInsert = inserts.find((c) => c.element.mediaId === "af");
+		expect(videoInsert).toBeDefined();
+		expect(audioInsert).toBeDefined();
+		expect(videoInsert?.element.type).toBe("video");
+		expect(videoInsert?.placement.trackId).toBe("video-main");
+		expect(videoInsert?.element.startTime).toBe(TPS);
+		expect(audioInsert?.element.type).toBe("audio");
+		expect(audioInsert?.placement.trackId).toBe(audioTrackId);
+		expect(audioInsert?.placement.trackId).not.toBe("video-main");
+		expect(audioInsert?.element.startTime).toBe(TPS);
+	});
+
+	test("(F4) separated-audio member in a multi-select onto an occupied video lane lands its audio LINKED in the same batch", () => {
+		// A multi-select of two videos onto an occupied video lane, where the FIRST is
+		// a source-audio video (hasAudio: true). Its separated audio must land on an
+		// audio lane, ganged to the inserted video (shared fresh linkId), all in the
+		// one BatchCommand — the multi-select separated-audio branch the verifier
+		// noted was uncovered.
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "a", startTime: 0, duration: TPS }),
+				videoClip({ id: "b", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [
+				asset({ id: "av", type: "video", duration: 1, hasAudio: true }),
+				asset({ id: "v2", type: "video", duration: 1 }),
+			],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: {
+						type: "media";
+						id: string;
+						mediaType: string;
+						name: string;
+						mediaIds: string[];
+					};
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: {
+				type: "media",
+				id: "av",
+				mediaType: "video",
+				name: "av",
+				mediaIds: ["av", "v2"],
+			},
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		const inserts = cmds
+			.filter((c) => c instanceof InsertElementCommand)
+			.map(
+				(c) =>
+					(c as unknown as {
+						element: {
+							type: string;
+							mediaId: string;
+							linkId?: string;
+						};
+					}).element,
+			);
+		// Both videos land on the video lane.
+		expect(inserts.some((el) => el.mediaId === "av")).toBe(true);
+		expect(inserts.some((el) => el.mediaId === "v2")).toBe(true);
+		// The separated audio for 'av' lands, ganged to the inserted 'av' video.
+		const avVideo = inserts.find(
+			(el) => el.type === "video" && el.mediaId === "av",
+		);
+		const separatedAudio = inserts.find((el) => el.type === "audio");
+		expect(separatedAudio).toBeDefined();
+		expect(separatedAudio?.linkId).toBeDefined();
+		expect(separatedAudio?.linkId).toBe(avVideo?.linkId);
+	});
+
 	test("insert at the end of a lane emits only InsertElement (no shift)", () => {
 		const track: VideoTrack = {
 			id: "video-main",
@@ -1398,5 +1580,45 @@ describe("authored / HyperFrames clip guard (never ripple/overwrite)", () => {
 			(c) => c instanceof InsertElementCommand,
 		) as unknown as { placement: { trackId: string } };
 		expect(insert.placement.trackId).not.toBe("video-main");
+	});
+	test("(FP-PROBE) normal overwrite over only non-authored clips STILL overwrites (no needless divert)", () => {
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "n1", startTime: 0, duration: TPS }),
+				videoClip({ id: "n2", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "dropped", type: "video", duration: 2 })],
+		});
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "video-main", elementId: "n1" },
+		};
+		(controller as unknown as { executeMediaDrop: (a: any) => void }).executeMediaDrop({
+			target,
+			dragData: { type: "media", id: "dropped", mediaType: "video", name: "dropped" },
+			coords: { mouseX: 0, mouseY: 0 },
+			mode: "overwrite",
+		});
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// NO divert: no AddTrackCommand; the region IS overwritten (n1+n2 deleted).
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(false);
+		const del = cmds.find((c) => c instanceof DeleteElementsCommand) as unknown as { elements: Array<{ elementId: string }> };
+		expect(del).toBeDefined();
+		expect(del.elements.map((e) => e.elementId).sort()).toEqual(["n1", "n2"]);
+		const insert = cmds.find((c) => c instanceof InsertElementCommand) as unknown as { placement: { trackId: string } };
+		expect(insert.placement.trackId).toBe("video-main");
 	});
 });
