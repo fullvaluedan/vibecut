@@ -11,8 +11,10 @@ import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
 import {
 	collectVideoClipSpansSec,
+	dropEmphasisPauses,
 	refineSilenceRanges,
 } from "./silence-refine";
+import { getCachedTranscript } from "@/features/transcription/transcript-cache";
 
 const WINDOW_SEC = 0.05;
 const MIN_SILENCE_SEC = 0.6;
@@ -84,11 +86,20 @@ export async function runRemoveSilences({
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
 	const silent = detectSilentRangesSec({ samples, sampleRate });
+	// Emphasis-pause protection (#4/U3): keep short, speech-bounded in-dialog pauses.
+	// Best-effort + NON-blocking — read the CACHED transcript only; never trigger a
+	// transcription here. No cached transcript -> no protection (prior behavior). Runs
+	// before refineSilenceRanges so a range is classified before it can be split.
+	const speechAware = dropEmphasisPauses({
+		ranges: silent,
+		segments: getCachedTranscript(editor) ?? [],
+		paddingSec: PADDING_SEC,
+	});
 	// Issue 2: never delete a whole VIDEO clip on low audio (quiet showcase/b-roll
 	// footage), and snap cut edges to clip boundaries so a cut never leaves a
 	// ~4-frame remnant.
 	const refined = refineSilenceRanges({
-		ranges: silent,
+		ranges: speechAware,
 		clipSpans: collectVideoClipSpansSec({
 			tracks: editor.scenes.getActiveScene().tracks,
 			ticksPerSecond: TICKS_PER_SECOND,

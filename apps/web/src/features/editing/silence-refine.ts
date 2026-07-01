@@ -13,10 +13,18 @@
  */
 
 import type { SceneTracks } from "@/timeline";
+import { computeEmphasisPauseKeepers } from "@/features/ai-generate/director/emphasis-pause";
 
 export interface SecRange {
 	start: number;
 	end: number;
+}
+
+/** One transcript line as the pause classifier reads it (speech boundaries). */
+export interface SpeechLine {
+	start: number;
+	end: number;
+	text: string;
 }
 
 export interface ClipSpanSec {
@@ -44,6 +52,41 @@ export function collectVideoClipSpansSec({
 		}
 	}
 	return spans;
+}
+
+/**
+ * Drop the silent ranges that read as deliberate EMPHASIS PAUSES (#4/U3): a short,
+ * speech-bounded in-dialog pause is KEPT (not cut). Runs BEFORE `refineSilenceRanges`
+ * (which can split a range at a clip edge), on the raw detected ranges.
+ *
+ * `paddingSec` is added back to each range to recover the TRUE silence duration —
+ * detectSilentRangesSec pads every range inward by that much, so without un-padding
+ * the ceiling test would see an artificially short pause (padding not double-counted).
+ * The repeat set is EMPTY here: the standalone action has no Director repeat context,
+ * so proximity never disqualifies. With no `segments` (transcript not cached) NOTHING
+ * is protected and the caller behaves exactly as before (words-unavailable fallback).
+ */
+export function dropEmphasisPauses({
+	ranges,
+	segments,
+	paddingSec,
+}: {
+	ranges: readonly SecRange[];
+	segments: readonly SpeechLine[];
+	paddingSec: number;
+}): SecRange[] {
+	if (segments.length === 0) return [...ranges];
+	const gaps = ranges.map((r) => ({
+		start: r.start - paddingSec,
+		end: r.end + paddingSec,
+	}));
+	const keepers = computeEmphasisPauseKeepers({
+		gaps,
+		words: segments,
+		repeatSpans: [],
+	});
+	const kept = new Set(keepers.map((k) => `${k.startSec}:${k.endSec}`));
+	return ranges.filter((_, i) => !kept.has(`${gaps[i].start}:${gaps[i].end}`));
 }
 
 /**
