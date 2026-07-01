@@ -129,9 +129,13 @@ export function prioritizeFormPicks(
 	].slice(0, max);
 }
 
-function renderSelectionGroup(assets: HfSelectionAsset[]): string {
+function renderSelectionGroup(
+	assets: HfSelectionAsset[],
+	compact: boolean,
+): string {
 	return assets
 		.map((a) => {
+			if (compact) return `  - ${a.title} (${a.name})`;
 			const frame = a.fullFrame ? " [full-frame]" : "";
 			const desc = a.description ? ` — ${a.description}` : "";
 			return `  - ${a.title} (${a.name})${frame}${desc}`;
@@ -206,6 +210,12 @@ export function compileHyperframesPrompt(
 	const examples = selections.filter((s) => s.kind === "example");
 	const blocks = selections.filter((s) => s.kind === "block");
 	const components = selections.filter((s) => s.kind === "component" || s.kind === "template");
+	// A large selection ("select all" = 100+ assets) would name every one with its
+	// full description and blow the brief past the author route's size cap — which
+	// truncates the TRANSCRIPT and FORM EXEMPLARS that come after it, so the skill
+	// gets neither the content nor the form. Past ~24 picks, list NAMES ONLY; the
+	// content->form rubric + the embedded FORM EXEMPLARS carry the detail.
+	const compact = selections.length > 24;
 
 	if (selections.length > 1) {
 		lines.push(
@@ -216,19 +226,19 @@ export function compileHyperframesPrompt(
 			lines.push(
 				`STYLES / LOOKS (full editorial designs — use one for a recap LIST of several key points, or a data chart in that style):`,
 			);
-			lines.push(renderSelectionGroup(examples));
+			lines.push(renderSelectionGroup(examples, compact));
 		}
 		if (blocks.length) {
 			lines.push("");
 			lines.push(
 				`GRAPHIC FORMS (ready-made graphics — use the one whose form matches the content):`,
 			);
-			lines.push(renderSelectionGroup(blocks));
+			lines.push(renderSelectionGroup(blocks, compact));
 		}
 		if (components.length) {
 			lines.push("");
 			lines.push(`EFFECTS / SNIPPETS (layer subtly, only when they suit):`);
-			lines.push(renderSelectionGroup(components));
+			lines.push(renderSelectionGroup(components, compact));
 		}
 		lines.push("");
 		lines.push(
@@ -239,7 +249,7 @@ export function compileHyperframesPrompt(
 		lines.push(
 			`SELECTED ASSET — the user explicitly chose "${only.title}" (${only.name}). USE it: build its graphic in its exact design wherever the content fits, and do NOT substitute a different aesthetic. The style is the LOOK, not the layout — within it, build the informative STRUCTURE the content needs (a recap LIST, a real DATA CHART, an explanatory diagram). Where the content does not suit this asset, make NOTHING rather than forcing it.`,
 		);
-		lines.push(renderSelectionGroup(selections));
+		lines.push(renderSelectionGroup(selections, false));
 	} else {
 		lines.push(
 			`No specific assets were selected — use your own judgment to add tasteful, INFORMATIVE overlays (recap lists, data charts, explanatory cards) where the transcript warrants them.`,
