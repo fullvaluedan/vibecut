@@ -1,5 +1,6 @@
 import type { EditorCore } from "@/core";
 import type { Bookmark, SceneTracks, TScene } from "@/timeline";
+import { collectLiveElementPairs } from "@/core/managers/timeline-manager";
 import { storageService } from "@/services/storage/service";
 import {
 	getMainScene,
@@ -107,6 +108,16 @@ export class ScenesManager {
 		}
 
 		this.active = targetScene;
+
+		// The active-scene swap here bypasses TimelineManager.updateTracks, so the
+		// selection-prune chokepoint never runs on a scene switch. Reconcile the
+		// selection against the target scene's live elements so a ref carried over
+		// from the previous scene can't tint a row in the new scene that happens to
+		// reuse a track id (phantom cross-scene highlight).
+		this.editor.selection.reconcileWithLiveElements({
+			livePairs: collectLiveElementPairs(targetScene.tracks),
+		});
+
 		this.notify();
 	}
 

@@ -993,7 +993,7 @@ export class TimelineManager {
 	}
 }
 
-function collectLiveElementPairs(tracks: SceneTracks): Set<string> {
+export function collectLiveElementPairs(tracks: SceneTracks): Set<string> {
 	const pairs = new Set<string>();
 	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
 		for (const element of track.elements) {
