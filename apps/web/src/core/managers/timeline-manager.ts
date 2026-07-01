@@ -982,6 +982,23 @@ export class TimelineManager {
 		this.previewOverlay.clear();
 		this.previewTracks = null;
 		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
+		// Prune selection refs to the elements that still exist, so a command that
+		// removed or re-minted a selected clip can't leave a stale ref tinting an
+		// empty track row (phantom highlight). Single chokepoint = fixes every
+		// current and future offender at once.
+		this.editor.selection.reconcileWithLiveElements({
+			livePairs: collectLiveElementPairs(newTracks),
+		});
 		this.notify();
 	}
+}
+
+function collectLiveElementPairs(tracks: SceneTracks): Set<string> {
+	const pairs = new Set<string>();
+	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
+		for (const element of track.elements) {
+			pairs.add(`${track.id}:${element.id}`);
+		}
+	}
+	return pairs;
 }

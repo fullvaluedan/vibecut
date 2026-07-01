@@ -49,7 +49,12 @@ export class RebuildMainTrackCommand extends Command {
 			main: { ...this.savedState.main, elements },
 		};
 		editor.timeline.updateTracks(updatedTracks);
-		return undefined;
+		// Re-minting every main clip orphans any prior main-track selection.
+		// updateTracks already pruned it live; declaring the reconciled selection
+		// as an override satisfies the documented invariant (commands that remove
+		// editor-owned selection targets must declare one) so undo restores the
+		// pre-rebuild selection cleanly.
+		return { selection: editor.selection.getSnapshot() };
 	}
 
 	undo(): void {

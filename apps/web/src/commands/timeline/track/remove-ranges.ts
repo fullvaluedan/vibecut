@@ -132,7 +132,12 @@ export class RemoveRangesCommand extends Command {
 		}
 
 		editor.timeline.updateTracks(tracks);
-		return undefined;
+		// Ripple-delete removes / re-mints elements inside the cut ranges.
+		// updateTracks already pruned any orphaned selection ref live; declaring
+		// the reconciled selection as an override satisfies the documented
+		// invariant (commands that remove editor-owned selection targets must
+		// declare one) so undo restores the pre-cut selection cleanly.
+		return { selection: editor.selection.getSnapshot() };
 	}
 
 	undo(): void {
