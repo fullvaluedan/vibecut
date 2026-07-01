@@ -10,7 +10,7 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 import {
-	computeGroupResize,
+	computeResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -60,7 +60,6 @@ export interface ResizeConfig {
 	getSceneTracks: () => SceneTracks;
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
-	selectedElements: ElementRef[];
 	discardPreview: () => void;
 	previewElements: (updates: GroupResizeUpdate[]) => void;
 	commitElements: (updates: GroupResizeUpdate[]) => void;
@@ -346,8 +345,8 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeGroupResize({
-			members: session.members,
+		const result = computeResize({
+			member: session.members[0],
 			side: session.side,
 			deltaTime,
 			fps: session.fps,

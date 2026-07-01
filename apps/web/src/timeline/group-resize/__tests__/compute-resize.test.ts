@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { FrameRate } from "opencut-wasm";
-import { computeGroupResize } from "@/timeline/group-resize";
+import { computeResize } from "@/timeline/group-resize";
 import type { GroupResizeMember } from "@/timeline/group-resize";
 import { buildResizeMembers } from "@/timeline/controllers/resize-controller";
 import type { SceneTracks, VideoElement, VideoTrack } from "@/timeline";
@@ -28,10 +28,10 @@ function member(
 	};
 }
 
-describe("computeGroupResize (characterization)", () => {
-	test("a single member returns exactly one update", () => {
-		const result = computeGroupResize({
-			members: [member({ elementId: "a" })],
+describe("computeResize (single grabbed clip)", () => {
+	test("returns exactly one update for the grabbed clip", () => {
+		const result = computeResize({
+			member: member({ elementId: "a" }),
 			side: "right",
 			deltaTime: mediaTime({ ticks: 2 * FRAME }),
 			fps: FPS,
@@ -42,17 +42,15 @@ describe("computeGroupResize (characterization)", () => {
 		expect(result.updates[0].patch.startTime).toBe(10 * FRAME);
 	});
 
-	test("single-member right resize is clamped only by its own source limit", () => {
+	test("right resize is clamped only by its own source limit", () => {
 		// Clip shows 10 frames of a 12-frame source (trimEnd = 2 frames of source).
 		// Right-extend by 5 frames: source ceiling caps at +2 frames.
-		const result = computeGroupResize({
-			members: [
-				member({
-					elementId: "a",
-					sourceDuration: mediaTime({ ticks: 12 * FRAME }),
-					trimEnd: mediaTime({ ticks: 2 * FRAME }),
-				}),
-			],
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 12 * FRAME }),
+				trimEnd: mediaTime({ ticks: 2 * FRAME }),
+			}),
 			side: "right",
 			deltaTime: mediaTime({ ticks: 5 * FRAME }),
 			fps: FPS,
@@ -61,50 +59,50 @@ describe("computeGroupResize (characterization)", () => {
 		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
 	});
 
-	test("a shorter OTHER member's limit does NOT constrain the grabbed clip when it resizes alone", () => {
-		// The grabbed clip 'a' has 5 frames of source headroom. A different clip
-		// 'b' with only 1 frame of headroom is NOT in this (single-member) session,
-		// so 'a' extends its full +3 frames.
-		const grabbedAlone = computeGroupResize({
-			members: [
-				member({
-					elementId: "a",
-					sourceDuration: mediaTime({ ticks: 15 * FRAME }),
-					trimEnd: mediaTime({ ticks: 5 * FRAME }),
-				}),
-			],
+	test("only the grabbed clip's own source headroom limits it (no fan-out)", () => {
+		// The grabbed clip 'a' has 5 frames of source headroom; since only the
+		// grabbed clip is ever resized, it extends its full +3 frames regardless of
+		// any other selected clip's tighter limit (the U2 no-fan-out guarantee).
+		const grabbedAlone = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 15 * FRAME }),
+				trimEnd: mediaTime({ ticks: 5 * FRAME }),
+			}),
 			side: "right",
 			deltaTime: mediaTime({ ticks: 3 * FRAME }),
 			fps: FPS,
 		});
 		expect(grabbedAlone.deltaTime).toBe(3 * FRAME);
+		expect(grabbedAlone.updates).toHaveLength(1);
+	});
 
-		// Same drag with the tight clip 'b' ALSO in the group clamps to +1 frame —
-		// this is the group-resize fan-out behavior U2's controller change avoids.
-		const asGroup = computeGroupResize({
-			members: [
-				member({
-					elementId: "a",
-					sourceDuration: mediaTime({ ticks: 15 * FRAME }),
-					trimEnd: mediaTime({ ticks: 5 * FRAME }),
-				}),
-				member({
-					elementId: "b",
-					sourceDuration: mediaTime({ ticks: 11 * FRAME }),
-					trimEnd: mediaTime({ ticks: 1 * FRAME }),
-				}),
-			],
+	test("a right-neighbor bound clamps the grabbed clip's duration exactly at the neighbor start", () => {
+		// The real U2 guarantee: clip 'a' (start 10, duration 10 => ends at frame
+		// 20) has an adjacent clip 'b' starting at frame 22, recorded as its
+		// rightNeighborBound. A large +10-frame right drag must stop the grabbed
+		// clip's right edge exactly at 22 (2 frames of growth), never running into
+		// or past the neighbor. Ample source headroom so the neighbor is the only
+		// binding limit.
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 100 * FRAME }),
+				rightNeighborBound: mediaTime({ ticks: 22 * FRAME }),
+			}),
 			side: "right",
-			deltaTime: mediaTime({ ticks: 3 * FRAME }),
+			deltaTime: mediaTime({ ticks: 10 * FRAME }),
 			fps: FPS,
 		});
-		expect(asGroup.deltaTime).toBe(1 * FRAME);
-		expect(asGroup.updates).toHaveLength(2);
+		expect(result.deltaTime).toBe(2 * FRAME);
+		const endEdge =
+			result.updates[0].patch.startTime + result.updates[0].patch.duration;
+		expect(endEdge).toBe(22 * FRAME);
 	});
 
 	test("left handle resizes only the grabbed clip", () => {
-		const result = computeGroupResize({
-			members: [member({ elementId: "a" })],
+		const result = computeResize({
+			member: member({ elementId: "a" }),
 			side: "left",
 			deltaTime: mediaTime({ ticks: 2 * FRAME }),
 			fps: FPS,

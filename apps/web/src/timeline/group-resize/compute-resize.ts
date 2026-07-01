@@ -16,58 +16,39 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import type {
-	ComputeGroupResizeArgs,
+	ComputeResizeArgs,
 	GroupResizeMember,
 	GroupResizeResult,
 	GroupResizeUpdate,
 	ResizeSide,
 } from "./types";
 
-export function computeGroupResize({
-	members,
+/**
+ * Resize a SINGLE clip (the grabbed one). A trim only ever affects the grabbed
+ * clip — group fan-out was removed by decision (U2 / OQ2) — so this is clamped
+ * solely by that clip's own source extent and its neighbor bounds. An adjacent
+ * clip constrains the drag only as a `leftNeighborBound` / `rightNeighborBound`,
+ * never as a co-resized member.
+ */
+export function computeResize({
+	member,
 	side,
 	deltaTime,
 	fps,
-}: ComputeGroupResizeArgs): GroupResizeResult {
-	if (members.length === 0) {
-		return { deltaTime: ZERO_MEDIA_TIME, updates: [] };
-	}
-
+}: ComputeResizeArgs): GroupResizeResult {
 	const minDuration = mediaTime({
 		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
 	});
-	let minimumDeltaTime = getMinimumAllowedDeltaTime({
-		member: members[0],
+	const minimumDeltaTime = getMinimumAllowedDeltaTime({
+		member,
 		side,
 		minDuration,
 	});
-	let maximumDeltaTime = getMaximumAllowedDeltaTime({
-		member: members[0],
+	const maximumDeltaTime = getMaximumAllowedDeltaTime({
+		member,
 		side,
 		minDuration,
 	});
-
-	for (const member of members.slice(1)) {
-		minimumDeltaTime = maxMediaTime({
-			a: minimumDeltaTime,
-			b: getMinimumAllowedDeltaTime({
-				member,
-				side,
-				minDuration,
-			}),
-		});
-		const memberMaximum = getMaximumAllowedDeltaTime({
-			member,
-			side,
-			minDuration,
-		});
-		if (memberMaximum !== null) {
-			maximumDeltaTime =
-				maximumDeltaTime === null
-					? memberMaximum
-					: minMediaTime({ a: maximumDeltaTime, b: memberMaximum });
-		}
-	}
 
 	const clampedDeltaTime =
 		maximumDeltaTime === null
@@ -103,13 +84,13 @@ export function computeGroupResize({
 
 	return {
 		deltaTime: Object.is(finalDeltaTime, -0) ? ZERO_MEDIA_TIME : finalDeltaTime,
-		updates: members.map((member) =>
+		updates: [
 			buildResizeUpdate({
 				member,
 				side,
 				deltaTime: finalDeltaTime,
 			}),
-		),
+		],
 	};
 }
 
