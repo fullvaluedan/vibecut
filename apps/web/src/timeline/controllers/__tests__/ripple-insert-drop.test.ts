@@ -460,7 +460,11 @@ describe("findOccupiedLaneForInsert", () => {
 		return makeController({ tracks, assets: [] }).controller;
 	}
 
-	test("returns the audio lane id when a clip occupies the drop point", () => {
+	// Ordered tracks = [video-main (65px), audio-1 (50px)] with a 6px gap, so the
+	// audio lane spans y=[71,121). mouseY must land there to hover it.
+	const AUDIO_LANE_Y = 90;
+
+	test("returns the hovered audio lane id when a clip occupies the drop point", () => {
 		const found = (
 			ctrl() as unknown as {
 				findOccupiedLaneForInsert: (args: {
@@ -472,12 +476,12 @@ describe("findOccupiedLaneForInsert", () => {
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: TPS / 2 }),
-			coords: { mouseX: 0, mouseY: 0 },
+			coords: { mouseX: 0, mouseY: AUDIO_LANE_Y },
 		});
 		expect(found).toBe("audio-1");
 	});
 
-	test("returns null when the lane is empty at the drop point", () => {
+	test("returns null when the hovered lane is empty at the drop point", () => {
 		const found = (
 			ctrl() as unknown as {
 				findOccupiedLaneForInsert: (args: {
@@ -489,8 +493,104 @@ describe("findOccupiedLaneForInsert", () => {
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: 5 * TPS }),
-			coords: { mouseX: 0, mouseY: 0 },
+			coords: { mouseX: 0, mouseY: AUDIO_LANE_Y },
 		});
 		expect(found).toBeNull();
+	});
+
+	test("returns null when the cursor is over a DIFFERENT audio lane than the occupied one", () => {
+		// Two audio lanes: lane 1 has a clip at the drop point, lane 2 is empty. A
+		// drop hovering lane 2 must NOT ripple lane 1 (the pre-fix bug: it took the
+		// first occupied compatible lane regardless of mouseY).
+		const audio1: AudioTrack = {
+			id: "audio-1",
+			type: "audio",
+			name: "audio-1",
+			muted: false,
+			elements: [audioClip({ id: "x", startTime: 0, duration: TPS })],
+		};
+		const audio2: AudioTrack = {
+			id: "audio-2",
+			type: "audio",
+			name: "audio-2",
+			muted: false,
+			elements: [],
+		};
+		const tracks: SceneTracks = {
+			overlay: [],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [audio1, audio2],
+		};
+		const controller = makeController({ tracks, assets: [] }).controller;
+		// Ordered = [video(65), audio-1(50), audio-2(50)] with 6px gaps.
+		// audio-1: [71,121), audio-2: [127,177). Hover audio-2 (empty) at y=150.
+		const found = (
+			controller as unknown as {
+				findOccupiedLaneForInsert: (args: {
+					mediaType: string;
+					dropX: number;
+					coords: { mouseX: number; mouseY: number } | null;
+				}) => string | null;
+			}
+		).findOccupiedLaneForInsert({
+			mediaType: "audio",
+			dropX: mediaTime({ ticks: TPS / 2 }),
+			coords: { mouseX: 0, mouseY: 150 },
+		});
+		expect(found).toBeNull();
+	});
+
+	test("returns the hovered lane id (not lane 1) when it is the occupied one", () => {
+		// Mirror image: lane 2 holds the clip, and the cursor hovers lane 2 — the
+		// drop must ripple lane 2, not fall through to lane 1.
+		const audio1: AudioTrack = {
+			id: "audio-1",
+			type: "audio",
+			name: "audio-1",
+			muted: false,
+			elements: [],
+		};
+		const audio2: AudioTrack = {
+			id: "audio-2",
+			type: "audio",
+			name: "audio-2",
+			muted: false,
+			elements: [audioClip({ id: "y", startTime: 0, duration: TPS })],
+		};
+		const tracks: SceneTracks = {
+			overlay: [],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [audio1, audio2],
+		};
+		const controller = makeController({ tracks, assets: [] }).controller;
+		// audio-2 spans [127,177); hover it at y=150.
+		const found = (
+			controller as unknown as {
+				findOccupiedLaneForInsert: (args: {
+					mediaType: string;
+					dropX: number;
+					coords: { mouseX: number; mouseY: number } | null;
+				}) => string | null;
+			}
+		).findOccupiedLaneForInsert({
+			mediaType: "audio",
+			dropX: mediaTime({ ticks: TPS / 2 }),
+			coords: { mouseX: 0, mouseY: 150 },
+		});
+		expect(found).toBe("audio-2");
 	});
 });

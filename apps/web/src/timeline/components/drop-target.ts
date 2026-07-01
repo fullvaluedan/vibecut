@@ -43,7 +43,7 @@ function findElementAtPosition({
 	return { elementId: hit.id, trackId: track.id };
 }
 
-function getTrackAtY({
+export function getTrackAtY({
 	mouseY,
 	tracks,
 	verticalDragDirection,

@@ -30,7 +30,7 @@ import {
 } from "@/timeline/placement/ripple-insert";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
-import { computeDropTarget } from "@/timeline/components/drop-target";
+import { computeDropTarget, getTrackAtY } from "@/timeline/components/drop-target";
 import type { TimelineDragSource } from "@/timeline/drag-source";
 import type {
 	TrackType,
@@ -578,11 +578,13 @@ export class DragDropController {
 	}
 
 	/**
-	 * The track id of the lane under the cursor when a clip already occupies the
+	 * The track id of the lane UNDER THE CURSOR when a clip already occupies the
 	 * drop point there (so an INSERT should ripple that lane instead of spawning a
-	 * new track). Used for audio, which has no visual hit-test. Returns null when
-	 * the lane is empty at the drop point or the cursor isn't over a compatible
-	 * lane.
+	 * new track). Used for audio, which has no visual hit-test. Resolves the
+	 * hovered lane from `coords.mouseY` (same vertical hit-test as
+	 * `computeDropTarget`) so a drop meant for lane B doesn't ripple lane A when
+	 * several compatible lanes exist. Returns null when the cursor isn't over a
+	 * compatible lane, or that lane is empty at the drop point.
 	 */
 	private findOccupiedLaneForInsert({
 		mediaType,
@@ -596,18 +598,16 @@ export class DragDropController {
 		if (!coords) return null;
 		const wantType: TrackType = mediaType === "audio" ? "audio" : "video";
 		const tracks = orderedTracks({ sceneTracks: this.config.getSceneTracks() });
-		// Hit-test the lane at the drop point across compatible tracks: the drop
-		// x lands inside one of that lane's clips.
-		for (const track of tracks) {
-			if (track.type !== wantType) continue;
-			const occupied = track.elements.some(
-				(element) =>
-					element.startTime <= dropX &&
-					dropX < addMediaTime({ a: element.startTime, b: element.duration }),
-			);
-			if (occupied) return track.id;
-		}
-		return null;
+		const hovered = getTrackAtY({ mouseY: coords.mouseY, tracks });
+		if (!hovered) return null;
+		const track = tracks[hovered.trackIndex];
+		if (!track || track.type !== wantType) return null;
+		const occupied = track.elements.some(
+			(element) =>
+				element.startTime <= dropX &&
+				dropX < addMediaTime({ a: element.startTime, b: element.duration }),
+		);
+		return occupied ? track.id : null;
 	}
 
 	/**
