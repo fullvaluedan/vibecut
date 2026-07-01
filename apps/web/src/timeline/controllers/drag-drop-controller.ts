@@ -23,7 +23,11 @@ import {
 import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
 import { buildSeparatedVideoAudioPair } from "@/timeline/audio-separation";
 import { canElementGoOnTrack } from "@/timeline/placement/compatibility";
-import { computeRippleInsertShifts } from "@/timeline/placement/ripple-insert";
+import {
+	computeRippleInsertShifts,
+	computeStraddleSplit,
+	findStraddlingElement,
+} from "@/timeline/placement/ripple-insert";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -711,6 +715,41 @@ export class DragDropController {
 				? audioTrack.id
 				: this.createAudioTrackInto(commands);
 			if (audioTrack) {
+				// A clip that starts BEFORE insertStart but extends PAST it is not
+				// caught by computeRippleInsertShifts (start < insertStart), so the
+				// ripple leaves no hole under it and the separated audio would overlap
+				// it — silent A/V-sync corruption. Split it at insertStart first
+				// (head stays put, tail moves into the shifted region) so a gap-free
+				// hole opens. Same batch = one undo, no media lost.
+				const straddler = findStraddlingElement({
+					elements: audioTrack.elements,
+					insertStart,
+				});
+				if (straddler) {
+					const split = computeStraddleSplit({
+						element: straddler,
+						insertStart,
+						shiftDuration: insertDuration,
+					});
+					commands.push(
+						new UpdateElementsCommand({
+							updates: [
+								{
+									trackId: audioTrack.id,
+									elementId: split.headPatch.id,
+									patch: {
+										duration: split.headPatch.duration,
+										trimEnd: split.headPatch.trimEnd,
+									},
+								},
+							],
+						}),
+						new InsertElementCommand({
+							element: split.tail,
+							placement: { mode: "explicit", trackId: audioTrack.id },
+						}),
+					);
+				}
 				const audioShifts = computeRippleInsertShifts({
 					elements: audioTrack.elements,
 					insertStart,

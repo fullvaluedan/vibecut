@@ -310,6 +310,130 @@ describe("drag-to-insert (U5) BatchCommand shape", () => {
 		expect(updates).toHaveLength(2);
 		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(false);
 	});
+
+	test("separated audio splits a straddling audio clip so nothing overlaps", () => {
+		// Video boundary (insertStart) = TPS (v2's start). The audio lane holds a
+		// single clip that STARTS before TPS and EXTENDS past it — a straddler that
+		// computeRippleInsertShifts would leave in place, so the separated audio
+		// would land on top of it. The fix splits the straddler at TPS.
+		const videoTrack: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "v1", startTime: 0, duration: TPS }),
+				videoClip({ id: "v2", startTime: TPS, duration: TPS }),
+			],
+		};
+		const audioTrack: AudioTrack = {
+			id: "audio-1",
+			type: "audio",
+			name: "audio-1",
+			muted: false,
+			// [TPS/2, TPS/2 + 2*TPS] straddles insertStart = TPS.
+			elements: [audioClip({ id: "straddle", startTime: TPS / 2, duration: 2 * TPS })],
+		};
+		const tracks: SceneTracks = {
+			overlay: [],
+			main: videoTrack,
+			audio: [audioTrack],
+		};
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "av", type: "video", duration: 1, hasAudio: true })],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: { type: "media", id: "av", mediaType: "video", name: "av" },
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+
+		// Reconstruct the audio lane after the batch: apply head-shrink updates and
+		// tail/audio inserts, so we can assert the final layout has no overlap.
+		type Span = { id: string; start: number; end: number; linkId?: string };
+		const spans: Span[] = audioTrack.elements.map((el) => ({
+			id: el.id,
+			start: el.startTime,
+			end: el.startTime + el.duration,
+			linkId: (el as { linkId?: string }).linkId,
+		}));
+		for (const cmd of cmds) {
+			if (cmd instanceof UpdateElementsCommand) {
+				const { updates } = cmd as unknown as {
+					updates: Array<{
+						trackId: string;
+						elementId: string;
+						patch: { startTime?: number; duration?: number };
+					}>;
+				};
+				for (const u of updates) {
+					if (u.trackId !== "audio-1") continue;
+					const span = spans.find((s) => s.id === u.elementId);
+					if (!span) continue;
+					if (u.patch.startTime !== undefined) {
+						const width = span.end - span.start;
+						span.start = u.patch.startTime;
+						span.end = span.start + width;
+					}
+					if (u.patch.duration !== undefined) {
+						span.end = span.start + u.patch.duration;
+					}
+				}
+			}
+			if (cmd instanceof InsertElementCommand) {
+				const el = (cmd as unknown as { element: {
+					type: string;
+					startTime: number;
+					duration: number;
+					linkId?: string;
+					mediaId?: string;
+				} }).element;
+				if (el.type !== "audio") continue;
+				// Two audio inserts land here: the split TAIL of the straddler (keeps
+				// the straddler's media) and the separated PAIR audio (carries the
+				// video's fresh linkId). Tag them apart.
+				spans.push({
+					id: el.mediaId === "media-straddle" ? "tail" : "inserted",
+					start: el.startTime,
+					end: el.startTime + el.duration,
+					linkId: el.linkId,
+				});
+			}
+		}
+
+		// No two audio spans overlap.
+		const sorted = [...spans].sort((a, b) => a.start - b.start);
+		for (let i = 1; i < sorted.length; i++) {
+			expect(sorted[i].start).toBeGreaterThanOrEqual(sorted[i - 1].end);
+		}
+
+		// The inserted separated audio starts at the video boundary (insertStart)
+		// and is linked to the inserted video.
+		const insertedAudio = spans.find((s) => s.id === "inserted");
+		expect(insertedAudio?.start).toBe(TPS);
+		const videoInsert = cmds.find(
+			(c) =>
+				c instanceof InsertElementCommand &&
+				(c as unknown as { element: { type: string } }).element.type === "video",
+		) as unknown as { element: { linkId?: string; startTime: number } };
+		expect(insertedAudio?.linkId).toBeDefined();
+		expect(insertedAudio?.linkId).toBe(videoInsert.element.linkId);
+		expect(videoInsert.element.startTime).toBe(TPS);
+	});
 });
 
 describe("findOccupiedLaneForInsert", () => {
