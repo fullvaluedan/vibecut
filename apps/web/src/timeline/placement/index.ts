@@ -3,6 +3,7 @@ export { canElementGoOnTrack, validateElementTrackCompatibility } from "./compat
 export { getDefaultInsertIndexForTrack, getHighestInsertIndexForTrack } from "./insert-index";
 export { MAIN_TRACK_NAME, enforceMainTrackStart, getEarliestMainTrackElement } from "./main-track";
 export { resolveTrackPlacement } from "./resolve";
+export { computeRippleInsertShifts, type RippleShift } from "./ripple-insert";
 export { buildEmptyTrack } from "./track-factory";
 export type {
 	PlacementResult,
