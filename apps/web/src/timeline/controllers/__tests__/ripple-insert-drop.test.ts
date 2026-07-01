@@ -219,6 +219,101 @@ describe("drag-to-insert (U5) BatchCommand shape", () => {
 		]);
 	});
 
+	test("(F2) multi-select insert onto an occupied clip lands ALL assets, lane ripples by the SUMMED duration, one undo", () => {
+		// Lane: clip 'a' [0, TPS], clip 'b' [TPS, 2*TPS]. Drop a 3-asset selection
+		// (each 1s) onto 'b' (insertStart = TPS). The pre-fix ripple path inserted
+		// only dragData.id (m1) and rippled by TPS — the other two were silently
+		// lost. Now: 'b' ripples right by the SUMMED 3*TPS and m1/m2/m3 land
+		// back-to-back at TPS / 2*TPS / 3*TPS. One BatchCommand => one undo.
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "a", startTime: 0, duration: TPS }),
+				videoClip({ id: "b", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [
+				asset({ id: "m1", type: "video", duration: 1 }),
+				asset({ id: "m2", type: "video", duration: 1 }),
+				asset({ id: "m3", type: "video", duration: 1 }),
+			],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: {
+						type: "media";
+						id: string;
+						mediaType: string;
+						name: string;
+						mediaIds: string[];
+					};
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: {
+				type: "media",
+				id: "m1",
+				mediaType: "video",
+				name: "m1",
+				mediaIds: ["m1", "m2", "m3"],
+			},
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		// ONE executed command => single Ctrl+Z undoes the whole multi-drop.
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+
+		// The lane rippled ONCE by the summed duration: 'b' (start TPS) shifts to
+		// TPS + 3*TPS = 4*TPS.
+		const shifts = cmds.filter(
+			(c) => c instanceof UpdateElementsCommand,
+		) as unknown as Array<{
+			updates: Array<{
+				trackId: string;
+				elementId: string;
+				patch: { startTime?: number };
+			}>;
+		}>;
+		const bShift = shifts
+			.flatMap((c) => c.updates)
+			.find((u) => u.elementId === "b");
+		expect(bShift?.patch.startTime).toBe(4 * TPS);
+
+		// All three selected assets land, back-to-back at TPS / 2*TPS / 3*TPS.
+		const inserted = cmds
+			.filter((c) => c instanceof InsertElementCommand)
+			.map(
+				(c) =>
+					(c as unknown as {
+						element: { mediaId: string; startTime: number };
+						placement: { trackId: string };
+					}),
+			);
+		const byMedia = new Map(
+			inserted.map((c) => [c.element.mediaId, c.element.startTime]),
+		);
+		expect(byMedia.get("m1")).toBe(TPS);
+		expect(byMedia.get("m2")).toBe(2 * TPS);
+		expect(byMedia.get("m3")).toBe(3 * TPS);
+		// Everything lands on the target lane (nothing diverted / lost).
+		for (const c of inserted) {
+			expect(c.placement.trackId).toBe("video-main");
+		}
+	});
+
 	test("insert at the end of a lane emits only InsertElement (no shift)", () => {
 		const track: VideoTrack = {
 			id: "video-main",

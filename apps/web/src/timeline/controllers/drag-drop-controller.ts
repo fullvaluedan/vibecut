@@ -801,7 +801,7 @@ export class DragDropController {
 	}
 
 	/**
-	 * INSERT edit (Premiere-style, but our default): drop the asset at the target
+	 * INSERT edit (Premiere-style, but our default): drop the asset(s) at the target
 	 * clip's start on `targetTrackId` and push every downstream clip on that lane
 	 * right by the inserted duration to open a hole — nothing is overwritten. A
 	 * dropped video's source audio is separated onto its own audio lane, which is
@@ -809,6 +809,12 @@ export class DragDropController {
 	 * thing is ONE BatchCommand, ordered shift-first (open the hole before the
 	 * insert), so a single Ctrl+Z undoes it. Mirrors the ripple-cut of
 	 * RemoveRangesCommand in reverse (see placement/ripple-insert.ts).
+	 *
+	 * A multi-select drag (`dragData.mediaIds.length > 1`) lays out the WHOLE
+	 * selection: the lane ripples ONCE by the SUMMED insert duration and every
+	 * selected asset is inserted back-to-back at the hole (cascaded starts) — never
+	 * silently dropping all but the dragged id. Same one-undo batch; each video's
+	 * separated audio stays in it.
 	 */
 	private executeMediaRippleInsert({
 		dragData,
@@ -825,27 +831,47 @@ export class DragDropController {
 		);
 		if (!track) return;
 
-		const mediaAsset = this.config
-			.getMediaAssets()
-			.find((asset) => asset.id === dragData.id);
-		if (!mediaAsset) return;
-
-		if (
-			!canElementGoOnTrack({
-				elementType: mediaAsset.type,
-				trackType: track.type,
+		// Multi-select drags carry the whole selection; a single drag carries only
+		// its own id. Resolve each to a track-compatible asset with a real duration,
+		// preserving the drag order so the cascade matches the bin selection.
+		const ids =
+			dragData.mediaIds && dragData.mediaIds.length > 1
+				? dragData.mediaIds
+				: [dragData.id];
+		const allAssets = this.config.getMediaAssets();
+		const inserts = ids
+			.map((id) => allAssets.find((candidate) => candidate.id === id))
+			.filter((mediaAsset): mediaAsset is MediaAsset => {
+				if (!mediaAsset) return false;
+				if (
+					!canElementGoOnTrack({
+						elementType: mediaAsset.type,
+						trackType: track.type,
+					})
+				) {
+					return false;
+				}
+				return (
+					toElementDurationTicks({ seconds: mediaAsset.duration }) >
+					ZERO_MEDIA_TIME
+				);
 			})
-		) {
-			return;
-		}
+			.map((mediaAsset) => ({
+				mediaAsset,
+				duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
+			}));
+		if (inserts.length === 0) return;
 
-		const insertDuration = toElementDurationTicks({
-			seconds: mediaAsset.duration,
-		});
-		if (insertDuration <= ZERO_MEDIA_TIME) return;
+		// The lane must open ONE hole wide enough for every asset, so it ripples by
+		// the SUMMED duration; the same summed shift drives the audio lane's ripple
+		// and straddle-split so the two stay aligned.
+		const summedDuration = inserts.reduce(
+			(total, { duration }) => addMediaTime({ a: total, b: duration }),
+			ZERO_MEDIA_TIME,
+		);
 
 		// Anchor the insert at the start of the clip under the cursor (the cut
-		// boundary), so the ripple opens a clean hole and the new clip lands on a
+		// boundary), so the ripple opens a clean hole and the new clips land on a
 		// cut point. Empty spot on the lane => insert at the raw drop point.
 		const clipAtDrop = track.elements.find(
 			(element) =>
@@ -857,7 +883,8 @@ export class DragDropController {
 		// Never ripple/split an authored lane: a direct audio drop onto an authored
 		// render's separated-audio lane (or any lane whose shifted/straddled clip is
 		// authored) diverts to a fresh track instead. Same invariant the covered-clip
-		// guard enforces for a video-target drop.
+		// guard enforces for a video-target drop. insertMediaOnNewTrack lays out the
+		// whole selection too (it reads dragData.mediaIds).
 		if (this.laneRippleTouchesAuthored({ lane: track, insertStart })) {
 			this.insertMediaOnNewTrack({
 				target: {
@@ -872,26 +899,14 @@ export class DragDropController {
 			return;
 		}
 
-		const video = buildElementFromMedia({
-			mediaId: mediaAsset.id,
-			mediaType: mediaAsset.type,
-			name: mediaAsset.name,
-			duration: insertDuration,
-			startTime: insertStart,
-		});
-		const pair =
-			video.type === "video"
-				? buildSeparatedVideoAudioPair({ videoElement: video, mediaAsset })
-				: null;
-		const elementToInsert = pair ? pair.video : video;
-
 		const commands: Command[] = [];
 
-		// 1) Open the hole: shift the target lane's downstream clips right first.
+		// 1) Open the hole: shift the target lane's downstream clips right by the
+		// summed duration (once, for the whole selection).
 		const laneShifts = computeRippleInsertShifts({
 			elements: track.elements,
 			insertStart,
-			shiftDuration: insertDuration,
+			shiftDuration: summedDuration,
 		});
 		if (laneShifts.length > 0) {
 			commands.push(
@@ -905,104 +920,128 @@ export class DragDropController {
 			);
 		}
 
-		// 2) Insert the (video) clip at the hole. Skip the main-track snap-to-0
-		// rule: the ripple already opened a gap-free hole at exactly insertStart, so
-		// enforcing "no leading gap" here would slide the new clip to 0 whenever it
-		// lands on the (post-shift) earliest main clip — misplacing it and desyncing
-		// it from its linked audio, which inserts unsnapped at insertStart.
-		commands.push(
-			new InsertElementCommand({
-				element: elementToInsert,
-				placement: {
-					mode: "explicit",
-					trackId: track.id,
-					skipMainTrackStart: true,
-				},
-			}),
+		// Resolve the shared separated-audio lane ONCE (lazy, only if a dropped video
+		// actually separates). If rippling/splitting the first audio track would
+		// disturb an authored (HyperFrames) clip, divert every separated audio onto a
+		// FRESH lane instead so the authored A/V gang is never broken.
+		const firstAudioTrack = orderedTracks({ sceneTracks }).find(
+			(candidate) => candidate.type === "audio",
 		);
-
-		// 3) Separated audio: ripple ITS lane at the same point, then insert. v1
-		// scope = target track + its linked audio only (no multi-track sync-lock).
-		if (pair) {
-			const firstAudioTrack = orderedTracks({ sceneTracks }).find(
-				(candidate) => candidate.type === "audio",
-			);
-			// Never disturb an authored lane: if rippling/splitting the first audio
-			// track would shift or cut authored (HyperFrames) separated audio — a plain
-			// AudioElement that carries the authored video's linkId — divert the
-			// separated audio onto a FRESH lane instead. Otherwise even a non-authored
-			// drop would move the authored audio and break its A/V gang.
-			const audioTrack =
-				firstAudioTrack &&
-				!this.laneRippleTouchesAuthored({
-					lane: firstAudioTrack,
-					insertStart,
-				})
-					? firstAudioTrack
-					: undefined;
-			const audioTrackId = audioTrack
-				? audioTrack.id
+		const rippleAudioTrack =
+			firstAudioTrack &&
+			!this.laneRippleTouchesAuthored({ lane: firstAudioTrack, insertStart })
+				? firstAudioTrack
+				: undefined;
+		let resolvedAudioTrackId: string | null = null;
+		const ensureAudioTrackId = (): string => {
+			if (resolvedAudioTrackId) return resolvedAudioTrackId;
+			resolvedAudioTrackId = rippleAudioTrack
+				? rippleAudioTrack.id
 				: this.createAudioTrackInto(commands);
-			if (audioTrack) {
-				// A clip that starts BEFORE insertStart but extends PAST it is not
-				// caught by computeRippleInsertShifts (start < insertStart), so the
-				// ripple leaves no hole under it and the separated audio would overlap
-				// it — silent A/V-sync corruption. Split it at insertStart first
-				// (head stays put, tail moves into the shifted region) so a gap-free
-				// hole opens. Same batch = one undo, no media lost.
-				const straddler = findStraddlingElement({
-					elements: audioTrack.elements,
+			return resolvedAudioTrackId;
+		};
+
+		// 2) Ripple the reused audio lane's downstream clips + split any straddler by
+		// the SAME summed duration, ONCE, BEFORE inserting the separated audio — so
+		// the hole is open under every separated-audio insert. Only needed when at
+		// least one dropped video actually has separable source audio (freshly-built
+		// video elements keep source audio enabled, so it reduces to a video asset
+		// whose audio wasn't detected absent — mirrors buildSeparatedVideoAudioPair).
+		const anySeparableAudio = inserts.some(
+			({ mediaAsset }) =>
+				mediaAsset.type === "video" && mediaAsset.hasAudio !== false,
+		);
+		if (rippleAudioTrack && anySeparableAudio) {
+			// A clip that starts BEFORE insertStart but extends PAST it is not caught
+			// by computeRippleInsertShifts, so the ripple leaves no hole under it and
+			// the separated audio would overlap it — silent A/V-sync corruption. Split
+			// it at insertStart first (head stays put, source-aligned tail moves past
+			// the whole hole) so a gap-free hole opens. Same batch = one undo.
+			const straddler = findStraddlingElement({
+				elements: rippleAudioTrack.elements,
+				insertStart,
+			});
+			if (straddler) {
+				const split = computeStraddleSplit({
+					element: straddler,
 					insertStart,
+					shiftDuration: summedDuration,
 				});
-				if (straddler) {
-					const split = computeStraddleSplit({
-						element: straddler,
-						insertStart,
-						shiftDuration: insertDuration,
-					});
-					commands.push(
-						new UpdateElementsCommand({
-							updates: [
-								{
-									trackId: audioTrack.id,
-									elementId: split.headPatch.id,
-									patch: {
-										duration: split.headPatch.duration,
-										trimEnd: split.headPatch.trimEnd,
-										animations: split.headPatch.animations,
-									},
+				commands.push(
+					new UpdateElementsCommand({
+						updates: [
+							{
+								trackId: rippleAudioTrack.id,
+								elementId: split.headPatch.id,
+								patch: {
+									duration: split.headPatch.duration,
+									trimEnd: split.headPatch.trimEnd,
+									animations: split.headPatch.animations,
 								},
-							],
-						}),
-						new InsertElementCommand({
-							element: split.tail,
-							placement: { mode: "explicit", trackId: audioTrack.id },
-						}),
-					);
-				}
-				const audioShifts = computeRippleInsertShifts({
-					elements: audioTrack.elements,
-					insertStart,
-					shiftDuration: insertDuration,
-				});
-				if (audioShifts.length > 0) {
-					commands.push(
-						new UpdateElementsCommand({
-							updates: audioShifts.map((shift) => ({
-								trackId: audioTrack.id,
-								elementId: shift.id,
-								patch: { startTime: shift.startTime },
-							})),
-						}),
-					);
-				}
+							},
+						],
+					}),
+					new InsertElementCommand({
+						element: split.tail,
+						placement: { mode: "explicit", trackId: rippleAudioTrack.id },
+					}),
+				);
 			}
+			const audioShifts = computeRippleInsertShifts({
+				elements: rippleAudioTrack.elements,
+				insertStart,
+				shiftDuration: summedDuration,
+			});
+			if (audioShifts.length > 0) {
+				commands.push(
+					new UpdateElementsCommand({
+						updates: audioShifts.map((shift) => ({
+							trackId: rippleAudioTrack.id,
+							elementId: shift.id,
+							patch: { startTime: shift.startTime },
+						})),
+					}),
+				);
+			}
+		}
+
+		// 3) Insert every asset back-to-back at the hole (cascaded starts). Skip the
+		// main-track snap-to-0 rule: the ripple already opened a gap-free hole at
+		// exactly insertStart, so enforcing "no leading gap" would slide the clips to
+		// 0 and desync them from their linked audio (inserted unsnapped at the same
+		// cascaded start).
+		let cascade = insertStart;
+		for (const { mediaAsset, duration } of inserts) {
+			const video = buildElementFromMedia({
+				mediaId: mediaAsset.id,
+				mediaType: mediaAsset.type,
+				name: mediaAsset.name,
+				duration,
+				startTime: cascade,
+			});
+			const pair =
+				video.type === "video"
+					? buildSeparatedVideoAudioPair({ videoElement: video, mediaAsset })
+					: null;
 			commands.push(
 				new InsertElementCommand({
-					element: pair.audio,
-					placement: { mode: "explicit", trackId: audioTrackId },
+					element: pair ? pair.video : video,
+					placement: {
+						mode: "explicit",
+						trackId: track.id,
+						skipMainTrackStart: true,
+					},
 				}),
 			);
+			if (pair) {
+				commands.push(
+					new InsertElementCommand({
+						element: pair.audio,
+						placement: { mode: "explicit", trackId: ensureAudioTrackId() },
+					}),
+				);
+			}
+			cascade = addMediaTime({ a: cascade, b: duration });
 		}
 
 		if (commands.length > 0) {
