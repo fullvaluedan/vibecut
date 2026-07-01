@@ -318,6 +318,9 @@ export interface ComputeDropTargetParams {
 	verticalDragDirection?: "up" | "down" | null;
 	startTimeOverride?: MediaTime;
 	excludeElementId?: string;
+	// The full moving-element id set for a multi-clip drag. Threaded to the
+	// overlap test so shifted siblings don't falsely block the group move.
+	excludeElementIds?: ReadonlySet<string>;
 	targetElementTypes?: string[];
 }
 

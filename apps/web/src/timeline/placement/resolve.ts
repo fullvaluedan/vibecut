@@ -20,6 +20,9 @@ type ResolveTrackPlacementParams = PlacementSubject & {
 	tracks: SceneTracks;
 	timeSpans: PlacementTimeSpan[];
 	strategy: PlacementStrategy;
+	// Elements skipped from the overlap test on every candidate track (the whole
+	// moving set of a multi-clip drag). See `canPlaceTimeSpansOnTrack`.
+	excludeElementIds?: ReadonlySet<string>;
 };
 
 function buildExistingTrackResult({
@@ -71,10 +74,12 @@ function findFirstAvailableTrackIndex({
 	tracks,
 	trackType,
 	timeSpans,
+	excludeElementIds,
 }: {
 	tracks: TimelineTrack[];
 	trackType: TrackType;
 	timeSpans: PlacementTimeSpan[];
+	excludeElementIds?: ReadonlySet<string>;
 }): number {
 	return tracks.findIndex((track) => {
 		return (
@@ -82,6 +87,7 @@ function findFirstAvailableTrackIndex({
 			canPlaceTimeSpansOnTrack({
 				track,
 				timeSpans,
+				excludeElementIds,
 			})
 		);
 	});
@@ -149,6 +155,7 @@ export function resolveTrackPlacement(
 		return clampToExistingVideoTrack({
 			tracks: params.tracks,
 			timeSpans: params.timeSpans,
+			excludeElementIds: params.excludeElementIds,
 		});
 	}
 
@@ -158,15 +165,18 @@ export function resolveTrackPlacement(
 function clampToExistingVideoTrack({
 	tracks,
 	timeSpans,
+	excludeElementIds,
 }: {
 	tracks: SceneTracks;
 	timeSpans: PlacementTimeSpan[];
+	excludeElementIds?: ReadonlySet<string>;
 }): PlacementResult | null {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const availableIndex = findFirstAvailableTrackIndex({
 		tracks: orderedTracks,
 		trackType: "video",
 		timeSpans,
+		excludeElementIds,
 	});
 	const trackIndex =
 		availableIndex >= 0
@@ -197,7 +207,7 @@ function resolveTrackPlacementUncapped({
 			: getTrackTypeForElementType({
 					elementType: placement.elementType,
 				});
-	const { timeSpans, strategy } = placement;
+	const { timeSpans, strategy, excludeElementIds } = placement;
 
 	if (strategy.type === "explicit") {
 		const trackIndex = orderedTracks.findIndex(
@@ -228,7 +238,11 @@ function resolveTrackPlacementUncapped({
 		// first; Assemble already targets main explicitly).
 		if (
 			trackType === "video" &&
-			canPlaceTimeSpansOnTrack({ track: tracks.main, timeSpans })
+			canPlaceTimeSpansOnTrack({
+				track: tracks.main,
+				timeSpans,
+				excludeElementIds,
+			})
 		) {
 			return buildExistingTrackResult({
 				track: tracks.main,
@@ -244,6 +258,7 @@ function resolveTrackPlacementUncapped({
 			tracks: orderedTracks,
 			trackType,
 			timeSpans,
+			excludeElementIds,
 		});
 		if (existingTrackIndex >= 0) {
 			return buildExistingTrackResult({
@@ -271,6 +286,7 @@ function resolveTrackPlacementUncapped({
 			canPlaceTimeSpansOnTrack({
 				track: preferredTrack,
 				timeSpans,
+				excludeElementIds,
 			});
 		if (canUseExistingTrack) {
 			return buildExistingTrackResult({
@@ -308,6 +324,7 @@ function resolveTrackPlacementUncapped({
 			canPlaceTimeSpansOnTrack({
 				track: aboveTrack,
 				timeSpans,
+				excludeElementIds,
 			})
 		) {
 			return buildExistingTrackResult({
@@ -322,6 +339,7 @@ function resolveTrackPlacementUncapped({
 			tracks: orderedTracks,
 			trackType,
 			timeSpans,
+			excludeElementIds,
 		});
 		if (firstAvailableTrackIndex >= 0) {
 			return buildExistingTrackResult({

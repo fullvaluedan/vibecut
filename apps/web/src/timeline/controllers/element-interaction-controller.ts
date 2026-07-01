@@ -210,6 +210,7 @@ function resolveDropTarget({
 	zoomLevel,
 	snappedTime,
 	verticalDragDirection,
+	movingElementIds,
 }: {
 	clientX: number;
 	clientY: number;
@@ -220,6 +221,11 @@ function resolveDropTarget({
 	zoomLevel: number;
 	snappedTime: MediaTime;
 	verticalDragDirection: "up" | "down" | null;
+	// The whole moving set (all selected members), not just the anchor, so the
+	// overlap test skips every clip this drag carries. Without this a same-track
+	// multi-clip shift falsely collides with its own siblings and diverts to a
+	// new track / no-op. Mirrors `canApplyMovesToExistingTracks` at commit time.
+	movingElementIds: ReadonlySet<string>;
 }): DropTarget | null {
 	const containerRect = viewport
 		.getTracksContainerEl()
@@ -249,6 +255,7 @@ function resolveDropTarget({
 		zoomLevel,
 		startTimeOverride: snappedTime,
 		excludeElementId: movingElement.id,
+		excludeElementIds: movingElementIds,
 		verticalDragDirection,
 	});
 }
@@ -540,6 +547,9 @@ export class ElementInteractionController {
 				startMouseY: mousedown.origin.y,
 				currentMouseY: clientY,
 			}),
+			movingElementIds: new Set(
+				drag.moveGroup.members.map((member) => member.elementId),
+			),
 		});
 
 		const nextGroupMoveResult = anchorDropTarget

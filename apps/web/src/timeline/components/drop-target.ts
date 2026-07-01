@@ -113,6 +113,7 @@ export function computeDropTarget({
 	verticalDragDirection,
 	startTimeOverride,
 	excludeElementId,
+	excludeElementIds,
 	targetElementTypes,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
@@ -134,6 +135,7 @@ export function computeDropTarget({
 			tracks,
 			elementType,
 			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			excludeElementIds,
 			strategy: {
 				type: "preferIndex",
 				trackIndex: 0,
@@ -169,6 +171,7 @@ export function computeDropTarget({
 			tracks,
 			elementType,
 			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			excludeElementIds,
 			strategy: {
 				type: "preferIndex",
 				trackIndex: isAboveAllTracks ? 0 : orderedTracks.length - 1,
@@ -222,6 +225,7 @@ export function computeDropTarget({
 		tracks,
 		elementType,
 		timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+		excludeElementIds,
 		strategy: {
 			type: "preferIndex",
 			trackIndex,

@@ -424,6 +424,53 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 
+	test("preferIndex group shift stays on the same lane when the moving set is excluded", () => {
+		// Two clips [a: 0..5][b: 5..10] on an overlay video lane, shifted right by
+		// 3. Excluding only the anchor makes the shifted anchor collide with b ->
+		// diverts to a new track. Excluding the whole set keeps it on the lane.
+		const buildLane = () =>
+			buildSceneTracks({
+				overlay: [
+					buildTrack({
+						id: "video-lane",
+						type: "video",
+						elements: [
+							buildElement({ id: "a", type: "video", startTime: 0, duration: 5 }),
+							buildElement({ id: "b", type: "video", startTime: 5, duration: 5 }),
+						],
+					}),
+				],
+			});
+
+		expect(
+			resolveTrackPlacement({
+				tracks: buildLane(),
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 3, duration: 5 })],
+				excludeElementIds: new Set(["a"]),
+				strategy: {
+					type: "preferIndex",
+					trackIndex: 0,
+					hoverDirection: "below",
+				},
+			}),
+		).toMatchObject({ kind: "newTrack" });
+
+		expect(
+			resolveTrackPlacement({
+				tracks: buildLane(),
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 3, duration: 5 })],
+				excludeElementIds: new Set(["a", "b"]),
+				strategy: {
+					type: "preferIndex",
+					trackIndex: 0,
+					hoverDirection: "below",
+				},
+			}),
+		).toMatchObject({ kind: "existingTrack", trackId: "video-lane" });
+	});
+
 	test("preferIndex creates a new overlay track above the main track", () => {
 		const tracks = buildSceneTracks({
 			main: buildTrack({ id: "video-main", type: "video" }),
@@ -595,8 +642,8 @@ describe("resolveTrackPlacement", () => {
 				tracks,
 				elementType: "audio",
 				timeSpans: [
-					buildTimeSpan({ startTime: 2.5, duration: 1 }),
-					buildTimeSpan({ startTime: 5.5, duration: 1 }),
+					buildTimeSpan({ startTime: 3, duration: 1 }),
+					buildTimeSpan({ startTime: 5, duration: 1 }),
 				],
 				strategy: { type: "firstAvailable" },
 			}),
@@ -756,6 +803,52 @@ describe("resolveTrackPlacement video-track cap (MAX_VIDEO_TRACKS = 8)", () => {
 				strategy: { type: "firstAvailable" },
 			}),
 		).toMatchObject({ kind: "newTrack", trackType: "audio" });
+	});
+
+	test("a same-track group shift still resolves to an existing lane at the cap", () => {
+		// main + 7 overlay video tracks all fully occupied = at the cap. A group
+		// of two clips on the main lane shifting right must resolve back onto the
+		// main lane (existingTrack), not divert to a would-be 9th track / null.
+		const occupy = (id: string): VideoTrack["elements"] => [
+			buildElement({ id, type: "video", startTime: 0, duration: 100 }),
+		];
+		const tracks = buildSceneTracks({
+			overlay: Array.from({ length: 7 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: occupy(`vid-el-${i + 1}`),
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "m-a", type: "video", startTime: 0, duration: 20 }),
+					buildElement({ id: "m-b", type: "video", startTime: 20, duration: 20 }),
+					buildElement({ id: "m-c", type: "video", startTime: 60, duration: 20 }),
+				],
+			}),
+		});
+
+		const result = resolveTrackPlacement({
+			tracks,
+			elementType: "video",
+			// Shift [m-a, m-b] right into the 40..60 gap; excluding both moving ids
+			// lets the anchor span pass on the main lane.
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 20 })],
+			excludeElementIds: new Set(["m-a", "m-b"]),
+			strategy: {
+				type: "preferIndex",
+				trackIndex: 7,
+				hoverDirection: "below",
+			},
+		});
+		expect(result).toMatchObject({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackType: "video",
+		});
 	});
 
 	test("below the cap, a video still resolves to a new track", () => {
