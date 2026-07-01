@@ -1003,4 +1003,234 @@ describe("authored / HyperFrames clip guard (never ripple/overwrite)", () => {
 		) as unknown as { placement: { trackId: string } };
 		expect(insert.placement.trackId).not.toBe("overlay-authored");
 	});
+
+	test("(G1/G2) audio INSERT drop onto an authored render's separated-audio lane does NOT ripple it", () => {
+		// An authored HyperFrames video (framecutAi) with its source audio separated
+		// onto `audio-hf`: the audio clip carries the video's linkId but NOT
+		// framecutAi (video-only). A bare framecutAi check would miss it; the guard
+		// follows the linkId back to the authored video. A direct audio INSERT drop
+		// on that lane must divert to a fresh track, never shift the authored audio.
+		const overlay: VideoTrack = {
+			id: "overlay-authored",
+			type: "video",
+			name: "overlay-authored",
+			muted: false,
+			hidden: false,
+			elements: [
+				{
+					...authoredVideoClip({ id: "hf", startTime: 0, duration: 2 * TPS }),
+					linkId: "hf-link",
+					isSourceAudioEnabled: false,
+				},
+			],
+		};
+		const authoredAudio: AudioTrack = {
+			id: "audio-hf",
+			type: "audio",
+			name: "audio-hf",
+			muted: false,
+			elements: [
+				audioClip({
+					id: "hf-audio",
+					startTime: 0,
+					duration: 2 * TPS,
+					linkId: "hf-link",
+				}),
+			],
+		};
+		const tracks: SceneTracks = {
+			overlay: [overlay],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [authoredAudio],
+		};
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "na", type: "audio", duration: 1 })],
+		});
+
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: { type: "media", id: "na", mediaType: "audio", name: "na" },
+			targetTrackId: "audio-hf",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// Diverted to a fresh track: AddTrack + insert, and NO UpdateElementsCommand
+		// (a ripple/split of the authored lane would be one). The insert never lands
+		// on the authored audio lane.
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(true);
+		expect(cmds.some((c) => c instanceof UpdateElementsCommand)).toBe(false);
+		const insert = cmds.find(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as { placement: { trackId: string } };
+		expect(insert.placement.trackId).not.toBe("audio-hf");
+	});
+
+	test("(G3) multi-select drop onto an authored clip lands ALL selected assets", () => {
+		const overlay: VideoTrack = {
+			id: "overlay-authored",
+			type: "video",
+			name: "overlay-authored",
+			muted: false,
+			hidden: false,
+			elements: [authoredVideoClip({ id: "hf", startTime: 0, duration: TPS })],
+		};
+		const tracks: SceneTracks = {
+			overlay: [overlay],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [],
+		};
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [
+				asset({ id: "m1", type: "video", duration: 1 }),
+				asset({ id: "m2", type: "video", duration: 1 }),
+				asset({ id: "m3", type: "video", duration: 1 }),
+			],
+		});
+
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "overlay-authored", elementId: "hf" },
+		};
+		(
+			controller as unknown as {
+				executeMediaDrop: (args: {
+					target: typeof target;
+					dragData: {
+						type: "media";
+						id: string;
+						mediaType: string;
+						name: string;
+						mediaIds: string[];
+					};
+					coords: { mouseX: number; mouseY: number } | null;
+					mode: "insert" | "overwrite";
+				}) => void;
+			}
+		).executeMediaDrop({
+			target,
+			dragData: {
+				type: "media",
+				id: "m1",
+				mediaType: "video",
+				name: "m1",
+				mediaIds: ["m1", "m2", "m3"],
+			},
+			coords: { mouseX: 0, mouseY: 0 },
+			mode: "insert",
+		});
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// All three selected assets land (previously only dragData.id did). None on
+		// the authored overlay lane.
+		const videoInserts = cmds.filter(
+			(c) =>
+				c instanceof InsertElementCommand &&
+				(c as unknown as { element: { type: string } }).element.type === "video",
+		) as unknown as Array<{
+			element: { mediaId: string };
+			placement: { trackId: string };
+		}>;
+		const mediaIds = videoInserts.map((c) => c.element.mediaId).sort();
+		expect(mediaIds).toEqual(["m1", "m2", "m3"]);
+		for (const insert of videoInserts) {
+			expect(insert.placement.trackId).not.toBe("overlay-authored");
+		}
+		// No ripple/overwrite of the authored clip.
+		expect(cmds.some((c) => c instanceof UpdateElementsCommand)).toBe(false);
+	});
+
+	test("(G4) video+audio divert is a SINGLE undo entry with the pair in one batch", () => {
+		const overlay: VideoTrack = {
+			id: "overlay-authored",
+			type: "video",
+			name: "overlay-authored",
+			muted: false,
+			hidden: false,
+			elements: [authoredVideoClip({ id: "hf", startTime: 0, duration: TPS })],
+		};
+		const tracks: SceneTracks = {
+			overlay: [overlay],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements: [],
+			},
+			audio: [],
+		};
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "av", type: "video", duration: 1, hasAudio: true })],
+		});
+
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "overlay-authored", elementId: "hf" },
+		};
+		(
+			controller as unknown as {
+				executeMediaDrop: (args: {
+					target: typeof target;
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					coords: { mouseX: number; mouseY: number } | null;
+					mode: "insert" | "overwrite";
+				}) => void;
+			}
+		).executeMediaDrop({
+			target,
+			dragData: { type: "media", id: "av", mediaType: "video", name: "av" },
+			coords: { mouseX: 0, mouseY: 0 },
+			mode: "insert",
+		});
+
+		// ONE executed command => a single Ctrl+Z undoes the whole divert. Previously
+		// the divert was insert-then-toggle (two undo steps). The batch carries the
+		// linked video + its separated audio.
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		const inserts = cmds.filter(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as Array<{ element: { type: string; linkId?: string } }>;
+		const videoInsert = inserts.find((c) => c.element.type === "video");
+		const audioInsert = inserts.find((c) => c.element.type === "audio");
+		expect(videoInsert).toBeDefined();
+		expect(audioInsert).toBeDefined();
+		// The separated audio is ganged to the diverted video (shared fresh linkId).
+		expect(audioInsert?.element.linkId).toBeDefined();
+		expect(audioInsert?.element.linkId).toBe(videoInsert?.element.linkId);
+	});
 });

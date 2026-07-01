@@ -38,6 +38,7 @@ import type {
 	ElementType,
 	SceneTracks,
 	TimelineTrack,
+	TimelineElement,
 	CreateTimelineElement,
 } from "@/timeline";
 import type { TimelineDragData } from "@/timeline/drag";
@@ -161,6 +162,38 @@ function orderedTracks({
 	sceneTracks: SceneTracks;
 }): TimelineTrack[] {
 	return [...sceneTracks.overlay, sceneTracks.main, ...sceneTracks.audio];
+}
+
+/**
+ * Is `element` authored / HyperFrames-provenance, and so never to be rippled or
+ * overwritten by a bin drop? A HyperFrames render / baked block is a `video`
+ * with `framecutAi` set. Its separated source audio is a plain `AudioElement`
+ * that carries the video's `linkId` but not `framecutAi` (video-only), so an
+ * audio lane is checked by following the `linkId` back to the authored video
+ * (needs `sceneTracks`). Pass `sceneTracks` for the linked-audio case.
+ */
+function isElementAuthored({
+	element,
+	sceneTracks,
+}: {
+	element: TimelineElement;
+	sceneTracks?: SceneTracks;
+}): boolean {
+	if ("framecutAi" in element && element.framecutAi != null) {
+		return true;
+	}
+	if (element.linkId === undefined || !sceneTracks) {
+		return false;
+	}
+	return orderedTracks({ sceneTracks }).some((track) =>
+		track.elements.some(
+			(candidate) =>
+				candidate.id !== element.id &&
+				candidate.linkId === element.linkId &&
+				"framecutAi" in candidate &&
+				candidate.framecutAi != null,
+		),
+	);
 }
 
 // --- Controller ---
@@ -606,15 +639,47 @@ export class DragDropController {
 		const element = track?.elements.find(
 			(candidate) => candidate.id === targetElement.elementId,
 		);
-		return !!element && "framecutAi" in element && element.framecutAi != null;
+		return element ? isElementAuthored({ element }) : false;
 	}
 
 	/**
-	 * Drop the dragged media onto its OWN new track (default position for its type),
-	 * ignoring the covered clip entirely. Used to divert a drop off an authored
-	 * clip: the media lands (never silently lost) and the authored clip is
-	 * untouched. AddTrackCommand with no explicit index picks the default insert
-	 * slot for the type.
+	 * Would rippling/splitting `lane` at `insertStart` shift or cut an authored
+	 * clip? An authored HyperFrames video can have its source audio separated onto
+	 * an audio lane; that separated audio carries the video's `linkId` but not
+	 * `framecutAi` (video-only), so it is invisible to a bare `framecutAi` check.
+	 * Follow the `linkId` back to the authored video. Any clip the ripple
+	 * (`startTime >= insertStart`) or the straddle split (spans insertStart) would
+	 * touch counts. If so, the caller diverts the drop to a fresh lane instead of
+	 * disturbing the authored one.
+	 */
+	private laneRippleTouchesAuthored({
+		lane,
+		insertStart,
+	}: {
+		lane: TimelineTrack;
+		insertStart: MediaTime;
+	}): boolean {
+		const sceneTracks = this.config.getSceneTracks();
+		return lane.elements.some((element) => {
+			const shifted = element.startTime >= insertStart;
+			const straddles =
+				element.startTime < insertStart &&
+				insertStart <
+					addMediaTime({ a: element.startTime, b: element.duration });
+			if (!shifted && !straddles) return false;
+			return isElementAuthored({ element, sceneTracks });
+		});
+	}
+
+	/**
+	 * Divert a bin drop off an authored clip onto FRESH track(s), ignoring the
+	 * covered clip entirely: the media lands (never silently lost) and the authored
+	 * clip is untouched. Lays out EVERY selected asset (multi-select drag) so none
+	 * is silently dropped, packing same-type assets onto ONE new track per type and
+	 * cascading their start times. A dropped video's source audio is separated into
+	 * a shared new audio lane IN THE SAME BatchCommand (via the pure
+	 * `buildSeparatedVideoAudioPair`), so the whole divert is a SINGLE undo — not
+	 * insert-then-toggle (two undo steps) as before.
 	 */
 	private insertMediaOnNewTrack({
 		target,
@@ -623,31 +688,83 @@ export class DragDropController {
 		target: DropTarget;
 		dragData: Extract<TimelineDragData, { type: "media" }>;
 	}): void {
-		const mediaAsset = this.config
-			.getMediaAssets()
-			.find((asset) => asset.id === dragData.id);
-		if (!mediaAsset) return;
+		// Multi-select drags carry the whole selection; lay them all out. A single
+		// drag carries only its own id.
+		const ids =
+			dragData.mediaIds && dragData.mediaIds.length > 1
+				? dragData.mediaIds
+				: [dragData.id];
+		const assets = this.config.getMediaAssets();
 
-		const trackType: TrackType =
-			dragData.mediaType === "audio" ? "audio" : "video";
-		const element = buildElementFromMedia({
-			mediaId: mediaAsset.id,
-			mediaType: mediaAsset.type,
-			name: mediaAsset.name,
-			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
-			startTime: target.xPosition,
-		});
-		const addTrackCmd = new AddTrackCommand({ type: trackType });
-		const insertCmd = new InsertElementCommand({
-			element,
-			placement: { mode: "explicit", trackId: addTrackCmd.getTrackId() },
-		});
-		this.config.executeCommand(new BatchCommand([addTrackCmd, insertCmd]));
-		this.maybeSeparateAudio({
-			asset: mediaAsset,
-			elementId: insertCmd.getElementId(),
-			trackId: addTrackCmd.getTrackId(),
-		});
+		const commands: Command[] = [];
+		// One fresh track PER TYPE (created once, reused), so N same-type assets pack
+		// back-to-back onto a single new track instead of spawning N one-clip tracks.
+		const newTrackForType = new Map<TrackType, string>();
+		const ensureNewTrack = (type: TrackType): string => {
+			const existing = newTrackForType.get(type);
+			if (existing) return existing;
+			const addTrackCmd = new AddTrackCommand({ type });
+			newTrackForType.set(type, addTrackCmd.getTrackId());
+			commands.push(addTrackCmd);
+			return addTrackCmd.getTrackId();
+		};
+		// All separated source-audio packs onto ONE shared new audio track (lazy, so
+		// a drop with no separable video adds no empty track).
+		let separatedAudioTrackId: string | null = null;
+		const ensureSeparatedAudioTrack = (): string => {
+			if (separatedAudioTrackId) return separatedAudioTrackId;
+			separatedAudioTrackId = ensureNewTrack("audio");
+			return separatedAudioTrackId;
+		};
+
+		const baseStart = target.xPosition;
+		let cascadeOffsetTicks = 0;
+		for (const id of ids) {
+			const mediaAsset = assets.find((asset) => asset.id === id);
+			if (!mediaAsset) continue;
+			const trackType: TrackType =
+				mediaAsset.type === "audio" ? "audio" : "video";
+			const duration = toElementDurationTicks({ seconds: mediaAsset.duration });
+			const startTime = mediaTime({ ticks: baseStart + cascadeOffsetTicks });
+			const element = buildElementFromMedia({
+				mediaId: mediaAsset.id,
+				mediaType: mediaAsset.type,
+				name: mediaAsset.name,
+				duration,
+				startTime,
+			});
+			const pair =
+				element.type === "video"
+					? buildSeparatedVideoAudioPair({ videoElement: element, mediaAsset })
+					: null;
+			const elementToInsert = pair ? pair.video : element;
+
+			commands.push(
+				new InsertElementCommand({
+					element: elementToInsert,
+					placement: {
+						mode: "explicit",
+						trackId: ensureNewTrack(trackType),
+					},
+				}),
+			);
+			if (pair) {
+				commands.push(
+					new InsertElementCommand({
+						element: pair.audio,
+						placement: {
+							mode: "explicit",
+							trackId: ensureSeparatedAudioTrack(),
+						},
+					}),
+				);
+			}
+			cascadeOffsetTicks += duration;
+		}
+
+		if (commands.length > 0) {
+			this.config.executeCommand(new BatchCommand(commands));
+		}
 	}
 
 	/**
@@ -737,6 +854,24 @@ export class DragDropController {
 		);
 		const insertStart = clipAtDrop ? clipAtDrop.startTime : dropX;
 
+		// Never ripple/split an authored lane: a direct audio drop onto an authored
+		// render's separated-audio lane (or any lane whose shifted/straddled clip is
+		// authored) diverts to a fresh track instead. Same invariant the covered-clip
+		// guard enforces for a video-target drop.
+		if (this.laneRippleTouchesAuthored({ lane: track, insertStart })) {
+			this.insertMediaOnNewTrack({
+				target: {
+					isNewTrack: true,
+					trackIndex: 0,
+					insertPosition: null,
+					xPosition: insertStart,
+					targetElement: null,
+				},
+				dragData,
+			});
+			return;
+		}
+
 		const video = buildElementFromMedia({
 			mediaId: mediaAsset.id,
 			mediaType: mediaAsset.type,
@@ -789,9 +924,22 @@ export class DragDropController {
 		// 3) Separated audio: ripple ITS lane at the same point, then insert. v1
 		// scope = target track + its linked audio only (no multi-track sync-lock).
 		if (pair) {
-			const audioTrack = orderedTracks({ sceneTracks }).find(
+			const firstAudioTrack = orderedTracks({ sceneTracks }).find(
 				(candidate) => candidate.type === "audio",
 			);
+			// Never disturb an authored lane: if rippling/splitting the first audio
+			// track would shift or cut authored (HyperFrames) separated audio — a plain
+			// AudioElement that carries the authored video's linkId — divert the
+			// separated audio onto a FRESH lane instead. Otherwise even a non-authored
+			// drop would move the authored audio and break its A/V gang.
+			const audioTrack =
+				firstAudioTrack &&
+				!this.laneRippleTouchesAuthored({
+					lane: firstAudioTrack,
+					insertStart,
+				})
+					? firstAudioTrack
+					: undefined;
 			const audioTrackId = audioTrack
 				? audioTrack.id
 				: this.createAudioTrackInto(commands);
