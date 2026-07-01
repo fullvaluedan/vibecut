@@ -48,6 +48,7 @@ import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
 import { buildRedundancyCatalog } from "./redundancy-catalog";
 import {
+	backstopDefaultAccept,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
 	type RedundancyReviewGroup,
@@ -418,18 +419,25 @@ export async function runDirector({
 	} catch {
 		// route error → fall through to the lexical repeat detectors (KTD-5)
 	}
-	const runLexical = shouldRunLexicalRepeatDetectors({ redundancyRan });
+	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5) — kept for intent
 	abort();
 
-	// Fold the always-on cleanup + (ONLY on fallback) the lexical repeat detectors into
-	// the LLM plan, protecting take-cluster keepers + the importance floor + LLM keeps.
-	const lexicalRepeatCuts = runLexical
-		? [...phraseRepeatCuts, ...segmentRepeatCuts, ...redundancyOps]
-		: [];
+	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
+	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
+	// detectors now run ADDITIVELY alongside the LLM pass (U5/R5): when the LLM pass
+	// ran they are a backstop for repeats it missed, so their cuts surface as accept-
+	// OFF review rows (opt-in, never auto-cut newly-surfaced content — OQ3/R7); only on
+	// route-error fallback are they the sole authority and keep the accepted default.
+	const backstopAccepted = backstopDefaultAccept({ redundancyRan });
+	const lexicalRepeatCuts = [
+		...phraseRepeatCuts,
+		...segmentRepeatCuts,
+		...redundancyOps,
+	].map((op) => (backstopAccepted ? op : { ...op, defaultAccept: false }));
 	const baseMerged = mergeDetectedCuts({
 		planOps,
 		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...vadDeadAirCuts, ...lexicalRepeatCuts],
-		keepers: [...(runLexical ? keepers : []), ...protectedSpans, ...llmKeepSpans],
+		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
 	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by
 	// explicit LLM keep ops — the capped importance floor must not veto them.

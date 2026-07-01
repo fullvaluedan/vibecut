@@ -172,12 +172,23 @@ export function applyKeeperSwap({
 
 /**
  * Whether the lexical repeat detectors (take-clusters / phrase-repeat / segment-
- * repeat / the deterministic redundancy mapper) should run. They are the
- * ROUTE-ERROR FALLBACK (KTD-5): when the redundancy pass ran (success, even with
- * zero groups), the LLM pass is the authority and the lexical detectors stay
- * silent; only when the pass errored do they run.
+ * repeat / the deterministic redundancy mapper) should run. They now ALWAYS run
+ * (#5/R5): when the LLM redundancy pass succeeded they contribute ADDITIVELY as a
+ * backstop for repeats it missed; when it errored they are the sole authority.
+ * `mergeDetectedCuts` dedup + keeper protection make the union safe.
  */
-export function shouldRunLexicalRepeatDetectors({
+export function shouldRunLexicalRepeatDetectors(): boolean {
+	return true;
+}
+
+/**
+ * The default accept state for the deterministic repeat backstop's cut ops. On
+ * route-error FALLBACK (`redundancyRan` false) they are the sole authority and keep
+ * the accepted default (unchanged behavior). When they are ADDITIVE (the LLM pass
+ * ran), their cuts are newly-surfaced repeats — accept-OFF, opt-in, never auto-cut
+ * (OQ3/R7).
+ */
+export function backstopDefaultAccept({
 	redundancyRan,
 }: {
 	redundancyRan: boolean;

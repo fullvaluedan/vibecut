@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyKeeperSwap,
+	backstopDefaultAccept,
 	cutMembersForKeeper,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
@@ -260,10 +261,16 @@ describe("cutMembersForKeeper (swap-to-alternate recompute)", () => {
 });
 
 describe("shouldRunLexicalRepeatDetectors", () => {
-	test("redundancy pass ran (success) → lexical detectors stay silent", () => {
-		expect(shouldRunLexicalRepeatDetectors({ redundancyRan: true })).toBe(false);
+	test("the detectors ALWAYS run now (additive backstop — U5/R5)", () => {
+		expect(shouldRunLexicalRepeatDetectors()).toBe(true);
 	});
-	test("redundancy pass errored → lexical detectors run (fallback)", () => {
-		expect(shouldRunLexicalRepeatDetectors({ redundancyRan: false })).toBe(true);
+});
+
+describe("backstopDefaultAccept", () => {
+	test("LLM pass ran → additive backstop cuts are accept-OFF (opt-in)", () => {
+		expect(backstopDefaultAccept({ redundancyRan: true })).toBe(false);
+	});
+	test("route-error fallback → backstop is the sole authority, accepted default", () => {
+		expect(backstopDefaultAccept({ redundancyRan: false })).toBe(true);
 	});
 });
