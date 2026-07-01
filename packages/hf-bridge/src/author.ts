@@ -496,6 +496,13 @@ export interface DirectorOp {
 	 * different keeper rebuilds exactly this group's cut ops. Absent on every other op.
 	 */
 	groupId?: string;
+	/**
+	 * Whether this op starts ACCEPTED in the review (client-assigned). Absent or
+	 * `true` = accepted by default (the user opts out); `false` = surfaced as an
+	 * opt-in row that starts unchecked, so higher-recall / lower-confidence
+	 * candidates are never auto-applied.
+	 */
+	defaultAccept?: boolean;
 }
 
 export interface DirectorPlan {

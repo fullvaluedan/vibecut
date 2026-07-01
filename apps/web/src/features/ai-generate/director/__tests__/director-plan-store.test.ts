@@ -30,6 +30,16 @@ describe("director plan decisions", () => {
 		expect(initDecisions(plan)).toEqual({ a: true, b: true, c: true });
 	});
 
+	test("an op flagged defaultAccept:false starts unchecked (opt-in)", () => {
+		const optIn: DirectorPlan = {
+			operations: [
+				op({ id: "a", kind: "cut" }),
+				{ ...op({ id: "b", kind: "cut" }), defaultAccept: false },
+			],
+		};
+		expect(initDecisions(optIn)).toEqual({ a: true, b: false });
+	});
+
 	test("toggle flips one op and leaves the rest", () => {
 		const d = toggleDecision({ decisions: initDecisions(plan), id: "b" });
 		expect(d).toEqual({ a: true, b: false, c: true });

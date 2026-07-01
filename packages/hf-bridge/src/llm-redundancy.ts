@@ -106,14 +106,14 @@ export function buildRedundancyPrompt({
 }): string {
 	return `You are an expert video EDITOR finding REDUNDANCY in a talking-head recording's transcript. Below is every spoken line IN ORDER, each with an id like [L12], its source clip, timing, and delivery signals (loudness 0-1, speaking rate wpm, "filler" when it reads as a false-start).
 
-Your job: find every set of lines that make the SAME POINT and should not all stay in the cut. This includes BOTH near-verbatim retakes (the speaker restarts and says almost the same sentence) AND reworded restatements (the same idea in different words). Group them, and for each group name the ONE best-delivered line to KEEP (the clearest, strongest delivery: higher loudness, steadier rate, no filler) — the rest will be cut.
+Your job: find every set of lines that make the SAME POINT and should not all stay in the cut. This includes BOTH near-verbatim retakes (the speaker restarts and says almost the same sentence) AND reworded restatements (the same idea in different words), including PARTIAL retakes where only the back half of a line is redone. Group them, and for each group name the ONE best-delivered line to KEEP (the clearest, strongest delivery: higher loudness, steadier rate, no filler) — the rest will be cut.
 
-Be CONSERVATIVE — accuracy over recall:
-- Only group lines you are CONFIDENT make the same point. If two lines are merely on the same topic but make DIFFERENT points, do NOT group them.
-- LEAVE intentional repetition alone: a deliberate callback, an "as I said earlier" recap, or repetition for rhetorical emphasis is NOT redundancy.
-- When unsure, do NOT group. A missed repeat is better than cutting distinct content.
+Aim for RECALL — surface every plausible repeat for review. The editor reviews every group before anything is cut, and lower-confidence groups are shown UNCHECKED for the editor to opt into, so a borderline group costs nothing:
+- Group lines that make the same point even when you are only moderately sure. Lines merely on the same TOPIC but making DIFFERENT points still should not be grouped.
+- LEAVE intentional repetition alone: a deliberate callback, an "as I said earlier" recap, or repetition for rhetorical emphasis is NOT redundancy. Never group those.
+- Do NOT drop a plausible group just because you are unsure — include it and lower its confidence instead.
 
-confidence is 0..1 — be honest; only include groups you are confident about.
+confidence is 0..1 — set it HONESTLY: high when it is clearly the same point, lower for a judgment call. The lower-confidence groups are exactly the ones the editor wants to see and decide on.
 
 TRANSCRIPT:
 ${renderRedundancyCatalog(lines)}

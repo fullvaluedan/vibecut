@@ -13,8 +13,18 @@
 import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
 import { stableCutId } from "./cut-utils";
 
-/** Groups below this LLM confidence are dropped (KTD-3, inclusive at the floor). */
-export const DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR = 0.7;
+/**
+ * Groups below this LLM confidence are dropped entirely (inclusive at the floor).
+ * Lowered from 0.7 to raise recall (#5): the [floor, accept-threshold) band is now
+ * SURFACED as opt-in review rows rather than dropped, so more repeats reach the user.
+ */
+export const DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR = 0.5;
+
+/**
+ * Groups at/above this confidence start ACCEPTED in the review; groups in
+ * [floor, this) are surfaced as accept-OFF rows the user opts into (never auto-cut).
+ */
+export const DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD = 0.7;
 
 /** One redundancy group as the review panel sees it (keeper + all takes). */
 export interface RedundancyReviewGroup {
@@ -34,11 +44,14 @@ function buildRedundancyCutOp({
 	groupId,
 	confidence,
 	reason,
+	defaultAccept = true,
 }: {
 	member: RedundancyMember;
 	groupId: string;
 	confidence: number;
 	reason: string;
+	/** Sub-floor groups pass `false` so their row starts unchecked (opt-in). */
+	defaultAccept?: boolean;
 }): DirectorOp {
 	return {
 		id: `redun-${stableCutId(`${member.startSec.toFixed(3)}:${member.endSec.toFixed(3)}`)}`,
@@ -51,6 +64,9 @@ function buildRedundancyCutOp({
 		confidence,
 		category: "redundancy",
 		groupId,
+		// Omit the field when accepted so above-threshold ops stay byte-shaped as
+		// before (absent = accepted); only sub-threshold ops carry `false`.
+		...(defaultAccept ? {} : { defaultAccept: false }),
 	};
 }
 
@@ -63,21 +79,25 @@ export interface MappedRedundancy {
 
 /**
  * Map redundancy groups to flat cut ops + review groups. A group below the
- * confidence floor is dropped entirely; a group that (defensively) has no non-keeper
- * member emits no cut. The keeper is never cut, even when it is the EARLIEST take
- * (best-delivered, not keep-last — KTD-8).
+ * confidence FLOOR is dropped entirely; a group in [floor, acceptThreshold) is
+ * SURFACED with accept-OFF cut ops (opt-in, never auto-cut — #5/R4); a group at/above
+ * the threshold surfaces with accepted cut ops. A group that (defensively) has no
+ * non-keeper member emits no cut. The keeper is never cut, even when it is the
+ * EARLIEST take (best-delivered, not keep-last — KTD-8).
  */
 export function mapRedundancyGroups({
 	groups,
 	confidenceFloor = DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR,
+	acceptThreshold = DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD,
 }: {
 	groups: readonly RedundancyGroup[];
 	confidenceFloor?: number;
+	acceptThreshold?: number;
 }): MappedRedundancy {
 	const cuts: DirectorOp[] = [];
 	const reviewGroups: RedundancyReviewGroup[] = [];
 
-	// `gi` indexes only the SURVIVING groups, so a group's id is stable across runs
+	// `gi` indexes only the SURFACED groups, so a group's id is stable across runs
 	// of the same plan (below-floor / keeper-only groups never consume an index).
 	let gi = 0;
 	for (const group of groups) {
@@ -86,6 +106,9 @@ export function mapRedundancyGroups({
 		if (nonKeepers.length === 0) continue; // keeper-only → nothing to cut (defensive)
 
 		const groupId = `g${gi++}`;
+		// Sub-threshold groups are opt-in: their cut ops start unchecked so the higher
+		// recall never auto-cuts distinct content (R7); the user approves them per row.
+		const defaultAccept = group.confidence >= acceptThreshold;
 		for (const member of nonKeepers) {
 			cuts.push(
 				buildRedundancyCutOp({
@@ -93,6 +116,7 @@ export function mapRedundancyGroups({
 					groupId,
 					confidence: group.confidence,
 					reason: group.reason,
+					defaultAccept,
 				}),
 			);
 		}

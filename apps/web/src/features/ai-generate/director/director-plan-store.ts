@@ -39,11 +39,15 @@ export function selectAcceptedKeeps({
 	return keeps.filter((k) => decisions[k.id]);
 }
 
-/** Every op starts ACCEPTED — the user opts ops out, not in. */
+/**
+ * Ops start ACCEPTED — the user opts ops out, not in — EXCEPT ops flagged
+ * `defaultAccept: false` (lower-confidence, higher-recall candidates), which start
+ * unchecked so nothing new is auto-applied (#5/R4).
+ */
 export function initDecisions(plan: DirectorPlan): OpDecisions {
 	const decisions: OpDecisions = {};
 	for (const op of plan.operations) {
-		decisions[op.id] = true;
+		decisions[op.id] = op.defaultAccept !== false;
 	}
 	return decisions;
 }

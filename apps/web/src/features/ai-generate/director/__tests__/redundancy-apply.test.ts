@@ -108,6 +108,42 @@ describe("mapRedundancyGroups", () => {
 	});
 });
 
+describe("mapRedundancyGroups recall surfacing (#5/R4)", () => {
+	const mk = (confidence: number) =>
+		group({
+			members: [
+				member({ lineId: "L0", startSec: 0, endSec: 2 }),
+				member({ lineId: "L1", startSec: 3, endSec: 5 }),
+			],
+			keeperLineId: "L1",
+			confidence,
+		});
+
+	test("a 0.55 group is surfaced as an accept-OFF row (previously dropped at floor 0.7)", () => {
+		const { cuts, groups } = mapRedundancyGroups({ groups: [mk(0.55)] });
+		expect(groups).toHaveLength(1);
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0].defaultAccept).toBe(false);
+	});
+
+	test("a group at/above the accept threshold defaults to accepted (no defaultAccept flag)", () => {
+		const { cuts } = mapRedundancyGroups({ groups: [mk(0.8)] });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0].defaultAccept).not.toBe(false);
+	});
+
+	test("a group below the floor is still dropped entirely", () => {
+		const { cuts, groups } = mapRedundancyGroups({ groups: [mk(0.4)] });
+		expect(cuts).toHaveLength(0);
+		expect(groups).toHaveLength(0);
+	});
+
+	test("exactly at the accept threshold is accepted; exactly at the floor is accept-off", () => {
+		expect(mapRedundancyGroups({ groups: [mk(0.7)] }).cuts[0].defaultAccept).not.toBe(false);
+		expect(mapRedundancyGroups({ groups: [mk(0.5)] }).cuts[0].defaultAccept).toBe(false);
+	});
+});
+
 describe("mapRedundancyGroups groupId tagging", () => {
 	test("each surviving group gets a stable id shared by its cut ops", () => {
 		const { cuts, groups } = mapRedundancyGroups({

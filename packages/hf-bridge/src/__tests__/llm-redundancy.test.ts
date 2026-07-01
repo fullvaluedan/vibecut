@@ -42,9 +42,9 @@ const lines: RedundancyLine[] = [
 ];
 
 describe("buildRedundancyPrompt", () => {
-	test("carries the conservative + protect-intentional-repetition instructions", () => {
+	test("aims for recall while protecting intentional repetition", () => {
 		const prompt = buildRedundancyPrompt({ lines });
-		expect(prompt).toContain("CONSERVATIVE");
+		expect(prompt).toContain("RECALL");
 		expect(prompt.toLowerCase()).toContain("callback");
 		expect(prompt).toContain("SAME POINT");
 		expect(prompt).toContain("[L0]");
