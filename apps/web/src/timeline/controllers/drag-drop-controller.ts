@@ -821,6 +821,7 @@ export class DragDropController {
 									patch: {
 										duration: split.headPatch.duration,
 										trimEnd: split.headPatch.trimEnd,
+										animations: split.headPatch.animations,
 									},
 								},
 							],

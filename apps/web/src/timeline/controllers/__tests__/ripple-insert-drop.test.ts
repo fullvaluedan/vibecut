@@ -18,9 +18,34 @@ import type {
 	AudioElement,
 } from "@/timeline";
 import type { MediaAsset } from "@/media/types";
+import type { ElementAnimations } from "@/animation/types";
 import { mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 const TPS = 120_000; // ticks per second (matches @/wasm mock)
+
+/** A minimal two-key volume fade (1 -> 0) over `duration` ticks. */
+function volumeFade({ duration }: { duration: number }): ElementAnimations {
+	return {
+		volume: {
+			keys: [
+				{
+					id: "vk-0",
+					time: ZERO_MEDIA_TIME,
+					value: 1,
+					segmentToNext: "linear",
+					tangentMode: "flat",
+				},
+				{
+					id: "vk-1",
+					time: mediaTime({ ticks: duration }),
+					value: 0,
+					segmentToNext: "linear",
+					tangentMode: "flat",
+				},
+			],
+		},
+	};
+}
 
 function videoClip({
 	id,
@@ -55,10 +80,22 @@ function audioClip({
 	id,
 	startTime,
 	duration,
+	trimStart = 0,
+	trimEnd = 0,
+	sourceDuration,
+	retime,
+	linkId,
+	animations,
 }: {
 	id: string;
 	startTime: number;
 	duration: number;
+	trimStart?: number;
+	trimEnd?: number;
+	sourceDuration?: number;
+	retime?: { rate: number; maintainPitch?: boolean };
+	linkId?: string;
+	animations?: ElementAnimations;
 }): AudioElement {
 	return {
 		id,
@@ -66,8 +103,14 @@ function audioClip({
 		name: id,
 		startTime: mediaTime({ ticks: startTime }),
 		duration: mediaTime({ ticks: duration }),
-		trimStart: ZERO_MEDIA_TIME,
-		trimEnd: ZERO_MEDIA_TIME,
+		trimStart: mediaTime({ ticks: trimStart }),
+		trimEnd: mediaTime({ ticks: trimEnd }),
+		...(sourceDuration !== undefined
+			? { sourceDuration: mediaTime({ ticks: sourceDuration }) }
+			: {}),
+		...(retime ? { retime } : {}),
+		...(linkId ? { linkId } : {}),
+		...(animations ? { animations } : {}),
 		sourceType: "upload",
 		mediaId: `media-${id}`,
 		params: { volume: 1, muted: false },
@@ -477,6 +520,212 @@ describe("drag-to-insert (U5) BatchCommand shape", () => {
 		expect(insertedAudio?.linkId).toBeDefined();
 		expect(insertedAudio?.linkId).toBe(videoInsert.element.linkId);
 		expect(videoInsert.element.startTime).toBe(TPS);
+	});
+});
+
+describe("straddle split is source-aligned (S1-S3)", () => {
+	// Shared driver: an A/V asset dropped over v2 (insertStart = TPS) forces the
+	// separated audio to split the single straddling audio clip on `audio-1`.
+	function runWithStraddler(straddler: AudioElement): {
+		headPatch:
+			| { startTime?: number; duration?: number; trimEnd?: number; animations?: unknown }
+			| undefined;
+		tail:
+			| {
+					type: string;
+					startTime: number;
+					duration: number;
+					trimStart: number;
+					trimEnd: number;
+					mediaId?: string;
+					linkId?: string;
+					retime?: { rate: number };
+					animations?: ElementAnimations;
+				}
+			| undefined;
+		videoLinkId: string | undefined;
+	} {
+		const videoTrack: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "v1", startTime: 0, duration: TPS }),
+				videoClip({ id: "v2", startTime: TPS, duration: TPS }),
+			],
+		};
+		const audioTrack: AudioTrack = {
+			id: "audio-1",
+			type: "audio",
+			name: "audio-1",
+			muted: false,
+			elements: [straddler],
+		};
+		const tracks: SceneTracks = {
+			overlay: [],
+			main: videoTrack,
+			audio: [audioTrack],
+		};
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [asset({ id: "av", type: "video", duration: 1, hasAudio: true })],
+		});
+		(
+			controller as unknown as {
+				executeMediaRippleInsert: (args: {
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					targetTrackId: string;
+					dropX: number;
+				}) => void;
+			}
+		).executeMediaRippleInsert({
+			dragData: { type: "media", id: "av", mediaType: "video", name: "av" },
+			targetTrackId: "video-main",
+			dropX: mediaTime({ ticks: TPS }),
+		});
+
+		const cmds = batchCommands(executed[0]);
+		// Head-shrink patch: the UpdateElementsCommand that touches the straddler id.
+		let headPatch:
+			| { startTime?: number; duration?: number; trimEnd?: number; animations?: unknown }
+			| undefined;
+		for (const cmd of cmds) {
+			if (!(cmd instanceof UpdateElementsCommand)) continue;
+			const { updates } = cmd as unknown as {
+				updates: Array<{
+					elementId: string;
+					patch: {
+						startTime?: number;
+						duration?: number;
+						trimEnd?: number;
+						animations?: unknown;
+					};
+				}>;
+			};
+			const found = updates.find((u) => u.elementId === straddler.id);
+			if (found) headPatch = found.patch;
+		}
+		// Tail insert: the audio insert carrying the straddler's media.
+		const inserts = cmds.filter((c) => c instanceof InsertElementCommand);
+		const tail = inserts
+			.map(
+				(c) =>
+					(c as unknown as {
+						element: {
+							type: string;
+							startTime: number;
+							duration: number;
+							trimStart: number;
+							trimEnd: number;
+							mediaId?: string;
+							linkId?: string;
+							retime?: { rate: number };
+							animations?: ElementAnimations;
+						};
+					}).element,
+			)
+			.find(
+				(el) =>
+					el.type === "audio" && el.mediaId === `media-${straddler.id}`,
+			);
+		const videoInsert = inserts
+			.map(
+				(c) =>
+					(c as unknown as { element: { type: string; linkId?: string } }).element,
+			)
+			.find((el) => el.type === "video");
+		return { headPatch, tail, videoLinkId: videoInsert?.linkId };
+	}
+
+	test("head trimEnd + tail trimStart absorb the WHOLE source span (rate 1)", () => {
+		// Straddler [TPS/2, TPS/2 + 2*TPS], trims 0. insertStart = TPS => head
+		// visible = TPS/2, tail visible = 3*TPS/2. At rate 1, source spans equal
+		// visible: head consumes TPS/2, so tail.trimStart advances by TPS/2 and
+		// head.trimEnd grows by the TAIL span 3*TPS/2 (source-aligned invariant).
+		const { headPatch, tail } = runWithStraddler(
+			audioClip({ id: "straddle", startTime: TPS / 2, duration: 2 * TPS }),
+		);
+		expect(headPatch).toBeDefined();
+		expect(tail).toBeDefined();
+		const headVisible = TPS / 2;
+		const tailVisible = (3 * TPS) / 2;
+		expect(headPatch?.duration).toBe(headVisible);
+		expect(tail?.duration).toBe(tailVisible);
+		// rate 1: source span == visible span. tail.trimStart advances by the HEAD
+		// span; head.trimEnd grows by the TAIL span (the source cut off after the
+		// split) — the pre-fix bug added the HEAD span to head.trimEnd instead.
+		expect(tail?.trimStart).toBe(headVisible); // element.trimStart(0) + headSpan
+		expect(headPatch?.trimEnd).toBe(tailVisible); // element.trimEnd(0) + tailSpan
+		// Conservation: head span (=tail.trimStart) + tail span (=head.trimEnd) tile
+		// the whole source with no gap/overlap. At rate 1 that is the full visible
+		// duration (2*TPS), since trims started at 0.
+		expect((tail?.trimStart ?? 0) + (headPatch?.trimEnd ?? 0)).toBe(2 * TPS);
+	});
+
+	test("retimed straddler (rate 2) splits the SOURCE span, not the visible span", () => {
+		// rate 2 => 1 visible tick consumes 2 source ticks. Straddler [TPS/2, +2*TPS]
+		// rate 2. head visible = TPS/2 => head source span = TPS. tail source span =
+		// (2*TPS)*2 - TPS = 3*TPS. So tail.trimStart = 0 + TPS, head.trimEnd = 0 +
+		// 3*TPS. This is the getSourceSpanAtClipTime path the bespoke code skipped.
+		const { headPatch, tail } = runWithStraddler(
+			audioClip({
+				id: "straddle",
+				startTime: TPS / 2,
+				duration: 2 * TPS,
+				sourceDuration: 4 * TPS,
+				retime: { rate: 2 },
+			}),
+		);
+		expect(tail?.retime?.rate).toBe(2);
+		expect(tail?.trimStart).toBe(TPS); // head source span
+		expect(headPatch?.trimEnd).toBe(3 * TPS); // tail source span
+		// head source span + tail source span == total source span (2*TPS visible *
+		// rate 2 = 4*TPS).
+		expect((tail?.trimStart ?? 0) + (headPatch?.trimEnd ?? 0)).toBe(4 * TPS);
+	});
+
+	test("linked straddler gives the tail a FRESH linkId (no false A/V gang)", () => {
+		// The straddler carries a linkId (it is itself linked to some video). The
+		// split tail must NOT inherit it — else two audio clips would claim the same
+		// gang as one unsplit video and corrupt linked selection / A/V sync.
+		const { tail, videoLinkId } = runWithStraddler(
+			audioClip({
+				id: "straddle",
+				startTime: TPS / 2,
+				duration: 2 * TPS,
+				linkId: "orig-link",
+			}),
+		);
+		expect(tail?.linkId).toBeDefined();
+		expect(tail?.linkId).not.toBe("orig-link"); // fresh, not the straddler's
+		expect(tail?.linkId).not.toBe(videoLinkId); // not the inserted video's gang
+	});
+
+	test("volume fade is partitioned: head keeps left, tail keeps right", () => {
+		// A 2*TPS-long fade (1 -> 0) on the straddler. Split at head visible = TPS/2.
+		// splitAnimationsAtTime must give the head the [0, TPS/2] keys and the tail
+		// the [TPS/2, 2*TPS] keys (re-based to 0), each with a boundary key.
+		const { headPatch, tail } = runWithStraddler(
+			audioClip({
+				id: "straddle",
+				startTime: TPS / 2,
+				duration: 2 * TPS,
+				animations: volumeFade({ duration: 2 * TPS }),
+			}),
+		);
+		const headAnim = headPatch?.animations as ElementAnimations | undefined;
+		const tailAnim = tail?.animations as ElementAnimations | undefined;
+		expect(headAnim?.volume).toBeDefined();
+		expect(tailAnim?.volume).toBeDefined();
+		const headKeys = (headAnim?.volume as { keys: Array<{ time: number }> }).keys;
+		const tailKeys = (tailAnim?.volume as { keys: Array<{ time: number }> }).keys;
+		// Head keys live in [0, headVisible]; tail keys are re-based to start at 0.
+		expect(Math.max(...headKeys.map((k) => k.time))).toBe(TPS / 2);
+		expect(Math.min(...tailKeys.map((k) => k.time))).toBe(0);
+		// Nothing shifted past the tail's own length.
+		expect(Math.max(...tailKeys.map((k) => k.time))).toBe((3 * TPS) / 2);
 	});
 });
 
