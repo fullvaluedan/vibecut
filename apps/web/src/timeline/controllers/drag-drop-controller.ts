@@ -1190,6 +1190,24 @@ export class DragDropController {
 		if (newMediaDuration <= ZERO_MEDIA_TIME) return;
 		const regionStart = existing.startTime;
 		const regionEnd = addMediaTime({ a: regionStart, b: newMediaDuration });
+
+		// The covered-clip guard (executeMediaDrop) only checks the clip directly
+		// under the cursor. A longer overwrite region can reach a DOWNSTREAM authored
+		// (HyperFrames) clip on the same lane, which planRegionOverwrite would delete
+		// or head-trim with no authored check — violating "never overwrite an authored
+		// overlay". Mirror laneRippleTouchesAuthored: if ANY element intersecting the
+		// region is authored, divert onto a fresh track (never touch it, never lose
+		// the media), exactly like the covered-clip guard.
+		const regionTouchesAuthored = track.elements.some((element) => {
+			const elEnd = addMediaTime({ a: element.startTime, b: element.duration });
+			const intersects = element.startTime < regionEnd && elEnd > regionStart;
+			return intersects && isElementAuthored({ element, sceneTracks });
+		});
+		if (regionTouchesAuthored) {
+			this.insertMediaOnNewTrack({ target, dragData });
+			return;
+		}
+
 		const plan = planRegionOverwrite({
 			elements: track.elements.map((element) => ({
 				id: element.id,

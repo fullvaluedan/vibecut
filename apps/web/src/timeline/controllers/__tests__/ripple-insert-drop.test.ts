@@ -7,6 +7,7 @@ import {
 	InsertElementCommand,
 	UpdateElementsCommand,
 	AddTrackCommand,
+	DeleteElementsCommand,
 } from "@/commands/timeline";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
@@ -1232,5 +1233,75 @@ describe("authored / HyperFrames clip guard (never ripple/overwrite)", () => {
 		// The separated audio is ganged to the diverted video (shared fresh linkId).
 		expect(audioInsert?.element.linkId).toBeDefined();
 		expect(audioInsert?.element.linkId).toBe(videoInsert?.element.linkId);
+	});
+
+	test("(F1) OVERWRITE over a non-authored clip never clears a DOWNSTREAM authored clip", () => {
+		// One lane: non-authored clip N [0, TPS], authored HyperFrames clip HF
+		// [TPS, 2*TPS]. The covered clip under the cursor (N) is NOT authored, so the
+		// entry guard passes; but a 2s overwrite region [0, 2*TPS] reaches HF, which
+		// planRegionOverwrite would delete with no authored check. The region guard
+		// must divert to a fresh track: HF is never deleted/trimmed.
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "n", startTime: 0, duration: TPS }),
+				authoredVideoClip({ id: "hf", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			// 2s asset => region [0, 2*TPS] covers both N and HF.
+			assets: [asset({ id: "dropped", type: "video", duration: 2 })],
+		});
+
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "video-main", elementId: "n" },
+		};
+		(
+			controller as unknown as {
+				executeMediaDrop: (args: {
+					target: typeof target;
+					dragData: { type: "media"; id: string; mediaType: string; name: string };
+					coords: { mouseX: number; mouseY: number } | null;
+					mode: "insert" | "overwrite";
+				}) => void;
+			}
+		).executeMediaDrop({
+			target,
+			dragData: {
+				type: "media",
+				id: "dropped",
+				mediaType: "video",
+				name: "dropped",
+			},
+			coords: { mouseX: 0, mouseY: 0 },
+			mode: "overwrite",
+		});
+
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+		// No DeleteElementsCommand touches the authored id (the pre-fix bug deleted it).
+		for (const cmd of cmds) {
+			if (!(cmd instanceof DeleteElementsCommand)) continue;
+			const { elements } = cmd as unknown as {
+				elements: Array<{ elementId: string }>;
+			};
+			expect(elements.some((e) => e.elementId === "hf")).toBe(false);
+		}
+		// Diverted to a fresh track: AddTrack + insert onto it, never the authored lane.
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(true);
+		const insert = cmds.find(
+			(c) => c instanceof InsertElementCommand,
+		) as unknown as { placement: { trackId: string } };
+		expect(insert.placement.trackId).not.toBe("video-main");
 	});
 });
