@@ -1581,6 +1581,90 @@ describe("authored / HyperFrames clip guard (never ripple/overwrite)", () => {
 		) as unknown as { placement: { trackId: string } };
 		expect(insert.placement.trackId).not.toBe("video-main");
 	});
+	test("(F5) multi-select OVERWRITE onto an occupied clip overwrites in place AND lands every other member, one undo", () => {
+		// Lane: n1 [0, TPS], n2 [TPS, 2*TPS]. Ctrl/Cmd-drop a 3-asset selection
+		// (each 1s) onto n1 (overwrite). Pre-fix: only the PRIMARY (m1) overwrote and
+		// m2/m3 were silently discarded. Now m1 overwrites in place (n1's start, own
+		// length) and m2/m3 land on a fresh track cascaded from the region end — all in
+		// ONE BatchCommand (one undo).
+		const track: VideoTrack = {
+			id: "video-main",
+			type: "video",
+			name: "video-main",
+			muted: false,
+			hidden: false,
+			elements: [
+				videoClip({ id: "n1", startTime: 0, duration: TPS }),
+				videoClip({ id: "n2", startTime: TPS, duration: TPS }),
+			],
+		};
+		const tracks: SceneTracks = { overlay: [], main: track, audio: [] };
+		const { controller, executed } = makeController({
+			tracks,
+			assets: [
+				asset({ id: "m1", type: "video", duration: 1 }),
+				asset({ id: "m2", type: "video", duration: 1 }),
+				asset({ id: "m3", type: "video", duration: 1 }),
+			],
+		});
+
+		const target = {
+			trackIndex: 0,
+			isNewTrack: false,
+			insertPosition: null,
+			xPosition: mediaTime({ ticks: TPS / 2 }),
+			targetElement: { trackId: "video-main", elementId: "n1" },
+		};
+		(controller as unknown as { executeMediaDrop: (a: any) => void }).executeMediaDrop({
+			target,
+			dragData: {
+				type: "media",
+				id: "m1",
+				mediaType: "video",
+				name: "m1",
+				mediaIds: ["m1", "m2", "m3"],
+			},
+			coords: { mouseX: 0, mouseY: 0 },
+			mode: "overwrite",
+		});
+
+		// ONE executed command => a single Ctrl+Z undoes the whole multi-overwrite.
+		expect(executed).toHaveLength(1);
+		const cmds = batchCommands(executed[0]);
+
+		const inserts = cmds
+			.filter((c) => c instanceof InsertElementCommand)
+			.map(
+				(c) =>
+					(c as unknown as {
+						element: { mediaId: string; startTime: number };
+						placement: { trackId: string };
+					}),
+			);
+		const byMedia = new Map(inserts.map((c) => [c.element.mediaId, c]));
+
+		// PRIMARY m1 overwrites in place: on the target lane, at n1's start (0), its own
+		// 1s length. n1 (fully covered) is deleted; no new track for the primary.
+		const primary = byMedia.get("m1");
+		expect(primary?.placement.trackId).toBe("video-main");
+		expect(primary?.element.startTime).toBe(0);
+
+		// Every OTHER selected member lands — nothing silently dropped.
+		expect(byMedia.has("m2")).toBe(true);
+		expect(byMedia.has("m3")).toBe(true);
+
+		// The remainder goes on a FRESH track (not the overwrite lane), cascaded from
+		// the region end (TPS): m2 at TPS, m3 at 2*TPS.
+		const remainderTrack = byMedia.get("m2")?.placement.trackId;
+		expect(remainderTrack).toBeDefined();
+		expect(remainderTrack).not.toBe("video-main");
+		expect(cmds.some((c) => c instanceof AddTrackCommand)).toBe(true);
+		expect(byMedia.get("m2")?.element.startTime).toBe(TPS);
+		expect(byMedia.get("m3")?.element.startTime).toBe(2 * TPS);
+		// Both remainder members pack onto the SAME fresh track (per-type reuse).
+		expect(byMedia.get("m3")?.placement.trackId).toBe(remainderTrack);
+	});
+
 	test("(FP-PROBE) normal overwrite over only non-authored clips STILL overwrites (no needless divert)", () => {
 		const track: VideoTrack = {
 			id: "video-main",

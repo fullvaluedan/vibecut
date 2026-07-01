@@ -694,9 +694,37 @@ export class DragDropController {
 			dragData.mediaIds && dragData.mediaIds.length > 1
 				? dragData.mediaIds
 				: [dragData.id];
-		const assets = this.config.getMediaAssets();
-
 		const commands: Command[] = [];
+		this.layoutMembersOnFreshTracks({
+			ids,
+			baseStart: target.xPosition,
+			commands,
+		});
+		if (commands.length > 0) {
+			this.config.executeCommand(new BatchCommand(commands));
+		}
+	}
+
+	/**
+	 * Lay a set of bin assets out on FRESH tracks packed per type, cascaded from
+	 * `baseStart`, appending every InsertElement/AddTrack into the shared `commands`
+	 * array so the caller can fold it into ONE BatchCommand (one undo). One fresh
+	 * track per type (reused), and each video's source audio is separated onto a
+	 * single shared new audio lane, ganged via the pure `buildSeparatedVideoAudioPair`
+	 * (shared linkId). This is the per-type cascade shared by the authored divert
+	 * (`insertMediaOnNewTrack`), the mixed-ripple divert, and the multi-select
+	 * overwrite remainder — never silently dropping a selected member.
+	 */
+	private layoutMembersOnFreshTracks({
+		ids,
+		baseStart,
+		commands,
+	}: {
+		ids: string[];
+		baseStart: MediaTime;
+		commands: Command[];
+	}): void {
+		const assets = this.config.getMediaAssets();
 		// One fresh track PER TYPE (created once, reused), so N same-type assets pack
 		// back-to-back onto a single new track instead of spawning N one-clip tracks.
 		const newTrackForType = new Map<TrackType, string>();
@@ -717,21 +745,19 @@ export class DragDropController {
 			return separatedAudioTrackId;
 		};
 
-		const baseStart = target.xPosition;
-		let cascadeOffsetTicks = 0;
+		let cascade = baseStart;
 		for (const id of ids) {
 			const mediaAsset = assets.find((asset) => asset.id === id);
 			if (!mediaAsset) continue;
 			const trackType: TrackType =
 				mediaAsset.type === "audio" ? "audio" : "video";
 			const duration = toElementDurationTicks({ seconds: mediaAsset.duration });
-			const startTime = mediaTime({ ticks: baseStart + cascadeOffsetTicks });
 			const element = buildElementFromMedia({
 				mediaId: mediaAsset.id,
 				mediaType: mediaAsset.type,
 				name: mediaAsset.name,
 				duration,
-				startTime,
+				startTime: cascade,
 			});
 			const pair =
 				element.type === "video"
@@ -759,11 +785,7 @@ export class DragDropController {
 					}),
 				);
 			}
-			cascadeOffsetTicks += duration;
-		}
-
-		if (commands.length > 0) {
-			this.config.executeCommand(new BatchCommand(commands));
+			cascade = addMediaTime({ a: cascade, b: duration });
 		}
 	}
 
@@ -1258,6 +1280,13 @@ export class DragDropController {
 	 * insert-first command ordering below. A head-trimmed survivor's source
 	 * in-point is retime-aware (planRegionOverwrite scales the cut by the element's
 	 * rate), so a speed-ramped clip keeps the right in-point.
+	 *
+	 * A multi-select drag (`dragData.mediaIds.length > 1`) overwrites with the
+	 * PRIMARY member (`dragData.id`) as above, then lays the REMAINING selected
+	 * members out on fresh per-type tracks cascaded from the overwrite region's end
+	 * — inside the SAME BatchCommand — so nothing is silently dropped (mirrors the
+	 * ripple divert). A single-asset drop (mediaIds absent or length 1) is
+	 * behaviorally identical to before: no extra members, no new track.
 	 */
 	private executeMediaOverwrite({
 		target,
@@ -1383,6 +1412,23 @@ export class DragDropController {
 				}),
 			);
 		}
+
+		// A multi-select OVERWRITE routes here on the PRIMARY member only; the rest of
+		// the selection would otherwise be silently discarded. Lay the remaining
+		// members (mediaIds excluding the primary id) out on fresh per-type tracks,
+		// cascaded from the overwrite region's end so they never overlap the just-placed
+		// primary — appended into THIS same commands array so the whole thing is ONE
+		// undo. Mirrors the ripple divert; nothing is lost. Single-asset drops (no
+		// mediaIds, or length 1) skip this entirely — behaviorally identical to before.
+		if (dragData.mediaIds && dragData.mediaIds.length > 1) {
+			const remaining = dragData.mediaIds.filter((id) => id !== dragData.id);
+			this.layoutMembersOnFreshTracks({
+				ids: remaining,
+				baseStart: regionEnd,
+				commands,
+			});
+		}
+
 		this.config.executeCommand(new BatchCommand(commands));
 	}
 
