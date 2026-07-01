@@ -68,8 +68,15 @@ mock.module("opencut-wasm", () => ({
 		const tpf = ticksPerFrame(rate);
 		return Math.max(0, Math.ceil(duration / tpf) - 1) * tpf;
 	},
-	snappedSeekTime: ({ time, rate }: { time: number; rate: FrameRate }) =>
-		roundToFrame({ time, rate }),
+	snappedSeekTime: ({
+		time,
+		duration,
+		rate,
+	}: {
+		time: number;
+		duration: number;
+		rate: FrameRate;
+	}) => Math.max(0, Math.min(duration, roundToFrame({ time, rate }))),
 	parseTimecode: () => undefined,
 	guessTimecodeFormat: () => undefined,
 	formatTimecode: () => "",
