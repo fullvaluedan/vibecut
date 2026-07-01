@@ -112,6 +112,7 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 }
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
+import { computeEmphasisPauseKeepers } from "./emphasis-pause";
 import { groupTranscriptByAsset } from "./source-map";
 import { buildTakeClusters } from "./take-clusters";
 import { detectRedundancyCuts } from "./redundancy";
@@ -172,8 +173,11 @@ export async function runDirector({
 	// fillers, pacing — the LLM works at segment level and misses these. The REPEAT
 	// detectors (phrase-repeat, segment-repeat) are computed here but only INCLUDED
 	// when the dedicated LLM redundancy pass didn't run (R7 fallback, gated below).
+	// Doubled words are a stutter/MISTAKE — kept as its own const so it can join the
+	// repeat/mistake proximity set that disqualifies an emphasis pause (U2).
+	const duplicateWordCuts = detectDuplicateWordCuts({ words: words ?? [] });
 	const wordCuts = [
-		...detectDuplicateWordCuts({ words: words ?? [] }),
+		...duplicateWordCuts,
 		...detectDeadAirCuts({ words: words ?? [] }),
 		...detectFillerCuts({ words: words ?? [] }),
 		...detectPacingCuts({ segments }),
@@ -434,10 +438,34 @@ export async function runDirector({
 		...segmentRepeatCuts,
 		...redundancyOps,
 	].map((op) => (backstopAccepted ? op : { ...op, defaultAccept: false }));
+	// Emphasis-pause protection (#4/U2): keep a short, speech-bounded in-dialog pause
+	// as a deliberate beat unless a repeat/mistake sits next to it. The repeat/mistake
+	// spans must be known FIRST (they disqualify a pause), so collect every repeat- and
+	// mistake-sourced cut in scope, then protect the qualifying inter-segment gaps via
+	// keepers — mergeDetectedCuts drops the pacing / vad-dead-air removals over them,
+	// suppressing ALL pause-removing sources at once (R2/KTD2). No words -> no keepers.
+	const repeatMistakeSpans = [
+		...duplicateWordCuts,
+		...phraseRepeatCuts,
+		...segmentRepeatCuts,
+		...redundancyOps,
+		...redundancyCuts,
+	].map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
+	const pauseGaps: { start: number; end: number }[] = [];
+	for (let i = 1; i < segments.length; i++) {
+		const start = segments[i - 1].end;
+		const end = segments[i].start;
+		if (end > start) pauseGaps.push({ start, end });
+	}
+	const emphasisPauseKeepers = computeEmphasisPauseKeepers({
+		gaps: pauseGaps,
+		words: words ?? [],
+		repeatSpans: repeatMistakeSpans,
+	});
 	const baseMerged = mergeDetectedCuts({
 		planOps,
 		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...vadDeadAirCuts, ...lexicalRepeatCuts],
-		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans],
+		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
 	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by
 	// explicit LLM keep ops — the capped importance floor must not veto them.
