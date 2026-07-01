@@ -336,11 +336,15 @@ function TimelineImpl() {
 			playheadRef,
 		});
 
-	const { isDragOver, dropTarget, dragProps } = useTimelineDragDrop({
+	const { isDragOver, dropTarget, dragMode, dragProps } = useTimelineDragDrop({
 		containerRef: tracksContainerRef,
 		tracksScrollRef,
 		zoomLevel,
 	});
+	// Distinct drag cue per mode: OVERWRITE tints the covered clip (region will be
+	// cleared); INSERT shows the drop line at the insert point (clips ripple right
+	// to make room), even when a clip sits under the cursor.
+	const isInsertMode = dragMode === "insert";
 
 	const {
 		selectionBox,
@@ -472,7 +476,9 @@ function TimelineImpl() {
 					<DragLine
 						dropTarget={dropTarget}
 						tracks={tracks}
-						isVisible={isDragOver && !dropTarget?.targetElement}
+						isVisible={
+							isDragOver && (isInsertMode || !dropTarget?.targetElement)
+						}
 						headerHeight={timelineHeaderHeight}
 					/>
 					<DragLine
@@ -570,6 +576,7 @@ function TimelineImpl() {
 										shouldIgnoreClick={shouldIgnoreClick}
 										isDragOver={isDragOver}
 										dropTarget={dropTarget}
+										isInsertMode={isInsertMode}
 									/>
 								)}
 							</div>
@@ -781,6 +788,7 @@ function TimelineTrackRows({
 	shouldIgnoreClick,
 	isDragOver,
 	dropTarget,
+	isInsertMode,
 }: {
 	mainTrackId: string | null;
 	zoomLevel: number;
@@ -799,6 +807,7 @@ function TimelineTrackRows({
 	shouldIgnoreClick: () => boolean;
 	isDragOver: boolean;
 	dropTarget: DropTarget | null;
+	isInsertMode: boolean;
 }) {
 	const timeline = useEditor((e) => e.timeline);
 	const editor = useEditor();
@@ -878,7 +887,7 @@ function TimelineTrackRows({
 								onTrackMouseUp={onTrackMouseUp}
 								shouldIgnoreClick={shouldIgnoreClick}
 								targetElementId={
-									isDragOver
+									isDragOver && !isInsertMode
 										? (dropTarget?.targetElement?.elementId ?? null)
 										: null
 								}

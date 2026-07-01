@@ -23,6 +23,7 @@ import {
 import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
 import { buildSeparatedVideoAudioPair } from "@/timeline/audio-separation";
 import { canElementGoOnTrack } from "@/timeline/placement/compatibility";
+import { computeRippleInsertShifts } from "@/timeline/placement/ripple-insert";
 import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import { computeDropTarget } from "@/timeline/components/drop-target";
@@ -83,10 +84,21 @@ export interface DragDropConfigRef {
 
 // --- State ---
 
+// Premiere-style drop modes. The user's default is INSERT (plain drag pushes
+// downstream clips right to make room); holding Ctrl/Cmd switches to OVERWRITE
+// (the covered region is cleared, nothing ripples). This is the inverse of
+// Premiere's own default, by explicit product decision (push-to-add-cuts).
+export type DragDropMode = "insert" | "overwrite";
+
+function dropModeFromEvent(event: DragEvent): DragDropMode {
+	return event.ctrlKey || event.metaKey ? "overwrite" : "insert";
+}
+
 interface DragOverState {
 	kind: "over";
 	dropTarget: DropTarget | null;
 	elementType: ElementType | null;
+	mode: DragDropMode;
 }
 
 type DragDropState = { kind: "idle" } | DragOverState;
@@ -179,6 +191,11 @@ export class DragDropController {
 		return this.state.kind === "over" ? this.state.elementType : null;
 	}
 
+	/** Active drop mode for the drag cue (insert = ripple, overwrite = clear). */
+	get dragMode(): DragDropMode | null {
+		return this.state.kind === "over" ? this.state.mode : null;
+	}
+
 	subscribe(fn: () => void): () => void {
 		this.subscribers.add(fn);
 		return () => this.subscribers.delete(fn);
@@ -198,7 +215,11 @@ export class DragDropController {
 
 		this.enterCount += 1;
 		if (this.state.kind === "idle") {
-			this.setOver({ dropTarget: null, elementType: null });
+			this.setOver({
+				dropTarget: null,
+				elementType: null,
+				mode: dropModeFromEvent(event),
+			});
 		}
 	}
 
@@ -211,10 +232,11 @@ export class DragDropController {
 		const dragData = this.config.dragSource.getActive();
 		const hasFiles = event.dataTransfer.types.includes("Files");
 		const isExternal = hasFiles && !dragData;
+		const mode = dropModeFromEvent(event);
 
 		if (!dragData) {
 			if (hasFiles && isExternal) {
-				this.setOver({ dropTarget: null, elementType: null });
+				this.setOver({ dropTarget: null, elementType: null, mode });
 			}
 			return;
 		}
@@ -245,7 +267,7 @@ export class DragDropController {
 			? roundFrameTime({ time: target.xPosition, fps })
 			: target.xPosition;
 
-		this.setOver({ dropTarget: target, elementType });
+		this.setOver({ dropTarget: target, elementType, mode });
 		event.dataTransfer.dropEffect = "copy";
 	}
 
@@ -267,6 +289,7 @@ export class DragDropController {
 		if (!dragData && !hasFiles) return;
 
 		const currentTarget = this.dropTarget;
+		const mode = dropModeFromEvent(event);
 		this.setIdle();
 		// After a drop, focus lingers on the dragged bin tile, which makes the
 		// keybindings dispatcher bail on bare-key shortcuts (Delete, gap-delete)
@@ -280,6 +303,7 @@ export class DragDropController {
 					target: currentTarget,
 					dragData,
 					coords: this.getMouseTimelineCoords({ event }),
+					mode,
 				});
 				return;
 			}
@@ -303,6 +327,7 @@ export class DragDropController {
 	private setOver(state: {
 		dropTarget: DropTarget | null;
 		elementType: ElementType | null;
+		mode: DragDropMode;
 	}): void {
 		this.state = { kind: "over", ...state };
 		this.notify();
@@ -400,10 +425,12 @@ export class DragDropController {
 		target,
 		dragData,
 		coords,
+		mode,
 	}: {
 		target: DropTarget;
 		dragData: TimelineDragData;
 		coords: TimelineCoords | null;
+		mode: DragDropMode;
 	}): void {
 		switch (dragData.type) {
 			case "text":
@@ -419,7 +446,7 @@ export class DragDropController {
 				this.executeEffectDrop({ target, dragData });
 				return;
 			case "media":
-				this.executeMediaDrop({ target, dragData, coords });
+				this.executeMediaDrop({ target, dragData, coords, mode });
 				return;
 		}
 	}
@@ -476,15 +503,46 @@ export class DragDropController {
 		target,
 		dragData,
 		coords,
+		mode,
 	}: {
 		target: DropTarget;
 		dragData: Extract<TimelineDragData, { type: "media" }>;
 		coords: TimelineCoords | null;
+		mode: DragDropMode;
 	}): void {
 		if (target.targetElement) {
-			// Drop onto an existing clip → overwrite that clip in place.
-			this.executeMediaOverwrite({ target, dragData });
+			// A clip sits under the cursor (video/image hit-test).
+			// OVERWRITE (Ctrl/Cmd): clear that region in place, no ripple.
+			// INSERT (default): push it + everything downstream right to make room.
+			if (mode === "overwrite") {
+				this.executeMediaOverwrite({ target, dragData });
+			} else {
+				this.executeMediaRippleInsert({
+					dragData,
+					targetTrackId: target.targetElement.trackId,
+					dropX: target.xPosition,
+				});
+			}
 			return;
+		}
+
+		// No clip under the cursor. Audio carries no visual targetElementTypes, so
+		// it never hit-tests; in INSERT mode, if the hovered audio lane is occupied
+		// at the drop point, ripple-insert on that lane instead of spawning a track.
+		if (mode === "insert") {
+			const rippleTrackId = this.findOccupiedLaneForInsert({
+				mediaType: dragData.mediaType,
+				dropX: target.xPosition,
+				coords,
+			});
+			if (rippleTrackId) {
+				this.executeMediaRippleInsert({
+					dragData,
+					targetTrackId: rippleTrackId,
+					dropX: target.xPosition,
+				});
+				return;
+			}
 		}
 
 		// Multi-selection drag: drop every selected asset back-to-back.
@@ -513,6 +571,180 @@ export class DragDropController {
 		});
 		const inserted = this.insertAtTarget({ element, target, trackType });
 		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+	}
+
+	/**
+	 * The track id of the lane under the cursor when a clip already occupies the
+	 * drop point there (so an INSERT should ripple that lane instead of spawning a
+	 * new track). Used for audio, which has no visual hit-test. Returns null when
+	 * the lane is empty at the drop point or the cursor isn't over a compatible
+	 * lane.
+	 */
+	private findOccupiedLaneForInsert({
+		mediaType,
+		dropX,
+		coords,
+	}: {
+		mediaType: "image" | "video" | "audio";
+		dropX: MediaTime;
+		coords: TimelineCoords | null;
+	}): string | null {
+		if (!coords) return null;
+		const wantType: TrackType = mediaType === "audio" ? "audio" : "video";
+		const tracks = orderedTracks({ sceneTracks: this.config.getSceneTracks() });
+		// Hit-test the lane at the drop point across compatible tracks: the drop
+		// x lands inside one of that lane's clips.
+		for (const track of tracks) {
+			if (track.type !== wantType) continue;
+			const occupied = track.elements.some(
+				(element) =>
+					element.startTime <= dropX &&
+					dropX < addMediaTime({ a: element.startTime, b: element.duration }),
+			);
+			if (occupied) return track.id;
+		}
+		return null;
+	}
+
+	/**
+	 * INSERT edit (Premiere-style, but our default): drop the asset at the target
+	 * clip's start on `targetTrackId` and push every downstream clip on that lane
+	 * right by the inserted duration to open a hole — nothing is overwritten. A
+	 * dropped video's source audio is separated onto its own audio lane, which is
+	 * itself rippled at the same insert point so the pair stays ganged. The whole
+	 * thing is ONE BatchCommand, ordered shift-first (open the hole before the
+	 * insert), so a single Ctrl+Z undoes it. Mirrors the ripple-cut of
+	 * RemoveRangesCommand in reverse (see placement/ripple-insert.ts).
+	 */
+	private executeMediaRippleInsert({
+		dragData,
+		targetTrackId,
+		dropX,
+	}: {
+		dragData: Extract<TimelineDragData, { type: "media" }>;
+		targetTrackId: string;
+		dropX: MediaTime;
+	}): void {
+		const sceneTracks = this.config.getSceneTracks();
+		const track = orderedTracks({ sceneTracks }).find(
+			(candidate) => candidate.id === targetTrackId,
+		);
+		if (!track) return;
+
+		const mediaAsset = this.config
+			.getMediaAssets()
+			.find((asset) => asset.id === dragData.id);
+		if (!mediaAsset) return;
+
+		if (
+			!canElementGoOnTrack({
+				elementType: mediaAsset.type,
+				trackType: track.type,
+			})
+		) {
+			return;
+		}
+
+		const insertDuration = toElementDurationTicks({
+			seconds: mediaAsset.duration,
+		});
+		if (insertDuration <= ZERO_MEDIA_TIME) return;
+
+		// Anchor the insert at the start of the clip under the cursor (the cut
+		// boundary), so the ripple opens a clean hole and the new clip lands on a
+		// cut point. Empty spot on the lane => insert at the raw drop point.
+		const clipAtDrop = track.elements.find(
+			(element) =>
+				element.startTime <= dropX &&
+				dropX < addMediaTime({ a: element.startTime, b: element.duration }),
+		);
+		const insertStart = clipAtDrop ? clipAtDrop.startTime : dropX;
+
+		const video = buildElementFromMedia({
+			mediaId: mediaAsset.id,
+			mediaType: mediaAsset.type,
+			name: mediaAsset.name,
+			duration: insertDuration,
+			startTime: insertStart,
+		});
+		const pair =
+			video.type === "video"
+				? buildSeparatedVideoAudioPair({ videoElement: video, mediaAsset })
+				: null;
+		const elementToInsert = pair ? pair.video : video;
+
+		const commands: Command[] = [];
+
+		// 1) Open the hole: shift the target lane's downstream clips right first.
+		const laneShifts = computeRippleInsertShifts({
+			elements: track.elements,
+			insertStart,
+			shiftDuration: insertDuration,
+		});
+		if (laneShifts.length > 0) {
+			commands.push(
+				new UpdateElementsCommand({
+					updates: laneShifts.map((shift) => ({
+						trackId: track.id,
+						elementId: shift.id,
+						patch: { startTime: shift.startTime },
+					})),
+				}),
+			);
+		}
+
+		// 2) Insert the (video) clip at the hole.
+		commands.push(
+			new InsertElementCommand({
+				element: elementToInsert,
+				placement: { mode: "explicit", trackId: track.id },
+			}),
+		);
+
+		// 3) Separated audio: ripple ITS lane at the same point, then insert. v1
+		// scope = target track + its linked audio only (no multi-track sync-lock).
+		if (pair) {
+			const audioTrack = orderedTracks({ sceneTracks }).find(
+				(candidate) => candidate.type === "audio",
+			);
+			const audioTrackId = audioTrack
+				? audioTrack.id
+				: this.createAudioTrackInto(commands);
+			if (audioTrack) {
+				const audioShifts = computeRippleInsertShifts({
+					elements: audioTrack.elements,
+					insertStart,
+					shiftDuration: insertDuration,
+				});
+				if (audioShifts.length > 0) {
+					commands.push(
+						new UpdateElementsCommand({
+							updates: audioShifts.map((shift) => ({
+								trackId: audioTrack.id,
+								elementId: shift.id,
+								patch: { startTime: shift.startTime },
+							})),
+						}),
+					);
+				}
+			}
+			commands.push(
+				new InsertElementCommand({
+					element: pair.audio,
+					placement: { mode: "explicit", trackId: audioTrackId },
+				}),
+			);
+		}
+
+		if (commands.length > 0) {
+			this.config.executeCommand(new BatchCommand(commands));
+		}
+	}
+
+	private createAudioTrackInto(commands: Command[]): string {
+		const addAudioTrack = new AddTrackCommand({ type: "audio" });
+		commands.push(addAudioTrack);
+		return addAudioTrack.getTrackId();
 	}
 
 	/** Insert several bin assets at the drop point, laid out sequentially. */
