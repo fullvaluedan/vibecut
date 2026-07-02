@@ -487,7 +487,11 @@ export async function runDirector({
 							),
 					),
 					extraOps: redundancyCuts,
-					keepers: llmKeepSpans,
+					// Carry the emphasis-pause keepers through the SECOND pass too, so a
+					// protected pause survives both merges. Today no redundancy cut lands on a
+					// protected gap (the proximity check disqualifies any gap near one upstream),
+					// but re-passing the keepers hardens that invariant instead of relying on it.
+					keepers: [...llmKeepSpans, ...emphasisPauseKeepers],
 				}).filter((op) => op.op !== "keep")
 			: baseMerged;
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal

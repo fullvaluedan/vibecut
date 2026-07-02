@@ -86,4 +86,48 @@ describe("emphasis-pause protection through the merge (U2)", () => {
 		const merged = mergeDetectedCuts({ planOps: [], extraOps: [pacingCut, deadAirCut], keepers });
 		expect(merged.length).toBeGreaterThan(0);
 	});
+
+	// FIX 4: run-director runs TWO merge passes (base, then a redundancy-authority
+	// pass). The emphasis keepers must ride through BOTH or a redundancy cut landing on
+	// a protected gap in the second pass would remove it. Mirror the two-pass sequence
+	// with a redundancy cut spanning the protected gap and assert the gap survives.
+	describe("keepers survive the redundancy-authority second pass", () => {
+		const emphasisPauseKeepers = computeEmphasisPauseKeepers({
+			gaps: [gap],
+			words,
+			repeatSpans: [],
+		});
+		const redundancyCut = cut({
+			startSec: 5,
+			endSec: 6.5,
+			category: "redundancy",
+			id: "redun-over-gap",
+		});
+
+		// Pass 1: pacing/dead-air removals over the gap are dropped by the keeper.
+		const baseMerged = mergeDetectedCuts({
+			planOps: [],
+			extraOps: [pacingCut, deadAirCut],
+			keepers: emphasisPauseKeepers,
+		}).filter((op) => op.op !== "keep");
+
+		test("second pass WITH the emphasis keepers keeps the gap protected", () => {
+			expect(emphasisPauseKeepers).toHaveLength(1);
+			const mergedOps = mergeDetectedCuts({
+				planOps: baseMerged,
+				extraOps: [redundancyCut],
+				keepers: [...emphasisPauseKeepers], // llmKeepSpans is empty in this fixture
+			}).filter((op) => op.op !== "keep");
+			expect(mergedOps.some((op) => op.startSec < 6.5 && 5 < op.endSec)).toBe(false);
+		});
+
+		test("second pass WITHOUT them would let the redundancy cut through (guards the fix)", () => {
+			const mergedOps = mergeDetectedCuts({
+				planOps: baseMerged,
+				extraOps: [redundancyCut],
+				keepers: [], // the pre-fix state: only llmKeepSpans, no emphasis keepers
+			}).filter((op) => op.op !== "keep");
+			expect(mergedOps.some((op) => op.startSec < 6.5 && 5 < op.endSec)).toBe(true);
+		});
+	});
 });
