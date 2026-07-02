@@ -4,6 +4,10 @@ import { useCallback } from "react";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
 import { TimelineElement } from "./timeline-element";
+import {
+	useVisibleClips,
+	type VisibleWindow,
+} from "@/timeline/hooks/use-visible-clips";
 import type { TimelineTrack } from "@/timeline";
 import type { TimelineElement as TimelineElementType } from "@/timeline";
 import { TIMELINE_LAYERS } from "./layers";
@@ -20,6 +24,11 @@ interface TimelineTrackContentProps {
 	track: TimelineTrack;
 	zoomLevel: number;
 	dragView: ElementDragView;
+	/**
+	 * Viewport-culling window (U7/KTD6). Only clips intersecting it (plus the
+	 * active drag target) are mounted. Null disables culling (renders all).
+	 */
+	visibleWindow: VisibleWindow | null;
 	onResizeStart: (params: {
 		event: React.MouseEvent;
 		element: TimelineElementType;
@@ -46,6 +55,7 @@ export function TimelineTrackContent({
 	track,
 	zoomLevel,
 	dragView,
+	visibleWindow,
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
@@ -214,6 +224,17 @@ export function TimelineTrackContent({
 
 	const isDragging = dragView.kind === "dragging";
 
+	// Force-include the active drag target(s) so a clip dragged out of the visible
+	// window stays mounted (unmounting it mid-drag breaks the drag). memberTimeOffsets
+	// is keyed by dragged element id, so it doubles as the `.has(id)` lookup.
+	const forceInclude = isDragging ? dragView.memberTimeOffsets : null;
+	const visibleElements = useVisibleClips({
+		elements: track.elements,
+		zoomLevel,
+		window: visibleWindow,
+		forceInclude,
+	});
+
 	return (
 		<div className={cn("relative size-full", isForwardTool && "cursor-e-resize")}>
 			<button
@@ -267,7 +288,7 @@ export function TimelineTrackContent({
 				{track.elements.length === 0 ? (
 					<div className="text-muted-foreground border-muted/30 pointer-events-none flex size-full items-center justify-center rounded-sm border-2 border-dashed text-xs" />
 				) : (
-					track.elements.map((element) => {
+					visibleElements.map((element) => {
 						const isSelected = isElementSelected({
 							trackId: track.id,
 							elementId: element.id,

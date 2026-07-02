@@ -88,6 +88,10 @@ import { useTimelineResize } from "@/timeline/hooks/use-timeline-resize";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useEditor } from "@/editor/use-editor";
 import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
+import {
+	TIMELINE_VISIBLE_OVERSCAN_PX,
+	type VisibleWindow,
+} from "@/timeline/hooks/use-visible-clips";
 import { useTimelinePlayhead } from "@/timeline/hooks/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { AvSyncMapContext } from "./timeline-element";
@@ -171,9 +175,24 @@ function TimelineImpl() {
 	const { height: timelineHeaderHeightValue } = useContainerSize({
 		containerRef: timelineHeaderRef,
 	});
-	const { viewportWidth: tracksViewportWidth } = useScrollPosition({
-		scrollRef: tracksScrollRef,
-	});
+	const { scrollLeft: tracksScrollLeft, viewportWidth: tracksViewportWidth } =
+		useScrollPosition({
+			scrollRef: tracksScrollRef,
+		});
+	// Viewport-culling window (U7/KTD6): the visible horizontal scroll range in
+	// timeline pixels, grown by a small overscan. Each track renders only the
+	// clips whose pixel span intersects this, so 400+ clips cost like the ~30 on
+	// screen. `scrollLeft`/`viewportWidth` are already rAF-coalesced by
+	// useScrollPosition, so the set updates at most once per frame on scroll.
+	// Null until the viewport is measured, which disables culling (renders all).
+	const visibleWindow = useMemo<VisibleWindow | null>(() => {
+		if (tracksViewportWidth <= 0) return null;
+		return {
+			start: tracksScrollLeft,
+			end: tracksScrollLeft + tracksViewportWidth,
+			overscan: TIMELINE_VISIBLE_OVERSCAN_PX,
+		};
+	}, [tracksScrollLeft, tracksViewportWidth]);
 
 	const handleSnapPointChange = useCallback((snapPoint: SnapPoint | null) => {
 		setCurrentSnapPoint(snapPoint);
@@ -575,6 +594,7 @@ function TimelineImpl() {
 										mainTrackId={mainTrackId}
 										zoomLevel={zoomLevel}
 										dragView={dragView}
+										visibleWindow={visibleWindow}
 										onResizeStart={handleResizeStart}
 										onElementMouseDown={handleElementMouseDown}
 										onElementClick={handleElementClick}
@@ -791,6 +811,7 @@ function TimelineTrackRows({
 	mainTrackId,
 	zoomLevel,
 	dragView,
+	visibleWindow,
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
@@ -804,6 +825,7 @@ function TimelineTrackRows({
 	mainTrackId: string | null;
 	zoomLevel: number;
 	dragView: ElementDragView;
+	visibleWindow: VisibleWindow | null;
 	onResizeStart: React.ComponentProps<
 		typeof TimelineTrackContent
 	>["onResizeStart"];
@@ -891,6 +913,7 @@ function TimelineTrackRows({
 								track={track}
 								zoomLevel={zoomLevel}
 								dragView={dragView}
+								visibleWindow={visibleWindow}
 								onResizeStart={onResizeStart}
 								onElementMouseDown={onElementMouseDown}
 								onElementClick={onElementClick}
