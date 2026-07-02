@@ -553,13 +553,17 @@ export async function ensureTimelineTranscript({
 	// Clear the shared slot only if it STILL points at this run. A newer run for a
 	// different timeline may have replaced it; nulling then would strand that run
 	// and wipe its live progress, freezing a joiner's bar on a dead ticker.
-	void thisRun.finally(() => {
+	const releaseSlot = () => {
 		if (inFlight === thisRun) {
 			inFlight = null;
 			inFlightHash = null;
 			lastProgress = null;
 		}
-	});
+	};
+	// Attach cleanup as BOTH handlers (not `.finally`): a rejected run (e.g. a
+	// cancelled one) then does not surface as an unhandled promise rejection. The
+	// caller still observes the rejection through `await abortable(thisRun)` below.
+	void thisRun.then(releaseSlot, releaseSlot);
 	try {
 		const result = await abortable(thisRun);
 		return { ...result, fromCache: false };

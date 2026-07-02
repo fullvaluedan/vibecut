@@ -22,6 +22,7 @@ import {
 	type TranscriptWordLite,
 } from "@/features/transcription/transcript-cache";
 import { timelineChangedWhileStale } from "@/features/transcription/detect-timeline-change";
+import { classifyTranscriptLoadError } from "@/features/transcription/transcript-load-error";
 import type {
 	TranscriptGranularity,
 	TranscriptSelection,
@@ -37,11 +38,6 @@ type LoadState =
 	| { status: "ready" }
 	| { status: "empty" }
 	| { status: "error"; message: string };
-
-/** An "Add some footage..." throw means the timeline has no audio, not a failure. */
-function isNoAudioError(message: string): boolean {
-	return /footage|no speech|no audio/i.test(message);
-}
 
 /** The timeline audio hash, or "" if it can't be read (never blocks on its own). */
 function safeAudioHash(editor: Parameters<typeof computeTimelineAudioHash>[0]): string {
@@ -132,12 +128,24 @@ export function TranscriptView() {
 			.catch((err: unknown) => {
 				if (gen !== genRef.current) return;
 				const message = err instanceof Error ? err.message : String(err);
-				if (/cancel/i.test(message)) return;
-				setLoad(
-					isNoAudioError(message)
-						? { status: "empty" }
-						: { status: "error", message },
-				);
+				// Swallow ONLY a cancel we initiated (our unmount, or a newer load that
+				// aborted this controller). A cancel from a joined run someone else
+				// aborted must not leave the panel stuck on the spinner.
+				const kind = classifyTranscriptLoadError({
+					message,
+					ownAbort: controller.signal.aborted,
+				});
+				if (kind === "ignore") return;
+				if (kind === "empty") {
+					setLoad({ status: "empty" });
+					return;
+				}
+				setLoad({
+					status: "error",
+					message: /cancel/i.test(message)
+						? "Transcription was interrupted. Click Try again."
+						: message,
+				});
 			});
 	}, [editor]);
 
