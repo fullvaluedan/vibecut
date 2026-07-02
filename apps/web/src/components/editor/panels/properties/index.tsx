@@ -18,6 +18,7 @@ import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
 import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
 import { DirectorPanel } from "@/features/ai-generate/director/components/director-panel";
+import { DirectorCutPanel } from "@/features/ai-generate/director/components/director-cut-panel";
 import { useVariantPickerStore } from "@/features/ai-generate/components/variant-picker-dialog";
 import { HyperframesDraftsPanel } from "@/features/ai-generate/components/hyperframes-drafts-panel";
 
@@ -69,6 +70,7 @@ export function PropertiesPanel() {
 	const assembleSurface = useDirectorPlanStore((s) => s.surface);
 	const assembleMode = useDirectorPlanStore((s) => s.mode);
 	const assembleDraft = useDirectorPlanStore((s) => s.draft);
+	const cutPlan = useDirectorPlanStore((s) => s.plan);
 	const hasHfDrafts = useVariantPickerStore(
 		(s) => (s.versions?.length ?? 0) > 0,
 	);
@@ -76,6 +78,12 @@ export function PropertiesPanel() {
 	// Auto-assemble review takes over the whole inspector while a draft is active.
 	if (assembleSurface === "panel" && assembleMode === "assemble" && assembleDraft) {
 		return <DirectorPanel />;
+	}
+
+	// The docked cut review (U6) takes over the inspector the same way, so it stays
+	// open + editable while the user works and survives deselecting all clips.
+	if (assembleSurface === "panel" && assembleMode === "cut" && cutPlan) {
+		return <DirectorCutPanel />;
 	}
 
 	if (selectedElements.length === 0) {

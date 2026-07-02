@@ -104,6 +104,17 @@ interface DirectorPlanState {
 		nearTies?: readonly NearTieNote[];
 		redundancyGroups?: readonly RedundancyReviewGroup[];
 	}) => void;
+	/**
+	 * Dock the cut review in the right panel (U6): same fresh-plan state as `openWith`
+	 * but `surface:'panel'` + `open:false` so it takes over the inspector (like the
+	 * assemble panel) instead of popping the modal — persistent + editable while the
+	 * user works, surviving deselection.
+	 */
+	openCutPanel: (args: {
+		plan: DirectorPlan;
+		nearTies?: readonly NearTieNote[];
+		redundancyGroups?: readonly RedundancyReviewGroup[];
+	}) => void;
 	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
 	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
 	/** Open the Highlight modal (KTD9): keep rows accepted by default, with preview + totalSec. */
@@ -154,6 +165,18 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set({
 			...CLEARED,
 			open: true,
+			mode: "cut",
+			plan,
+			decisions: initDecisions(plan),
+			nearTies: [...(nearTies ?? [])],
+			redundancyGroups: [...(redundancyGroups ?? [])],
+		}),
+	// `open` stays FALSE — the panel keys off surface/mode/plan, not `open`, so the
+	// still-mounted modal DirectorReviewDialog does NOT also pop over the docked panel.
+	openCutPanel: ({ plan, nearTies, redundancyGroups }) =>
+		set({
+			...CLEARED,
+			surface: "panel",
 			mode: "cut",
 			plan,
 			decisions: initDecisions(plan),

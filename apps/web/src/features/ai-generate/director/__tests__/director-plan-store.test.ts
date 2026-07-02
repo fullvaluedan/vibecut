@@ -5,6 +5,7 @@ import {
 	selectAccepted,
 	selectAcceptedKeeps,
 	toggleDecision,
+	useDirectorPlanStore,
 } from "../director-plan-store";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
 
@@ -54,6 +55,44 @@ describe("director plan decisions", () => {
 		let d = initDecisions(plan);
 		for (const id of ["a", "b", "c"]) d = toggleDecision({ decisions: d, id });
 		expect(selectAccepted({ plan, decisions: d })).toEqual([]);
+	});
+});
+
+describe("openCutPanel (docked cut review, U6)", () => {
+	const optIn: DirectorPlan = {
+		operations: [
+			op({ id: "a", kind: "cut" }),
+			{ ...op({ id: "b", kind: "cut" }), defaultAccept: false },
+		],
+	};
+	const groups = [
+		{ groupId: "g1", keeperLineId: "l1", members: [], confidence: 0.6, reason: "r" },
+	];
+
+	test("docks in the panel with open:false and preserves plan/decisions/groups", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({
+			plan: optIn,
+			nearTies: [],
+			redundancyGroups: groups,
+		});
+		const s = useDirectorPlanStore.getState();
+		expect(s.surface).toBe("panel");
+		expect(s.mode).toBe("cut");
+		// `open` stays false so the still-mounted modal does NOT also pop.
+		expect(s.open).toBe(false);
+		expect(s.plan?.operations.map((o) => o.id)).toEqual(["a", "b"]);
+		// defaultAccept:false op starts unchecked; nothing new is auto-applied.
+		expect(s.decisions).toEqual({ a: true, b: false });
+		expect(s.redundancyGroups.map((g) => g.groupId)).toEqual(["g1"]);
+	});
+
+	test("close() resets the surface back to the modal default", () => {
+		useDirectorPlanStore.getState().openCutPanel({ plan: optIn });
+		useDirectorPlanStore.getState().close();
+		const s = useDirectorPlanStore.getState();
+		expect(s.surface).toBe("modal");
+		expect(s.plan).toBeNull();
 	});
 });
 

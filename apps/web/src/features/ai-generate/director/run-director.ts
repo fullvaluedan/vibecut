@@ -511,7 +511,7 @@ export async function runDirector({
 	if (typeof window !== "undefined" && window.__directorDebug) {
 		console.log(buildOpeningDebugReport({ segments, planOps, operations }));
 	}
-	useDirectorPlanStore.getState().openWith({
+	useDirectorPlanStore.getState().openCutPanel({
 		plan: { operations },
 		nearTies,
 		// Carry the groups so the review can offer swap-to-alternate; a group whose
