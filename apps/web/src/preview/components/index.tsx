@@ -9,9 +9,14 @@ import { useFullscreen } from "@/hooks/use-fullscreen";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { AiOverlayPreviewLayer } from "@/features/ai-generate/components/overlay-preview-layer";
 import { PlaceToolOverlay } from "./place-tool-overlay";
-import { TICKS_PER_SECOND } from "@/wasm";
+import { TICKS_PER_SECOND, type MediaTime, mediaTimeToSeconds } from "@/wasm";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
+import { videoCache } from "@/services/video-cache/service";
+import {
+	type PrefetchClip,
+	resolveBoundaryPrefetch,
+} from "@/services/video-cache/boundary-prefetch";
 import { PreviewOverlayLayer } from "./overlay-layer";
 import { PreviewInteractionOverlay } from "./preview-interaction-overlay";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -155,11 +160,54 @@ function PreviewCanvas({
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
 	const renderingRef = useRef(false);
+	// Which cut boundary we last warmed, so the prefetch fires once per approach
+	// instead of every playback frame inside the lookahead window (U8).
+	const lastPrefetchBoundaryRef = useRef<string | null>(null);
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const viewportSize = useContainerSize({ containerRef: viewportRef });
 	const editor = useEditor();
 	const activeProject = useEditor((e) => e.project.getActive());
 	const renderTree = useEditor((e) => e.renderer.getRenderTree());
+	const previewTracks = useEditor(
+		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
+	);
+	const mediaAssets = useEditor((e) => e.media.getAssets());
+
+	// Sorted main-track (V1) video clips + their source files, for the U8
+	// boundary prefetch. Rebuilt only when the tracks or media change (never per
+	// frame; the render loop below reads this snapshot imperatively).
+	const prefetchPlan = useMemo(() => {
+		const clips: PrefetchClip[] = [];
+		const fileByMediaId = new Map<string, File>();
+		const mediaMap = new Map(mediaAssets.map((asset) => [asset.id, asset]));
+
+		const elements = previewTracks.main.elements
+			.filter((element) => element.type === "video" && !element.hidden)
+			.slice()
+			.sort((a, b) => a.startTime - b.startTime);
+
+		for (const element of elements) {
+			if (element.type !== "video") continue;
+			// framecutAi / alpha clips render through the DOM overlay, not the
+			// video-cache decode path, so there is nothing to warm for them.
+			if (element.framecutAi) continue;
+			const asset = mediaMap.get(element.mediaId);
+			if (!asset?.file || asset.type !== "video" || asset.hasAlpha) continue;
+
+			const startSec = mediaTimeToSeconds({ time: element.startTime });
+			const durationSec = mediaTimeToSeconds({ time: element.duration });
+			clips.push({
+				mediaId: element.mediaId,
+				startSec,
+				endSec: startSec + durationSec,
+				sourceStartSec: mediaTimeToSeconds({ time: element.trimStart }),
+			});
+			fileByMediaId.set(element.mediaId, asset.file);
+		}
+
+		return { clips, fileByMediaId };
+	}, [previewTracks, mediaAssets]);
+
 	const viewport = usePreviewViewportState({
 		canvasHeight: nativeHeight,
 		canvasWidth: nativeWidth,
@@ -196,12 +244,44 @@ function PreviewCanvas({
 	}, [renderer]);
 
 	const render = useCallback(() => {
-		if (!renderTree || renderingRef.current) return;
+		if (!renderTree) return;
 
 		const renderTime = Math.min(
 			editor.playback.getCurrentTime(),
 			editor.timeline.getLastFrameTime(),
 		);
+
+		// U8: warm the next clip's decode before the playhead crosses the cut
+		// boundary, so the crossing hits the fast-path instead of a cold deep
+		// seek that would blow the frame budget and drop ticks. Runs regardless
+		// of an in-flight render (below) so the warm still happens while the
+		// current frame's decode is busy. Playback-only; a real scrub still wins
+		// via supersede-by-time in the cache (KTD3).
+		if (editor.playback.getIsPlaying()) {
+			const target = resolveBoundaryPrefetch({
+				clips: prefetchPlan.clips,
+				playheadSec: mediaTimeToSeconds({ time: renderTime as MediaTime }),
+			});
+			if (target) {
+				const boundaryKey = `${target.mediaId}@${target.sourceTimeSec}`;
+				if (boundaryKey !== lastPrefetchBoundaryRef.current) {
+					lastPrefetchBoundaryRef.current = boundaryKey;
+					const file = prefetchPlan.fileByMediaId.get(target.mediaId);
+					if (file) {
+						videoCache.prefetchFrameAt({
+							mediaId: target.mediaId,
+							file,
+							time: target.sourceTimeSec,
+						});
+					}
+				}
+			} else {
+				lastPrefetchBoundaryRef.current = null;
+			}
+		}
+
+		if (renderingRef.current) return;
+
 		const ticksPerFrame = Math.round(
 			(TICKS_PER_SECOND * renderer.fps.denominator) / renderer.fps.numerator,
 		);
@@ -223,7 +303,13 @@ function PreviewCanvas({
 			.finally(() => {
 				renderingRef.current = false;
 			});
-	}, [renderer, renderTree, editor.playback, editor.timeline]);
+	}, [
+		renderer,
+		renderTree,
+		editor.playback,
+		editor.timeline,
+		prefetchPlan,
+	]);
 
 	useRafLoop(render);
 

@@ -84,6 +84,29 @@ export class VideoCache {
 		return current;
 	}
 
+	/**
+	 * Best-effort, lowest-priority warm of a frame the playhead is about to cross
+	 * into (U8 boundary prefetch). It routes through the SAME `getFrameAt` path,
+	 * so the supersede-by-time guarantee (KTD3 / commit 68ba04c7) is preserved
+	 * unchanged: a newer DISTINCT seek on this mediaId (a real user scrub) still
+	 * wins and is never starved by this prefetch, because the queued prefetch
+	 * decode bails the moment a different latest time is recorded (see
+	 * `isSeekSuperseded`). The decoded frame is intentionally discarded here; it
+	 * lands in the sink cache for the crossing and stays evictable by the normal
+	 * cache policy if the crossing never happens (playback paused / seeked away).
+	 */
+	prefetchFrameAt({
+		mediaId,
+		file,
+		time,
+	}: {
+		mediaId: string;
+		file: File;
+		time: number;
+	}): void {
+		void this.getFrameAt({ mediaId, file, time }).catch(() => {});
+	}
+
 	private async resolveFrame({
 		sinkData,
 		time,
