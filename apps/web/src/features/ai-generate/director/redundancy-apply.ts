@@ -144,10 +144,12 @@ export function applyKeeperSwap({
 	operations,
 	group,
 	newKeeperLineId,
+	acceptThreshold = DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD,
 }: {
 	operations: readonly DirectorOp[];
 	group: RedundancyReviewGroup;
 	newKeeperLineId: string;
+	acceptThreshold?: number;
 }): DirectorOp[] {
 	// Defensive: a keeper that isn't a member of the group would make
 	// cutMembersForKeeper cut EVERY take (total group loss). Treat an unknown
@@ -155,6 +157,12 @@ export function applyKeeperSwap({
 	if (!group.members.some((member) => member.lineId === newKeeperLineId)) {
 		return [...operations];
 	}
+	// Preserve the group's accept default across a swap: a sub-threshold (accept-OFF)
+	// group's rebuilt ops must STAY opt-in, or swapping its keeper would silently flip
+	// the whole group to fully accepted (the rebuilt ops get new ids the store's
+	// decision merge can't match, so it would fall back to accepted). Mirrors
+	// `mapRedundancyGroups`'s `group.confidence >= acceptThreshold`.
+	const defaultAccept = group.confidence >= acceptThreshold;
 	const others = operations.filter((op) => op.groupId !== group.groupId);
 	const rebuilt = cutMembersForKeeper({
 		members: group.members,
@@ -165,6 +173,7 @@ export function applyKeeperSwap({
 			groupId: group.groupId,
 			confidence: group.confidence,
 			reason: group.reason,
+			defaultAccept,
 		}),
 	);
 	return [...others, ...rebuilt].sort((a, b) => a.startSec - b.startSec);

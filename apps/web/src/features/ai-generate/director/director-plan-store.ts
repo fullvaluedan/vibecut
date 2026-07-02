@@ -193,9 +193,12 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 				group,
 				newKeeperLineId: keeperLineId,
 			});
-			// New (rebuilt) ops default to accepted; surviving ops keep their decision.
+			// Surviving ops keep their decision; a rebuilt op (new id, no prior decision)
+			// falls back to its OWN accept default so a sub-threshold (accept-OFF) group
+			// stays opt-in across a swap instead of silently flipping to fully accepted.
 			const decisions: OpDecisions = {};
-			for (const op of operations) decisions[op.id] = state.decisions[op.id] ?? true;
+			for (const op of operations)
+				decisions[op.id] = state.decisions[op.id] ?? op.defaultAccept !== false;
 			return {
 				plan: { ...state.plan, operations },
 				decisions,

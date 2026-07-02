@@ -239,6 +239,40 @@ describe("applyKeeperSwap (rebuild a group's cuts for a new keeper)", () => {
 		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L2" });
 		expect(swapped.map((c) => c.startSec).sort((a, b) => a - b)).toEqual([0, 3]); // keeper L2 → cut L0,L1
 	});
+
+	test("sub-threshold group stays accept-OFF across a swap (never silently re-accepted)", () => {
+		// A 0.55-confidence group is in [floor 0.5, accept-threshold 0.7): surfaced as
+		// opt-in, so its cut ops start `defaultAccept: false`.
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })],
+					keeperLineId: "L1",
+					confidence: 0.55,
+				}),
+			],
+		});
+		expect(cuts[0].defaultAccept).toBe(false); // baseline: opt-in before any swap
+		// Swapping the keeper must NOT flip the rebuilt op to accepted. Before the fix
+		// the rebuilt op dropped `defaultAccept` and fell back to accepted.
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L0" });
+		expect(swapped.map((c) => c.startSec)).toEqual([3]); // keeper L0 → cut L1
+		expect(swapped[0].defaultAccept).toBe(false); // still opt-in
+	});
+
+	test("above-threshold group's rebuilt ops stay accepted (defaultAccept omitted)", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L0" });
+		expect(swapped[0].defaultAccept).not.toBe(false); // accepted default preserved
+	});
 });
 
 describe("cutMembersForKeeper (swap-to-alternate recompute)", () => {
