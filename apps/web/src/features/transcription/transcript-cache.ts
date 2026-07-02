@@ -20,6 +20,7 @@ import {
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { needsWordUpgrade } from "./word-upgrade";
 
 export interface TranscriptSegmentLite {
 	start: number;
@@ -171,7 +172,6 @@ let inFlight: Promise<{
 	wordsUnavailable?: boolean;
 }> | null = null;
 let inFlightHash: string | null = null;
-let inFlightHasWords = false;
 
 // Every caller that joins the same in-flight transcription subscribes here, so
 // progress reaches ALL of them — not just whoever started the run. Without this,
@@ -299,13 +299,27 @@ export async function ensureTimelineTranscript({
 		if (lastProgress) onProgress(lastProgress);
 	}
 
-	if (inFlight && inFlightHash === hash && (!wantWords || inFlightHasWords)) {
+	// Join any in-flight run for the SAME timeline instead of starting a second
+	// one: two concurrent runs would each extract the timeline audio (racing
+	// mediabunny) and the later one would overwrite `inFlight`, so the first run's
+	// cleanup would later strand it. A cloud run always returns words, so a
+	// word-level caller that joins it is satisfied immediately. Only when the joined
+	// run produced no words (a segment-only local run) do we fall through to our own
+	// run — and by then the joined run has settled, so the two never extract at once.
+	if (inFlight && inFlightHash === hash) {
+		const current = inFlight;
+		let joined: Awaited<typeof current>;
 		try {
-			const result = await abortable(inFlight);
-			return { ...result, fromCache: false };
-		} finally {
+			joined = await abortable(current);
+		} catch (error) {
 			if (onProgress) progressSubscribers.delete(onProgress);
+			throw error;
 		}
+		if (!needsWordUpgrade({ wantWords, result: joined })) {
+			if (onProgress) progressSubscribers.delete(onProgress);
+			return { ...joined, fromCache: false };
+		}
+		// Needed words, the joined run had none: fall through to our own run.
 	}
 
 	const run = async (): Promise<{
@@ -347,7 +361,7 @@ export async function ensureTimelineTranscript({
 				const sec = Math.round((Date.now() - startedAt) / 1000);
 				broadcastProgress({
 					phase: "transcribing",
-					detail: `Transcribing in the cloud — ${sec}s elapsed...`,
+					detail: `Transcribing in the cloud - ${sec}s elapsed...`,
 				});
 			}, 1000);
 			try {
@@ -455,14 +469,14 @@ export async function ensureTimelineTranscript({
 									const sec = Math.round((Date.now() - initStartedAt) / 1000);
 									broadcastProgress({
 										phase: "initializing-model",
-										detail: `Initializing speech model — ${sec}s elapsed (first run can take about a minute; later runs are instant)...`,
+										detail: `Initializing speech model - ${sec}s elapsed (first run can take about a minute; later runs are instant)...`,
 										progress: 1,
 									});
 								}, 1000);
 								broadcastProgress({
 									phase: "initializing-model",
 									detail:
-										"Speech model downloaded — initializing (first run can take about a minute)...",
+										"Speech model downloaded - initializing (first run can take about a minute)...",
 									progress: 1,
 								});
 							}
@@ -483,13 +497,13 @@ export async function ensureTimelineTranscript({
 						broadcastProgress({
 							phase: "transcribing",
 							detail:
-								"Transcribing your video — this can take a few minutes on a long video...",
+								"Transcribing your video - this can take a few minutes on a long video...",
 						});
 						ticker = setInterval(() => {
 							const sec = Math.round((Date.now() - startedAt) / 1000);
 							broadcastProgress({
 								phase: "transcribing",
-								detail: `Transcribing your video — ${sec}s elapsed (long videos take a few minutes)...`,
+								detail: `Transcribing your video - ${sec}s elapsed (long videos take a few minutes)...`,
 							});
 						}, 1000);
 					}
@@ -533,16 +547,21 @@ export async function ensureTimelineTranscript({
 		}
 	};
 
-	inFlightHasWords = wantWords;
-	inFlight = run().finally(() => {
-		inFlight = null;
-		inFlightHash = null;
-		inFlightHasWords = false;
-		lastProgress = null;
-	});
+	const thisRun = run();
+	inFlight = thisRun;
 	inFlightHash = hash;
+	// Clear the shared slot only if it STILL points at this run. A newer run for a
+	// different timeline may have replaced it; nulling then would strand that run
+	// and wipe its live progress, freezing a joiner's bar on a dead ticker.
+	void thisRun.finally(() => {
+		if (inFlight === thisRun) {
+			inFlight = null;
+			inFlightHash = null;
+			lastProgress = null;
+		}
+	});
 	try {
-		const result = await abortable(inFlight);
+		const result = await abortable(thisRun);
 		return { ...result, fromCache: false };
 	} finally {
 		if (onProgress) progressSubscribers.delete(onProgress);
