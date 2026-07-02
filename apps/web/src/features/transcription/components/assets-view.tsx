@@ -10,16 +10,18 @@
  * when a segment-only cache entry already exists, so progress is honest.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { useEditor } from "@/editor/use-editor";
 import {
+	computeTimelineAudioHash,
 	ensureTimelineTranscript,
 	type TranscriptSegmentLite,
 	type TranscriptWordLite,
 } from "@/features/transcription/transcript-cache";
+import { timelineChangedWhileStale } from "@/features/transcription/detect-timeline-change";
 import type {
 	TranscriptGranularity,
 	TranscriptSelection,
@@ -41,6 +43,15 @@ function isNoAudioError(message: string): boolean {
 	return /footage|no speech|no audio/i.test(message);
 }
 
+/** The timeline audio hash, or "" if it can't be read (never blocks on its own). */
+function safeAudioHash(editor: Parameters<typeof computeTimelineAudioHash>[0]): string {
+	try {
+		return computeTimelineAudioHash(editor);
+	} catch {
+		return "";
+	}
+}
+
 export function TranscriptView() {
 	const editor = useEditor();
 	const [load, setLoad] = useState<LoadState>({
@@ -60,6 +71,28 @@ export function TranscriptView() {
 	const abortRef = useRef<AbortController | null>(null);
 	// Ignore responses from a superseded load (mount race or manual refresh).
 	const genRef = useRef(0);
+	// The timeline audio hash captured right after our last load/delete. While
+	// stale, a live hash that no longer matches means the timeline moved out from
+	// under our local coords (undo/redo/manual edit) and deletes must be blocked.
+	const [expectedHash, setExpectedHash] = useState("");
+
+	// Recompute the live hash only when the tracks reference actually changes (a
+	// real edit, undo, or redo replaces it), the same cheap selector the background
+	// transcriber uses, so scrubbing/selection never triggers it.
+	const tracks = useEditor((e) => e.scenes.getActiveSceneOrNull()?.tracks);
+	const liveHash = useMemo(() => {
+		if (!tracks) return "";
+		try {
+			return computeTimelineAudioHash(editor);
+		} catch {
+			return "";
+		}
+	}, [tracks, editor]);
+	const timelineChanged = timelineChangedWhileStale({
+		stale,
+		liveHash,
+		expectedHash,
+	});
 
 	// Word-level when the model produced words; otherwise segment-level (KTD4).
 	const granularity: TranscriptGranularity =
@@ -93,6 +126,7 @@ export function TranscriptView() {
 				setSelection(null);
 				setRemovedIndices(new Set());
 				setStale(false);
+				setExpectedHash(safeAudioHash(editor));
 				setLoad({ status: "ready" });
 			})
 			.catch((err: unknown) => {
@@ -116,7 +150,9 @@ export function TranscriptView() {
 	}, [loadTranscript]);
 
 	const handleDelete = useCallback(() => {
-		if (!selection) return;
+		// Blocked while the timeline has moved under us (undo/redo/manual edit);
+		// the user must Refresh so the local coords match the live timeline again.
+		if (!selection || timelineChanged) return;
 		const range = deleteTranscriptSelection({
 			editor,
 			selection,
@@ -151,7 +187,10 @@ export function TranscriptView() {
 		);
 		setSelection(null);
 		setStale(true);
-	}, [selection, editor, words, segments]);
+		// The delete just changed the timeline; capture the new hash as the baseline
+		// so this delete is not itself flagged as an external change.
+		setExpectedHash(safeAudioHash(editor));
+	}, [selection, timelineChanged, editor, words, segments]);
 
 	const handleCopy = useCallback(() => {
 		void navigator.clipboard
@@ -200,9 +239,13 @@ export function TranscriptView() {
 							type="button"
 							size="sm"
 							variant="outline"
-							disabled={!selection}
+							disabled={!selection || timelineChanged}
 							onClick={handleDelete}
-							title="Delete the selected words from the timeline (Ctrl+Z to undo)"
+							title={
+								timelineChanged
+									? "The timeline changed. Refresh the transcript before deleting."
+									: "Delete the selected words from the timeline (Ctrl+Z to undo)"
+							}
 						>
 							Delete
 						</Button>
@@ -241,8 +284,18 @@ export function TranscriptView() {
 			{load.status === "ready" && (
 				<div className="flex h-full flex-col">
 					{stale && (
-						<div className="text-muted-foreground flex items-center justify-between gap-2 border-b bg-amber-500/10 px-4 py-2 text-xs">
-							<span>Showing a local preview after your edits.</span>
+						<div
+							className={
+								timelineChanged
+									? "text-destructive flex items-center justify-between gap-2 border-b bg-destructive/10 px-4 py-2 text-xs font-medium"
+									: "text-muted-foreground flex items-center justify-between gap-2 border-b bg-amber-500/10 px-4 py-2 text-xs"
+							}
+						>
+							<span>
+								{timelineChanged
+									? "Timeline changed - refresh before deleting."
+									: "Showing a local preview after your edits."}
+							</span>
 							<Button
 								type="button"
 								size="sm"
