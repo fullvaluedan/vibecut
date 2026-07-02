@@ -38,7 +38,7 @@ import type { SelectionBoxBounds } from "@/selection/types";
 import type {
 	TimelineElement as TimelineElementType,
 	TimelineTrack,
-	ElementDragView,
+	ElementDragSlice,
 	VideoElement,
 	ImageElement,
 	AudioElement,
@@ -90,7 +90,7 @@ import {
 } from "@/features/editing/remove-attributes";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
-import { useMemo, type ComponentProps, type ReactNode } from "react";
+import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
 import type { SelectedKeyframeRef, ElementKeyframe } from "@/animation/types";
 import { cn } from "@/utils/ui";
 import type { AvSyncMap } from "@/timeline/av-sync-map";
@@ -242,11 +242,18 @@ interface TimelineElementProps {
 		event: React.MouseEvent;
 		element: TimelineElementType;
 	}) => void;
-	dragView: ElementDragView;
+	/**
+	 * This clip's slice of the active drag, or `null` when it is not being
+	 * dragged. `null` is a stable reference, so an untouched clip keeps identical
+	 * props across a drag move and the `memo` below skips its re-render. This is
+	 * the load-bearing invariant for a responsive drag on a large timeline. Only
+	 * dragged clips receive a fresh object (they must re-render to move).
+	 */
+	drag: ElementDragSlice | null;
 	isDropTarget?: boolean;
 }
 
-export function TimelineElement({
+function TimelineElementImpl({
 	element,
 	track,
 	zoomLevel,
@@ -254,7 +261,7 @@ export function TimelineElement({
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
-	dragView,
+	drag,
 	isDropTarget = false,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
@@ -281,19 +288,11 @@ export function TimelineElement({
 			selected.elementId === element.id && selected.trackId === track.id,
 	);
 
-	const isDragging = dragView.kind === "dragging";
-	const dragTimeOffset = isDragging
-		? dragView.memberTimeOffsets.get(element.id)
-		: undefined;
-	const isBeingDragged = dragTimeOffset !== undefined;
-	const dragOffsetY =
-		isDragging && isBeingDragged
-			? dragView.currentMouseY - dragView.startMouseY
-			: 0;
-	const elementStartTime =
-		isDragging && isBeingDragged
-			? addMediaTime({ a: dragView.currentTime, b: dragTimeOffset })
-			: renderElement.startTime;
+	const isBeingDragged = drag !== null;
+	const dragOffsetY = drag ? drag.offsetY : 0;
+	const elementStartTime = drag
+		? addMediaTime({ a: drag.currentTime, b: drag.timeOffset })
+		: renderElement.startTime;
 	const displayedStartTime = elementStartTime;
 	const displayedDuration = renderElement.duration;
 	const elementWidth = timelineTimeToPixels({
@@ -417,10 +416,9 @@ export function TimelineElement({
 								expandedRows.length > 0
 									? `${baseTrackHeight + expansionHeight}px`
 									: "100%",
-							transform:
-								isDragging && isBeingDragged
-									? `translate3d(0, ${dragOffsetY}px, 0)`
-									: undefined,
+							transform: isBeingDragged
+								? `translate3d(0, ${dragOffsetY}px, 0)`
+								: undefined,
 						}}
 					>
 						<ElementInner
@@ -649,6 +647,17 @@ export function TimelineElement({
 		</PixelsPerSecondContext.Provider>
 	);
 }
+
+/**
+ * Memoized so a drag move re-renders only the dragged clip(s). With a large
+ * timeline (hundreds of clips), every mousemove otherwise re-rendered all of
+ * them. The equality boundary holds because the track renderer feeds untouched
+ * clips referentially-stable props: `element`/`track` come straight from the
+ * (unmutated-during-drag) store, the callbacks are stabilized via committed
+ * refs, and `drag` is `null` (a stable reference) for any clip not being
+ * dragged. See `TimelineTrackContent` for where those props are built.
+ */
+export const TimelineElement = memo(TimelineElementImpl);
 
 function ElementInner({
 	element,

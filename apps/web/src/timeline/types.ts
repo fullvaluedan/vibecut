@@ -297,6 +297,18 @@ export type ElementDragView =
 			readonly dropTarget: DropTarget | null;
 	  };
 
+/**
+ * The per-clip slice of an active drag, derived from `ElementDragView` once per
+ * clip by the track renderer. A clip NOT under the drag gets `null` (a stable
+ * reference), so the memoized `TimelineElement` skips re-rendering the ~hundreds
+ * of untouched clips while a drag moves; only dragged clips get a fresh object.
+ */
+export interface ElementDragSlice {
+	readonly timeOffset: MediaTime;
+	readonly currentTime: MediaTime;
+	readonly offsetY: number;
+}
+
 export interface DropTarget {
 	trackIndex: number;
 	isNewTrack: boolean;
