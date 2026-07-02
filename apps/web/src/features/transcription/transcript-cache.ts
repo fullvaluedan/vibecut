@@ -152,6 +152,19 @@ export function getCachedTranscript(
 	return getCachedEntry(editor)?.segments ?? null;
 }
 
+/**
+ * The cached WORD-level timings for the current timeline, or `[]` when none are
+ * cached (segment-only entry, a words-unavailable device model, or no cache at
+ * all). Read-only + non-blocking — never triggers a transcription. Word-timing
+ * consumers (e.g. standalone Remove Silences' emphasis-pause protection) need the
+ * per-WORD boundaries the pause classifier is calibrated for; segment boundaries
+ * span whole sentences and swallow in-dialog pauses, so a segment-only fallback
+ * degrades safely but rarely protects a pause.
+ */
+export function getCachedWords(editor: EditorCore): TranscriptWordLite[] {
+	return getCachedEntry(editor)?.words ?? [];
+}
+
 let inFlight: Promise<{
 	segments: TranscriptSegmentLite[];
 	words?: TranscriptWordLite[];

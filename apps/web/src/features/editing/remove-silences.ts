@@ -14,7 +14,10 @@ import {
 	dropEmphasisPauses,
 	refineSilenceRanges,
 } from "./silence-refine";
-import { getCachedTranscript } from "@/features/transcription/transcript-cache";
+import {
+	getCachedTranscript,
+	getCachedWords,
+} from "@/features/transcription/transcript-cache";
 
 const WINDOW_SEC = 0.05;
 const MIN_SILENCE_SEC = 0.6;
@@ -88,11 +91,17 @@ export async function runRemoveSilences({
 	const silent = detectSilentRangesSec({ samples, sampleRate });
 	// Emphasis-pause protection (#4/U3): keep short, speech-bounded in-dialog pauses.
 	// Best-effort + NON-blocking — read the CACHED transcript only; never trigger a
-	// transcription here. No cached transcript -> no protection (prior behavior). Runs
-	// before refineSilenceRanges so a range is classified before it can be split.
+	// transcription here. Prefer WORD-level timings: the pause classifier snaps a gap
+	// to a word edge within 0.25s, and a Whisper SEGMENT spans a whole sentence, so
+	// segment boundaries almost never land on a mid-dialog pause's edges. Fall back to
+	// segments (safe, rarely protects) then to nothing (no cache -> prior behavior).
+	// Runs before refineSilenceRanges so a range is classified before it can be split.
+	const cachedWords = getCachedWords(editor);
+	const speechLines =
+		cachedWords.length > 0 ? cachedWords : (getCachedTranscript(editor) ?? []);
 	const speechAware = dropEmphasisPauses({
 		ranges: silent,
-		segments: getCachedTranscript(editor) ?? [],
+		segments: speechLines,
 		paddingSec: PADDING_SEC,
 	});
 	// Issue 2: never delete a whole VIDEO clip on low audio (quiet showcase/b-roll

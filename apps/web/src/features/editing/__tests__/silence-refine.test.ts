@@ -69,6 +69,36 @@ describe("dropEmphasisPauses — keep short in-dialog pauses (U3)", () => {
 		const surviving = dropEmphasisPauses({ ranges, segments: [], paddingSec: PADDING });
 		expect(surviving).toEqual(ranges);
 	});
+
+	// FIX 2: the standalone Remove Silences caller now feeds WORD-level timings when
+	// cached (getCachedWords), falling back to SEGMENT-level. A real Whisper segment
+	// spans a whole sentence and swallows a mid-dialog pause, so segment boundaries
+	// (2..10 here) never land within the classifier's 0.25s snap of the pause edges
+	// (5, 6.5) — segment data degrades safely (no protection) while word data protects.
+	describe("word- vs segment-granularity (realistic Whisper fixture)", () => {
+		// One 8s sentence-level segment that CONTAINS the pause at [5, 6.5].
+		const segment: SpeechLine = { start: 2, end: 10, text: "a long spoken sentence with a beat in it" };
+		// The same speech as per-WORD timings: a word ends at 5.0, the next starts at 6.5.
+		const words: SpeechLine[] = [line(4.6, 5), line(6.5, 6.9)];
+
+		test("SEGMENT-only data leaves the pause in the cut list (degrades safely)", () => {
+			const surviving = dropEmphasisPauses({
+				ranges: [detected(5, 6.5)],
+				segments: [segment],
+				paddingSec: PADDING,
+			});
+			expect(surviving).toHaveLength(1); // not protected — segment edges too coarse
+		});
+
+		test("WORD-level data protects the same mid-segment pause", () => {
+			const surviving = dropEmphasisPauses({
+				ranges: [detected(5, 6.5)],
+				segments: words,
+				paddingSec: PADDING,
+			});
+			expect(surviving).toHaveLength(0); // kept — word edges snap to the gap
+		});
+	});
 });
 
 describe("refineSilenceRanges — (a) protect whole video clips", () => {
