@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	computeEmphasisPauseKeepers,
 	MAX_PAUSE_SEC,
+	WORD_BOUNDARY_SNAP_SEC,
 	type PauseGap,
 	type RepeatSpan,
 } from "../emphasis-pause";
@@ -88,6 +89,61 @@ describe("computeEmphasisPauseKeepers", () => {
 			computeEmphasisPauseKeepers({
 				gaps: [overCeiling],
 				words: boundedWords(overCeiling),
+			}),
+		).toEqual([]);
+	});
+
+	test("snap tolerance: a word edge just WITHIN snapSec still counts as speech-bounded", () => {
+		// Words end/start 0.2s off the gap edges (inside the 0.25s snap) -> still bounded.
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		const off = WORD_BOUNDARY_SNAP_SEC - 0.05; // 0.2s
+		const withinSnap = [
+			word(gap.start - 0.5, gap.start - off, "before"),
+			word(gap.end + off, gap.end + 0.5, "after"),
+		];
+		expect(
+			computeEmphasisPauseKeepers({ gaps: [gap], words: withinSnap }),
+		).toEqual([{ startSec: 5, endSec: 6.5 }]);
+	});
+
+	test("snap tolerance: a word edge just OUTSIDE snapSec is not speech-bounded", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		const off = WORD_BOUNDARY_SNAP_SEC + 0.05; // 0.3s
+		// The BEFORE word ends 0.3s early (outside snap); the AFTER word is tight.
+		const outsideSnap = [
+			word(gap.start - 0.5, gap.start - off, "before"),
+			word(gap.end, gap.end + 0.5, "after"),
+		];
+		expect(
+			computeEmphasisPauseKeepers({ gaps: [gap], words: outsideSnap }),
+		).toEqual([]);
+	});
+
+	test("repeat proximity: a repeat BEFORE the gap start also disqualifies", () => {
+		// Mirrors the after-the-gap test: a repeat ending 0.5s before the gap start is
+		// within proximitySec (1.0s) of the leading edge -> no keeper.
+		const gap: PauseGap = { start: 5, end: 6.2 };
+		const repeat: RepeatSpan = { startSec: 3.5, endSec: 4.5 };
+		expect(
+			computeEmphasisPauseKeepers({
+				gaps: [gap],
+				words: boundedWords(gap),
+				repeatSpans: [repeat],
+			}),
+		).toEqual([]);
+	});
+
+	test("degenerate gaps: zero-duration and inverted spans yield no keeper", () => {
+		const zero: PauseGap = { start: 5, end: 5 };
+		expect(
+			computeEmphasisPauseKeepers({ gaps: [zero], words: boundedWords(zero) }),
+		).toEqual([]);
+		const inverted: PauseGap = { start: 6.5, end: 5 };
+		expect(
+			computeEmphasisPauseKeepers({
+				gaps: [inverted],
+				// Provide words at both raw coordinates so only the duration check rejects it.
+				words: [word(4.5, 5, "a"), word(6.5, 7, "b")],
 			}),
 		).toEqual([]);
 	});
