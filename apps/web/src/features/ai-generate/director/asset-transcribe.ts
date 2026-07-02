@@ -11,6 +11,7 @@
 import { IndexedDBAdapter } from "@/services/storage/indexeddb-adapter";
 import { decodeAssetAudioToFloat32 } from "@/media/audio";
 import { encodeAudioForUpload } from "@/media/audio-encode";
+import { checkTranscribeUploadSize } from "@/media/transcribe-upload-limit";
 import { transcriptionService } from "@/services/transcription/service";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import {
@@ -79,10 +80,18 @@ async function transcribeViaCloud({
 	signal?: AbortSignal;
 }): Promise<AssetTranscriptEntry> {
 	const wav = float32MonoToWav({ samples, sampleRate });
-	// Compress to a small Opus/AAC blob so a long clip stays under Groq's 100 MB
-	// cap; fall back to the WAV if the browser can't encode either codec.
-	const encoded = await encodeAudioForUpload({ audioBlob: wav });
+	// Compress to a small Opus/AAC blob so a long clip stays under Groq's real
+	// per-request cap (~25 MB free tier); fall back to the WAV if the browser can't
+	// encode or the encode wedges.
+	const encoded = await encodeAudioForUpload({
+		audioBlob: wav,
+		durationSec: sampleRate > 0 ? samples.length / sampleRate : 0,
+	});
 	const upload = encoded ?? { blob: wav, filename: "clip.wav" };
+	// Refuse an oversized upload instead of letting Groq 413 (only the raw-WAV
+	// fallback on a very long clip can reach this).
+	const sizeCheck = checkTranscribeUploadSize(upload.blob.size);
+	if (!sizeCheck.ok) throw new Error(sizeCheck.error);
 	const form = new FormData();
 	form.append("audio", upload.blob, upload.filename);
 	const response = await fetch("/api/transcribe", {

@@ -9,6 +9,7 @@ import { create } from "zustand";
 import type { EditorCore } from "@/core";
 import { decodeAudioToFloat32 } from "@/media/audio";
 import { encodeAudioForUpload } from "@/media/audio-encode";
+import { checkTranscribeUploadSize } from "@/media/transcribe-upload-limit";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { transcriptionService } from "@/services/transcription/service";
 import { vadService } from "@/services/vad/service";
@@ -366,12 +367,22 @@ export async function ensureTimelineTranscript({
 			}, 1000);
 			try {
 				// Compress to a small Opus/AAC blob so a long source stays under
-				// Groq's 100 MB cap; fall back to the WAV if the browser can't encode.
-				const encoded = await encodeAudioForUpload({ audioBlob });
+				// Groq's real per-request cap (~25 MB free tier); fall back to the WAV
+				// if the browser can't encode or the encode wedges.
+				const encoded = await encodeAudioForUpload({
+					audioBlob,
+					durationSec: totalDuration / TICKS_PER_SECOND,
+				});
 				const upload = encoded ?? {
 					blob: audioBlob,
 					filename: "timeline.wav",
 				};
+				// Refuse an oversized upload instead of letting Groq 413. Only the raw
+				// WAV fallback on long content can reach this; a compressed blob is
+				// single-digit MB. Fail with an actionable message (points at the
+				// in-browser backend) rather than a raw "413 Request Entity Too Large".
+				const sizeCheck = checkTranscribeUploadSize(upload.blob.size);
+				if (!sizeCheck.ok) throw new Error(sizeCheck.error);
 				const form = new FormData();
 				form.append("audio", upload.blob, upload.filename);
 				const response = await abortable(

@@ -31,6 +31,23 @@ export function uploadInfoForCodec(codec: UploadCodec): UploadInfo {
 		: { filename: "timeline.m4a", mimeType: "audio/mp4" };
 }
 
+/**
+ * How long the browser encode is allowed to run before we give up and fall back
+ * to the raw WAV. Scales with source duration: the flat 20s ceiling was tuned to
+ * catch a WebCodecs pipeline WEDGE on a SHORT ripple-cut timeline (near-instant
+ * hang), but a genuine 30-plus-minute encode legitimately needs more wall-clock
+ * time and would trip that flat ceiling for no reason, forcing the oversized-WAV
+ * fallback that 413s. We keep a 20s floor (short-clip wedge protection unchanged)
+ * and a 90s ceiling (a truly wedged pipeline still degrades in bounded time).
+ */
+export function computeEncodeTimeoutMs(durationSec: number): number {
+	const FLOOR_MS = 20_000;
+	const CEILING_MS = 90_000;
+	const MS_PER_SEC_OF_AUDIO = 40; // ~generous vs. faster-than-realtime encode
+	const scaled = FLOOR_MS + Math.max(0, durationSec) * MS_PER_SEC_OF_AUDIO;
+	return Math.min(CEILING_MS, Math.max(FLOOR_MS, scaled));
+}
+
 /** WebCodecs codec string + target bitrate for the support probe and encode. */
 export function encoderProbe(codec: UploadCodec): {
 	webCodec: string;

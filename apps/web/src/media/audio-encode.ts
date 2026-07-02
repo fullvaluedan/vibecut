@@ -1,9 +1,11 @@
 /**
  * Compress the 16 kHz-mono transcription WAV to a small Opus (preferred) or AAC
- * blob before cloud upload, so a long source stays well under Groq's 100 MB cap
- * (an hour of speech is single-digit MB vs ~115 MB as WAV). Browser-only,
- * reuses mediabunny (already a dependency) + WebCodecs, no new package. Returns
- * null when the browser can't encode either codec; the caller uploads the WAV.
+ * blob before cloud upload, so a long source stays under Groq's real per-request
+ * cap (~25 MB on the free tier; an hour of speech is single-digit MB vs ~115 MB
+ * as WAV). Browser-only, reuses mediabunny (already a dependency) + WebCodecs, no
+ * new package. Returns null when the browser can't encode either codec OR the
+ * encode wedges past its (duration-scaled) timeout; the caller then falls back to
+ * the WAV, which transcript-cache.ts size-guards before uploading.
  */
 
 import {
@@ -17,6 +19,7 @@ import { decodeAudioToFloat32 } from "@/media/audio";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import {
 	CODEC_PREFERENCE,
+	computeEncodeTimeoutMs,
 	encoderProbe,
 	uploadInfoForCodec,
 	type UploadCodec,
@@ -53,18 +56,21 @@ async function pickEncodableCodec({
  * finalize) can WEDGE rather than reject on some inputs, and `try/catch` only
  * catches rejections, so an unbounded await would hang the whole cloud
  * transcription before any upload. On timeout we return null and the caller uploads
- * the WAV instead (larger, but the request actually fires).
+ * the WAV instead (larger, and size-guarded so it can no longer silently 413).
+ * The bound scales with `durationSec` (see computeEncodeTimeoutMs) so a genuine
+ * long encode gets a fair shot instead of falling back to the oversized WAV.
  */
-const ENCODE_TIMEOUT_MS = 20_000;
-
 export async function encodeAudioForUpload({
 	audioBlob,
+	durationSec,
 }: {
 	audioBlob: Blob;
+	/** Source length in seconds; scales the wedge timeout. */
+	durationSec: number;
 }): Promise<{ blob: Blob; filename: string } | null> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<null>((resolve) => {
-		timer = setTimeout(() => resolve(null), ENCODE_TIMEOUT_MS);
+		timer = setTimeout(() => resolve(null), computeEncodeTimeoutMs(durationSec));
 	});
 	try {
 		return await Promise.race([encodeAudioCore({ audioBlob }), timeout]);
