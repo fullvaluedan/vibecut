@@ -93,7 +93,7 @@ import { uppercase } from "@/utils/string";
 import { useMemo, type ComponentProps, type ReactNode } from "react";
 import type { SelectedKeyframeRef, ElementKeyframe } from "@/animation/types";
 import { cn } from "@/utils/ui";
-import { computeAvSyncOffset } from "@/timeline/av-sync";
+import type { AvSyncMap } from "@/timeline/av-sync-map";
 import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
 import { getTrackTypeForElementType } from "@/timeline/placement/compatibility";
 import { useTimelineStore } from "@/timeline/timeline-store";
@@ -115,6 +115,12 @@ const ELEMENT_RING_WIDTH_PX = 1.5;
 const NARROW_CLIP_WIDTH_PX = 16;
 
 const PixelsPerSecondContext = createContext<number | null>(null);
+/**
+ * The A/V-sync offsets for every clip, precomputed once per tracks-change
+ * (U6/KTD7). Each `AvSyncBadge` reads its own entry by element id instead of
+ * re-running the O(total-elements) `computeAvSyncOffset` scan per render.
+ */
+export const AvSyncMapContext = createContext<AvSyncMap | null>(null);
 const THUMBNAIL_ASPECT_RATIO = 16 / 9;
 
 interface KeyframeIndicator {
@@ -1327,11 +1333,9 @@ function TiledMediaContent({
  * drifted out of sync. Hidden when in sync or there is no partner.
  */
 function AvSyncBadge({ element }: { element: TimelineElementType }) {
-	const tracks = useEditor((e) => e.scenes.getActiveSceneOrNull()?.tracks);
-	const fps = useEditor((e) => e.project.getActiveOrNull()?.settings.fps ?? null);
-	if (!tracks) return null;
+	const avSyncMap = useContext(AvSyncMapContext);
 	if (element.type !== "video" && element.type !== "audio") return null;
-	const sync = computeAvSyncOffset({ element, tracks, fps });
+	const sync = avSyncMap?.get(element.id) ?? null;
 	if (!sync || sync.offsetFrames === 0) return null;
 	const sign = sync.offsetFrames > 0 ? "+" : "";
 	return (

@@ -90,6 +90,8 @@ import { useEditor } from "@/editor/use-editor";
 import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
 import { useTimelinePlayhead } from "@/timeline/hooks/use-timeline-playhead";
 import { DragLine } from "./drag-line";
+import { AvSyncMapContext } from "./timeline-element";
+import { buildAvSyncMap } from "@/timeline/av-sync-map";
 import { invokeAction } from "@/actions";
 import { resolveTimelineElementIntersections } from "./selection-hit-testing";
 import { cn } from "@/utils/ui";
@@ -141,6 +143,13 @@ function TimelineImpl() {
 		[scene],
 	);
 	const mainTrackId = scene?.tracks.main.id ?? null;
+	const fps = useEditor((e) => e.project.getActiveOrNull()?.settings.fps ?? null);
+	// A/V-sync offsets for every clip, rebuilt once per tracks-change (U6) and
+	// handed to each AvSyncBadge via context, replacing the per-clip O(n) scan.
+	const avSyncMap = useMemo(
+		() => (scene ? buildAvSyncMap({ tracks: scene.tracks, fps }) : null),
+		[scene, fps],
+	);
 	const seek = (time: MediaTime) => editor.playback.seek({ time });
 
 	const timelineRef = useRef<HTMLDivElement>(null);
@@ -439,6 +448,7 @@ function TimelineImpl() {
 		timelineHeaderHeightValue + TIMELINE_CONTENT_TOP_PADDING_PX;
 
 	return (
+		<AvSyncMapContext.Provider value={avSyncMap}>
 		<section
 			className={
 				"panel bg-background relative flex h-full flex-col overflow-hidden rounded-sm border"
@@ -612,6 +622,7 @@ function TimelineImpl() {
 				/>
 			</div>
 		</section>
+		</AvSyncMapContext.Provider>
 	);
 }
 
