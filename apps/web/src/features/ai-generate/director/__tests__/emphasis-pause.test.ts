@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	computeEmphasisPauseKeepers,
+	computeRepeatAdjacentPauseFloors,
 	MAX_PAUSE_SEC,
 	WORD_BOUNDARY_SNAP_SEC,
 	type PauseGap,
@@ -162,6 +163,115 @@ describe("computeEmphasisPauseKeepers", () => {
 		const wordsSnapshot = JSON.stringify(words);
 		const repeatSnapshot = JSON.stringify(repeatSpans);
 		computeEmphasisPauseKeepers({ gaps, words, repeatSpans });
+		expect(JSON.stringify(gaps)).toBe(gapsSnapshot);
+		expect(JSON.stringify(words)).toBe(wordsSnapshot);
+		expect(JSON.stringify(repeatSpans)).toBe(repeatSnapshot);
+	});
+});
+
+describe("computeRepeatAdjacentPauseFloors", () => {
+	// 15 frames at 30fps = 0.5s of silence left behind.
+	const FLOOR = 15 / 30;
+	// A repeat sitting 0.2s after the gap end (well within proximitySec).
+	const nearRepeat = (gap: PauseGap): RepeatSpan => ({
+		startSec: gap.end + 0.2,
+		endSec: gap.end + 1,
+	});
+
+	test("repeat-adjacent 1.5s pause -> tightened to leave exactly the 15-frame floor", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 }; // 1.5s
+		const cuts = computeRepeatAdjacentPauseFloors({
+			gaps: [gap],
+			words: boundedWords(gap),
+			repeatSpans: [nearRepeat(gap)],
+			floorSec: FLOOR,
+		});
+		expect(cuts).toHaveLength(1);
+		// The cut removes everything but a trailing FLOOR remnant before the next word.
+		expect(cuts[0].startSec).toBeCloseTo(5, 6);
+		expect(cuts[0].endSec).toBeCloseTo(6, 6);
+		const remainingSilence = gap.end - cuts[0].endSec;
+		expect(remainingSilence).toBeCloseTo(FLOOR, 6);
+	});
+
+	test("no repeat nearby -> no floor cut (kept whole as a beat elsewhere)", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: boundedWords(gap),
+				repeatSpans: [{ startSec: 20, endSec: 21 }],
+				floorSec: FLOOR,
+			}),
+		).toEqual([]);
+	});
+
+	test("pause already within the floor -> no cut (never widens a pause)", () => {
+		const gap: PauseGap = { start: 5, end: 5.4 }; // 0.4s < 0.5s floor
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: boundedWords(gap),
+				repeatSpans: [nearRepeat(gap)],
+				floorSec: FLOOR,
+			}),
+		).toEqual([]);
+	});
+
+	test("pause over the ceiling (> maxPauseSec) -> no floor cut (dead air, cut whole)", () => {
+		const gap: PauseGap = { start: 5, end: 5 + MAX_PAUSE_SEC + 0.5 };
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: boundedWords(gap),
+				repeatSpans: [nearRepeat(gap)],
+				floorSec: FLOOR,
+			}),
+		).toEqual([]);
+	});
+
+	test("speech on only one side -> no floor cut (leading/trailing air, not a beat)", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		const onlyBefore = [word(gap.start - 0.5, gap.start, "before")];
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: onlyBefore,
+				repeatSpans: [nearRepeat(gap)],
+				floorSec: FLOOR,
+			}),
+		).toEqual([]);
+	});
+
+	test("words unavailable / non-positive floor -> []", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: [],
+				repeatSpans: [nearRepeat(gap)],
+				floorSec: FLOOR,
+			}),
+		).toEqual([]);
+		expect(
+			computeRepeatAdjacentPauseFloors({
+				gaps: [gap],
+				words: boundedWords(gap),
+				repeatSpans: [nearRepeat(gap)],
+				floorSec: 0,
+			}),
+		).toEqual([]);
+	});
+
+	test("purity: inputs are not mutated", () => {
+		const gap: PauseGap = { start: 5, end: 6.5 };
+		const gaps = [gap];
+		const words = boundedWords(gap);
+		const repeatSpans = [nearRepeat(gap)];
+		const gapsSnapshot = JSON.stringify(gaps);
+		const wordsSnapshot = JSON.stringify(words);
+		const repeatSnapshot = JSON.stringify(repeatSpans);
+		computeRepeatAdjacentPauseFloors({ gaps, words, repeatSpans, floorSec: FLOOR });
 		expect(JSON.stringify(gaps)).toBe(gapsSnapshot);
 		expect(JSON.stringify(words)).toBe(wordsSnapshot);
 		expect(JSON.stringify(repeatSpans)).toBe(repeatSnapshot);

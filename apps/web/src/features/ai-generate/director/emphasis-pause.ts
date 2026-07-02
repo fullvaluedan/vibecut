@@ -104,3 +104,62 @@ export function computeEmphasisPauseKeepers({
 	}
 	return keepers;
 }
+
+/** A tightening removal (seconds) over a repeat-adjacent pause. */
+export interface PauseFloorCut {
+	startSec: number;
+	endSec: number;
+}
+
+/**
+ * The counterpart to `computeEmphasisPauseKeepers` for the DISQUALIFIED pauses
+ * (Dan's rule #3). A mid-delivery pause that WOULD read as an emphasis beat (short
+ * + speech-bounded) but sits next to a repeat/mistake we're cutting anyway should
+ * be neither kept whole nor zeroed by the splice: tighten it to leave `floorSec`
+ * of silence. Returns a removal covering the pause MINUS a trailing `floorSec`
+ * remnant (so a breath survives before the next word); a pause already <= `floorSec`
+ * yields nothing. Same qualification as an emphasis keeper, but the near-repeat test
+ * is INVERTED (these are exactly the ones a keeper skips). Pure + side-effect free.
+ */
+export function computeRepeatAdjacentPauseFloors({
+	gaps,
+	words,
+	repeatSpans = [],
+	floorSec,
+	maxPauseSec = MAX_PAUSE_SEC,
+	proximitySec = PAUSE_PROXIMITY_SEC,
+	snapSec = WORD_BOUNDARY_SNAP_SEC,
+}: {
+	gaps: readonly PauseGap[];
+	words: readonly TranscriptWordLite[];
+	repeatSpans?: readonly RepeatSpan[];
+	floorSec: number;
+	maxPauseSec?: number;
+	proximitySec?: number;
+	snapSec?: number;
+}): PauseFloorCut[] {
+	if (words.length === 0 || floorSec <= 0) return [];
+
+	const cuts: PauseFloorCut[] = [];
+	for (const gap of gaps) {
+		const duration = gap.end - gap.start;
+		if (duration <= 0 || duration > maxPauseSec) continue;
+		// Already within the floor: nothing to tighten (and never widen a pause).
+		if (duration <= floorSec) continue;
+
+		const speechBefore = words.some((w) => Math.abs(w.end - gap.start) <= snapSec);
+		const speechAfter = words.some((w) => Math.abs(w.start - gap.end) <= snapSec);
+		if (!speechBefore || !speechAfter) continue;
+
+		const nearRepeat = repeatSpans.some(
+			(r) =>
+				r.startSec < gap.end + proximitySec &&
+				gap.start - proximitySec < r.endSec,
+		);
+		// Only the repeat-adjacent pauses land here; the rest are kept whole as beats.
+		if (!nearRepeat) continue;
+
+		cuts.push({ startSec: gap.start, endSec: gap.end - floorSec });
+	}
+	return cuts;
+}

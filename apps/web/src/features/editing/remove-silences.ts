@@ -17,6 +17,7 @@ import {
 import {
 	getCachedTranscript,
 	getCachedWords,
+	type TranscriptWordLite,
 } from "@/features/transcription/transcript-cache";
 
 const WINDOW_SEC = 0.05;
@@ -72,8 +73,16 @@ export function detectSilentRangesSec({
 
 export async function runRemoveSilences({
 	editor,
+	words,
 }: {
 	editor: EditorCore;
+	/**
+	 * Word timings for emphasis-pause protection. When supplied (the Director passes
+	 * the fresh transcript it just made) they're used directly, so protection works
+	 * even on a first run with nothing cached yet. Omitted (the standalone menu action)
+	 * falls back to the cached lookup (same behavior as before).
+	 */
+	words?: readonly TranscriptWordLite[];
 }): Promise<{ cuts: number; removedSec: number }> {
 	const totalDuration = editor.timeline.getTotalDuration();
 	if (totalDuration / TICKS_PER_SECOND < 1) {
@@ -96,9 +105,12 @@ export async function runRemoveSilences({
 	// segment boundaries almost never land on a mid-dialog pause's edges. Fall back to
 	// segments (safe, rarely protects) then to nothing (no cache -> prior behavior).
 	// Runs before refineSilenceRanges so a range is classified before it can be split.
-	const cachedWords = getCachedWords(editor);
+	const suppliedOrCachedWords =
+		words && words.length > 0 ? words : getCachedWords(editor);
 	const speechLines =
-		cachedWords.length > 0 ? cachedWords : (getCachedTranscript(editor) ?? []);
+		suppliedOrCachedWords.length > 0
+			? suppliedOrCachedWords
+			: (getCachedTranscript(editor) ?? []);
 	const speechAware = dropEmphasisPauses({
 		ranges: silent,
 		segments: speechLines,

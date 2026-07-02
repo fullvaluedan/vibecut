@@ -69,6 +69,10 @@ const REMNANT_FRAMES_TOLERANCE = 15;
  * short to be real footage — a stray fragment proposed for removal in review. */
 const MIN_USEFUL_CLIP_FRAMES = 5;
 
+/** Silence left behind (frames at the project fps) when tightening a pause that
+ * sits next to a repeat/mistake we're cutting anyway (a breath, not a hard splice). */
+const PAUSE_FLOOR_FRAMES = 15;
+
 /**
  * Pre-pass (live test): if a video track's clips are timestamped recordings placed
  * out of chronological order, re-sequence them back-to-back in timestamp order
@@ -111,8 +115,11 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 	return plannedMoves.length;
 }
 import { detectSegmentRepeatCuts } from "./segment-repeat";
-import { mergeDetectedCuts, type KeeperSpan } from "./cut-utils";
-import { computeEmphasisPauseKeepers } from "./emphasis-pause";
+import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
+import {
+	computeEmphasisPauseKeepers,
+	computeRepeatAdjacentPauseFloors,
+} from "./emphasis-pause";
 import { groupTranscriptByAsset } from "./source-map";
 import { buildTakeClusters } from "./take-clusters";
 import { detectRedundancyCuts } from "./redundancy";
@@ -155,10 +162,25 @@ export async function runDirector({
 	}
 	abort();
 
-	onProgress?.("Removing silences...");
-	await runRemoveSilences({ editor });
+	// Transcribe the FULL timeline FIRST so silence removal has word timings for its
+	// emphasis-pause protection. On a fresh project with background transcription off
+	// nothing is cached yet, so without this the protection was inert and every short
+	// mid-sentence pause got cut. The result is fed straight into runRemoveSilences.
+	onProgress?.("Transcribing...");
+	const preSilence = await ensureTimelineTranscript({
+		editor,
+		signal,
+		wantWords: true,
+		onProgress: (p) => onProgress?.(p.detail),
+	});
 	abort();
 
+	onProgress?.("Removing silences...");
+	await runRemoveSilences({ editor, words: preSilence.words });
+	abort();
+
+	// Re-transcribe the SHORTENED timeline: the ripple changed the audio hash, so this
+	// is a cache miss that re-aligns every downstream coordinate to the new timeline.
 	onProgress?.("Transcribing...");
 	const { segments, words } = await ensureTimelineTranscript({
 		editor,
@@ -462,9 +484,35 @@ export async function runDirector({
 		words: words ?? [],
 		repeatSpans: repeatMistakeSpans,
 	});
+	// 15-frame floor (#3): a pause that WOULD be a beat but sits next to a repeat/
+	// mistake is disqualified above (no keeper), so it would otherwise stay whole. It's
+	// part of the mess we're cutting there anyway, so tighten it to a PAUSE_FLOOR_FRAMES
+	// breath instead of leaving the full pause. Added as removals below; they can't be
+	// protected away because these gaps have no keeper (the near-repeat test excluded them).
+	const pauseFloorCuts: DirectorOp[] = computeRepeatAdjacentPauseFloors({
+		gaps: pauseGaps,
+		words: words ?? [],
+		repeatSpans: repeatMistakeSpans,
+		floorSec: PAUSE_FLOOR_FRAMES / fpsFloat,
+	}).map((cut) => ({
+		id: `pausefloor-${stableCutId(`${cut.startSec.toFixed(3)}:${cut.endSec.toFixed(3)}`)}`,
+		op: "cut",
+		startSec: cut.startSec,
+		endSec: cut.endSec,
+		reason: "Tightened pause next to a repeat/mistake (left a short breath)",
+		confidence: 0.6,
+		category: "pacing",
+	}));
 	const baseMerged = mergeDetectedCuts({
 		planOps,
-		extraOps: [...wordCuts, ...noiseCuts, ...tinyClipCuts, ...vadDeadAirCuts, ...lexicalRepeatCuts],
+		extraOps: [
+			...wordCuts,
+			...noiseCuts,
+			...tinyClipCuts,
+			...vadDeadAirCuts,
+			...lexicalRepeatCuts,
+			...pauseFloorCuts,
+		],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
 	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by
