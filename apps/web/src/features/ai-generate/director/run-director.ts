@@ -114,6 +114,7 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 	return plannedMoves.length;
 }
 import { detectSegmentRepeatCuts } from "./segment-repeat";
+import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
 import {
 	computeEmphasisPauseKeepers,
@@ -600,7 +601,35 @@ export async function runDirector({
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
-	const energySnapped = snapRemovalOps({ ops: mergedOps, envelope });
+	// Virtual second pass (2P-U3): re-analyze the Director's OWN compressed output.
+	// Compression reveals adjacency: two verbatim takes >60s apart only become close
+	// enough to match once the material between them is cut, so apply the default-
+	// accepted cuts to the transcript virtually and re-run the deterministic detectors
+	// on the shortened result, mapping any new findings back to original coordinates.
+	// Deterministic + transcript-only (no re-transcription, no LLM re-runs), capped at
+	// 3 passes, folded into the SAME review and undo. Pure: it computes ops only, the
+	// same keepers protect each pass, and the extra ops flow through the SAME snap/
+	// coalesce chain below as the pass-1 cuts.
+	const secondPass = runSecondPass({
+		ops: mergedOps,
+		words: words ?? [],
+		segments,
+		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
+		redundancyRan,
+	});
+	if (secondPass.extraOps.length > 0) {
+		const extraPasses = secondPass.passesRun - 1;
+		toast.info(
+			`Director second pass: found ${secondPass.extraOps.length} more cut${secondPass.extraOps.length === 1 ? "" : "s"} the compression revealed (${extraPasses} extra pass${extraPasses === 1 ? "" : "es"}).`,
+		);
+	}
+	const withSecondPass = [...mergedOps, ...secondPass.extraOps].sort(
+		(a, b) => a.startSec - b.startSec,
+	);
+	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
+	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
+	// guard's envelope; reorder ops are left untouched.
+	const energySnapped = snapRemovalOps({ ops: withSecondPass, envelope });
 	// Trim-vs-cut (U4/KTD4): a removal whose edge lands within a few frames of a clip
 	// boundary is aligned to it so the removal TRIMS that clip edge (swallowing the
 	// 2-frame / 13-frame slivers a cut left) instead of fragmenting the clip; a removal
