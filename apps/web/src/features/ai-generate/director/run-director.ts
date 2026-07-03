@@ -252,11 +252,12 @@ export async function runDirector({
 		minDurationSec: MIN_USEFUL_CLIP_FRAMES / fpsFloat,
 	});
 
-	// VAD dead-air (Plan A / U5, OPT-IN — default off): a Silero VAD pass over the
-	// decoded audio surfaces long NON-speech gaps as reviewable "dead air" cuts —
-	// the silent "just sitting there" a transcript can't see. Runs in its own worker;
-	// NON-throwing (a VAD failure must never break the Director) and overlap-filtered
-	// against the other detected cuts so it can't double with pacing / dead-air.
+	// VAD dead-air (Plan A / U5, default ON per U2/KTD3, still a user override): a
+	// Silero VAD pass over the decoded audio surfaces long NON-speech gaps as
+	// reviewable "dead air" cuts, the silent "just sitting there" a transcript can't
+	// see. Runs in its own worker; NON-throwing (a VAD failure must never break the
+	// Director) and overlap-filtered against the other detected cuts so it can't
+	// double with pacing / dead-air.
 	let vadDeadAirCuts: DirectorOp[] = [];
 	if (useAiSettingsStore.getState().directorVadDeadAirEnabled) {
 		onProgress?.("Scanning for dead air...");

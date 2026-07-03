@@ -75,9 +75,11 @@ interface AiSettingsStore {
 	directorVisionEnabled: boolean;
 	setDirectorVisionEnabled: (enabled: boolean) => void;
 	/**
-	 * Opt-in (default off): run a Silero VAD pass during AI Director analysis to
-	 * surface long NON-speech gaps as reviewable "dead air" cut candidates. The
-	 * VAD runs in its own worker; failures are swallowed (the Director still runs).
+	 * Default ON (U2/KTD3): run a Silero VAD pass during AI Director analysis to
+	 * surface long NON-speech gaps as reviewable "dead air" cut candidates, so real
+	 * silent stretches (not only hesitation-word clusters) are removed by a default
+	 * AI CUT run. The VAD runs in its own worker; failures are swallowed (the
+	 * Director still runs). Remains a user override: turning it off is honored.
 	 */
 	directorVadDeadAirEnabled: boolean;
 	setDirectorVadDeadAirEnabled: (enabled: boolean) => void;
@@ -185,7 +187,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			setDirectorVisionEnabled: (directorVisionEnabled) =>
 				set({ directorVisionEnabled }),
 
-			directorVadDeadAirEnabled: false,
+			directorVadDeadAirEnabled: true,
 			setDirectorVadDeadAirEnabled: (directorVadDeadAirEnabled) =>
 				set({ directorVadDeadAirEnabled }),
 
