@@ -33,12 +33,16 @@ class FakeBatchCommand {
 		this.commands = commands;
 	}
 }
+class FakeConsolidateAdjacentClipsCommand {}
 
 mock.module("@/commands/timeline/track/remove-ranges", () => ({
 	RemoveRangesCommand: FakeRemoveRangesCommand,
 }));
 mock.module("@/commands/timeline/element/move-elements", () => ({
 	MoveElementCommand: FakeMoveElementCommand,
+}));
+mock.module("@/commands/timeline/track/consolidate-adjacent-clips", () => ({
+	ConsolidateAdjacentClipsCommand: FakeConsolidateAdjacentClipsCommand,
 }));
 mock.module("@/commands/batch-command", () => ({ BatchCommand: FakeBatchCommand }));
 
@@ -181,15 +185,20 @@ function fakeEditor(elements: ReorderElementFixture[] = []): {
 }
 
 describe("applyDirectorPlan (composition glue)", () => {
-	test("removals-only plan executes a BARE RemoveRangesCommand, reorders: 0 (R6)", () => {
+	test("removals-only plan batches [Remove, Consolidate], reorders: 0 (U4/R6)", () => {
 		const { editor, executed } = fakeEditor();
 		const result = applyDirectorPlan({
 			editor,
 			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
 		});
 		expect(executed).toHaveLength(1);
-		expect(executed[0]).toBeInstanceOf(FakeRemoveRangesCommand);
-		expect(executed[0]).not.toBeInstanceOf(FakeBatchCommand);
+		const batch = executed[0];
+		expect(batch).toBeInstanceOf(FakeBatchCommand);
+		// Consolidation runs LAST so it reads the post-removal layout; one undo.
+		if (batch instanceof FakeBatchCommand) {
+			expect(batch.commands[0]).toBeInstanceOf(FakeRemoveRangesCommand);
+			expect(batch.commands[1]).toBeInstanceOf(FakeConsolidateAdjacentClipsCommand);
+		}
 		expect(result).toEqual({ cuts: 1, removedSec: 1, reorders: 0 });
 	});
 
@@ -207,10 +216,12 @@ describe("applyDirectorPlan (composition glue)", () => {
 		expect(executed).toHaveLength(1);
 		const batch = executed[0];
 		expect(batch).toBeInstanceOf(FakeBatchCommand);
-		// Reorders composed FIRST so removal ranges (original coords) still line up.
+		// Reorders composed FIRST so removal ranges (original coords) still line up;
+		// consolidation LAST so it reads the post-removal layout (U4).
 		if (batch instanceof FakeBatchCommand) {
 			expect(batch.commands[0]).toBeInstanceOf(FakeMoveElementCommand);
 			expect(batch.commands[1]).toBeInstanceOf(FakeRemoveRangesCommand);
+			expect(batch.commands[2]).toBeInstanceOf(FakeConsolidateAdjacentClipsCommand);
 		}
 		expect(result.reorders).toBe(1);
 		expect(result.cuts).toBe(1);

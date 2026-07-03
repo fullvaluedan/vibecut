@@ -42,7 +42,8 @@ import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectTinyClipCuts } from "./tiny-clip";
 import { detectVadDeadAirCuts } from "./vad-dead-air";
 import { vadService } from "@/services/vad/service";
-import { snapRemovalOps, snapRemovalsToClipEdges } from "./snap-cut";
+import { snapRemovalOps } from "./snap-cut";
+import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
@@ -601,11 +602,12 @@ export async function runDirector({
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
 	const energySnapped = snapRemovalOps({ ops: mergedOps, envelope });
-	// Cut-remnant guard (live test): a removal whose boundary lands a few frames shy
-	// of a clip edge leaves a tiny sliver of that clip (the 2-frame / 13-frame bits
-	// at the start). Snap such a boundary OUT to the clip edge so the cut swallows the
-	// remnant. Reuses the clipSpans + fps computed above.
-	const operations = snapRemovalsToClipEdges({
+	// Trim-vs-cut (U4/KTD4): a removal whose edge lands within a few frames of a clip
+	// boundary is aligned to it so the removal TRIMS that clip edge (swallowing the
+	// 2-frame / 13-frame slivers a cut left) instead of fragmenting the clip; a removal
+	// with both edges mid-clip stays a ripple-cut. Reuses the clipSpans + fps above.
+	// (Adjacent same-source slices are then merged post-apply by the consolidation pass.)
+	const operations = resolveTrimVsCut({
 		ops: energySnapped,
 		clipStartsSec: clipSpans.map((c) => c.startSec),
 		clipEndsSec: clipSpans.map((c) => c.endSec),

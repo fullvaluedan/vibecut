@@ -15,6 +15,7 @@ import {
 	type TimeRange,
 } from "@/commands/timeline/track/remove-ranges";
 import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
+import { ConsolidateAdjacentClipsCommand } from "@/commands/timeline/track/consolidate-adjacent-clips";
 import { BatchCommand } from "@/commands/batch-command";
 import type { Command } from "@/commands/base-command";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
@@ -247,6 +248,11 @@ export function applyDirectorPlan({
 	if (ranges.length > 0) {
 		removalCommand = new RemoveRangesCommand({ ranges });
 		commands.push(removalCommand);
+		// KTD5: after the cuts fragment the timeline, merge adjacent same-source
+		// contiguous slices back into single clips (U4). Runs LAST so it reads the
+		// post-removal layout, and it is part of THIS batch so the whole recut is one
+		// undo. Gated on removals: with nothing cut there is no fragmentation to fix.
+		commands.push(new ConsolidateAdjacentClipsCommand());
 	}
 
 	if (commands.length === 0) {
