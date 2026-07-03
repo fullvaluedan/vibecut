@@ -4,8 +4,8 @@ import type { DirectorApplyEditor } from "../apply-plan";
 
 // apply-plan imports `@/wasm` + several command classes at module top; stub them
 // so the helpers import under bun. The command stubs CAPTURE their constructor args
-// (and carry identity via instanceof) so applyDirectorPlan's composition — which
-// command runs, in what order — is assertable; planRemovalRanges + planReorderMoves
+// (and carry identity via instanceof) so applyDirectorPlan's composition - which
+// command runs, in what order - is assertable; planRemovalRanges + planReorderMoves
 // hold the pure logic.
 mock.module("@/wasm", () => ({
 	TICKS_PER_SECOND: 120_000,
@@ -103,9 +103,9 @@ describe("planReorderMoves", () => {
 			ops: [op({ op: "reorder", startSec: 8, endSec: 12, targetStartSec: 0 })],
 			ticksPerSecond: 120_000,
 			elements: [
-				el(["a", 960_000, 240_000]), // 8s..10s — contained → moves to 0
-				el(["b", 1_320_000, 240_000]), // 11s..13s — straddles span end → not moved
-				el(["c", 0, 120_000]), // 0s..1s — outside span → not moved
+				el(["a", 960_000, 240_000]), // 8s..10s - contained → moves to 0
+				el(["b", 1_320_000, 240_000]), // 11s..13s - straddles span end → not moved
+				el(["c", 0, 120_000]), // 0s..1s - outside span → not moved
 			],
 		});
 		expect(moves).toEqual([
@@ -155,7 +155,7 @@ interface ReorderElementFixture {
 
 // A plain DirectorApplyEditor stub exposing only what applyDirectorPlan reads: the
 // active scene's tracks (elements default to main) and a command.execute spy. No
-// cast needed — the apply takes the segregated interface, not the full EditorCore.
+// cast needed - the apply takes the segregated interface, not the full EditorCore.
 function fakeEditor(elements: ReorderElementFixture[] = []): {
 	editor: DirectorApplyEditor;
 	executed: unknown[];
@@ -290,7 +290,7 @@ describe("applyDirectorPlan (composition glue)", () => {
 		expect(result.cuts).toBe(2);
 	});
 
-	test("2P-U1: without words nothing coalesces (fail-open) — byte-identical to pre-guard", () => {
+	test("2P-U1: without words nothing coalesces (fail-open) - byte-identical to pre-guard", () => {
 		const { editor, executed } = fakeEditor();
 		const result = applyDirectorPlan({
 			editor,
@@ -305,7 +305,7 @@ describe("applyDirectorPlan (composition glue)", () => {
 
 	test("2P-U1 INVARIANT: a dense plan → coalesce leaves zero sub-floor content-free gaps", () => {
 		const { editor, executed } = fakeEditor();
-		// 12 tight cuts, ~4-frame removals, ~5-frame gaps — the sliver-generating case.
+		// 12 tight cuts, ~4-frame removals, ~5-frame gaps - the sliver-generating case.
 		const ops: DirectorOp[] = Array.from({ length: 12 }, (_, i) => {
 			const base = i * (9 / 30); // 9 frames per step
 			return op({ op: "cut", startSec: base, endSec: base + 4 / 30 });

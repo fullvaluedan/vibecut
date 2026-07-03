@@ -4,7 +4,7 @@
  * mousemove far faster than the display refreshes; processing every event
  * re-renders the timeline many times per frame for no visible gain. Pushing
  * through this collapses each frame to a single update with the newest coords,
- * so drag results are unchanged — only the update cadence drops.
+ * so drag results are unchanged - only the update cadence drops.
  *
  * The scheduler is injected so the coalescer is unit-testable with a fake
  * frame clock (real usage passes requestAnimationFrame / cancelAnimationFrame).

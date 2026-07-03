@@ -552,10 +552,10 @@ export async function runDirector({
 		confidence: 0.6,
 		category: "pacing",
 	}));
-	// Out-of-context flags → opt-in cut ops (U3 Part B), dropped where they overlap a
+	// Out-of-context flags → cut ops (U3 Part B, 2P-U4), dropped where they overlap a
 	// removal another detector already made, so a context row never doubles a repeat /
-	// dead-air / redundancy cut. They fold into the merge as accept-OFF extraOps,
-	// protected by the same keepers + emphasis-pause keepers as the other backstops.
+	// dead-air / redundancy cut. High-confidence flags fold in default-ACCEPTED, the
+	// uncertain band accept-OFF, protected by the same keepers as the other backstops.
 	const contextCuts = mapContextFlags({
 		flags: contextFlags,
 		existingCuts: [

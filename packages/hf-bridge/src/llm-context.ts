@@ -7,10 +7,11 @@
 // only groups lines that repeat each other): here a line is flagged for NOT
 // belonging, not for repeating.
 //
-// PRECISION over recall by design: semantic relevance is false-positive-prone, so
-// every flag is surfaced as an OPT-IN review row (never auto-cut). The sanitizer
-// snaps each flagged lineId back to a real transcript line (anti-hallucination), so
-// review can only ever cut real spans.
+// PRECISION over recall by design: semantic relevance is false-positive-prone.
+// A flag at/above the accept threshold (0.7) is REMOVED BY DEFAULT in the review
+// (2P-U4: clear mistakes/meta-asides actually leave); below it the flag surfaces
+// as an opt-in row the editor judges. The sanitizer snaps each flagged lineId back
+// to a real transcript line (anti-hallucination), so review can only cut real spans.
 //
 // Reuses `RedundancyLine` as the input line shape (same numbered-transcript catalog
 // the redundancy pass consumes) to avoid a parallel type + builder.

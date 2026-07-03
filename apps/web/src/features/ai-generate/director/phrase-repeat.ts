@@ -6,7 +6,8 @@
  * continuous recording where they restart or re-explain the same line. The
  * EARLIER instance is the cut (keep the LAST attempt, like a retake), never the
  * gap between them. Pure + wasm-free so it's unit-tested; the ops merge into the
- * Director plan and show in the Review modal (flagged, not auto-applied).
+ * Director plan and show in the Review modal. Verbatim matches start ACCEPTED
+ * (U1: obvious repeats leave without row-toggling); review remains the gate.
  *
  * VERBATIM / near-verbatim repeats only — token n-gram matching can't see a
  * PARAPHRASED restatement (same point, different words); the LLM cut prompt
