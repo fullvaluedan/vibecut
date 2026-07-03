@@ -48,6 +48,15 @@ describe("describeReviewOp", () => {
 		expect(describeReviewOp({ op: op({ op: "cut", category: "deadair" }), accepted: true }).categoryBadge).toBe("Dead air");
 	});
 
+	test("an out-of-context cut shows the badge; rejecting keeps the content (U3 Part B)", () => {
+		const accepted = describeReviewOp({ op: op({ op: "cut", category: "context" }), accepted: true });
+		expect(accepted.badge).toBe("Cut");
+		expect(accepted.categoryBadge).toBe("Out of context");
+		expect(accepted.rejectedHint).toBe("");
+		const rejected = describeReviewOp({ op: op({ op: "cut", category: "context" }), accepted: false });
+		expect(rejected.rejectedHint).toBe("Keeping this content");
+	});
+
 	test("a reorder never gets a rejected hint", () => {
 		expect(describeReviewOp({ op: op({ op: "reorder" }), accepted: false }).rejectedHint).toBe("");
 		expect(describeReviewOp({ op: op({ op: "reorder" }), accepted: true }).badge).toBe("Reorder");

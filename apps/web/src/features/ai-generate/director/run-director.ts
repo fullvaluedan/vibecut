@@ -22,7 +22,7 @@ import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
 import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
 import type { EditorCore } from "@/core";
-import type { DirectorAssetSummary, DirectorOp, DirectorVisionFrame } from "@framecut/hf-bridge";
+import type { ContextFlag, DirectorAssetSummary, DirectorOp, DirectorVisionFrame } from "@framecut/hf-bridge";
 import { computeEnergyEnvelope, computeSpeechFeatures, ENERGY_WINDOW_SEC } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
@@ -47,6 +47,7 @@ import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
 import { buildRedundancyCatalog } from "./redundancy-catalog";
+import { mapContextFlags } from "./context-relevance";
 import {
 	lexicalBackstopDefaultAccept,
 	mapRedundancyGroups,
@@ -419,16 +420,18 @@ export async function runDirector({
 	// Dedicated LLM redundancy pass (R1) — the focused repeat-catcher. On success it is
 	// the authority and the lexical repeat detectors stay silent (R7); on a route error
 	// it falls through to them. Non-throwing (KTD-5).
+	// The numbered-transcript catalog, shared by the redundancy pass and the new
+	// out-of-context pass (U3 Part B) so both reason over the same lines.
+	const redundancyLines = buildRedundancyCatalog({
+		segments,
+		features,
+		elements: tracks.main.elements,
+		clipNameByAssetId: new Map(editor.media.getAssets().map((a) => [a.id, a.name])),
+	});
 	let redundancyCuts: DirectorOp[] = [];
 	let redundancyReviewGroups: RedundancyReviewGroup[] = [];
 	let redundancyRan = false;
 	try {
-		const redundancyLines = buildRedundancyCatalog({
-			segments,
-			features,
-			elements: tracks.main.elements,
-			clipNameByAssetId: new Map(editor.media.getAssets().map((a) => [a.id, a.name])),
-		});
 		const rRes = await fetch("/api/director/redundancy", {
 			method: "POST",
 			headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
@@ -448,6 +451,32 @@ export async function runDirector({
 	}
 	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5) — kept for intent
 	abort();
+
+	// Out-of-context pass (U3 Part B, NEW): read the FULL transcript, infer the
+	// video's throughline, and flag lines whose dialog does not fit it (tangents,
+	// abandoned thoughts, meta-asides, wrong-video content). Every flag is OPT-IN
+	// (accept-OFF) and never auto-cut (semantic relevance is false-positive-prone), so
+	// Dan reviews each. Non-throwing: a route error skips Part B entirely (like the
+	// redundancy pass). Mapped to ops + overlap-filtered at the merge below.
+	let contextFlags: ContextFlag[] = [];
+	if (segments.length > 0) {
+		onProgress?.("Checking the throughline...");
+		try {
+			const cRes = await fetch("/api/director/context", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				signal,
+				body: JSON.stringify({ lines: redundancyLines, taste: taste || undefined }),
+			});
+			if (cRes.ok) {
+				const cData = await cRes.json();
+				contextFlags = Array.isArray(cData?.plan?.flags) ? cData.plan.flags : [];
+			}
+		} catch {
+			// route error → skip the out-of-context pass (it is an enhancement)
+		}
+		abort();
+	}
 
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
 	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
@@ -512,6 +541,22 @@ export async function runDirector({
 		confidence: 0.6,
 		category: "pacing",
 	}));
+	// Out-of-context flags → opt-in cut ops (U3 Part B), dropped where they overlap a
+	// removal another detector already made, so a context row never doubles a repeat /
+	// dead-air / redundancy cut. They fold into the merge as accept-OFF extraOps,
+	// protected by the same keepers + emphasis-pause keepers as the other backstops.
+	const contextCuts = mapContextFlags({
+		flags: contextFlags,
+		existingCuts: [
+			...wordCuts,
+			...noiseCuts,
+			...tinyClipCuts,
+			...vadDeadAirCuts,
+			...lexicalRepeatCuts,
+			...pauseFloorCuts,
+			...redundancyCuts,
+		],
+	});
 	const baseMerged = mergeDetectedCuts({
 		planOps,
 		extraOps: [
@@ -521,6 +566,7 @@ export async function runDirector({
 			...vadDeadAirCuts,
 			...lexicalRepeatCuts,
 			...pauseFloorCuts,
+			...contextCuts,
 		],
 		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)

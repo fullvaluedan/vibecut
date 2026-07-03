@@ -46,6 +46,7 @@ const CATEGORIES: readonly DirectorOpCategory[] = [
 	"deadair",
 	"noise",
 	"redundancy",
+	"context",
 ];
 const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	duplicate: "duplicate-word cuts",
@@ -59,6 +60,7 @@ const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	deadair: "dead-air cuts",
 	noise: "noise-fragment cuts",
 	redundancy: "redundancy cuts",
+	context: "out-of-context cuts",
 };
 
 /**

@@ -57,6 +57,7 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	deadair: "Dead air",
 	noise: "Noise",
 	redundancy: "Repeat",
+	context: "Out of context",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -87,6 +88,9 @@ export function describeReviewOp({
 		} else if (op.category === "redundancy") {
 			// A group's non-keeper take: rejecting it keeps that take in the cut.
 			rejectedHint = "Keeping this take";
+		} else if (op.category === "context") {
+			// An out-of-context flag: rejecting it keeps the content in the video.
+			rejectedHint = "Keeping this content";
 		}
 	}
 

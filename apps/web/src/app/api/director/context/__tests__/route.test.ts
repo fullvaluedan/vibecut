@@ -2,12 +2,12 @@ import { describe, expect, mock, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 // Stub the auth resolver and the planner so the route's guard / validate / error
-// logic is tested without a real LLM call. Registered before importing the route.
-// (planRedundancy is a VALUE import in the route — the mock MUST export it or the
-// route fails to load; the prior vision regression was an incomplete mock.)
+// logic is tested without a real LLM call. bun's mock.module is process-global, so
+// the hf-bridge stub must satisfy every director route's imports (plan / redundancy /
+// context) when they run together in one `bun test` dir, hence the inert siblings.
 let authImpl: () => unknown = () => null;
-let planRedundancyImpl: () => Promise<unknown> = async () => ({
-	plan: { groups: [] },
+let planContextImpl: () => Promise<unknown> = async () => ({
+	plan: { topic: "", flags: [] },
 	usage: null,
 });
 let lastLines: unknown = undefined;
@@ -15,43 +15,39 @@ let lastLines: unknown = undefined;
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
-// bun's mock.module is process-global, so when this file runs alongside the plan
-// route test (same `bun test` dir), whichever mock is active must satisfy BOTH
-// routes' imports. Stub the other planners too (inert here) to avoid a cross-file
-// "export not found" load error.
 mock.module("@framecut/hf-bridge", () => ({
-	planRedundancy: (arg: { lines?: unknown }) => {
+	planContext: (arg: { lines?: unknown }) => {
 		lastLines = arg?.lines;
-		return planRedundancyImpl();
+		return planContextImpl();
 	},
+	// Inert siblings so the plan/redundancy route imports stay satisfied under the
+	// shared process-global mock.
+	planRedundancy: async () => ({ plan: { groups: [] }, usage: null }),
 	planDirector: async () => ({ plan: { operations: [] }, usage: null }),
 	planDirectorVision: async () => ({ plan: { operations: [] }, usage: null, degraded: false }),
-	// Inert here, present so the sibling context route test's process-global
-	// mock.module doesn't leave the context route's `planContext` import unsatisfied.
-	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");
 
 function post(body?: unknown): NextRequest {
-	return new NextRequest("http://localhost/api/director/redundancy", {
+	return new NextRequest("http://localhost/api/director/context", {
 		method: "POST",
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 }
 
 const goodLines = [
-	{ lineId: "L0", startSec: 0, endSec: 2, text: "we ship friday" },
-	{ lineId: "L1", startSec: 3, endSec: 5, text: "the launch is friday" },
+	{ lineId: "L0", startSec: 0, endSec: 2, text: "how to build a website" },
+	{ lineId: "L1", startSec: 3, endSec: 5, text: "wait let me redo that" },
 ];
 
-describe("/api/director/redundancy", () => {
+describe("/api/director/context", () => {
 	test("401 when AI auth is not configured (no upstream call)", async () => {
 		authImpl = () => null;
 		let planned = false;
-		planRedundancyImpl = async () => {
+		planContextImpl = async () => {
 			planned = true;
-			return { plan: { groups: [] }, usage: null };
+			return { plan: { topic: "", flags: [] }, usage: null };
 		};
 		const res = await POST(post({ lines: goodLines }));
 		expect(res.status).toBe(401);
@@ -68,26 +64,18 @@ describe("/api/director/redundancy", () => {
 	test("happy path returns the plan + usage and forwards parsed lines", async () => {
 		authImpl = () => ({ mode: "claude-code" });
 		lastLines = undefined;
-		planRedundancyImpl = async () => ({
+		planContextImpl = async () => ({
 			plan: {
-				groups: [
-					{
-						members: [
-							{ lineId: "L0", startSec: 0, endSec: 2, text: "we ship friday" },
-							{ lineId: "L1", startSec: 3, endSec: 5, text: "the launch is friday" },
-						],
-						keeperLineId: "L1",
-						confidence: 0.9,
-						reason: "same point",
-					},
-				],
+				topic: "how to build a website",
+				flags: [{ lineId: "L1", startSec: 3, endSec: 5, text: "wait let me redo that", confidence: 0.8, reason: "meta aside" }],
 			},
 			usage: { inputTokens: 7, outputTokens: 3 },
 		});
 		const res = await POST(post({ lines: goodLines, taste: "be conservative" }));
 		expect(res.status).toBe(200);
 		const json = await res.json();
-		expect(json.plan.groups).toHaveLength(1);
+		expect(json.plan.topic).toBe("how to build a website");
+		expect(json.plan.flags).toHaveLength(1);
 		expect(json.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
 		expect(Array.isArray(lastLines)).toBe(true);
 	});
@@ -99,8 +87,8 @@ describe("/api/director/redundancy", () => {
 			post({
 				lines: [
 					{ lineId: "L0", startSec: 0, endSec: 2, text: "ok" },
-					{ lineId: "L1", startSec: "bad", endSec: 5, text: "dropped — non-numeric start" },
-					{ startSec: 6, endSec: 8, text: "dropped — no lineId" },
+					{ lineId: "L1", startSec: "bad", endSec: 5, text: "dropped, non-numeric start" },
+					{ startSec: 6, endSec: 8, text: "dropped, no lineId" },
 				],
 			}),
 		);
@@ -113,12 +101,12 @@ describe("/api/director/redundancy", () => {
 
 	test("500 when the planner throws", async () => {
 		authImpl = () => ({ mode: "claude-code" });
-		planRedundancyImpl = async () => {
+		planContextImpl = async () => {
 			throw new Error("upstream boom");
 		};
 		const res = await POST(post({ lines: goodLines }));
 		expect(res.status).toBe(500);
 		const json = await res.json();
-		expect(json.error).toContain("Redundancy planning failed");
+		expect(json.error).toContain("Context planning failed");
 	});
 });

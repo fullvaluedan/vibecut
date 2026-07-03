@@ -59,6 +59,14 @@ export {
 	type RedundancyPlan,
 } from "./llm-redundancy";
 export {
+	planContext,
+	buildContextPrompt,
+	renderContextCatalog,
+	sanitizeContextPlan,
+	type ContextFlag,
+	type ContextPlan,
+} from "./llm-context";
+export {
 	renderTemplateJob,
 	renderCompDir,
 	startStudio,
