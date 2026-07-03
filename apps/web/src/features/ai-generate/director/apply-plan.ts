@@ -22,7 +22,10 @@ import type { PlannedElementMove } from "@/timeline/group-move/types";
 import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
 import type { DirectorOp } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
-import { coalesceRemovalRanges } from "./coalesce-removal-ranges";
+import {
+	coalesceRemovalRanges,
+	type ProtectedSpanSec,
+} from "./coalesce-removal-ranges";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 
 export interface ApplyDirectorPlanResult {
@@ -212,6 +215,7 @@ export function applyDirectorPlan({
 	ops,
 	words,
 	fps = 30,
+	protectedSpansSec = [],
 }: {
 	editor: DirectorApplyEditor;
 	ops: readonly DirectorOp[];
@@ -219,6 +223,9 @@ export function applyDirectorPlan({
 	words?: readonly WordTiming[];
 	/** Project fps, for the sub-floor gap threshold. Defaults to 30. */
 	fps?: number;
+	/** Spans (seconds) coalescing must never swallow: user-rejected review rows,
+	 * emphasis-pause keepers, justify-reverted cuts (review F5). */
+	protectedSpansSec?: readonly ProtectedSpanSec[];
 }): ApplyDirectorPlanResult {
 	const { ranges: rawRanges, removedSec } = planRemovalRanges({
 		ops,
@@ -236,6 +243,7 @@ export function applyDirectorPlan({
 		words,
 		floorTicks,
 		ticksPerSecond: TICKS_PER_SECOND,
+		protectedSpansSec,
 	});
 
 	const tracks = editor.scenes.getActiveScene().tracks;

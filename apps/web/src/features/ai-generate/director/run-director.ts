@@ -651,6 +651,20 @@ export async function runDirector({
 		words: words ?? [],
 		floorSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
 	});
+	// Spans the APPLY-time coalescer must never swallow (review F5): every plan-time
+	// keeper (a word-free protected pause has no word-guard protection at apply) plus
+	// each cut justify reverted just above (re-swallowing it would re-create the exact
+	// unjustified boundary 2P-U5 removed). The review surfaces add the user-rejected
+	// rows at apply time.
+	const justifyKept = new Set(operations);
+	const applyProtectedSpans = [
+		...[...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers].map(
+			(k) => ({ startSec: k.startSec, endSec: k.endSec }),
+		),
+		...trimmed
+			.filter((op) => !justifyKept.has(op))
+			.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
+	];
 	// Issue A investigation: opt-in opening-redundancy report (set window.__directorDebug
 	// = true in the console before running). Shows the opening transcript, pairwise
 	// similarity vs the merge bar, and whether the LLM proposed a cut there — so a
@@ -667,5 +681,6 @@ export async function runDirector({
 		// Carry the transcript words so the apply-time sliver coalescing (2P-U1) can
 		// word-guard which sub-floor gaps it swallows.
 		words: words ?? [],
+		protectedSpans: applyProtectedSpans,
 	});
 }

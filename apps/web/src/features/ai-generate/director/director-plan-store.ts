@@ -119,6 +119,9 @@ interface DirectorPlanState {
 	decisions: OpDecisions;
 	/** Transcript words (seconds) backing the apply-time sliver word-guard (2P-U1). */
 	words: WordTiming[];
+	/** Spans (seconds) apply-time coalescing must never swallow: plan-time keepers +
+	 * justify-reverted cuts (review F5). Rejected rows are added at apply time. */
+	protectedSpans: { startSec: number; endSec: number }[];
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
 	/** Redundancy groups (keeper + all takes) backing the review's swap-to-alternate (U5b). */
@@ -141,6 +144,7 @@ interface DirectorPlanState {
 		nearTies?: readonly NearTieNote[];
 		redundancyGroups?: readonly RedundancyReviewGroup[];
 		words?: readonly WordTiming[];
+		protectedSpans?: readonly { startSec: number; endSec: number }[];
 	}) => void;
 	/**
 	 * Dock the cut review in the right panel (U6): same fresh-plan state as `openWith`
@@ -153,6 +157,7 @@ interface DirectorPlanState {
 		nearTies?: readonly NearTieNote[];
 		redundancyGroups?: readonly RedundancyReviewGroup[];
 		words?: readonly WordTiming[];
+		protectedSpans?: readonly { startSec: number; endSec: number }[];
 	}) => void;
 	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
 	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
@@ -181,6 +186,7 @@ const CLEARED = {
 	plan: null,
 	decisions: {},
 	words: [],
+	protectedSpans: [],
 	nearTies: [],
 	redundancyGroups: [],
 	keeps: [],
@@ -201,7 +207,7 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openWith: ({ plan, nearTies, redundancyGroups, words }) =>
+	openWith: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
 		set({
 			...CLEARED,
 			open: true,
@@ -209,12 +215,13 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			plan,
 			decisions: initDecisions(plan),
 			words: [...(words ?? [])],
+			protectedSpans: [...(protectedSpans ?? [])],
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
 		}),
 	// `open` stays FALSE — the panel keys off surface/mode/plan, not `open`, so the
 	// still-mounted modal DirectorReviewDialog does NOT also pop over the docked panel.
-	openCutPanel: ({ plan, nearTies, redundancyGroups, words }) =>
+	openCutPanel: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
 		set({
 			...CLEARED,
 			surface: "panel",
@@ -222,6 +229,7 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			plan,
 			decisions: initDecisions(plan),
 			words: [...(words ?? [])],
+			protectedSpans: [...(protectedSpans ?? [])],
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
 		}),

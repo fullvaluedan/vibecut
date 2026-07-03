@@ -14,6 +14,12 @@ import type { TimeRange } from "@/commands/timeline/track/remove-ranges";
 import type { WordTiming } from "./cut-utils";
 import { spanHasContentWord } from "./content-word";
 
+/** A span (seconds) the coalescer must never swallow, whatever the word-guard says. */
+export interface ProtectedSpanSec {
+	startSec: number;
+	endSec: number;
+}
+
 /**
  * Coalesce accepted removal ranges (ticks) across sub-floor gaps. Sorts the ranges,
  * walks adjacent pairs, and merges `prev`+`next` when they overlap/touch, OR when the
@@ -24,17 +30,26 @@ import { spanHasContentWord } from "./content-word";
  * Fail-open: with no `words`, sub-floor gaps are NEVER swallowed (footage is kept) -
  * a merge requires positive proof the gap is content-free, which absent words we
  * cannot have.
+ *
+ * `protectedSpansSec` (review F5): a gap overlapping any of these is NEVER swallowed,
+ * word-guard or not. The word-guard alone cannot protect a review row the user
+ * explicitly UNCHECKED (a filler is not a content word), a keeper-protected emphasis
+ * pause (word-free by definition), or a span justifyCuts deliberately reverted - a
+ * merge across any of those silently deletes footage a human or a guard decided to
+ * keep.
  */
 export function coalesceRemovalRanges({
 	ranges,
 	words,
 	floorTicks,
 	ticksPerSecond,
+	protectedSpansSec = [],
 }: {
 	ranges: readonly TimeRange[];
 	words?: readonly WordTiming[];
 	floorTicks: number;
 	ticksPerSecond: number;
+	protectedSpansSec?: readonly ProtectedSpanSec[];
 }): TimeRange[] {
 	const sorted = ranges
 		.filter((r) => r.end > r.start)
@@ -56,12 +71,18 @@ export function coalesceRemovalRanges({
 		}
 
 		const gapTicks = next.start - prev.end;
+		const gapStartSec = prev.end / ticksPerSecond;
+		const gapEndSec = next.start / ticksPerSecond;
+		const gapProtected = protectedSpansSec.some(
+			(p) => p.startSec < gapEndSec && gapStartSec < p.endSec,
+		);
 		const swallow =
 			hasWords &&
+			!gapProtected &&
 			gapTicks < floorTicks &&
 			!spanHasContentWord({
-				startSec: prev.end / ticksPerSecond,
-				endSec: next.start / ticksPerSecond,
+				startSec: gapStartSec,
+				endSec: gapEndSec,
 				words,
 			});
 		if (swallow) {

@@ -43,6 +43,39 @@ describe("coalesceRemovalRanges", () => {
 		expect(out).toHaveLength(2);
 	});
 
+	test("a gap overlapping a protected span is NEVER merged (review F5)", () => {
+		// Same 8-frame noise gap as the merge case, but the user rejected the review
+		// row covering it (or a keeper protects it): the word-guard alone cannot save
+		// a filler/word-free span, the protected-span check must.
+		const gapStart = TPS;
+		const gapEnd = TPS + frames(8);
+		const out = coalesceRemovalRanges({
+			ranges: [
+				{ start: 0, end: TPS },
+				{ start: gapEnd, end: gapEnd + 40_000 },
+			],
+			words: anchor,
+			floorTicks: FLOOR,
+			ticksPerSecond: TPS,
+			protectedSpansSec: [{ startSec: gapStart / TPS, endSec: gapEnd / TPS }],
+		});
+		expect(out).toHaveLength(2);
+	});
+
+	test("a protected span elsewhere does not stop an unrelated merge", () => {
+		const out = coalesceRemovalRanges({
+			ranges: [
+				{ start: 0, end: TPS },
+				{ start: TPS + frames(8), end: TPS + frames(8) + 40_000 },
+			],
+			words: anchor,
+			floorTicks: FLOOR,
+			ticksPerSecond: TPS,
+			protectedSpansSec: [{ startSec: 100, endSec: 101 }],
+		});
+		expect(out).toHaveLength(1);
+	});
+
 	test("20-frame gap (over floor): NOT merged", () => {
 		const out = coalesceRemovalRanges({
 			ranges: [
