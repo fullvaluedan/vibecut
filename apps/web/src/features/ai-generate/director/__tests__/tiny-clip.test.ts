@@ -73,12 +73,13 @@ describe("detectTinyClipCuts", () => {
 describe("detectTinyClipCuts (word-aware micro-clip sweep, 2P-U2)", () => {
 	const FLOOR = 0.5; // 15 frames @30fps
 
-	test("a 9-frame clip holding only a partial \"um\" is default-accepted", () => {
-		// 9 frames ≈ 0.3s < floor; the only word inside is filler.
+	test("a 9-frame clip holding only a partial \"um\" inside speech is default-accepted", () => {
+		// 9 frames ≈ 0.3s < floor; the only word inside is filler; speech covers it.
 		const ops = detectTinyClipCuts({
 			clips: [span({ startSec: 10, endSec: 10.3 })],
 			minDurationSec: FLOOR,
 			words: [{ text: "um", start: 10.05, end: 10.2 }],
+			segments: [{ start: 9, end: 11 }],
 		});
 		expect(ops).toHaveLength(1);
 		expect(ops[0].defaultAccept).toBe(true);
@@ -116,14 +117,41 @@ describe("detectTinyClipCuts (word-aware micro-clip sweep, 2P-U2)", () => {
 		expect(ops[0].defaultAccept).toBe(false);
 	});
 
-	test("a content-free shard WITH a transcript present auto-removes", () => {
-		// No word lands inside this shard, but the transcript exists (words elsewhere).
+	test("a content-free shard INSIDE speech auto-removes (cut-up speech junk)", () => {
+		// No word lands inside this shard, but a transcript segment covers it: speech
+		// was happening there, so a wordless sub-floor clip is a shard of cut speech.
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.3 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "elsewhere", start: 2, end: 2.4 }],
+			segments: [{ start: 9.5, end: 11 }],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(true);
+	});
+
+	test("a content-free shard OUTSIDE speech stays opt-in (visual insert guard, F6)", () => {
+		// Words exist elsewhere (global transcript presence) but no speech overlaps the
+		// shard: exactly what a deliberate 0.3s b-roll flash looks like. The old global
+		// hasWords check auto-removed it; now it is an opt-in row.
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.3 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "elsewhere", start: 2, end: 2.4 }],
+			segments: [{ start: 1.5, end: 3 }], // speech nowhere near the shard
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+		expect(ops[0].reason).toContain("visual insert");
+	});
+
+	test("no segments at all: nothing auto-removes even with words present", () => {
 		const ops = detectTinyClipCuts({
 			clips: [span({ startSec: 10, endSec: 10.3 })],
 			minDurationSec: FLOOR,
 			words: [{ text: "elsewhere", start: 2, end: 2.4 }],
 		});
 		expect(ops).toHaveLength(1);
-		expect(ops[0].defaultAccept).toBe(true);
+		expect(ops[0].defaultAccept).toBe(false);
 	});
 });

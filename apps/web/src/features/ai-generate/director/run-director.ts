@@ -253,6 +253,9 @@ export async function runDirector({
 		clips: clipSpans,
 		minDurationSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
 		words: words ?? [],
+		// Auto-accept needs the shard to overlap SPEECH (F6): a wordless clip outside
+		// any segment is what a deliberate visual insert looks like, so it stays opt-in.
+		segments,
 	});
 
 	// VAD dead-air (Plan A / U5, default ON per U2/KTD3, still a user override): a
