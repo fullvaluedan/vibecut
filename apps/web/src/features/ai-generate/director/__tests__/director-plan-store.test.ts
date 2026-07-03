@@ -5,6 +5,7 @@ import {
 	selectAccepted,
 	selectAcceptedKeeps,
 	toggleDecision,
+	toggleWithPremiseGuard,
 	useDirectorPlanStore,
 } from "../director-plan-store";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
@@ -55,6 +56,71 @@ describe("director plan decisions", () => {
 		let d = initDecisions(plan);
 		for (const id of ["a", "b", "c"]) d = toggleDecision({ decisions: d, id });
 		expect(selectAccepted({ plan, decisions: d })).toEqual([]);
+	});
+});
+
+describe("toggleWithPremiseGuard (review F4)", () => {
+	const operations: DirectorOp[] = [
+		op({ id: "a", kind: "cut" }), // premise removal (default-accepted)
+		{ ...op({ id: "b", kind: "cut" }), defaultAccept: false }, // opt-in, never premise
+		op({ id: "c", kind: "reorder" }), // not a removal
+		op({ id: "sp-1", kind: "cut" }), // second-pass finding
+		{ ...op({ id: "sp-2", kind: "cut" }), defaultAccept: false }, // sp, already opt-in
+	];
+
+	test("rejecting a premise removal downgrades every accepted sp- row", () => {
+		const d = toggleWithPremiseGuard({
+			operations,
+			decisions: initDecisions({ operations }),
+			id: "a",
+		});
+		expect(d.a).toBe(false);
+		expect(d["sp-1"]).toBe(false); // premise stale -> opt-in
+		expect(d["sp-2"]).toBe(false); // was already unchecked, stays
+	});
+
+	test("rejecting an opt-in op leaves sp- rows alone (never part of the premise)", () => {
+		const start = { ...initDecisions({ operations }), b: true }; // user had checked b
+		const d = toggleWithPremiseGuard({ operations, decisions: start, id: "b" });
+		expect(d.b).toBe(false);
+		expect(d["sp-1"]).toBe(true);
+	});
+
+	test("rejecting a non-removal (reorder) leaves sp- rows alone", () => {
+		const d = toggleWithPremiseGuard({
+			operations,
+			decisions: initDecisions({ operations }),
+			id: "c",
+		});
+		expect(d["sp-1"]).toBe(true);
+	});
+
+	test("ACCEPTING a premise op does not touch sp- rows", () => {
+		const start = { ...initDecisions({ operations }), a: false };
+		const d = toggleWithPremiseGuard({ operations, decisions: start, id: "a" });
+		expect(d.a).toBe(true);
+		expect(d["sp-1"]).toBe(true);
+	});
+
+	test("rejecting an sp- op itself does not cascade to other sp- rows", () => {
+		const d = toggleWithPremiseGuard({
+			operations,
+			decisions: initDecisions({ operations }),
+			id: "sp-1",
+		});
+		expect(d["sp-1"]).toBe(false);
+		expect(d.a).toBe(true);
+	});
+
+	test("a manually re-checked sp- row is downgraded again by a later premise reject", () => {
+		let d = toggleWithPremiseGuard({
+			operations,
+			decisions: { ...initDecisions({ operations }), "sp-2": true },
+			id: "a",
+		});
+		expect(d["sp-2"]).toBe(false);
+		d = toggleWithPremiseGuard({ operations, decisions: d, id: "sp-2" });
+		expect(d["sp-2"]).toBe(true); // the user's explicit re-check still works
 	});
 });
 

@@ -64,6 +64,40 @@ export function toggleDecision({
 	return { ...decisions, [id]: !decisions[id] };
 }
 
+/**
+ * Toggle with the second-pass premise guard (review F4). A second-pass (`sp-`) cut
+ * exists only because compressing the default-accepted pass-1 removals made two
+ * spans adjacent. When the user REJECTS one of those premise removals, that
+ * adjacency may no longer exist, so every still-accepted sp- row downgrades to
+ * unchecked instead of auto-cutting on a stale premise: re-checking is one click,
+ * a wrong auto-cut is lost footage. Re-accepting a premise op does NOT auto-restore
+ * the sp- rows (conservative; the user decides).
+ */
+export function toggleWithPremiseGuard({
+	operations,
+	decisions,
+	id,
+}: {
+	operations: readonly DirectorOp[];
+	decisions: OpDecisions;
+	id: string;
+}): OpDecisions {
+	const next = toggleDecision({ decisions, id });
+	const op = operations.find((o) => o.id === id);
+	const rejectedPremiseOp =
+		next[id] === false &&
+		op !== undefined &&
+		!op.id.startsWith("sp-") &&
+		(op.op === "cut" || op.op === "take_select") &&
+		op.defaultAccept !== false;
+	if (rejectedPremiseOp) {
+		for (const o of operations) {
+			if (o.id.startsWith("sp-") && next[o.id]) next[o.id] = false;
+		}
+	}
+	return next;
+}
+
 /** The accepted ops, in plan order. */
 export function selectAccepted({
 	plan,
@@ -222,7 +256,13 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set({ ...CLEARED, open: true, mode: "highlight", keeps: rows, decisions, preview, totalSec });
 	},
 	toggle: (id) =>
-		set((state) => ({ decisions: toggleDecision({ decisions: state.decisions, id }) })),
+		set((state) => ({
+			decisions: toggleWithPremiseGuard({
+				operations: state.plan?.operations ?? [],
+				decisions: state.decisions,
+				id,
+			}),
+		})),
 	setAll: (accepted) =>
 		set((state) => {
 			const ids =
