@@ -436,36 +436,39 @@ export async function runDirector({
 	let redundancyCuts: DirectorOp[] = [];
 	let redundancyReviewGroups: RedundancyReviewGroup[] = [];
 	let redundancyRan = false;
-	try {
-		const rRes = await fetch("/api/director/redundancy", {
-			method: "POST",
-			headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-			signal,
-			body: JSON.stringify({ lines: redundancyLines, taste: taste || undefined }),
-		});
-		if (rRes.ok) {
-			const rData = await rRes.json();
-			const groups = Array.isArray(rData?.plan?.groups) ? rData.plan.groups : [];
-			const mapped = mapRedundancyGroups({ groups });
-			redundancyCuts = mapped.cuts;
-			redundancyReviewGroups = mapped.groups;
-			redundancyRan = true;
-		}
-	} catch {
-		// route error → fall through to the lexical repeat detectors (KTD-5)
-	}
-	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5) — kept for intent
-	abort();
-
-	// Out-of-context pass (U3 Part B, NEW): read the FULL transcript, infer the
-	// video's throughline, and flag lines whose dialog does not fit it (tangents,
-	// abandoned thoughts, meta-asides, wrong-video content). Every flag is OPT-IN
-	// (accept-OFF) and never auto-cut (semantic relevance is false-positive-prone), so
-	// Dan reviews each. Non-throwing: a route error skips Part B entirely (like the
-	// redundancy pass). Mapped to ops + overlap-filtered at the merge below.
+	// Out-of-context pass (U3 Part B): read the FULL transcript, infer the video's
+	// throughline, and flag lines whose dialog does not fit it (tangents, abandoned
+	// thoughts, meta-asides, wrong-video content). A flag at/above the shared accept
+	// threshold default-accepts so clear mistakes leave the video (2P-U4); the
+	// uncertain band stays an opt-in row Dan reviews. Non-throwing: a route error
+	// skips Part B entirely. Mapped to ops + overlap-filtered at the merge below.
 	let contextFlags: ContextFlag[] = [];
-	if (segments.length > 0) {
-		onProgress?.("Checking the throughline...");
+	// The two LLM passes read the SAME catalog and neither consumes the other's
+	// output, so they run CONCURRENTLY: awaiting them back-to-back added a full LLM
+	// round-trip of pure wait to every Director run (review F9). Each stays
+	// individually non-throwing, so Promise.all never rejects.
+	const redundancyPass = async () => {
+		try {
+			const rRes = await fetch("/api/director/redundancy", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				signal,
+				body: JSON.stringify({ lines: redundancyLines, taste: taste || undefined }),
+			});
+			if (rRes.ok) {
+				const rData = await rRes.json();
+				const groups = Array.isArray(rData?.plan?.groups) ? rData.plan.groups : [];
+				const mapped = mapRedundancyGroups({ groups });
+				redundancyCuts = mapped.cuts;
+				redundancyReviewGroups = mapped.groups;
+				redundancyRan = true;
+			}
+		} catch {
+			// route error → fall through to the lexical repeat detectors (KTD-5)
+		}
+	};
+	const contextPass = async () => {
+		if (segments.length === 0) return;
 		try {
 			const cRes = await fetch("/api/director/context", {
 				method: "POST",
@@ -480,8 +483,11 @@ export async function runDirector({
 		} catch {
 			// route error → skip the out-of-context pass (it is an enhancement)
 		}
-		abort();
-	}
+	};
+	onProgress?.("Checking repeats and the throughline...");
+	await Promise.all([redundancyPass(), contextPass()]);
+	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5) — kept for intent
+	abort();
 
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
 	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
