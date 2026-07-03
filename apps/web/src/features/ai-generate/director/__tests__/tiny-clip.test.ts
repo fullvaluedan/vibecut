@@ -68,3 +68,62 @@ describe("detectTinyClipCuts", () => {
 		expect(a[0].id.startsWith("tiny-")).toBe(true);
 	});
 });
+
+// 2P-U2: word-aware accept-default split at the 15-frame floor (0.5s @30fps).
+describe("detectTinyClipCuts (word-aware micro-clip sweep, 2P-U2)", () => {
+	const FLOOR = 0.5; // 15 frames @30fps
+
+	test("a 9-frame clip holding only a partial \"um\" is default-accepted", () => {
+		// 9 frames ≈ 0.3s < floor; the only word inside is filler.
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.3 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "um", start: 10.05, end: 10.2 }],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(true);
+	});
+
+	test("a 12-frame clip holding the complete word \"yes\" is an opt-in row naming it", () => {
+		// 12 frames = 0.4s < floor; a real content word lives fully inside.
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.4 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "yes", start: 10.05, end: 10.35 }],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+		expect(ops[0].reason).toContain("yes");
+	});
+
+	test("a 20-frame clip (over floor) is untouched", () => {
+		// 20 frames ≈ 0.667s >= floor.
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.667 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "hello", start: 10.1, end: 10.5 }],
+		});
+		expect(ops).toHaveLength(0);
+	});
+
+	test("no transcript: shards stay opt-in only (fail-open, nothing auto-removed)", () => {
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.3 })],
+			minDurationSec: FLOOR,
+			// words omitted
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+	});
+
+	test("a content-free shard WITH a transcript present auto-removes", () => {
+		// No word lands inside this shard, but the transcript exists (words elsewhere).
+		const ops = detectTinyClipCuts({
+			clips: [span({ startSec: 10, endSec: 10.3 })],
+			minDurationSec: FLOOR,
+			words: [{ text: "elsewhere", start: 2, end: 2.4 }],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(true);
+	});
+});

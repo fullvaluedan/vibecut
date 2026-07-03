@@ -40,6 +40,7 @@ import { detectFillerCuts } from "./filler-words";
 import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectTinyClipCuts } from "./tiny-clip";
+import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 import { detectVadDeadAirCuts } from "./vad-dead-air";
 import { vadService } from "@/services/vad/service";
 import { snapRemovalOps } from "./snap-cut";
@@ -66,10 +67,6 @@ declare global {
 /** A surviving clip sliver up to this many frames (at the project fps) is a cut
  * remnant worth swallowing — covers the reported 2-frame and 13-frame artifacts. */
 const REMNANT_FRAMES_TOLERANCE = 15;
-
-/** A standalone video clip shorter than this (frames at the project fps) is too
- * short to be real footage — a stray fragment proposed for removal in review. */
-const MIN_USEFUL_CLIP_FRAMES = 5;
 
 /** Silence left behind (frames at the project fps) when tightening a pause that
  * sits next to a repeat/mistake we're cutting anyway (a breath, not a hard splice). */
@@ -241,17 +238,19 @@ export async function runDirector({
 	// the fragments for review.
 	const noiseCuts = detectNoiseFragmentCuts({ features, envelope, windowSec: ENERGY_WINDOW_SEC });
 
-	// Useless tiny-clip guard (live test): a stray sub-N-frame video clip (no speech,
-	// not a removal remnant) survives every other layer, and the reorder can even
-	// promote it to the head. Flag any video clip shorter than MIN_USEFUL_CLIP_FRAMES
-	// for review. clipSpans + the fps are shared with the cut-remnant snap below.
+	// Micro-clip sweep (2P-U2): a stray sub-floor video clip (no speech, not a removal
+	// remnant) survives every other layer, and the reorder can even promote it to the
+	// head. Flag any clip shorter than the shared MIN_SURVIVING_CLIP_FRAMES floor; the
+	// word-aware split auto-removes content-free shards and leaves content-bearing ones
+	// as opt-in rows. clipSpans + the fps are shared with the cut-remnant snap below.
 	const fps = editor.project.getActive().settings.fps;
 	const fpsFloat =
 		fps.denominator > 0 && fps.numerator > 0 ? fps.numerator / fps.denominator : 30;
 	const clipSpans = collectVideoClipSpansSec({ tracks, ticksPerSecond: TICKS_PER_SECOND });
 	const tinyClipCuts = detectTinyClipCuts({
 		clips: clipSpans,
-		minDurationSec: MIN_USEFUL_CLIP_FRAMES / fpsFloat,
+		minDurationSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
+		words: words ?? [],
 	});
 
 	// VAD dead-air (Plan A / U5, default ON per U2/KTD3, still a user override): a
