@@ -18,9 +18,8 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
-import { remapTranscriptTimestamps } from "@/features/transcription/remap-transcript-timestamps";
 import {
-	mergeDetectedCuts,
+	removalCoversKeeper,
 	stableCutId,
 	type KeeperSpan,
 	type WordTiming,
@@ -50,6 +49,15 @@ const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
 
 /**
+ * Minimum NEW footage (seconds) an overlapping pass-2 op must add to survive dedup.
+ * At or above the surviving-clip floor (15 frames at 30fps): anything smaller would
+ * be edge jitter from the remap round-trip re-finding an existing cut, not a new
+ * finding; anything at/above it is a genuinely wider removal (a revealed repeat
+ * containing pass-1 micro-cuts).
+ */
+const NEW_COVERAGE_FLOOR_SEC = 0.5;
+
+/**
  * The DEFAULT-ACCEPTED removal spans from an op set, sorted and unioned into disjoint
  * ranges. Only `cut`/`take_select` ops that start accepted (`defaultAccept !== false`)
  * are applied virtually - an opt-in row the user hasn't checked isn't part of the
@@ -57,21 +65,29 @@ const isRemoval = (op: DirectorOp): boolean =>
  * merged so the forward/inverse remap math sees clean disjoint ranges.
  */
 export function acceptedRemovalSpans(ops: readonly DirectorOp[]): RemovalSpan[] {
-	const spans = ops
-		.filter((op) => isRemoval(op) && op.defaultAccept !== false)
-		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
-		.filter((s) => s.endSec > s.startSec)
-		.sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
-	if (spans.length === 0) return [];
+	return unionSpans(
+		ops
+			.filter((op) => isRemoval(op) && op.defaultAccept !== false)
+			.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
+	);
+}
 
-	const merged: RemovalSpan[] = [{ ...spans[0] }];
-	for (let i = 1; i < spans.length; i++) {
+/** Union raw spans into sorted disjoint ranges (degenerate spans dropped). */
+function unionSpans(spans: readonly RemovalSpan[]): RemovalSpan[] {
+	const sorted = spans
+		.filter((s) => s.endSec > s.startSec)
+		.map((s) => ({ ...s }))
+		.sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
+	if (sorted.length === 0) return [];
+
+	const merged: RemovalSpan[] = [sorted[0]];
+	for (let i = 1; i < sorted.length; i++) {
 		const prev = merged[merged.length - 1];
-		const cur = spans[i];
+		const cur = sorted[i];
 		if (cur.startSec <= prev.endSec) {
 			prev.endSec = Math.max(prev.endSec, cur.endSec);
 		} else {
-			merged.push({ ...cur });
+			merged.push(cur);
 		}
 	}
 	return merged;
@@ -122,26 +138,41 @@ export function inverseRemapTime(
 	return remappedSec + removed;
 }
 
-/** Midpoint of an item lies inside a removal -> the item is gone from the compressed
- * transcript. Midpoint (not any-overlap) so a word snapped flush to a cut edge is not
- * spuriously dropped; removals are snapped to troughs between words, so words don't
- * straddle in practice. */
-function isRemovedItem(
-	item: { start: number; end: number },
+/**
+ * Drop the items inside `removals` and shift the survivors left, in ONE sorted sweep
+ * (O(n + removals), one output array). Membership and shift use the SAME start-based
+ * rule: an item whose start lies inside a removal is gone; a survivor shifts by the
+ * total duration removed before its start. The old midpoint membership disagreed with
+ * the start-based shift on words straddling a removal edge (the second pass runs
+ * BEFORE energy snapping, so LLM/VAD/take_select edges land mid-word routinely),
+ * leaving unshifted survivors that garbled the compressed order and inverse-mapped
+ * detector findings onto the wrong footage. A survivor reaching INTO the next removal
+ * is clamped to the removal's start so the compressed items stay disjoint and sorted.
+ */
+function applyRemovalsToItems<T extends { start: number; end: number }>(
+	items: readonly T[],
 	removals: readonly RemovalSpan[],
-): boolean {
-	const mid = (item.start + item.end) / 2;
-	return removals.some((r) => r.startSec <= mid && mid < r.endSec);
+): T[] {
+	const sorted = [...items].sort((a, b) => a.start - b.start);
+	const out: T[] = [];
+	let ri = 0;
+	let removedBefore = 0;
+	for (const item of sorted) {
+		while (ri < removals.length && removals[ri].endSec <= item.start) {
+			removedBefore += removals[ri].endSec - removals[ri].startSec;
+			ri++;
+		}
+		const next = removals[ri]; // first removal ending after this item starts
+		if (next && item.start >= next.startSec) continue; // starts inside -> gone
+		const end = next && item.end > next.startSec ? next.startSec : item.end;
+		out.push({ ...item, start: item.start - removedBefore, end: end - removedBefore });
+	}
+	return out;
 }
 
 /**
- * Build the COMPRESSED words + segments: drop every item inside an accepted removal,
- * then shift the survivors left through the removals using the shipped
- * `remapTranscriptTimestamps` helper. Applied removal-by-removal RIGHT-TO-LEFT so each
- * removal's `deletedEndSec`/`removedDurationSec` stay in the item's current coordinate
- * space (a removal to the right never shifts a coordinate to its left), which composes
- * to exactly the cumulative-shift forward map - the same semantics the shipped
- * delete-then-remap-sequence test asserts for sequential live deletes.
+ * Build the COMPRESSED words + segments by applying the accepted removals virtually.
+ * `removals` must be the sorted disjoint output of `acceptedRemovalSpans`.
  */
 export function buildRemappedTranscript({
 	words,
@@ -152,23 +183,10 @@ export function buildRemappedTranscript({
 	segments: readonly SecondPassSegment[];
 	removals: readonly RemovalSpan[];
 }): { words: WordTiming[]; segments: SecondPassSegment[] } {
-	let rw = words.filter((w) => !isRemovedItem(w, removals));
-	let rs = segments.filter((s) => !isRemovedItem(s, removals));
-	for (let i = removals.length - 1; i >= 0; i--) {
-		const r = removals[i];
-		const removedDurationSec = r.endSec - r.startSec;
-		rw = remapTranscriptTimestamps({
-			items: rw,
-			deletedEndSec: r.endSec,
-			removedDurationSec,
-		});
-		rs = remapTranscriptTimestamps({
-			items: rs,
-			deletedEndSec: r.endSec,
-			removedDurationSec,
-		});
-	}
-	return { words: rw, segments: rs };
+	return {
+		words: applyRemovalsToItems(words, removals),
+		segments: applyRemovalsToItems(segments, removals),
+	};
 }
 
 /**
@@ -280,21 +298,47 @@ export function runSecondPass({
 			};
 		});
 
+		// Dedup + keeper protection. Pass-1's blanket any-overlap dedup is WRONG here:
+		// a repeat take revealed by compression legitimately CONTAINS the pass-1
+		// micro-cuts made inside it (a filler, a duplicate word), and its inverse-mapped
+		// span re-expands across those collapse points - dropping it for that overlap
+		// silently ships the exact verbatim repeat this pass exists to catch. Instead:
+		// an op overlapping no existing removal folds in as before; an overlapping op
+		// survives only when it adds at least NEW_COVERAGE_FLOOR_SEC of footage no
+		// existing removal op (accepted OR opt-in) already covers - a true re-detection
+		// of an existing cut adds ~none and still dedups away.
+		const allRemovalSpans = unionSpans(
+			allOps
+				.filter(isRemoval)
+				.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
+		);
+		const coveredSec = (op: DirectorOp): number => {
+			let covered = 0;
+			for (const r of allRemovalSpans) {
+				covered += Math.max(
+					0,
+					Math.min(op.endSec, r.endSec) - Math.max(op.startSec, r.startSec),
+				);
+			}
+			return covered;
+		};
 		const existingIds = new Set(allOps.map((op) => op.id));
-		// Same dedup + keeper protection the pass-1 merge uses: a new op overlapping a
-		// surviving removal or covering a keeper is dropped. The fresh survivors are the
-		// ones in the result the prior op set didn't already have.
-		const merged = mergeDetectedCuts({
-			planOps: allOps,
-			extraOps: originalCoordOps,
-			keepers,
-		}).filter((op) => op.op !== "keep");
-		const fresh = merged.filter((op) => !existingIds.has(op.id));
+		const fresh = originalCoordOps.filter((op) => {
+			if (removalCoversKeeper({ op, keepers })) return false;
+			const covered = coveredSec(op);
+			if (covered > 0 && op.endSec - op.startSec - covered < NEW_COVERAGE_FLOOR_SEC) {
+				return false;
+			}
+			if (existingIds.has(op.id)) return false;
+			existingIds.add(op.id); // also dedups identical spans within this batch
+			return true;
+		});
 		perPass.push(fresh.length);
 		if (fresh.length === 0) break;
 
 		extraOps.push(...fresh);
-		allOps = merged; // grow the op set so the next pass compresses further + dedups
+		// Grow the op set so the next pass compresses further and dedups against it.
+		allOps = [...allOps, ...fresh].sort((a, b) => a.startSec - b.startSec);
 	}
 
 	return { extraOps, passesRun, perPass };

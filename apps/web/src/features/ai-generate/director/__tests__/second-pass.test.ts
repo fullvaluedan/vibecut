@@ -111,13 +111,40 @@ describe("buildRemappedTranscript", () => {
 			end: i + 0.4,
 		}));
 		const removals: RemovalSpan[] = [
-			{ startSec: 2, endSec: 5 }, // removes w2,w3,w4 (mids 2.2,3.2,4.2)
+			{ startSec: 2, endSec: 5 }, // removes w2,w3,w4 (starts 2,3,4)
 			{ startSec: 7, endSec: 9 }, // removes w7,w8
 		];
 		const { words: rw } = buildRemappedTranscript({ words, segments: [], removals });
 		// Survivors w0,w1,w5,w6,w9,w10 shifted by cumulative removed-before.
 		expect(rw.map((w) => w.text)).toEqual(["w0", "w1", "w5", "w6", "w9", "w10"]);
 		expect(rw.map((w) => Number(w.start.toFixed(6)))).toEqual([0, 1, 2, 3, 4, 5]);
+	});
+
+	test("a word straddling a removal END is dropped, never left unshifted (review F2)", () => {
+		// Old midpoint membership KEPT a word starting inside a removal whose midpoint
+		// sat past its end, while the shift rule never moved it: stale coordinates,
+		// inverted order, detector findings inverse-mapped onto the wrong footage.
+		const words: WordTiming[] = [
+			{ text: "before", start: 7.0, end: 7.4 },
+			{ text: "strad", start: 9.9, end: 10.5 }, // starts inside [8,10), mid past end
+			{ text: "after", start: 10.6, end: 11.0 },
+		];
+		const removals: RemovalSpan[] = [{ startSec: 8, endSec: 10 }];
+		const { words: rw } = buildRemappedTranscript({ words, segments: [], removals });
+		expect(rw.map((w) => w.text)).toEqual(["before", "after"]);
+		expect(rw[1].start).toBeCloseTo(8.6, 6);
+		for (let i = 1; i < rw.length; i++) {
+			expect(rw[i].start).toBeGreaterThan(rw[i - 1].start); // stays monotonic
+		}
+	});
+
+	test("a word reaching INTO a removal is clamped to the removal start (review F2)", () => {
+		const words: WordTiming[] = [{ text: "w", start: 7.5, end: 8.5 }];
+		const removals: RemovalSpan[] = [{ startSec: 8, endSec: 10 }];
+		const { words: rw } = buildRemappedTranscript({ words, segments: [], removals });
+		expect(rw).toHaveLength(1);
+		expect(rw[0].start).toBeCloseTo(7.5, 6);
+		expect(rw[0].end).toBeCloseTo(8.0, 6); // clamped, no reach into removed footage
 	});
 });
 
@@ -177,6 +204,50 @@ describe("runSecondPass", () => {
 		// the pass-2 repeat over the same span dedups away.
 		const mergedOps = [
 			cut(0, 2.4, { defaultAccept: false, id: "optin-a" }),
+			cut(2.4, 70, { id: "middle" }),
+		];
+		const { extraOps } = runSecondPass({
+			ops: mergedOps,
+			words,
+			segments: [],
+			redundancyRan: false,
+		});
+		expect(extraOps).toHaveLength(0);
+	});
+
+	test("a revealed repeat CONTAINING an interior pass-1 cut is not deduped away (review F3)", () => {
+		// Both takes carry an "um" that pass 1 cut (auto-accepted fillers), so the
+		// compressed takes read verbatim-identical and phrase-repeat matches. The
+		// repeat cut of take A inverse-maps to a span CONTAINING A's interior um cut;
+		// the old any-overlap dedup dropped it for that overlap and the verbatim
+		// repeat shipped. Now it survives: it adds ~2.5s of new coverage.
+		const UM_FREE = ["it", "is", "um", "free", "to", "try"];
+		const words = [...take(UM_FREE, 120), ...take(UM_FREE, 240)];
+		const mergedOps = [
+			cut(121.0, 121.4, { id: "um-a", category: "filler" }), // A's um (accepted)
+			cut(241.0, 241.4, { id: "um-b", category: "filler" }), // B's um (accepted)
+			cut(122.9, 240, { id: "middle" }), // everything between the takes
+		];
+		const { extraOps } = runSecondPass({
+			ops: mergedOps,
+			words,
+			segments: [],
+			redundancyRan: false,
+		});
+		const repeat = extraOps.find((op) => op.category === "repeat");
+		expect(repeat).toBeDefined();
+		// Take A's span in ORIGINAL coordinates, re-expanded across the interior cut.
+		expect(repeat!.startSec).toBeCloseTo(120, 6);
+		expect(repeat!.endSec).toBeCloseTo(122.9, 6);
+	});
+
+	test("a pass-2 op adding only sliver coverage over an existing cut still dedups", () => {
+		// The coverage rule must not let edge jitter re-add an existing removal.
+		const words = [...take(FREE, 0), ...take(FREE, 70)];
+		const mergedOps = [
+			// Pass-1 opt-in cut nearly covering take A: an sp- repeat over [0,2.4]
+			// would add only ~0.1s of new footage, below the 0.5s floor.
+			cut(0.1, 2.4, { defaultAccept: false, id: "optin-a" }),
 			cut(2.4, 70, { id: "middle" }),
 		];
 		const { extraOps } = runSecondPass({
