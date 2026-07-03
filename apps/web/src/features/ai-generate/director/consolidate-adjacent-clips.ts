@@ -52,6 +52,53 @@ export interface ConsolidateGroup {
 	mergeable: boolean;
 }
 
+/** An unmergeable linked element's timeline span, for the lockstep guard. */
+export interface BlockedLinkedSpan {
+	linkId: string;
+	start: number;
+	end: number;
+}
+
+/**
+ * Lockstep guard (review F7). Merging is per-track, but linked pairing downstream is
+ * linkId + timelineOverlap: if a video run holds its splits (an effect makes every
+ * fragment unmergeable) while its linked audio merges into one element, each video
+ * slice then pairs with the WHOLE merged audio, and a linked move/trim of one slice
+ * drags the audio out from under its siblings. So: collect the spans of unmergeable
+ * linked elements across ALL tracks, and any linked element overlapping one of them
+ * must hold its splits too.
+ */
+export function collectBlockedLinkedSpans(
+	clips: readonly { linkId?: string; startTime: number; duration: number; mergeable: boolean }[],
+): BlockedLinkedSpan[] {
+	const blocked: BlockedLinkedSpan[] = [];
+	for (const c of clips) {
+		if (c.linkId && !c.mergeable) {
+			blocked.push({ linkId: c.linkId, start: c.startTime, end: c.startTime + c.duration });
+		}
+	}
+	return blocked;
+}
+
+/** Whether a (mergeable) linked clip overlaps an unmergeable same-link span. */
+export function isBlockedByLinkedPartner({
+	linkId,
+	startTime,
+	duration,
+	blocked,
+}: {
+	linkId?: string;
+	startTime: number;
+	duration: number;
+	blocked: readonly BlockedLinkedSpan[];
+}): boolean {
+	if (!linkId) return false;
+	const end = startTime + duration;
+	return blocked.some(
+		(b) => b.linkId === linkId && b.start < end && startTime < b.end,
+	);
+}
+
 function canMerge(
 	group: ConsolidateGroup,
 	next: ConsolidateClip,

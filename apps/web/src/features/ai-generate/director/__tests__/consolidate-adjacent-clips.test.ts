@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+	collectBlockedLinkedSpans,
 	consolidateAdjacentClips,
+	isBlockedByLinkedPartner,
 	type ConsolidateClip,
 	type ConsolidateGroup,
 } from "../consolidate-adjacent-clips";
@@ -122,6 +124,46 @@ describe("consolidateAdjacentClips (U4/KTD5)", () => {
 		expect(consolidateAdjacentClips({ clips: [A, Brounded], toleranceTicks: 120 })).toHaveLength(1);
 		const Bframe = clip({ id: "B", startTime: 100, trimStart: 4100, duration: 50 }); // ~1 frame removed
 		expect(consolidateAdjacentClips({ clips: [A, Bframe], toleranceTicks: 120 })).toHaveLength(2);
+	});
+
+	test("lockstep (review F7): an unmergeable video partner blocks its linked audio from merging", () => {
+		// Video V1|V2|V3 all carry an effect (unmergeable); linked audio A1|A2|A3 is
+		// plain. Without the guard the audio merges into one element that then pairs
+		// with EVERY video slice (linkId + timelineOverlap), so moving one slice drags
+		// audio under its siblings. With the guard the audio holds its splits.
+		const videoClips = [
+			{ linkId: "L", startTime: 0, duration: 100, mergeable: false },
+			{ linkId: "L", startTime: 100, duration: 100, mergeable: false },
+			{ linkId: "L", startTime: 200, duration: 100, mergeable: false },
+		];
+		const blocked = collectBlockedLinkedSpans(videoClips);
+		expect(blocked).toHaveLength(3);
+		// Each audio slice overlaps an unmergeable same-link span -> blocked.
+		for (const startTime of [0, 100, 200]) {
+			expect(
+				isBlockedByLinkedPartner({ linkId: "L", startTime, duration: 100, blocked }),
+			).toBe(true);
+		}
+		// A different link (or unlinked) element is untouched.
+		expect(
+			isBlockedByLinkedPartner({ linkId: "OTHER", startTime: 0, duration: 100, blocked }),
+		).toBe(false);
+		expect(
+			isBlockedByLinkedPartner({ startTime: 0, duration: 100, blocked }),
+		).toBe(false);
+		// Non-overlapping same-link element (elsewhere on the timeline) still merges.
+		expect(
+			isBlockedByLinkedPartner({ linkId: "L", startTime: 500, duration: 100, blocked }),
+		).toBe(false);
+	});
+
+	test("lockstep: mergeable partners produce no blocked spans (symmetric case unchanged)", () => {
+		expect(
+			collectBlockedLinkedSpans([
+				{ linkId: "L", startTime: 0, duration: 100, mergeable: true },
+				{ startTime: 100, duration: 100, mergeable: false }, // unmergeable but unlinked
+			]),
+		).toEqual([]);
 	});
 
 	test("R9 (2P-U5): a pure split that removed nothing collapses back to one clip", () => {

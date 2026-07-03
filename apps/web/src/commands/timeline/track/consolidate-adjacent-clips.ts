@@ -3,7 +3,10 @@ import { EditorCore } from "@/core";
 import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline";
 import { addMediaTime } from "@/wasm";
 import {
+	collectBlockedLinkedSpans,
 	consolidateAdjacentClips,
+	isBlockedByLinkedPartner,
+	type BlockedLinkedSpan,
 	type ConsolidateClip,
 } from "@/features/ai-generate/director/consolidate-adjacent-clips";
 
@@ -53,10 +56,29 @@ function toConsolidateClip(el: TimelineElement): ConsolidateClip {
 }
 
 /** Rebuild one track's element list with adjacent same-source slices merged. */
-function consolidateTrack<T extends TimelineTrack>(track: T): T {
+function consolidateTrack<T extends TimelineTrack>(
+	track: T,
+	blocked: readonly BlockedLinkedSpan[],
+): T {
 	const byId = new Map(track.elements.map((el) => [el.id, el]));
 	const groups = consolidateAdjacentClips({
-		clips: track.elements.map(toConsolidateClip),
+		clips: track.elements.map((el) => {
+			const clip = toConsolidateClip(el);
+			// Lockstep (review F7): a linked element overlapping an unmergeable partner
+			// span holds its splits too, so linked pairing stays slice-to-slice.
+			if (
+				clip.mergeable &&
+				isBlockedByLinkedPartner({
+					linkId: el.linkId,
+					startTime: el.startTime,
+					duration: el.duration,
+					blocked,
+				})
+			) {
+				return { ...clip, mergeable: false };
+			}
+			return clip;
+		}),
 		toleranceTicks: CONTIGUITY_TOLERANCE_TICKS,
 	});
 	const elements: TimelineElement[] = [];
@@ -100,11 +122,23 @@ export class ConsolidateAdjacentClipsCommand extends Command {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.scenes.getActiveScene().tracks;
 		const tracks = this.savedState;
+		// Lockstep pre-pass (review F7): spans of unmergeable LINKED elements across
+		// every track, so their partners on other tracks hold their splits too.
+		const blocked = collectBlockedLinkedSpans(
+			[tracks.main, ...tracks.overlay, ...tracks.audio].flatMap((track) =>
+				track.elements.map((el) => ({
+					linkId: el.linkId,
+					startTime: el.startTime,
+					duration: el.duration,
+					mergeable: toConsolidateClip(el).mergeable,
+				})),
+			),
+		);
 		const next: SceneTracks = {
 			...tracks,
-			main: consolidateTrack(tracks.main),
-			overlay: tracks.overlay.map(consolidateTrack),
-			audio: tracks.audio.map(consolidateTrack),
+			main: consolidateTrack(tracks.main, blocked),
+			overlay: tracks.overlay.map((t) => consolidateTrack(t, blocked)),
+			audio: tracks.audio.map((t) => consolidateTrack(t, blocked)),
 		};
 		editor.timeline.updateTracks(next);
 		// Merging drops the absorbed elements; declare the reconciled selection so undo
