@@ -13,7 +13,7 @@ for (const method of ["error", "warn", "log"] as const) {
 	};
 }
 
-const { useAiSettingsStore } = await import("../store");
+const { useAiSettingsStore, migrateAiSettings } = await import("../store");
 
 describe("directorVadDeadAirEnabled default (U2/KTD3)", () => {
 	test("defaults ON so a default AI CUT run removes silent dead air", () => {
@@ -24,5 +24,23 @@ describe("directorVadDeadAirEnabled default (U2/KTD3)", () => {
 		useAiSettingsStore.getState().setDirectorVadDeadAirEnabled(false);
 		expect(useAiSettingsStore.getState().directorVadDeadAirEnabled).toBe(false);
 		useAiSettingsStore.getState().setDirectorVadDeadAirEnabled(true);
+	});
+
+	test("v2 migration resets a pre-v2 persisted false so the new default lands", () => {
+		// Pre-v2 installs have the OLD default (false) frozen in storage, which would
+		// shallow-merge over the new true forever without this migration.
+		const migrated = migrateAiSettings({ directorVadDeadAirEnabled: false }, 1);
+		expect(migrated.directorVadDeadAirEnabled).toBe(true);
+	});
+
+	test("a post-v2 persisted false is an explicit user choice and survives", () => {
+		const migrated = migrateAiSettings({ directorVadDeadAirEnabled: false }, 2);
+		expect(migrated.directorVadDeadAirEnabled).toBe(false);
+	});
+
+	test("v1 hfEngine migration still fires alongside v2", () => {
+		const migrated = migrateAiSettings({ hfEngine: "native" }, 0);
+		expect(migrated.hfEngine).toBe("authored");
+		expect(migrated.directorVadDeadAirEnabled).toBe(true);
 	});
 });

@@ -319,20 +319,34 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 		}),
 		{
 			name: "framecut-ai-settings",
-			version: 1,
-			migrate: (persisted, version) => {
-				// v1: the default effect engine moved to Authored (it runs the skill
-				// on your checked assets). Flip a stored legacy "native" default so
-				// existing devices pick up the new behavior too.
-				const s = (persisted ?? {}) as Record<string, unknown>;
-				if (version < 1 && s.hfEngine === "native") {
-					s.hfEngine = "authored";
-				}
-				return s as unknown as AiSettingsStore;
-			},
+			version: 2,
+			migrate: (persisted, version) =>
+				migrateAiSettings(persisted, version) as unknown as AiSettingsStore,
 		},
 	),
 );
+
+/**
+ * Persisted-state migration for framecut-ai-settings. Pure + exported for tests.
+ * v1: the default effect engine moved to Authored; flip a stored legacy "native".
+ * v2: VAD dead-air removal became default-ON for the Director path (U2). Every
+ * pre-v2 install has the old `false` default frozen in storage (any set()
+ * persisted the whole state), which would silently override the new default
+ * forever. Reset it once; turning it off after this persists under v2.
+ */
+export function migrateAiSettings(
+	persisted: unknown,
+	version: number,
+): Record<string, unknown> {
+	const s = (persisted ?? {}) as Record<string, unknown>;
+	if (version < 1 && s.hfEngine === "native") {
+		s.hfEngine = "authored";
+	}
+	if (version < 2) {
+		s.directorVadDeadAirEnabled = true;
+	}
+	return s;
+}
 
 /** Headers to attach to FrameCut AI API routes, carrying device-local auth. */
 export function buildAiAuthHeaders(): Record<string, string> {
