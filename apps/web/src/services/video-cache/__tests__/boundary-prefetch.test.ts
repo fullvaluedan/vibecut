@@ -14,6 +14,51 @@ const TWO_SOURCE_CLIPS: PrefetchClip[] = [
 	{ mediaId: "B", startSec: 10, endSec: 20, sourceStartSec: 5 },
 ];
 
+describe("resolveBoundaryPrefetch overlay guard (review F8)", () => {
+	test("an overlay actively decoding the next clip's media blocks the prefetch", () => {
+		// PiP of source B is live under the playhead: warming B would cold-seek the
+		// shared sink mid-playback and stutter the PiP.
+		expect(
+			resolveBoundaryPrefetch({
+				clips: TWO_SOURCE_CLIPS,
+				playheadSec: 9.6,
+				overlaySpans: [{ mediaId: "B", startSec: 5, endSec: 15 }],
+			}),
+		).toBeNull();
+	});
+
+	test("an overlay that becomes live INSIDE the lookahead window also blocks", () => {
+		// The PiP starts at 9.9s; the prefetch would race its warm-up.
+		expect(
+			resolveBoundaryPrefetch({
+				clips: TWO_SOURCE_CLIPS,
+				playheadSec: 9.6,
+				overlaySpans: [{ mediaId: "B", startSec: 9.9, endSec: 15 }],
+			}),
+		).toBeNull();
+	});
+
+	test("an overlay on a DIFFERENT media does not block", () => {
+		expect(
+			resolveBoundaryPrefetch({
+				clips: TWO_SOURCE_CLIPS,
+				playheadSec: 9.6,
+				overlaySpans: [{ mediaId: "C", startSec: 5, endSec: 15 }],
+			}),
+		).toEqual({ mediaId: "B", sourceTimeSec: 5 });
+	});
+
+	test("an overlay of the same media far from the playhead does not block", () => {
+		expect(
+			resolveBoundaryPrefetch({
+				clips: TWO_SOURCE_CLIPS,
+				playheadSec: 9.6,
+				overlaySpans: [{ mediaId: "B", startSec: 50, endSec: 60 }],
+			}),
+		).toEqual({ mediaId: "B", sourceTimeSec: 5 });
+	});
+});
+
 describe("isWithinBoundaryLookahead", () => {
 	test("inside the window (0.4s before end, 0.5s lookahead)", () => {
 		expect(

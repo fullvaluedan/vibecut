@@ -14,6 +14,7 @@ import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
 import { videoCache } from "@/services/video-cache/service";
 import {
+	type ActiveMediaSpan,
 	type PrefetchClip,
 	resolveBoundaryPrefetch,
 } from "@/services/video-cache/boundary-prefetch";
@@ -205,7 +206,25 @@ function PreviewCanvas({
 			fileByMediaId.set(element.mediaId, asset.file);
 		}
 
-		return { clips, fileByMediaId };
+		// Overlay/PiP video spans (review F8): a prefetch must never touch media one
+		// of these lanes is actively decoding, since sinks are shared per mediaId.
+		const overlaySpans: ActiveMediaSpan[] = [];
+		for (const track of previewTracks.overlay) {
+			for (const element of track.elements) {
+				if (element.type !== "video" || element.hidden) continue;
+				if (element.framecutAi) continue;
+				const asset = mediaMap.get(element.mediaId);
+				if (!asset?.file || asset.type !== "video" || asset.hasAlpha) continue;
+				const startSec = mediaTimeToSeconds({ time: element.startTime });
+				overlaySpans.push({
+					mediaId: element.mediaId,
+					startSec,
+					endSec: startSec + mediaTimeToSeconds({ time: element.duration }),
+				});
+			}
+		}
+
+		return { clips, fileByMediaId, overlaySpans };
 	}, [previewTracks, mediaAssets]);
 
 	const viewport = usePreviewViewportState({
@@ -261,6 +280,7 @@ function PreviewCanvas({
 			const target = resolveBoundaryPrefetch({
 				clips: prefetchPlan.clips,
 				playheadSec: mediaTimeToSeconds({ time: renderTime as MediaTime }),
+				overlaySpans: prefetchPlan.overlaySpans,
 			});
 			if (target) {
 				const boundaryKey = `${target.mediaId}@${target.sourceTimeSec}`;

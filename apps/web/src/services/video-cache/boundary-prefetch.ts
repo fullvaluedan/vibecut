@@ -36,6 +36,13 @@ export interface BoundaryPrefetchTarget {
 	sourceTimeSec: number;
 }
 
+/** A video element on another lane (overlay/PiP) that shares the per-mediaId sinks. */
+export interface ActiveMediaSpan {
+	mediaId: string;
+	startSec: number;
+	endSec: number;
+}
+
 /** True when the playhead sits within `lookaheadSec` before the clip's end. */
 export function isWithinBoundaryLookahead({
 	playheadSec,
@@ -85,10 +92,14 @@ export function resolveBoundaryPrefetch({
 	clips,
 	playheadSec,
 	lookaheadSec = DEFAULT_PREFETCH_LOOKAHEAD_SEC,
+	overlaySpans = [],
 }: {
 	clips: readonly PrefetchClip[];
 	playheadSec: number;
 	lookaheadSec?: number;
+	/** Video elements on OTHER lanes (overlay/PiP); a prefetch never touches media
+	 * one of them is decoding now or inside the lookahead window (review F8). */
+	overlaySpans?: readonly ActiveMediaSpan[];
 }): BoundaryPrefetchTarget | null {
 	const activeIndex = findActiveClipIndex({ clips, playheadSec });
 	if (activeIndex < 0) return null;
@@ -108,6 +119,20 @@ export function resolveBoundaryPrefetch({
 	}
 
 	if (next.mediaId === current.mediaId) return null;
+
+	// Decode sinks are shared per mediaId across EVERY render node, overlays and
+	// PiP included. Warming the next clip's media while an overlay is actively
+	// decoding it would cold-seek that shared sink mid-playback: the overlay
+	// stutters and its next read evicts the warmed frame anyway, so the crossing
+	// stays cold too. Skip when any overlay span using that media is live now or
+	// becomes live inside the lookahead window.
+	const overlayBusy = overlaySpans.some(
+		(o) =>
+			o.mediaId === next.mediaId &&
+			o.startSec < playheadSec + lookaheadSec &&
+			playheadSec < o.endSec,
+	);
+	if (overlayBusy) return null;
 
 	return { mediaId: next.mediaId, sourceTimeSec: next.sourceStartSec };
 }
