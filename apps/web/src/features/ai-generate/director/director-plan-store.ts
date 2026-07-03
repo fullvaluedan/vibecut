@@ -6,6 +6,7 @@
 
 import { create } from "zustand";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
+import type { WordTiming } from "./cut-utils";
 import type { NearTieNote } from "./redundancy";
 import type { HighlightPreview } from "./highlight-preview";
 import type { AssemblyDraft, DraftSpan } from "./assembly-draft";
@@ -82,6 +83,8 @@ interface DirectorPlanState {
 	mode: "cut" | "highlight" | "assemble";
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
+	/** Transcript words (seconds) backing the apply-time sliver word-guard (2P-U1). */
+	words: WordTiming[];
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
 	/** Redundancy groups (keeper + all takes) backing the review's swap-to-alternate (U5b). */
@@ -103,6 +106,7 @@ interface DirectorPlanState {
 		plan: DirectorPlan;
 		nearTies?: readonly NearTieNote[];
 		redundancyGroups?: readonly RedundancyReviewGroup[];
+		words?: readonly WordTiming[];
 	}) => void;
 	/**
 	 * Dock the cut review in the right panel (U6): same fresh-plan state as `openWith`
@@ -114,6 +118,7 @@ interface DirectorPlanState {
 		plan: DirectorPlan;
 		nearTies?: readonly NearTieNote[];
 		redundancyGroups?: readonly RedundancyReviewGroup[];
+		words?: readonly WordTiming[];
 	}) => void;
 	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
 	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
@@ -141,6 +146,7 @@ const CLEARED = {
 	mode: "cut" as const,
 	plan: null,
 	decisions: {},
+	words: [],
 	nearTies: [],
 	redundancyGroups: [],
 	keeps: [],
@@ -161,25 +167,27 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openWith: ({ plan, nearTies, redundancyGroups }) =>
+	openWith: ({ plan, nearTies, redundancyGroups, words }) =>
 		set({
 			...CLEARED,
 			open: true,
 			mode: "cut",
 			plan,
 			decisions: initDecisions(plan),
+			words: [...(words ?? [])],
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
 		}),
 	// `open` stays FALSE — the panel keys off surface/mode/plan, not `open`, so the
 	// still-mounted modal DirectorReviewDialog does NOT also pop over the docked panel.
-	openCutPanel: ({ plan, nearTies, redundancyGroups }) =>
+	openCutPanel: ({ plan, nearTies, redundancyGroups, words }) =>
 		set({
 			...CLEARED,
 			surface: "panel",
 			mode: "cut",
 			plan,
 			decisions: initDecisions(plan),
+			words: [...(words ?? [])],
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
 		}),

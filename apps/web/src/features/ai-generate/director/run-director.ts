@@ -626,5 +626,8 @@ export async function runDirector({
 		// Carry the groups so the review can offer swap-to-alternate; a group whose
 		// cuts were all deduped/snapped away simply has no row to attach a dropdown to.
 		redundancyGroups: redundancyReviewGroups,
+		// Carry the transcript words so the apply-time sliver coalescing (2P-U1) can
+		// word-guard which sub-floor gaps it swallows.
+		words: words ?? [],
 	});
 }

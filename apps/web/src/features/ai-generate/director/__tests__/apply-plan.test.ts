@@ -250,6 +250,78 @@ describe("applyDirectorPlan (composition glue)", () => {
 		expect(executed).toHaveLength(0);
 		expect(result).toEqual({ cuts: 0, removedSec: 0, reorders: 0 });
 	});
+
+	// The applied removal ranges live inside the [Remove, Consolidate] batch.
+	const appliedRanges = (executed: unknown[]): { start: number; end: number }[] => {
+		const batch = executed[0];
+		if (!(batch instanceof FakeBatchCommand)) return [];
+		const remove = batch.commands.find((c) => c instanceof FakeRemoveRangesCommand);
+		return remove instanceof FakeRemoveRangesCommand ? remove.ranges : [];
+	};
+
+	test("2P-U1: two cuts 8 frames apart with content-free words coalesce into ONE range", () => {
+		const { editor, executed } = fakeEditor();
+		// 8 frames @30fps = 0.2667s gap, under the 0.5s (15-frame) floor.
+		const result = applyDirectorPlan({
+			editor,
+			ops: [
+				op({ op: "cut", startSec: 0, endSec: 1 }),
+				op({ op: "cut", startSec: 1.2667, endSec: 1.6667 }),
+			],
+			words: [{ text: "hello", start: 0.1, end: 0.9 }], // inside cut 1, not in the gap
+			fps: 30,
+		});
+		expect(appliedRanges(executed)).toHaveLength(1);
+		expect(result.cuts).toBe(1);
+	});
+
+	test("2P-U1: the same gap holding a complete content word is NOT coalesced", () => {
+		const { editor, executed } = fakeEditor();
+		const result = applyDirectorPlan({
+			editor,
+			ops: [
+				op({ op: "cut", startSec: 0, endSec: 1 }),
+				op({ op: "cut", startSec: 1.2667, endSec: 1.6667 }),
+			],
+			words: [{ text: "free", start: 1.05, end: 1.2 }], // fully inside the gap
+			fps: 30,
+		});
+		expect(appliedRanges(executed)).toHaveLength(2);
+		expect(result.cuts).toBe(2);
+	});
+
+	test("2P-U1: without words nothing coalesces (fail-open) — byte-identical to pre-guard", () => {
+		const { editor, executed } = fakeEditor();
+		const result = applyDirectorPlan({
+			editor,
+			ops: [
+				op({ op: "cut", startSec: 0, endSec: 1 }),
+				op({ op: "cut", startSec: 1.2667, endSec: 1.6667 }),
+			],
+		});
+		expect(appliedRanges(executed)).toHaveLength(2);
+		expect(result.cuts).toBe(2);
+	});
+
+	test("2P-U1 INVARIANT: a dense plan → coalesce leaves zero sub-floor content-free gaps", () => {
+		const { editor, executed } = fakeEditor();
+		// 12 tight cuts, ~4-frame removals, ~5-frame gaps — the sliver-generating case.
+		const ops: DirectorOp[] = Array.from({ length: 12 }, (_, i) => {
+			const base = i * (9 / 30); // 9 frames per step
+			return op({ op: "cut", startSec: base, endSec: base + 4 / 30 });
+		});
+		applyDirectorPlan({
+			editor,
+			ops,
+			words: [{ text: "intro", start: 0, end: 0.02 }], // no content in any inter-cut gap
+			fps: 30,
+		});
+		const ranges = appliedRanges(executed);
+		const floorTicks = Math.round((15 / 30) * 120_000); // 15 frames @30fps
+		for (let i = 1; i < ranges.length; i++) {
+			expect(ranges[i].start - ranges[i - 1].end).toBeGreaterThanOrEqual(floorTicks);
+		}
+	});
 });
 
 describe("planKeepInverseRanges (Highlight inverse apply)", () => {

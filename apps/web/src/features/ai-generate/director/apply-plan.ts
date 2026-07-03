@@ -21,6 +21,9 @@ import type { Command } from "@/commands/base-command";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
 import { mediaTime, TICKS_PER_SECOND } from "@/wasm";
 import type { DirectorOp } from "@framecut/hf-bridge";
+import type { WordTiming } from "./cut-utils";
+import { coalesceRemovalRanges } from "./coalesce-removal-ranges";
+import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 
 export interface ApplyDirectorPlanResult {
 	/** Removal ranges applied (cut + take_select). */
@@ -207,12 +210,31 @@ export interface DirectorApplyEditor {
 export function applyDirectorPlan({
 	editor,
 	ops,
+	words,
+	fps = 30,
 }: {
 	editor: DirectorApplyEditor;
 	ops: readonly DirectorOp[];
+	/** Transcript words (seconds), for the sliver word-guard. Absent → no coalescing. */
+	words?: readonly WordTiming[];
+	/** Project fps, for the sub-floor gap threshold. Defaults to 30. */
+	fps?: number;
 }): ApplyDirectorPlanResult {
-	const { ranges, removedSec } = planRemovalRanges({
+	const { ranges: rawRanges, removedSec } = planRemovalRanges({
 		ops,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	// Choke-point sliver guard (2P-U1): coalesce accepted removals across sub-floor
+	// gaps so no shard survives, word-guarded so a real word between two cuts is never
+	// swallowed. Fail-open (no words → no merge → footage kept). Every removal source
+	// passes through here, so nothing downstream can reintroduce a sliver.
+	const floorTicks = Math.round(
+		(MIN_SURVIVING_CLIP_FRAMES / (fps > 0 ? fps : 30)) * TICKS_PER_SECOND,
+	);
+	const ranges = coalesceRemovalRanges({
+		ranges: rawRanges,
+		words,
+		floorTicks,
 		ticksPerSecond: TICKS_PER_SECOND,
 	});
 

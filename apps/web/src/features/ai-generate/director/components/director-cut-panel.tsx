@@ -28,6 +28,7 @@ export function DirectorCutPanel() {
 	const close = useDirectorPlanStore((s) => s.close);
 	const redundancyGroups = useDirectorPlanStore((s) => s.redundancyGroups);
 	const swapRedundancyKeeper = useDirectorPlanStore((s) => s.swapRedundancyKeeper);
+	const words = useDirectorPlanStore((s) => s.words);
 
 	if (!plan) return null;
 
@@ -56,7 +57,10 @@ export function DirectorCutPanel() {
 
 	const apply = () => {
 		const accepted = ops.filter((op) => decisions[op.id]);
-		const result = applyDirectorPlan({ editor, ops: accepted });
+		const fps = editor.project.getActive().settings.fps;
+		const fpsFloat =
+			fps.denominator > 0 && fps.numerator > 0 ? fps.numerator / fps.denominator : 30;
+		const result = applyDirectorPlan({ editor, ops: accepted, words, fps: fpsFloat });
 		// Seed the taste signal from every reviewed decision (accepted or not).
 		useDirectorTasteStore.getState().noteReviewDecisions(
 			ops.map((op) => ({
