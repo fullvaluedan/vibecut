@@ -48,7 +48,7 @@ import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
 import { buildRedundancyCatalog } from "./redundancy-catalog";
 import {
-	backstopDefaultAccept,
+	lexicalBackstopDefaultAccept,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
 	type RedundancyReviewGroup,
@@ -450,16 +450,24 @@ export async function runDirector({
 
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
 	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
-	// detectors now run ADDITIVELY alongside the LLM pass (U5/R5): when the LLM pass
-	// ran they are a backstop for repeats it missed, so their cuts surface as accept-
-	// OFF review rows (opt-in, never auto-cut newly-surfaced content — OQ3/R7); only on
-	// route-error fallback are they the sole authority and keep the accepted default.
-	const backstopAccepted = backstopDefaultAccept({ redundancyRan });
+	// detectors run ADDITIVELY alongside the LLM pass (U5/R5): when the LLM pass ran
+	// they are a backstop for repeats it missed. Phrase-repeat cuts are VERBATIM n-gram
+	// matches (>=4 consecutive identical tokens, i.e. clearly-duplicate content), so they
+	// auto-accept by default even when additive, letting obvious repeats leave the
+	// timeline without row-toggling (U1/KTD2, high-confidence-only). The softer near-
+	// identical backstops (segment-repeat + the take-cluster redundancyOps) stay accept-
+	// OFF review rows (opt-in, never auto-cut newly-surfaced content, per OQ3/R7) when
+	// additive, and only on route-error fallback are they the sole authority and keep
+	// the accepted default.
+	const withBackstopAccept = (op: DirectorOp, verbatim: boolean): DirectorOp =>
+		lexicalBackstopDefaultAccept({ verbatim, redundancyRan })
+			? op
+			: { ...op, defaultAccept: false };
 	const lexicalRepeatCuts = [
-		...phraseRepeatCuts,
-		...segmentRepeatCuts,
-		...redundancyOps,
-	].map((op) => (backstopAccepted ? op : { ...op, defaultAccept: false }));
+		...phraseRepeatCuts.map((op) => withBackstopAccept(op, true)),
+		...segmentRepeatCuts.map((op) => withBackstopAccept(op, false)),
+		...redundancyOps.map((op) => withBackstopAccept(op, false)),
+	];
 	// Emphasis-pause protection (#4/U2): keep a short, speech-bounded in-dialog pause
 	// as a deliberate beat unless a repeat/mistake sits next to it. The repeat/mistake
 	// spans must be known FIRST (they disqualify a pause), so collect every repeat- and

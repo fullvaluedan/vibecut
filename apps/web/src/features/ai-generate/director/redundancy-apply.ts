@@ -191,18 +191,24 @@ export function shouldRunLexicalRepeatDetectors(): boolean {
 }
 
 /**
- * The default accept state for the deterministic repeat backstop's cut ops. On
- * route-error FALLBACK (`redundancyRan` false) they are the sole authority and keep
- * the accepted default (unchanged behavior). When they are ADDITIVE (the LLM pass
- * ran), their cuts are newly-surfaced repeats — accept-OFF, opt-in, never auto-cut
- * (OQ3/R7).
+ * The default accept state for a lexical repeat backstop cut. VERBATIM repeats
+ * (phrase-repeat: a run of >=4 consecutive identical tokens, i.e. clearly-duplicate
+ * content) auto-accept by default even when they are ADDITIVE to a successful LLM
+ * redundancy pass, so obvious repeats leave the timeline without row-toggling
+ * (U1/KTD2: high-confidence-only removal). The softer near-identical backstops
+ * (segment-repeat, take-cluster redundancy) stay opt-in when additive and only take
+ * the accepted default on route-error FALLBACK (`redundancyRan` false), where they
+ * are the sole repeat authority (OQ3/R7).
  */
-export function backstopDefaultAccept({
+export function lexicalBackstopDefaultAccept({
+	verbatim,
 	redundancyRan,
 }: {
+	/** True for phrase-repeat (verbatim n-gram) cuts; false for the softer backstops. */
+	verbatim: boolean;
 	redundancyRan: boolean;
 }): boolean {
-	return !redundancyRan;
+	return verbatim || !redundancyRan;
 }
 
 /**

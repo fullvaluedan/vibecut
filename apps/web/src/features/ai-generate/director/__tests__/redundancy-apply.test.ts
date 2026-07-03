@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyKeeperSwap,
-	backstopDefaultAccept,
 	cutMembersForKeeper,
+	lexicalBackstopDefaultAccept,
 	mapRedundancyGroups,
 	shouldRunLexicalRepeatDetectors,
 } from "../redundancy-apply";
@@ -142,6 +142,15 @@ describe("mapRedundancyGroups recall surfacing (#5/R4)", () => {
 	test("exactly at the accept threshold is accepted; exactly at the floor is accept-off", () => {
 		expect(mapRedundancyGroups({ groups: [mk(0.7)] }).cuts[0].defaultAccept).not.toBe(false);
 		expect(mapRedundancyGroups({ groups: [mk(0.5)] }).cuts[0].defaultAccept).toBe(false);
+	});
+
+	test("0.85 group → accepted; 0.6 group → opt-in; keeper never in the accepted cut set", () => {
+		const highCuts = mapRedundancyGroups({ groups: [mk(0.85)] }).cuts;
+		expect(highCuts[0].defaultAccept).not.toBe(false); // auto-removed
+		expect(mapRedundancyGroups({ groups: [mk(0.6)] }).cuts[0].defaultAccept).toBe(false); // opt-in
+		// keeper L1 [3,5] is never one of the accepted cuts (no group loses all takes)
+		const accepted = highCuts.filter((c) => c.defaultAccept !== false);
+		expect(accepted.some((c) => c.startSec === 3 && c.endSec === 5)).toBe(false);
 	});
 });
 
@@ -300,11 +309,17 @@ describe("shouldRunLexicalRepeatDetectors", () => {
 	});
 });
 
-describe("backstopDefaultAccept", () => {
-	test("LLM pass ran → additive backstop cuts are accept-OFF (opt-in)", () => {
-		expect(backstopDefaultAccept({ redundancyRan: true })).toBe(false);
+describe("lexicalBackstopDefaultAccept (U1/KTD2)", () => {
+	test("verbatim phrase-repeat cut auto-accepts even when additive to the LLM pass", () => {
+		expect(lexicalBackstopDefaultAccept({ verbatim: true, redundancyRan: true })).toBe(true);
 	});
-	test("route-error fallback → backstop is the sole authority, accepted default", () => {
-		expect(backstopDefaultAccept({ redundancyRan: false })).toBe(true);
+	test("verbatim phrase-repeat cut auto-accepts on route-error fallback too", () => {
+		expect(lexicalBackstopDefaultAccept({ verbatim: true, redundancyRan: false })).toBe(true);
+	});
+	test("soft backstop (segment-repeat / redundancyOps) is accept-OFF when additive", () => {
+		expect(lexicalBackstopDefaultAccept({ verbatim: false, redundancyRan: true })).toBe(false);
+	});
+	test("soft backstop is the sole authority on route-error fallback → accepted default", () => {
+		expect(lexicalBackstopDefaultAccept({ verbatim: false, redundancyRan: false })).toBe(true);
 	});
 });
