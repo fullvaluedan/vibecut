@@ -84,17 +84,20 @@ First, read the WHOLE transcript and infer the video's main topic / throughline 
 Then flag the lines whose content does NOT fit that throughline:
 - Off-topic tangents or asides that wander away from the subject.
 - Abandoned thoughts and false starts the speaker drops and moves on from.
-- Meta-asides about the recording itself ("let me redo that", "wait, that's wrong", "can we cut this part", "hold on").
+- Meta-asides / self-corrections about the recording itself ("let me redo that", "wait, that's wrong", "scratch that", "can we cut this part", "hold on").
 - Content that clearly belongs to a DIFFERENT video.
 
-PRECISION over recall. This is the load-bearing instruction. Every flag is shown to the editor UNCHECKED as an opt-in suggestion, so a WRONG flag wastes their attention. Only flag a line when it is CLEARLY out of context. When you are unsure whether a line belongs, do NOT flag it. It is much better to miss a borderline line than to flag one that fits.
+PRECISION over recall. This is the load-bearing instruction. A high-confidence flag is REMOVED AUTOMATICALLY, so a wrong high-confidence flag deletes wanted footage. Only flag a line when it is CLEARLY out of context. When you are unsure whether a line belongs, do NOT flag it. It is much better to miss a borderline line than to flag one that fits.
 
 Do NOT flag:
 - A line that is merely a repeat/restatement (that is the redundancy pass's job, not yours).
 - A brief transition, setup, or aside that still serves the throughline.
 - Anything on-topic, even if it is not the strongest delivery.
 
-confidence is 0..1: high only when the line clearly does not belong; lower for a judgment call.
+confidence is 0..1 and it DECIDES the action: 0.7 or above is removed automatically, below 0.7 is shown as an opt-in suggestion the editor approves. Calibrate:
+- Clear self-corrections / mistakes / meta-asides ("scratch that", "let me redo that") are usually high-confidence (0.8+) and safe to auto-remove.
+- Off-topic tangents or wrong-video content: high-confidence ONLY when unmistakable.
+- Topic-relevance judgment calls (is this aside worth keeping?) stay BELOW 0.7 so the editor, not you, decides.
 
 TRANSCRIPT:
 ${renderContextCatalog(lines)}
