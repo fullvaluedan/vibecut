@@ -123,4 +123,15 @@ describe("consolidateAdjacentClips (U4/KTD5)", () => {
 		const Bframe = clip({ id: "B", startTime: 100, trimStart: 4100, duration: 50 }); // ~1 frame removed
 		expect(consolidateAdjacentClips({ clips: [A, Bframe], toleranceTicks: 120 })).toHaveLength(2);
 	});
+
+	test("R9 (2P-U5): a pure split that removed nothing collapses back to one clip", () => {
+		// Dan's mid-continuous-speech boundary: a clip split into two source-contiguous,
+		// timeline-adjacent halves with NOTHING removed. No boundary should survive.
+		const left = clip({ id: "L", startTime: 0, trimStart: 0, duration: 100 });
+		const right = clip({ id: "R", startTime: 100, trimStart: 100, duration: 100 });
+		const groups = consolidateAdjacentClips({ clips: [left, right], toleranceTicks: 120 });
+		expect(groups).toHaveLength(1);
+		expect(groups[0].absorbedIds).toEqual(["R"]);
+		expect(groups[0].duration).toBe(200);
+	});
 });

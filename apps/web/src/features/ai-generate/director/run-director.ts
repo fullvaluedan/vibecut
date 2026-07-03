@@ -45,6 +45,7 @@ import { detectVadDeadAirCuts } from "./vad-dead-air";
 import { vadService } from "@/services/vad/service";
 import { snapRemovalOps } from "./snap-cut";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
+import { justifyCuts } from "./justify-cuts";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { buildOpeningDebugReport } from "./director-debug";
@@ -635,11 +636,20 @@ export async function runDirector({
 	// 2-frame / 13-frame slivers a cut left) instead of fragmenting the clip; a removal
 	// with both edges mid-clip stays a ripple-cut. Reuses the clipSpans + fps above.
 	// (Adjacent same-source slices are then merged post-apply by the consolidation pass.)
-	const operations = resolveTrimVsCut({
+	const trimmed = resolveTrimVsCut({
 		ops: energySnapped,
 		clipStartsSec: clipSpans.map((c) => c.startSec),
 		clipEndsSec: clipSpans.map((c) => c.endSec),
 		toleranceSec: REMNANT_FRAMES_TOLERANCE / fpsFloat,
+	});
+	// No unnecessary cuts (2P-U5/R9): revert any sub-floor removal that splices two
+	// content words in continuous speech and carries no concrete reason, so a boundary
+	// is never created mid-sentence for nothing. Real pauses (silence removals) keep
+	// their flanking words a floor apart and are untouched. Fail-open with no words.
+	const operations = justifyCuts({
+		ops: trimmed,
+		words: words ?? [],
+		floorSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
 	});
 	// Issue A investigation: opt-in opening-redundancy report (set window.__directorDebug
 	// = true in the console before running). Shows the opening transcript, pairwise

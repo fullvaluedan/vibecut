@@ -19,6 +19,17 @@ import { isFillerToken } from "./filler-words";
 export const MIN_SURVIVING_CLIP_FRAMES = 15;
 
 /**
+ * True when one word is a real content word: it has positive duration, non-empty
+ * normalized text, and is not a filler token. The per-word primitive both span
+ * checks below and the no-unnecessary-cuts guard (2P-U5) route through.
+ */
+export function isContentWord(word: WordTiming): boolean {
+	if (!(word.end > word.start)) return false;
+	const norm = normalizeWord(word.text);
+	return norm.length > 0 && !isFillerToken(norm);
+}
+
+/**
  * True when a COMPLETE content word lives inside `[startSec, endSec)`: a word whose
  * whole span is within the range (a word only touching a boundary - partly outside -
  * does NOT count, so a real word straddling a cut edge is never mistaken for
