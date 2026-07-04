@@ -64,8 +64,9 @@ describe("toggleWithPremiseGuard (review F4)", () => {
 		op({ id: "a", kind: "cut" }), // premise removal (default-accepted)
 		{ ...op({ id: "b", kind: "cut" }), defaultAccept: false }, // opt-in, never premise
 		op({ id: "c", kind: "reorder" }), // not a removal
-		op({ id: "sp-1", kind: "cut" }), // second-pass finding
+		op({ id: "sp-1", kind: "cut" }), // second-pass finding (default-accepted -> premise too)
 		{ ...op({ id: "sp-2", kind: "cut" }), defaultAccept: false }, // sp, already opt-in
+		op({ id: "sp-3", kind: "cut" }), // later-pass finding premised on sp-1
 	];
 
 	test("rejecting a premise removal downgrades every accepted sp- row", () => {
@@ -77,6 +78,7 @@ describe("toggleWithPremiseGuard (review F4)", () => {
 		expect(d.a).toBe(false);
 		expect(d["sp-1"]).toBe(false); // premise stale -> opt-in
 		expect(d["sp-2"]).toBe(false); // was already unchecked, stays
+		expect(d["sp-3"]).toBe(false);
 	});
 
 	test("rejecting an opt-in op leaves sp- rows alone (never part of the premise)", () => {
@@ -102,14 +104,17 @@ describe("toggleWithPremiseGuard (review F4)", () => {
 		expect(d["sp-1"]).toBe(true);
 	});
 
-	test("rejecting an sp- op itself does not cascade to other sp- rows", () => {
+	test("rejecting a default-accepted sp- op downgrades LATER sp- rows too (X2)", () => {
+		// Passes 2-3 compress over earlier sp- removals, so an sp- op IS a premise
+		// for later findings: rejecting it must downgrade them like any other premise.
 		const d = toggleWithPremiseGuard({
 			operations,
 			decisions: initDecisions({ operations }),
 			id: "sp-1",
 		});
 		expect(d["sp-1"]).toBe(false);
-		expect(d.a).toBe(true);
+		expect(d["sp-3"]).toBe(false); // premised on sp-1's compression -> downgraded
+		expect(d.a).toBe(true); // non-sp rows untouched
 	});
 
 	test("a manually re-checked sp- row is downgraded again by a later premise reject", () => {

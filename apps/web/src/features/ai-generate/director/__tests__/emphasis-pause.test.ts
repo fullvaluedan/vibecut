@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	collectPauseGaps,
 	computeEmphasisPauseKeepers,
 	computeRepeatAdjacentPauseFloors,
 	MAX_PAUSE_SEC,
 	WORD_BOUNDARY_SNAP_SEC,
+	WORD_PAUSE_GAP_MIN_SEC,
 	type PauseGap,
 	type RepeatSpan,
 } from "../emphasis-pause";
@@ -20,6 +22,37 @@ const boundedWords = (gap: PauseGap): TranscriptWordLite[] => [
 	word(gap.start - 0.5, gap.start, "before"),
 	word(gap.end, gap.end + 0.5, "after"),
 ];
+
+describe("collectPauseGaps (review X3)", () => {
+	const segments = [
+		{ start: 0, end: 10 },
+		{ start: 12, end: 20 },
+	];
+
+	test("includes inter-segment gaps", () => {
+		const gaps = collectPauseGaps({ segments, words: [] });
+		expect(gaps).toEqual([{ start: 10, end: 12 }]);
+	});
+
+	test("includes INTRA-segment word gaps at/above the floor (the beat VAD would cut)", () => {
+		// A 1.7s mid-sentence dramatic pause inside segment [0,10]: segment gaps
+		// alone missed it, so its VAD dead-air cut had no keeper (the X3 bug).
+		const words = [word(0, 4.0), word(5.7, 10, "next")];
+		const gaps = collectPauseGaps({ segments, words });
+		expect(gaps).toContainEqual({ start: 4.0, end: 5.7 });
+	});
+
+	test("excludes sub-floor word gaps (inter-word spacing must not flood keepers)", () => {
+		const words = [word(0, 1.0), word(1.2, 2.0, "next")]; // 0.2s < floor
+		const gaps = collectPauseGaps({ segments, words });
+		expect(gaps).not.toContainEqual({ start: 1.0, end: 1.2 });
+		expect(WORD_PAUSE_GAP_MIN_SEC).toBeLessThan(0.8); // stays under pacing's floor
+	});
+
+	test("no words: segment gaps only (prior behavior)", () => {
+		expect(collectPauseGaps({ segments, words: [] })).toHaveLength(1);
+	});
+});
 
 describe("computeEmphasisPauseKeepers", () => {
 	test("happy path: 1.5s speech-bounded gap, no repeat nearby -> one keeper", () => {

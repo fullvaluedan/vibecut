@@ -125,6 +125,7 @@ import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
 import {
+	collectPauseGaps,
 	computeEmphasisPauseKeepers,
 	computeRepeatAdjacentPauseFloors,
 } from "./emphasis-pause";
@@ -265,12 +266,19 @@ export async function runDirector({
 				sampleRate,
 				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
 			});
+			// Overlap-dedup only against DEFAULT-ACCEPTED rows (X4): an opt-in row (an
+			// unchecked tiny-clip shard, a review-only noise fragment) must not veto the
+			// only default remover of the silence around it, or a shattered timeline's
+			// edge silence ships with neither the shard nor the gap removed.
+			const acceptedOverlapSources = [...wordCuts, ...noiseCuts, ...tinyClipCuts].filter(
+				(other) => other.defaultAccept !== false,
+			);
 			vadDeadAirCuts = detectVadDeadAirCuts({
 				gaps,
 				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
 			}).filter(
 				(op) =>
-					![...wordCuts, ...noiseCuts, ...tinyClipCuts].some(
+					!acceptedOverlapSources.some(
 						(other) => other.startSec < op.endSec && op.startSec < other.endSec,
 					),
 			);
@@ -517,12 +525,9 @@ export async function runDirector({
 		...redundancyOps,
 		...redundancyCuts,
 	].map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
-	const pauseGaps: { start: number; end: number }[] = [];
-	for (let i = 1; i < segments.length; i++) {
-		const start = segments[i - 1].end;
-		const end = segments[i].start;
-		if (end > start) pauseGaps.push({ start, end });
-	}
+	// Segment gaps PLUS word-level gaps (X3): emphasis beats live inside segments
+	// too, and VAD detects gaps anywhere, so protection must see the same pauses.
+	const pauseGaps = collectPauseGaps({ segments, words: words ?? [] });
 	const emphasisPauseKeepers = computeEmphasisPauseKeepers({
 		gaps: pauseGaps,
 		words: words ?? [],

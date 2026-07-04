@@ -47,6 +47,45 @@ export const PAUSE_PROXIMITY_SEC = 1.0;
 export const WORD_BOUNDARY_SNAP_SEC = 0.25;
 
 /**
+ * A word-derived gap shorter than this is inter-word spacing, not a pause worth
+ * classifying. Well below every pause detector's floor (pacing 0.8s, VAD 1.5s), so
+ * nothing that could be cut is missed, and far above natural word spacing, so the
+ * keeper set is never flooded with micro-gaps that would veto filler/duplicate cuts
+ * spanning a word boundary.
+ */
+export const WORD_PAUSE_GAP_MIN_SEC = 0.5;
+
+/**
+ * Candidate pause gaps for emphasis classification (review X3): the inter-SEGMENT
+ * gaps plus every word-level gap at or above `WORD_PAUSE_GAP_MIN_SEC`. Segment gaps
+ * alone miss intra-segment beats: a Whisper segment spans mid-sentence pauses, and
+ * VAD detects gaps anywhere, so protection derived only from segment boundaries let
+ * a deliberate 1.5-2s mid-sentence beat be cut as default-accepted dead air. Pure.
+ */
+export function collectPauseGaps({
+	segments,
+	words,
+	minWordGapSec = WORD_PAUSE_GAP_MIN_SEC,
+}: {
+	segments: readonly { start: number; end: number }[];
+	words: readonly TranscriptWordLite[];
+	minWordGapSec?: number;
+}): PauseGap[] {
+	const gaps: PauseGap[] = [];
+	for (let i = 1; i < segments.length; i++) {
+		const start = segments[i - 1].end;
+		const end = segments[i].start;
+		if (end > start) gaps.push({ start, end });
+	}
+	for (let i = 1; i < words.length; i++) {
+		const start = words[i - 1].end;
+		const end = words[i].start;
+		if (end - start >= minWordGapSec) gaps.push({ start, end });
+	}
+	return gaps;
+}
+
+/**
  * Decide which `gaps` to keep as emphasis pauses. Returns a `KeeperSpan` for
  * every gap where ALL hold:
  *

@@ -65,13 +65,14 @@ export function toggleDecision({
 }
 
 /**
- * Toggle with the second-pass premise guard (review F4). A second-pass (`sp-`) cut
- * exists only because compressing the default-accepted pass-1 removals made two
- * spans adjacent. When the user REJECTS one of those premise removals, that
- * adjacency may no longer exist, so every still-accepted sp- row downgrades to
- * unchecked instead of auto-cutting on a stale premise: re-checking is one click,
- * a wrong auto-cut is lost footage. Re-accepting a premise op does NOT auto-restore
- * the sp- rows (conservative; the user decides).
+ * Toggle with the second-pass premise guard (review F4/X2). A second-pass (`sp-`)
+ * cut exists only because compressing the default-accepted removals made two spans
+ * adjacent. When the user REJECTS any of those premise removals, that adjacency may
+ * no longer exist, so every still-accepted sp- row downgrades to unchecked instead
+ * of auto-cutting on a stale premise: re-checking is one click, a wrong auto-cut is
+ * lost footage. Default-accepted sp- ops count as premises too (X2): passes 2-3
+ * compress over EARLIER sp- removals, so rejecting one invalidates later findings
+ * the same way. Re-accepting a premise op does NOT auto-restore (the user decides).
  */
 export function toggleWithPremiseGuard({
 	operations,
@@ -87,7 +88,6 @@ export function toggleWithPremiseGuard({
 	const rejectedPremiseOp =
 		next[id] === false &&
 		op !== undefined &&
-		!op.id.startsWith("sp-") &&
 		(op.op === "cut" || op.op === "take_select") &&
 		op.defaultAccept !== false;
 	if (rejectedPremiseOp) {
