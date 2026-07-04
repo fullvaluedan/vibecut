@@ -25,8 +25,10 @@ import {
 } from "@/features/transcription/transcript-cache";
 import {
 	compileHyperframesPrompt,
+	prioritizeFormPicks,
 	type HfSelectionAsset,
 } from "@/features/ai-generate/compile-hyperframes-prompt";
+import { detectSpeakerZone } from "@/features/ai-generate/detect-speaker-zone";
 import {
 	placeHyperframesRender,
 	placeHyperframesRenders,
@@ -36,10 +38,15 @@ import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
 import { runWithConcurrency } from "@/features/ai-generate/concurrency";
 import {
 	planAuthorChunks,
+	planAuthorChunksOver,
 	VARIANT_CHUNK_SEC,
 	type AuthorChunk,
 } from "@/features/ai-generate/chunk-plan";
 import type { RunProgress } from "@/features/ai-generate/run-hyperframes";
+import {
+	scopeSegments,
+	hasAuthorableContent,
+} from "@/features/ai-generate/transcript-scope";
 
 /** Enabled native templates → selection hints for the author brief. */
 function enabledSelections(): HfSelectionAsset[] {
@@ -65,13 +72,16 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 	try {
 		const res = await fetch("/api/hyperframes/registry");
 		if (!res.ok) return [];
-		const all = (await res.json()) as {
-			name: string;
-			type: string;
-			title: string;
-			description: string;
-			tags?: string[];
-		}[];
+		const data = (await res.json()) as {
+			items?: {
+				name: string;
+				type: string;
+				title: string;
+				description: string;
+				tags?: string[];
+			}[];
+		};
+		const all = data.items ?? [];
 		const want = new Set(picks);
 		return all
 			.filter((a) => want.has(a.name))
@@ -79,9 +89,7 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 				const kind = a.type.split(":")[1];
 				return {
 					name: a.name,
-					kind: (kind === "block" ||
-					kind === "component" ||
-					kind === "example"
+					kind: (kind === "block" || kind === "component" || kind === "example"
 						? kind
 						: "block") as HfSelectionAsset["kind"],
 					title: a.title,
@@ -96,22 +104,43 @@ async function pickedRegistrySelections(): Promise<HfSelectionAsset[]> {
 	}
 }
 
-/** Segments scoped to [startSec, endSec], offset to 0, as bracketed text. */
-function scopeSegments(
-	segments: { start: number; end: number; text: string }[],
-	startSec: number,
-	endSec: number,
-): string {
-	return segments
-		.filter((s) => s.end > startSec && s.start < endSec)
-		.map(
-			(s) =>
-				`[${Math.max(0, s.start - startSec).toFixed(1)}–${Math.max(
-					0,
-					s.end - startSec,
-				).toFixed(1)}] ${s.text.trim()}`,
-		)
-		.join("\n");
+const MAX_REFERENCE_COMPS = 3;
+
+/**
+ * Fetch the REAL composition HTML for the user's picked registry assets (capped),
+ * so the author adapts the genuine asset instead of reinventing it from a name.
+ * Best-effort: a fetch failure drops that reference (the pick still appears as a
+ * named preference). The server route does the cross-origin registry fetch.
+ */
+async function fetchReferenceCompositions(
+	picks: HfSelectionAsset[],
+	signal?: AbortSignal,
+): Promise<{ name: string; title: string; html: string }[]> {
+	// Prioritize FORM relevance, not list order, so the few fetched references are
+	// the forms the content->form rubric actually uses (see prioritizeFormPicks).
+	const want = prioritizeFormPicks(picks, MAX_REFERENCE_COMPS);
+	const fetched = await Promise.all(
+		want.map(async (p) => {
+			try {
+				const res = await fetch("/api/hyperframes/registry-comp", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ name: p.name, type: `hyperframes:${p.kind}` }),
+					signal,
+				});
+				if (!res.ok) return null;
+				const data = (await res.json()) as { title?: string; html?: string };
+				return data.html
+					? { name: p.name, title: p.title, html: data.html }
+					: null;
+			} catch {
+				return null;
+			}
+		}),
+	);
+	return fetched.filter(
+		(c): c is { name: string; title: string; html: string } => c !== null,
+	);
 }
 
 /** Does the timeline have any audio worth transcribing? */
@@ -126,25 +155,43 @@ function timelineHasAudio(editor: EditorCore): boolean {
 }
 
 /**
- * Transcript for the clip so the authored graphic reflects what's SAID in it.
- * Transcribes on demand (cached after the first run) when the timeline has
- * audio; otherwise best-effort from cache. Never blocks authoring — a failure
- * just means the graphic is authored from the selections + look alone.
+ * Raw timeline transcript segments: transcribe on demand (cached after the
+ * first run) when the timeline has audio; otherwise best-effort from cache.
+ * Never blocks authoring — a failure falls through to whatever is cached. The
+ * RAW segments let callers slice any window AND check whether there is ANY
+ * speech to author from (an empty result is the real cause of the "no
+ * transcript" author failures).
  */
-async function gatherClipTranscript(
+async function gatherTimelineSegments(
 	editor: EditorCore,
-	startSec: number,
-	endSec: number,
 	signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ start: number; end: number; text: string }[]> {
 	if (timelineHasAudio(editor)) {
 		try {
+			// Collapse the per-second "…Ns elapsed" tickers (initializing-model,
+			// transcribing repeat the same phase with a changing elapsed count) to one
+			// line each, but let the model-download phase's live percentage through — a
+			// fresh ~40MB download is the one long first-run step where visible progress
+			// matters, and it repeats the same phase with a changing "% downloaded".
+			let lastPhase = "";
+			let lastDetail = "";
 			const { segments } = await ensureTimelineTranscript({
 				editor,
-				onProgress: (p) => logRun(`${p.phase}: ${p.detail}`),
+				onProgress: (p) => {
+					const carriesProgress = p.phase === "downloading-model";
+					if (
+						p.phase === lastPhase &&
+						!(carriesProgress && p.detail !== lastDetail)
+					) {
+						return;
+					}
+					lastPhase = p.phase;
+					lastDetail = p.detail;
+					logRun(`${p.phase}: ${p.detail}`);
+				},
 				signal,
 			});
-			return scopeSegments(segments, startSec, endSec);
+			return segments;
 		} catch (e) {
 			// A user cancel during transcription must abort the whole run — only
 			// a genuine transcript failure falls through to best-effort cache.
@@ -155,7 +202,35 @@ async function gatherClipTranscript(
 			);
 		}
 	}
-	return scopeSegments(getCachedTranscript(editor) ?? [], startSec, endSec);
+	return getCachedTranscript(editor) ?? [];
+}
+
+/** Clip transcript: the raw segments scoped to [startSec, endSec], offset to 0. */
+async function gatherClipTranscript(
+	editor: EditorCore,
+	startSec: number,
+	endSec: number,
+	signal?: AbortSignal,
+): Promise<string> {
+	return scopeSegments(
+		await gatherTimelineSegments(editor, signal),
+		startSec,
+		endSec,
+	);
+}
+
+/**
+ * Graphics recap SPOKEN content, so a run with NO transcript AND no user
+ * direction has nothing to author — every chunk would spawn a `claude -p` that
+ * correctly refuses ("(no speech in this segment)"). Fail fast with the actual
+ * reason instead of flooding the log with N identical refusals.
+ */
+function noAuthorableContentError(editor: EditorCore): Error {
+	return new Error(
+		timelineHasAudio(editor)
+			? "No speech was found in this video, so there's nothing to recap. If it has talking, the transcript came back empty — try Settings → AI → cloud transcription, or type a direction in the HyperFrames panel to author from. (Music-only clips have nothing to caption.)"
+			: "No audio is enabled on the timeline. HyperFrames graphics recap what's SAID — enable the clip's source audio (or add its audio track), or type a direction in the HyperFrames panel, then run again.",
+	);
 }
 
 let clipRunInFlight = false;
@@ -207,9 +282,29 @@ export async function runHyperframesOnClip({
 			endSec,
 			controller.signal,
 		);
+		// Nothing said in this clip and no direction to author from → the skill
+		// would just refuse. Fail fast with the reason instead of a doomed author.
+		if (!hasAuthorableContent(transcript, hfDirection)) {
+			throw noAuthorableContentError(editor);
+		}
 		const registrySelections = await pickedRegistrySelections();
+		const referenceCompositions = await fetchReferenceCompositions(
+			registrySelections,
+			controller.signal,
+		);
+		// Speaker-aware placement: when Director Vision is on, locate the speaker in
+		// this clip's footage so the brief can keep clear of them (and their path).
+		// Best-effort — null falls back to the brief's robust lower-third default.
+		const speakerSafeZone = useAiSettingsStore.getState().directorVisionEnabled
+			? ((await detectSpeakerZone({
+					editor,
+					element,
+					signal: controller.signal,
+				})) ?? undefined)
+			: undefined;
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
+			referenceCompositions,
 			look: {
 				name: look.name,
 				description: look.description,
@@ -220,6 +315,7 @@ export async function runHyperframesOnClip({
 			scope: { kind: "clip", label: `clip "${scope.label}"`, startSec, endSec },
 			transcript,
 			canvas: { width, height, fps },
+			speakerSafeZone,
 			preferenceNotes: usePreferenceStore
 				.getState()
 				.buildPreferenceNotes("graphics"),
@@ -257,6 +353,7 @@ export async function runHyperframesOnClip({
 			compId,
 			templateId: `authored:${compId ?? "clip"}`,
 			name: `HyperFrames: ${scope.label}`,
+			brief: prompt,
 		});
 		// Self-learning: an authored graphic landed — a later delete is the
 		// "didn't like it" signal that balances this against the keep count.
@@ -303,34 +400,42 @@ export async function runHyperframesOnClip({
 interface SharedAuthorInputs {
 	segments: { start: number; end: number; text: string }[];
 	selections: HfSelectionAsset[];
-	look: { name: string; description: string; accent?: string; fontFamily?: string };
+	look: {
+		name: string;
+		description: string;
+		accent?: string;
+		fontFamily?: string;
+	};
 	direction: string;
 	canvas: { width: number; height: number; fps: number };
 	preferenceNotes: string[];
+	referenceCompositions: { name: string; title: string; html: string }[];
 }
 
 /** Transcribe once + gather the selections/look/direction shared by every chunk. */
 async function buildSharedInputs({
 	editor,
-	totalSec,
 	signal,
 }: {
 	editor: EditorCore;
-	totalSec: number;
 	signal?: AbortSignal;
 }): Promise<SharedAuthorInputs> {
 	const project = editor.project.getActive();
 	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
 	const { width, height } = project.settings.canvasSize;
-	// Warm the transcript cache once; chunks slice from it via scopeSegments.
-	await gatherClipTranscript(editor, 0, totalSec, signal);
-	const segments = getCachedTranscript(editor) ?? [];
+	// One transcription for the whole run; chunks slice it via scopeSegments.
+	const segments = await gatherTimelineSegments(editor, signal);
 	const registrySelections = await pickedRegistrySelections();
+	const referenceCompositions = await fetchReferenceCompositions(
+		registrySelections,
+		signal,
+	);
 	const { styleId, hfDirection } = useAiSettingsStore.getState();
 	const look = getStyleById(styleId);
 	return {
 		segments,
 		selections: [...enabledSelections(), ...registrySelections],
+		referenceCompositions,
 		look: {
 			name: look.name,
 			description: look.description,
@@ -339,14 +444,37 @@ async function buildSharedInputs({
 		},
 		direction: hfDirection,
 		canvas: { width, height, fps },
-		preferenceNotes: usePreferenceStore.getState().buildPreferenceNotes("graphics"),
+		preferenceNotes: usePreferenceStore
+			.getState()
+			.buildPreferenceNotes("graphics"),
 	};
+}
+
+/**
+ * R2 observability: log the transcript state ONCE per run so an empty transcript
+ * is diagnosable from the run log — never produced (no segments) vs lost in
+ * scoping (segments present but per-chunk char counts zero, logged in authorChunks).
+ */
+function logTranscriptSummary(segments: SharedAuthorInputs["segments"]): void {
+	if (!segments.length) {
+		logRun("transcript: no segments (nothing to author from)", "warn");
+		return;
+	}
+	const first = segments[0].start;
+	const last = segments[segments.length - 1].end;
+	logRun(
+		`transcript: ${segments.length} segment${
+			segments.length === 1 ? "" : "s"
+		}, ${first.toFixed(1)}s–${last.toFixed(1)}s`,
+	);
 }
 
 interface AuthoredChunkRender {
 	chunk: AuthorChunk;
 	file: File;
 	compId?: string;
+	/** The compiled prompt for this chunk — carried onto the clip for re-editing. */
+	brief?: string;
 }
 
 /** Author every chunk (bounded concurrency); local renders serialize in the bridge. */
@@ -381,12 +509,27 @@ async function authorChunks({
 	await runWithConcurrency(chunks, concurrency, async (chunk) => {
 		if (signal?.aborted) throw new Error("Cancelled");
 		const chunkLen = chunk.endSec - chunk.startSec;
-		const transcript = scopeSegments(shared.segments, chunk.startSec, chunk.endSec);
+		const transcript = scopeSegments(
+			shared.segments,
+			chunk.startSec,
+			chunk.endSec,
+		);
+		// A silent segment (gap, music, intro) has nothing to recap and the skill
+		// would only refuse — skip it instead of a doomed author, unless the user
+		// gave a direction to author from (an angle alone is not content).
+		if (!hasAuthorableContent(transcript, shared.direction)) {
+			skipped.push(`segment ${chunk.label}: no speech in this segment`);
+			logRun(`${pre}— skipped ${chunk.label} (no speech)`, "warn");
+			done++;
+			onChunkDone?.(done, chunks.length);
+			return;
+		}
 		const direction = angle
 			? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
 			: shared.direction;
 		const prompt = compileHyperframesPrompt({
 			selections: shared.selections,
+			referenceCompositions: shared.referenceCompositions,
 			look: shared.look,
 			direction,
 			scope: {
@@ -398,13 +541,18 @@ async function authorChunks({
 			transcript,
 			canvas: shared.canvas,
 			preferenceNotes: shared.preferenceNotes,
-			densityHint: `Aim for ~${Math.max(1, Math.round(chunkLen / 15))} timed graphics across this ${Math.round(chunkLen)}s segment — spread them out, at least one early.`,
+			densityHint: `At most ~${Math.max(1, Math.round(chunkLen / 45))} SUBSTANTIVE graphics across this ${Math.round(chunkLen)}s segment — a recap list, a data chart, or an explanatory card, NOT title pills. Quality over quantity: a topic earns at most one strong graphic, held long enough to read. Make fewer (or none) rather than pad with labels.`,
 		});
 		try {
-			logRun(`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label})…`);
+			logRun(
+				`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label}) — ${transcript.trim().length} transcript chars…`,
+			);
 			const res = await fetch("/api/hyperframes/author", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: {
+					"content-type": "application/json",
+					...buildAiAuthHeaders(),
+				},
 				body: JSON.stringify({
 					prompt,
 					fps: shared.canvas.fps,
@@ -426,6 +574,7 @@ async function authorChunks({
 			rendered.push({
 				chunk,
 				compId,
+				brief: prompt,
 				file: new File([blob], `hf-authored-${chunk.index}.webm`, {
 					type: "video/webm",
 				}),
@@ -447,9 +596,13 @@ async function authorChunks({
 	return { rendered, skipped, tokensUsed };
 }
 
-/** claude-code spawns a local CLI per call → 1; hosted endpoints parallelize → 2. */
+/**
+ * Author chunks in parallel to cut the whole-timeline run's wall-clock. Each
+ * claude-code call spawns a local CLI, so 2 keeps the machine sane while roughly
+ * halving a multi-segment run; hosted endpoints parallelize more cheaply → 3.
+ */
 function authorConcurrency(): number {
-	return useAiSettingsStore.getState().authMode === "claude-code" ? 1 : 2;
+	return useAiSettingsStore.getState().authMode === "claude-code" ? 2 : 3;
 }
 
 /**
@@ -463,24 +616,52 @@ export async function runHyperframesWholeTimeline({
 	editor,
 	onProgress,
 	signal,
+	range,
 }: {
 	editor: EditorCore;
 	onProgress: (p: RunProgress) => void;
 	signal?: AbortSignal;
+	/**
+	 * When set, author graphics ONLY across this [startSec, endSec] section of the
+	 * timeline (the "Run Selected Video ONLY" mode) instead of the whole timeline.
+	 * The transcript still covers everything; only these chunks get graphics.
+	 */
+	range?: { startSec: number; endSec: number };
 }): Promise<{ placed: number; skipped: string[]; tokensUsed: number }> {
 	const totalSec = editor.timeline.getTotalDuration() / TICKS_PER_SECOND;
 	if (totalSec < 1) {
 		throw new Error("Add some footage to the timeline first.");
 	}
-	const chunks = planAuthorChunks(totalSec);
+	if (range && range.endSec - range.startSec < 1) {
+		throw new Error("Select at least ~1s of footage to run on.");
+	}
+	const chunks = range
+		? planAuthorChunksOver({ startSec: range.startSec, endSec: range.endSec })
+		: planAuthorChunks(totalSec);
 
 	useRunLogStore.getState().setOpen(true);
 	logRun(
-		`▶ RUN HYPERFRAMES — authoring graphics across the whole video (${chunks.length} segment${chunks.length === 1 ? "" : "s"})`,
+		`▶ RUN HYPERFRAMES — authoring graphics across ${
+			range ? "the selected section" : "the whole video"
+		} (${chunks.length} segment${chunks.length === 1 ? "" : "s"})`,
 	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
-	const shared = await buildSharedInputs({ editor, totalSec, signal });
+	const shared = await buildSharedInputs({ editor, signal });
+	logTranscriptSummary(shared.segments);
+
+	// No speech across the run's span (and no direction) → don't spawn one doomed
+	// author per segment. Fail fast with the reason (run-log + the thrown toast).
+	const spanStart = range ? range.startSec : 0;
+	const spanEnd = range ? range.endSec : totalSec;
+	if (
+		!hasAuthorableContent(
+			scopeSegments(shared.segments, spanStart, spanEnd),
+			shared.direction,
+		)
+	) {
+		throw noAuthorableContentError(editor);
+	}
 
 	onProgress({
 		stage: "rendering",
@@ -518,10 +699,13 @@ export async function runHyperframesWholeTimeline({
 			compId: r.compId,
 			templateId: `authored:${r.compId ?? r.chunk.index}`,
 			name: `HyperFrames: ${r.chunk.label}`,
+			brief: r.brief,
 		})),
 	});
 	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
-	logRun(`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`);
+	logRun(
+		`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`,
+	);
 	onProgress({
 		stage: "done",
 		detail: `Placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video.`,
@@ -575,7 +759,19 @@ export async function runHyperframesVariants({
 	);
 
 	onProgress({ stage: "transcribing", detail: "Reading the timeline…" });
-	const shared = await buildSharedInputs({ editor, totalSec, signal });
+	const shared = await buildSharedInputs({ editor, signal });
+	logTranscriptSummary(shared.segments);
+
+	// Whole-video pass with no speech (and no direction) → every version's every
+	// segment would refuse. Fail fast with the reason instead of N×M doomed authors.
+	if (
+		!hasAuthorableContent(
+			scopeSegments(shared.segments, 0, totalSec),
+			shared.direction,
+		)
+	) {
+		throw noAuthorableContentError(editor);
+	}
 
 	const versions: AuthoredVersion[] = [];
 	let tokensUsed = 0;
@@ -588,7 +784,11 @@ export async function runHyperframesVariants({
 		if (signal?.aborted) throw new Error("Cancelled");
 		const angle = VARIANT_ANGLES[i];
 		logRun(`— Version ${i + 1}/${n}: ${angle.split(" — ")[0]}`);
-		const { rendered, skipped, tokensUsed: t } = await authorChunks({
+		const {
+			rendered,
+			skipped,
+			tokensUsed: t,
+		} = await authorChunks({
 			chunks,
 			shared,
 			angle,

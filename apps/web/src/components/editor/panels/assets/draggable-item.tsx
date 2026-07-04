@@ -56,6 +56,10 @@ export function DraggableItem({
 
 	const handleAddToTimeline = () => {
 		onAddToTimeline?.({ currentTime: editor.playback.getCurrentTime() });
+		// Drop focus off the "+" button so bare-key timeline shortcuts (Delete,
+		// gap-delete) work immediately instead of after the first manual interaction.
+		const active = document.activeElement;
+		if (active instanceof HTMLElement) active.blur();
 	};
 
 	const emptyImg = new window.Image();

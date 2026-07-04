@@ -39,6 +39,16 @@ const HEDGES: ReadonlyArray<readonly [string, string]> = [
 /** Whisper marks an interrupted / cut-off word with a trailing dash. */
 const CUTOFF = /[-—]\s*$/;
 
+/**
+ * True when a NORMALIZED token is a standalone disfluency ("um"/"uh"/"er"...). The
+ * shared content-word guard (coalescing + micro-clip sweep) reuses this so both
+ * classify fillers exactly as this detector does, rather than re-inventing the set.
+ * Two-word hedges are deliberately not covered: those words carry meaning alone.
+ */
+export function isFillerToken(normalized: string): boolean {
+	return SINGLE_FILLERS.has(normalized);
+}
+
 function fillerOp({
 	start,
 	end,

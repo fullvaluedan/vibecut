@@ -48,7 +48,11 @@ export async function POST(req: NextRequest) {
 
 	try {
 		const { compId, usage } = await authorComposition({
-			prompt: body.prompt.slice(0, 12000),
+			// Sized to the legitimate brief: rubric + transcript + up to two embedded
+			// FORM exemplars (~3.5k each) + the compact asset palette + hard rules land
+			// in ~19-22k. The old 12k cap silently dropped the transcript AND the form
+			// exemplars once many assets were selected (the palette pushed them past it).
+			prompt: body.prompt.slice(0, 24000),
 			fps,
 			width,
 			height,

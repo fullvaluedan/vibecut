@@ -2,8 +2,10 @@ import { cloneAnimations } from "@/animation";
 import type { ElementAnimations } from "@/animation/types";
 import type { MediaAsset } from "@/media/types";
 import { DEFAULTS } from "@/timeline/defaults";
+import { generateUUID } from "@/utils/id";
 import type {
 	CreateUploadAudioElement,
+	CreateVideoElement,
 	TimelineElement,
 	AudioElement,
 	VideoElement,
@@ -75,7 +77,10 @@ export function doesElementHaveEnabledAudio({
 export function buildSeparatedAudioElement({
 	sourceElement,
 }: {
-	sourceElement: VideoElement;
+	// Accepts a not-yet-inserted create-shape (Omit<VideoElement,"id">) too, so the
+	// separated audio can be built BEFORE insert (drag-from-bin batch). A full
+	// VideoElement is still assignable. Only non-id fields are read.
+	sourceElement: CreateVideoElement;
 }): CreateUploadAudioElement {
 	return {
 		type: "audio",
@@ -103,6 +108,36 @@ export function buildSeparatedAudioElement({
 		animations: cloneVolumeAnimations({
 			animations: sourceElement.animations,
 		}),
+	};
+}
+
+/**
+ * Build a video + its separated source-audio as a LINKED pair, ready to insert in
+ * one batch (drag-from-bin) instead of insert-then-toggle. The video is returned
+ * pre-marked separated (`isSourceAudioEnabled: false`) and both share a fresh
+ * `linkId`. Returns null when there's nothing to separate — mirrors
+ * `canExtractSourceAudio` but works on a not-yet-inserted create-shape (which has
+ * no `id`, so it can't satisfy the `TimelineElement`-typed guards): a video whose
+ * source audio is still enabled, on an asset whose audio wasn't detected absent.
+ */
+export function buildSeparatedVideoAudioPair({
+	videoElement,
+	mediaAsset,
+}: {
+	videoElement: CreateVideoElement;
+	mediaAsset: MediaAudioState | null | undefined;
+}): { video: CreateVideoElement; audio: CreateUploadAudioElement } | null {
+	if (
+		videoElement.isSourceAudioEnabled === false ||
+		!mediaAsset ||
+		mediaAsset.hasAudio === false
+	) {
+		return null;
+	}
+	const linkId = generateUUID();
+	return {
+		video: { ...videoElement, isSourceAudioEnabled: false, linkId },
+		audio: { ...buildSeparatedAudioElement({ sourceElement: videoElement }), linkId },
 	};
 }
 

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
+import { resolveClaude } from "./renderer";
 import type {
 	ClaudeAuth,
 	EffectPlan,
@@ -172,8 +173,9 @@ function planViaClaudeCode(
 	prompt: string,
 ): Promise<{ raw: unknown; usage: TokenUsage | null }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("claude", ["-p", "--output-format", "json"], {
-			shell: true,
+		const { command, useShell } = resolveClaude();
+		const child = spawn(command, ["-p", "--output-format", "json"], {
+			shell: useShell,
 			stdio: ["pipe", "pipe", "pipe"],
 			env: { ...process.env, NO_COLOR: "1" },
 		});
@@ -183,17 +185,54 @@ function planViaClaudeCode(
 		child.stderr.on("data", (d) => (err += d.toString()));
 		child.on("error", reject);
 		child.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}`));
+			// claude-code `--output-format json` reports API/auth errors in the STDOUT
+			// JSON (`is_error` / `api_error_status` / `result`) — typically with a
+			// NON-zero exit and EMPTY stderr. Parse stdout FIRST so we surface the real
+			// reason (e.g. a 401 auth failure) instead of a bare "exited 1:".
+			let wrapper: {
+				result?: string;
+				is_error?: boolean;
+				api_error_status?: number;
+				usage?: { input_tokens?: number; output_tokens?: number };
+			} | null = null;
+			try {
+				wrapper = JSON.parse(out);
+			} catch {
+				wrapper = null;
+			}
+
+			if (wrapper?.is_error === true) {
+				const status = wrapper.api_error_status;
+				const detail =
+					typeof wrapper.result === "string"
+						? wrapper.result
+						: `claude CLI error (exit ${code})`;
+				const authHint =
+					status === 401 || /authenticat|invalid auth|credential/i.test(detail)
+						? " — the claude CLI is not signed in. Run `claude setup-token` (or `claude` then /login) in a terminal, or switch Settings → AI to an Anthropic API key."
+						: "";
+				reject(
+					new Error(
+						`Claude planning failed${status ? ` (API ${status})` : ""}: ${detail}${authHint}`,
+					),
+				);
 				return;
 			}
+
+			if (code !== 0) {
+				// A wiped/missing CLI binary surfaces as "not recognized"/ENOENT — point
+				// at the escape hatch rather than a cryptic shell error.
+				const hint = /not recognized|ENOENT|not found|cannot find/i.test(err)
+					? " — the claude CLI isn't runnable (a failed update may have wiped its binary). Set FRAMECUT_CLAUDE to a working claude path, or restore the CLI."
+					: "";
+				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}${hint}`));
+				return;
+			}
+
 			try {
-				const wrapper = JSON.parse(out) as {
-					result?: string;
-					usage?: { input_tokens?: number; output_tokens?: number };
-				};
-				const text = typeof wrapper.result === "string" ? wrapper.result : out;
-				const usage = normalizeAnthropicUsage(wrapper.usage);
+				const text =
+					typeof wrapper?.result === "string" ? wrapper.result : out;
+				const usage = normalizeAnthropicUsage(wrapper?.usage);
 				resolve({ raw: extractJson(text), usage });
 			} catch (e) {
 				reject(new Error(`Could not parse claude CLI output: ${String(e)}`));
@@ -433,7 +472,10 @@ export type DirectorOpCategory =
 	| "llm"
 	| "vision"
 	| "repeat"
-	| "deadair";
+	| "deadair"
+	| "noise"
+	| "redundancy"
+	| "context";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {
@@ -449,6 +491,19 @@ export interface DirectorOp {
 	targetStartSec?: number;
 	/** Cut category for taste learning (client-assigned; absent on raw LLM ops). */
 	category?: DirectorOpCategory;
+	/**
+	 * For `redundancy` cuts: the id of the redundancy GROUP this take belongs to
+	 * (client-assigned). Lets the review panel offer swap-to-alternate — picking a
+	 * different keeper rebuilds exactly this group's cut ops. Absent on every other op.
+	 */
+	groupId?: string;
+	/**
+	 * Whether this op starts ACCEPTED in the review (client-assigned). Absent or
+	 * `true` = accepted by default (the user opts out); `false` = surfaced as an
+	 * opt-in row that starts unchecked, so higher-recall / lower-confidence
+	 * candidates are never auto-applied.
+	 */
+	defaultAccept?: boolean;
 }
 
 export interface DirectorPlan {
@@ -474,6 +529,8 @@ export interface DirectorSegment {
 	silenceBeforeSec?: number;
 	/** Take-cluster id when this row is an alternate take/restatement already flagged for de-dup. */
 	clusterId?: string;
+	/** Emphasis/anchor importance score 0..1 (keep-side); absent on cut-only runs. */
+	importance?: number;
 }
 
 /** One source-clip summary the planner reads above the signal table (the asset catalog). */
@@ -525,29 +582,33 @@ function stableOpId(op: {
 }
 
 /**
- * Render the per-segment signal table the planner reasons over (pipe-escaped). A
- * "grp" (take-cluster) column is added ONLY when at least one segment carries a
- * clusterId — so the no-cluster path stays byte-identical to the pre-cluster table.
+ * Render the per-segment signal table the planner reasons over (pipe-escaped).
+ * Optional columns are added ONLY when a segment carries the field: "grp" (take
+ * cluster) and "imp" (keep-side importance). With neither present the table is
+ * byte-identical to the original cut-only table.
  */
 export function renderSignalTable(segments: readonly DirectorSegment[]): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
-	const header = hasClusters
-		? "| time (s) | src | grp | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|---|"
-		: "| time (s) | src | text | loudness | wpm | filler | silence(s) |\n|---|---|---|---|---|---|---|";
+	const hasImportance = segments.some((s) => s.importance !== undefined);
+
+	const headers = ["time (s)", "src"];
+	if (hasClusters) headers.push("grp");
+	if (hasImportance) headers.push("imp");
+	headers.push("text", "loudness", "wpm", "filler", "silence(s)");
+	const header = `| ${headers.join(" | ")} |\n|${headers.map(() => "---").join("|")}|`;
+
 	const rows = segments.map((s) => {
-		const time = `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`;
-		const src = s.assetId ? s.assetId.slice(0, 6) : "-";
-		const text = s.text.trim().replace(/\|/g, "/").slice(0, 120) || "-";
-		const loud =
-			s.loudnessRelative !== undefined
-				? s.loudnessRelative.toFixed(2)
-				: (s.energy?.toFixed(3) ?? "-");
-		const wpm = s.wpm !== undefined ? String(Math.round(s.wpm)) : "-";
-		const filler = s.fillerCandidate ? "yes" : "-";
-		const silence = s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-";
-		return hasClusters
-			? `| ${time} | ${src} | ${s.clusterId ?? "-"} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`
-			: `| ${time} | ${src} | ${text} | ${loud} | ${wpm} | ${filler} | ${silence} |`;
+		const cells = [`${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}`, s.assetId ? s.assetId.slice(0, 6) : "-"];
+		if (hasClusters) cells.push(s.clusterId ?? "-");
+		if (hasImportance) cells.push(s.importance !== undefined ? s.importance.toFixed(2) : "-");
+		cells.push(
+			s.text.trim().replace(/\|/g, "/").slice(0, 120) || "-",
+			s.loudnessRelative !== undefined ? s.loudnessRelative.toFixed(2) : (s.energy?.toFixed(3) ?? "-"),
+			s.wpm !== undefined ? String(Math.round(s.wpm)) : "-",
+			s.fillerCandidate ? "yes" : "-",
+			s.silenceBeforeSec !== undefined ? s.silenceBeforeSec.toFixed(1) : "-",
+		);
+		return `| ${cells.join(" | ")} |`;
 	});
 	return [header, ...rows].join("\n");
 }
@@ -579,15 +640,22 @@ export function buildDirectorPrompt({
 	catalog?: readonly DirectorAssetSummary[];
 }): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
+	const hasImportance = segments.some((s) => s.importance !== undefined);
 	const catalogBlock =
 		catalog && catalog.length >= 2 ? `${renderAssetCatalog(catalog)}\n\n` : "";
 	const clusterRule = hasClusters
 		? `\n- Rows sharing a "grp" id are alternate takes/restatements of the same line that the editor has ALREADY flagged for de-duplication — do NOT emit "cut" or "take_select" for grp rows; they are handled. Apply your own judgment only to redundancy NOT marked with a grp (e.g. the same point paraphrased in different words).`
 		: "";
+	const importanceRule = hasImportance
+		? `\n- Each row has an "imp" score (0-1): a deterministic emphasis/anchor signal (loudness + steady delivery + content density). Lean toward KEEPING high-imp rows and cutting low-imp ones when trimming for pace — but imp measures EMPHASIS, not meaning, so never cut a load-bearing line just because its imp is low.`
+		: "";
+	const keepRule = hasImportance
+		? `\n- Emit "keep" ops on the genuinely LOAD-BEARING spans — the thesis, the payoff, a landed joke, a surprising or pivotal line — ESPECIALLY ones the imp score underrates (a quiet but important moment imp can't detect). A "keep" op protects that span from removal; it never deletes anything.`
+		: "";
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
-- "cut": remove a span [startSec,endSec) - retakes and RESTARTS (keep the LAST attempt), REDUNDANT RESTATEMENTS (the speaker makes the same point a second time, even in DIFFERENT words - keep the single clearest version and cut the rest), stutters/false-starts, contentless filler runs, off-topic tangents, dead-weight intros/outros, and DEAD TIME where nothing useful is said (long fumbling / "let me just..." while figuring something out). This is ONE continuous recording, so expect the speaker to circle back and repeat themselves - cut that redundancy aggressively; pacing beats completeness.
+- "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness.
 - "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
 - "keep": optionally mark a load-bearing span you deliberately kept.
@@ -595,7 +663,7 @@ ${catalogBlock}Emit a plan of typed OPERATIONS:
 Rules:
 - Pacing beats completeness, but NEVER cut content the video's point depends on. Keep the speaker's personality; only cut what stalls the video.
 - Boundaries must align with the segment timestamps. Total duration is ${totalSec.toFixed(2)}s; every startSec/endSec/targetStartSec must be within [0, ${totalSec.toFixed(2)}].
-- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}
+- confidence is 0..1 - be honest. If there is nothing to do, return an empty operations list.${clusterRule}${importanceRule}${keepRule}
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}

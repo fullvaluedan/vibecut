@@ -38,6 +38,7 @@ import {
 import { UpdateElementsCommand } from "@/commands/timeline/element/update-elements";
 import type { TextElement } from "@/timeline";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { loadFonts } from "@/fonts/google-fonts";
 
 export function TemplateControlsTab({
 	element,
@@ -135,6 +136,8 @@ export function TemplateControlsTab({
 	const commitVariable = (key: string, value: string) => {
 		const next = { ...variables, [key]: value };
 		setVariables(next);
+		// A picked Google font must be fetched before it renders in the preview.
+		if (key === "font" && value) void loadFonts({ families: [value] });
 		apply(next, durationSec);
 	};
 
@@ -167,7 +170,8 @@ export function TemplateControlsTab({
 			}),
 		});
 		toast.info("Template detached", {
-			description: "Now a plain text element — edit it in the Text/Transform tabs.",
+			description:
+				"Now a plain text element — edit it in the Text/Transform tabs.",
 		});
 	};
 

@@ -16,6 +16,11 @@ import { getMotionTemplate } from "@/features/motion-templates/templates";
 import type { TimelineElement, TimelineTrack } from "@/timeline";
 import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
+import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
+import { DirectorPanel } from "@/features/ai-generate/director/components/director-panel";
+import { DirectorCutPanel } from "@/features/ai-generate/director/components/director-cut-panel";
+import { useVariantPickerStore } from "@/features/ai-generate/components/variant-picker-dialog";
+import { HyperframesDraftsPanel } from "@/features/ai-generate/components/hyperframes-drafts-panel";
 
 type ElementWithTrack = { track: TimelineTrack; element: TimelineElement };
 
@@ -62,8 +67,36 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
+	const assembleSurface = useDirectorPlanStore((s) => s.surface);
+	const assembleMode = useDirectorPlanStore((s) => s.mode);
+	const assembleDraft = useDirectorPlanStore((s) => s.draft);
+	const cutPlan = useDirectorPlanStore((s) => s.plan);
+	const hasHfDrafts = useVariantPickerStore(
+		(s) => (s.versions?.length ?? 0) > 0,
+	);
+
+	// Auto-assemble review takes over the whole inspector while a draft is active.
+	if (assembleSurface === "panel" && assembleMode === "assemble" && assembleDraft) {
+		return <DirectorPanel />;
+	}
+
+	// The docked cut review (U6) takes over the inspector the same way, so it stays
+	// open + editable while the user works and survives deselecting all clips.
+	if (assembleSurface === "panel" && assembleMode === "cut" && cutPlan) {
+		return <DirectorCutPanel />;
+	}
 
 	if (selectedElements.length === 0) {
+		// HyperFrames version drafts exist BEFORE any clip is placed, so nothing is
+		// selected to review them from — dock them in the empty inspector so they're
+		// reviewable + applicable without reopening the (now persistent) picker modal.
+		if (hasHfDrafts) {
+			return (
+				<div className="panel bg-background flex h-full flex-col overflow-hidden rounded-sm border">
+					<HyperframesDraftsPanel />
+				</div>
+			);
+		}
 		return (
 			<div className="panel bg-background flex h-full flex-col items-center justify-center overflow-hidden rounded-sm border">
 				<EmptyView />

@@ -3,7 +3,7 @@ import { frameRateToFloat } from "@/fps/utils";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { FrameRate } from "opencut-wasm";
 
-interface MediaBacked {
+export interface MediaBacked {
 	type: "video" | "audio";
 	mediaId: string;
 	startTime: number;
@@ -12,18 +12,42 @@ interface MediaBacked {
 	linkId?: string;
 }
 
-function asMediaBacked(el: TimelineElement): MediaBacked | null {
+export function asMediaBacked(el: TimelineElement): MediaBacked | null {
 	if ((el.type === "video" || el.type === "audio") && "mediaId" in el) {
 		return el as unknown as MediaBacked;
 	}
 	return null;
 }
 
-function sourceOverlap(a: MediaBacked, b: MediaBacked): boolean {
+export function sourceOverlap(a: MediaBacked, b: MediaBacked): boolean {
 	return (
 		a.trimStart < b.trimStart + b.duration &&
 		a.trimStart + a.duration > b.trimStart
 	);
+}
+
+/**
+ * The signed frame drift of a video/audio pair, audio relative to video:
+ *   (start − trimStart)_audio − (start − trimStart)_video
+ * Positive = audio is later than the picture. Shared by the per-clip
+ * `computeAvSyncOffset` and the once-per-tracks `buildAvSyncMap` so both
+ * report identical values.
+ */
+export function computeOffsetFrames({
+	self,
+	partner,
+	fps,
+}: {
+	self: MediaBacked;
+	partner: MediaBacked;
+	fps: FrameRate | null;
+}): number {
+	const video = self.type === "video" ? self : partner;
+	const audio = self.type === "audio" ? self : partner;
+	const offsetTicks =
+		audio.startTime - audio.trimStart - (video.startTime - video.trimStart);
+	const fpsFloat = fps ? frameRateToFloat(fps) : 30;
+	return Math.round((offsetTicks / TICKS_PER_SECOND) * fpsFloat);
 }
 
 /**
@@ -75,13 +99,6 @@ export function computeAvSyncOffset({
 	}
 	if (!partner || !partnerRef) return null;
 
-	const video = self.type === "video" ? self : partner;
-	const audio = self.type === "audio" ? self : partner;
-	const offsetTicks =
-		audio.startTime - audio.trimStart - (video.startTime - video.trimStart);
-	const fpsFloat = fps ? frameRateToFloat(fps) : 30;
-	const offsetFrames = Math.round(
-		(offsetTicks / TICKS_PER_SECOND) * fpsFloat,
-	);
+	const offsetFrames = computeOffsetFrames({ self, partner, fps });
 	return { offsetFrames, partner: partnerRef };
 }

@@ -4,23 +4,27 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { enqueueRender, resolveHyperframesCli, runNode } from "./renderer";
+import { fetchRegistryComposition, registryKindDir } from "./registry-fetch";
 
 /**
- * The "bake library": registry BLOCKS are full standalone HyperFrames
- * compositions (own dimensions, duration, GSAP timeline). Native motion
- * templates can't reproduce them (maps, charts, social cards, logo outros),
- * so we render each one ONCE through the pinned hyperframes CLI to a cached
- * transparent WebM and reuse that file for every drop. The cache key folds in
- * the composition's content hash, so a registry update re-bakes automatically.
+ * The "bake library": registry items that are full standalone HyperFrames
+ * compositions (own dimensions, duration, GSAP timeline) — blocks, full-frame
+ * examples, and any composition-bearing component. Native motion templates can't
+ * reproduce them (maps, charts, social cards, designed layouts), so we render
+ * each one ONCE through the pinned hyperframes CLI to a cached transparent WebM
+ * and reuse that file for every drop. The cache key folds in the composition's
+ * content hash, so a registry update re-bakes automatically.
  */
 
 const REGISTRY_BASE =
 	"https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
 
 export interface BakeJob {
-	/** Registry block name, e.g. "yt-lower-third". */
+	/** Registry item name, e.g. "yt-lower-third". */
 	name: string;
 	fps: number;
+	/** Registry item type (e.g. "hyperframes:example"); defaults to a block. */
+	type?: string;
 	/** Override for tests; defaults to the official registry. */
 	registryBase?: string;
 }
@@ -38,23 +42,7 @@ export interface BakeOutcome {
 	cached: boolean;
 }
 
-interface RegistryFile {
-	path: string;
-	target?: string;
-	type?: string;
-}
-
-interface RegistryItem {
-	name: string;
-	type: string;
-	title?: string;
-	description?: string;
-	duration?: number;
-	dimensions?: { width?: number; height?: number };
-	files?: RegistryFile[];
-}
-
-/** Baked blocks persist here, separate from per-run comps under generated/. */
+/** Baked items persist here, separate from per-run comps under generated/. */
 export function bakedRoot(): string {
 	return path.join(os.homedir(), ".framecut", "baked");
 }
@@ -68,39 +56,33 @@ async function fetchOk(url: string): Promise<Response> {
 }
 
 /**
- * Renders a registry block to a cached transparent WebM. Idempotent: a second
- * call with the same block + dims + fps returns the cached file instantly.
+ * Renders a registry item (block / full-frame example / composition-bearing
+ * component) to a cached transparent WebM. Idempotent: a second call with the
+ * same item + dims + fps returns the cached file instantly. An item with no
+ * composition file (a snippet-only component) cannot be baked standalone and
+ * throws a clear error.
  */
-export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
+export async function bakeRegistryItem(job: BakeJob): Promise<BakeOutcome> {
 	const base = job.registryBase ?? REGISTRY_BASE;
 	const fps = Math.round(job.fps) || 30;
+	const type = job.type ?? "hyperframes:block";
+	const dir = registryKindDir(type);
 
-	const item = (await (
-		await fetchOk(`${base}/blocks/${job.name}/registry-item.json`)
-	).json()) as RegistryItem;
-	if (item.type !== "hyperframes:block") {
+	const { compFile, compHtml, files, title, width, height, durationSec } =
+		await fetchRegistryComposition({
+			name: job.name,
+			type,
+			registryBase: base,
+		});
+	if (!compFile) {
 		throw new Error(
-			`"${job.name}" is a ${item.type}, not a block — only blocks can be baked yet.`,
+			`"${job.name}" has no composition file to render. It cannot be baked standalone.`,
 		);
 	}
 
-	const width = item.dimensions?.width ?? 1920;
-	const height = item.dimensions?.height ?? 1080;
-	const durationSec = item.duration ?? 5;
-	const files = item.files ?? [];
-	const compFile = files.find((f) => f.type === "hyperframes:composition");
-	if (!compFile) {
-		throw new Error(`Block "${job.name}" has no composition file to render.`);
-	}
-
-	// Pull the composition first — it doubles as the content-hash source.
-	const compHtml = await (
-		await fetchOk(`${base}/blocks/${job.name}/${compFile.path}`)
-	).text();
-
 	const hash = createHash("sha256")
 		.update(compHtml)
-		.update(`|${width}x${height}@${fps}`)
+		.update(`|${width}x${height}@${fps}|${type}`)
 		.digest("hex")
 		.slice(0, 16);
 	const bakeKey = `${job.name}-${width}x${height}-${fps}-${hash}`;
@@ -111,7 +93,7 @@ export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
 		return {
 			videoPath: outPath,
 			bakeKey,
-			title: item.title ?? job.name,
+			title,
 			width,
 			height,
 			durationSec,
@@ -127,10 +109,18 @@ export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
 		if (f === compFile) continue;
 		const buf = Buffer.from(
 			await (
-				await fetchOk(`${base}/blocks/${job.name}/${f.path}`)
+				await fetchOk(`${base}/${dir}/${job.name}/${f.path}`)
 			).arrayBuffer(),
 		);
-		const target = path.join(compDir, f.target ?? f.path);
+		// The registry-supplied target/path is untrusted — contain it inside the
+		// bake dir so a crafted entry can't write attacker bytes elsewhere on disk.
+		const target = path.resolve(compDir, f.target ?? f.path);
+		const root = path.resolve(compDir);
+		if (target !== root && !target.startsWith(root + path.sep)) {
+			throw new Error(
+				`Refusing to write a registry file outside the bake dir: ${f.target ?? f.path}`,
+			);
+		}
 		await mkdir(path.dirname(target), { recursive: true });
 		await writeFile(target, buf);
 	}
@@ -139,7 +129,7 @@ export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
 		JSON.stringify(
 			{
 				name: job.name,
-				title: item.title ?? job.name,
+				title,
 				width,
 				height,
 				durationSec,
@@ -180,10 +170,13 @@ export async function bakeRegistryBlock(job: BakeJob): Promise<BakeOutcome> {
 	return {
 		videoPath: outPath,
 		bakeKey,
-		title: item.title ?? job.name,
+		title,
 		width,
 		height,
 		durationSec,
 		cached: false,
 	};
 }
+
+/** @deprecated renamed to bakeRegistryItem; kept for existing callers/tests. */
+export const bakeRegistryBlock = bakeRegistryItem;

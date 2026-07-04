@@ -9,12 +9,26 @@ import { extractTimelineAudio } from "@/media/mediabunny";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { EditorCore } from "@/core";
+import {
+	collectVideoClipSpansSec,
+	dropEmphasisPauses,
+	refineSilenceRanges,
+} from "./silence-refine";
+import {
+	getCachedTranscript,
+	getCachedWords,
+	type TranscriptWordLite,
+} from "@/features/transcription/transcript-cache";
 
 const WINDOW_SEC = 0.05;
 const MIN_SILENCE_SEC = 0.6;
 /** Keep this much breathing room around speech on each side of a cut. */
 const PADDING_SEC = 0.15;
 const RMS_THRESHOLD = 0.015;
+/** Snap a cut edge this close to a clip boundary out to it (kills padding slivers). */
+const SNAP_SEC = 0.25;
+/** Drop a refined range shorter than this (matches the detector's own floor). */
+const MIN_REMOVED_SEC = 0.2;
 
 export function detectSilentRangesSec({
 	samples,
@@ -59,8 +73,16 @@ export function detectSilentRangesSec({
 
 export async function runRemoveSilences({
 	editor,
+	words,
 }: {
 	editor: EditorCore;
+	/**
+	 * Word timings for emphasis-pause protection. When supplied (the Director passes
+	 * the fresh transcript it just made) they're used directly, so protection works
+	 * even on a first run with nothing cached yet. Omitted (the standalone menu action)
+	 * falls back to the cached lookup (same behavior as before).
+	 */
+	words?: readonly TranscriptWordLite[];
 }): Promise<{ cuts: number; removedSec: number }> {
 	const totalDuration = editor.timeline.getTotalDuration();
 	if (totalDuration / TICKS_PER_SECOND < 1) {
@@ -76,15 +98,45 @@ export async function runRemoveSilences({
 		sampleRate: DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
 	});
 	const silent = detectSilentRangesSec({ samples, sampleRate });
-	if (!silent.length) {
+	// Emphasis-pause protection (#4/U3): keep short, speech-bounded in-dialog pauses.
+	// Best-effort + NON-blocking — read the CACHED transcript only; never trigger a
+	// transcription here. Prefer WORD-level timings: the pause classifier snaps a gap
+	// to a word edge within 0.25s, and a Whisper SEGMENT spans a whole sentence, so
+	// segment boundaries almost never land on a mid-dialog pause's edges. Fall back to
+	// segments (safe, rarely protects) then to nothing (no cache -> prior behavior).
+	// Runs before refineSilenceRanges so a range is classified before it can be split.
+	const suppliedOrCachedWords =
+		words && words.length > 0 ? words : getCachedWords(editor);
+	const speechLines =
+		suppliedOrCachedWords.length > 0
+			? suppliedOrCachedWords
+			: (getCachedTranscript(editor) ?? []);
+	const speechAware = dropEmphasisPauses({
+		ranges: silent,
+		segments: speechLines,
+		paddingSec: PADDING_SEC,
+	});
+	// Issue 2: never delete a whole VIDEO clip on low audio (quiet showcase/b-roll
+	// footage), and snap cut edges to clip boundaries so a cut never leaves a
+	// ~4-frame remnant.
+	const refined = refineSilenceRanges({
+		ranges: speechAware,
+		clipSpans: collectVideoClipSpansSec({
+			tracks: editor.scenes.getActiveScene().tracks,
+			ticksPerSecond: TICKS_PER_SECOND,
+		}),
+		snapSec: SNAP_SEC,
+		minSec: MIN_REMOVED_SEC,
+	});
+	if (!refined.length) {
 		return { cuts: 0, removedSec: 0 };
 	}
-	const ranges: TimeRange[] = silent.map((r) => ({
+	const ranges: TimeRange[] = refined.map((r) => ({
 		start: Math.round(r.start * TICKS_PER_SECOND),
 		end: Math.round(r.end * TICKS_PER_SECOND),
 	}));
 	const command = new RemoveRangesCommand({ ranges });
 	editor.command.execute({ command });
-	const removedSec = silent.reduce((acc, r) => acc + (r.end - r.start), 0);
+	const removedSec = refined.reduce((acc, r) => acc + (r.end - r.start), 0);
 	return { cuts: command.getRemovedCount(), removedSec };
 }

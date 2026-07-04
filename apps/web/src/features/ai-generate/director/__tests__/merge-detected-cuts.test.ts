@@ -87,6 +87,26 @@ describe("mergeDetectedCuts — keeper safety (KTD7)", () => {
 		expect(merged[0].id).toBe("fil");
 	});
 
+	test("additive backstop: a repeat the LLM missed survives the union (U5)", () => {
+		// LLM plan cut one repeat [0,3]; the deterministic segment-repeat backstop
+		// caught a SECOND, non-overlapping repeat [10,13] the LLM missed → both land.
+		const merged = mergeDetectedCuts({
+			planOps: [op({ startSec: 0, endSec: 3, id: "llm" })],
+			extraOps: [op({ startSec: 10, endSec: 13, id: "backstop", category: "repeat" })],
+		});
+		expect(merged.map((o) => o.id)).toEqual(["llm", "backstop"]);
+	});
+
+	test("additive backstop: a repeat found by BOTH appears once (dedup — U5)", () => {
+		// The LLM and the backstop both flagged the same span → the overlapping
+		// backstop op is deduped, so the removal is represented once.
+		const merged = mergeDetectedCuts({
+			planOps: [op({ startSec: 0, endSec: 3, id: "llm" })],
+			extraOps: [op({ startSec: 0, endSec: 3, id: "backstop", category: "repeat" })],
+		});
+		expect(merged.map((o) => o.id)).toEqual(["llm"]);
+	});
+
 	test("empty keepers reproduces the pre-cluster merge (regression)", () => {
 		const merged = mergeDetectedCuts({
 			planOps: [op({ startSec: 10, endSec: 12 })],

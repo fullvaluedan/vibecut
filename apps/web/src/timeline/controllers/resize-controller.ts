@@ -10,7 +10,7 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 import {
-	computeGroupResize,
+	computeResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -60,7 +60,6 @@ export interface ResizeConfig {
 	getSceneTracks: () => SceneTracks;
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
-	selectedElements: ElementRef[];
 	discardPreview: () => void;
 	previewElements: (updates: GroupResizeUpdate[]) => void;
 	commitElements: (updates: GroupResizeUpdate[]) => void;
@@ -224,16 +223,16 @@ export class ResizeController {
 		const fps = this.config.getActiveProjectFps();
 		if (!fps) return;
 
+		// A trim resizes ONLY the grabbed clip, always (no group-resize). Building
+		// a one-member session from the grabbed ref means computeGroupResize is
+		// clamped solely by this clip's own source/neighbor bounds, never fanned
+		// out across the selection or clamped by another selected clip's tighter
+		// limit. (U2 / OQ2: group-resize removed by decision.)
 		const ref = { trackId: track.id, elementId: element.id };
-		const activeSelection = this.config.selectedElements.some(
-			(el) => el.trackId === track.id && el.elementId === element.id,
-		)
-			? this.config.selectedElements
-			: [ref];
 
 		const members = buildResizeMembers({
 			tracks: this.config.getSceneTracks(),
-			selectedElements: activeSelection,
+			selectedElements: [ref],
 		});
 		if (members.length === 0) return;
 
@@ -346,8 +345,8 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeGroupResize({
-			members: session.members,
+		const result = computeResize({
+			member: session.members[0],
 			side: session.side,
 			deltaTime,
 			fps: session.fps,

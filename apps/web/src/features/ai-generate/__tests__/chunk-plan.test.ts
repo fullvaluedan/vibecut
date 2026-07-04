@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	planAuthorChunks,
+	planAuthorChunksOver,
 	MAX_CHUNKS,
 	VARIANT_CHUNK_SEC,
 } from "../chunk-plan";
@@ -50,5 +51,38 @@ describe("planAuthorChunks", () => {
 	test("indices are sequential from 0", () => {
 		const chunks = planAuthorChunks(300);
 		chunks.forEach((c, i) => expect(c.index).toBe(i));
+	});
+});
+
+describe("planAuthorChunksOver (selected section)", () => {
+	test("a mid-timeline 200s span chunks within [start,end], absolute times", () => {
+		const chunks = planAuthorChunksOver({ startSec: 100, endSec: 300 }); // 200s / 90 = 3
+		expect(chunks.length).toBe(3);
+		expect(chunks[0].startSec).toBe(100);
+		expect(chunks[chunks.length - 1].endSec).toBeCloseTo(300, 5);
+		for (let i = 1; i < chunks.length; i++) {
+			expect(chunks[i].startSec).toBeCloseTo(chunks[i - 1].endSec, 5);
+		}
+	});
+
+	test("a short span → a single chunk over exactly that span", () => {
+		const chunks = planAuthorChunksOver({ startSec: 42, endSec: 70 });
+		expect(chunks.length).toBe(1);
+		expect(chunks[0].startSec).toBe(42);
+		expect(chunks[0].endSec).toBe(70);
+	});
+
+	test("swapped/negative bounds are normalized", () => {
+		const chunks = planAuthorChunksOver({ startSec: 120, endSec: 60 });
+		expect(chunks[0].startSec).toBe(60);
+		expect(chunks[chunks.length - 1].endSec).toBe(120);
+		const neg = planAuthorChunksOver({ startSec: -10, endSec: 30 });
+		expect(neg[0].startSec).toBe(0);
+	});
+
+	test("planAuthorChunks([0,total]) equals planAuthorChunksOver over the same span", () => {
+		const a = planAuthorChunks(480);
+		const b = planAuthorChunksOver({ startSec: 0, endSec: 480 });
+		expect(b).toEqual(a);
 	});
 });

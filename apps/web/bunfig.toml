@@ -1,0 +1,4 @@
+[test]
+# Mock the published opencut-wasm package, whose .wasm fails to instantiate under
+# `bun test` (wasm.__wbindgen_start is undefined). See test-preload.ts.
+preload = ["./test-preload.ts"]

@@ -67,28 +67,75 @@ export interface CompileHyperframesPromptInput {
 	 * is how a whole-video run used to yield a single graphic.
 	 */
 	densityHint?: string;
+	/**
+	 * Real registry compositions the user PICKED — their actual HTML, for the
+	 * author to adapt (keep the design, retarget the content). Truncated per-comp
+	 * by the renderer to stay within the token budget.
+	 */
+	referenceCompositions?: { name: string; title: string; html: string }[];
+	/**
+	 * Movement-aware safe-zone instruction from vision speaker detection
+	 * (`computeSafeZone`), e.g. "the left third stays clear … place the graphic
+	 * there". Present only when Director Vision is on; omitted otherwise so the
+	 * brief's robust lower-third default applies. The skill brief honors a named
+	 * SPEAKER LOCATION precisely.
+	 */
+	speakerSafeZone?: string;
 }
+
+/**
+ * Cap for LOOSE-inspiration reference HTML. Kept modest: the skill only needs the
+ * design language (layout, type, color, motion), and a smaller brief authors faster.
+ */
+const REFERENCE_HTML_MAX_CHARS = 6000;
+
+/**
+ * Cap for the BASE composition (the user's chosen style). Larger, because the skill
+ * must preserve its <style> block VERBATIM — truncating the CSS would force it to
+ * improvise the missing styles, which is exactly the drift we're preventing.
+ */
+const BASE_HTML_MAX_CHARS = 16000;
+
+/**
+ * Palette-mode FORM exemplars: how many, and how hard each is truncated. Kept SMALL
+ * and FEW on purpose — embedding several full compositions once bloated the brief to
+ * ~38k chars and buried the transcript (the skill then hallucinated off-topic). These
+ * are concrete forms (a chart, a swiss/editorial card) to INSTANTIATE with the
+ * transcript's content, not to copy verbatim, and they sit AFTER the transcript so
+ * grounding always comes first.
+ */
+const PALETTE_EXEMPLAR_COUNT = 2;
+const PALETTE_EXEMPLAR_MAX_CHARS = 3500;
 
 function secs(n: number): string {
 	return (Math.round(n * 10) / 10).toFixed(1);
 }
 
-function groupHeading(kind: HfSelectionAsset["kind"]): string {
-	switch (kind) {
-		case "template":
-			return "Motion templates (transparent text/graphic overlays)";
-		case "block":
-			return "Blocks (self-contained graphics)";
-		case "component":
-			return "Components (effect snippets to layer in)";
-		case "example":
-			return "Whole-video templates (they REFRAME the footage into a designed layout)";
-	}
+/**
+ * Order picks so the FORM assets the content->form rubric is most likely to use
+ * come first: editorial/grid LOOKS (examples), then ready GRAPHIC FORMS (blocks:
+ * chart, diagram, map), then components/snippets. Capped to `max`. In palette mode
+ * only the first 1-2 become embedded FORM exemplars, so this ordering (not raw
+ * list order) decides which forms the skill gets a concrete exemplar to build.
+ */
+export function prioritizeFormPicks(
+	picks: HfSelectionAsset[],
+	max: number,
+): HfSelectionAsset[] {
+	return [
+		...picks.filter((p) => p.kind === "example"),
+		...picks.filter((p) => p.kind === "block"),
+		...picks.filter((p) => p.kind !== "example" && p.kind !== "block"),
+	].slice(0, max);
 }
 
-function renderSelectionGroup(assets: HfSelectionAsset[]): string {
+function renderSelectionGroup(
+	assets: HfSelectionAsset[],
+	compact: boolean,
+): string {
 	return assets
 		.map((a) => {
+			if (compact) return `  - ${a.title} (${a.name})`;
 			const frame = a.fullFrame ? " [full-frame]" : "";
 			const desc = a.description ? ` — ${a.description}` : "";
 			return `  - ${a.title} (${a.name})${frame}${desc}`;
@@ -104,18 +151,43 @@ function renderSelectionGroup(assets: HfSelectionAsset[]): string {
 export function compileHyperframesPrompt(
 	input: CompileHyperframesPromptInput,
 ): string {
-	const { selections, look, direction, scope, transcript, canvas, preferenceNotes, densityHint } =
-		input;
+	const {
+		selections,
+		look,
+		direction,
+		scope,
+		transcript,
+		canvas,
+		preferenceNotes,
+		densityHint,
+		referenceCompositions,
+	} = input;
 	const durationSec = Math.max(0, scope.endSec - scope.startSec);
 
 	const lines: string[] = [];
 
 	lines.push(
-		`Author a HyperFrames overlay composition for a video editor (VibeCut).`,
+		`Author a HyperFrames overlay GRAPHIC that recaps or visualizes the SPOKEN CONTENT of ONE video. It overlays that video's footage and is ABOUT what the speaker actually says in the TRANSCRIPT below — NOT about the video editor, this tool, or generic advice. If the transcript is about anagrams, the graphics are about anagrams; never invent a different topic (e.g. editing tips, product features).`,
 	);
 	lines.push("");
 	lines.push(
-		`GOAL: graphics that sit OVER existing footage as a NEW overlay track. The composition's background MUST be fully transparent (no opaque full-frame fill) so the footage shows through — EXCEPT where a selected full-frame asset is deliberately used to reframe the shot.`,
+		`GOAL: author graphics that HELP THE VIEWER FOLLOW AND RECAP the content. Every graphic must carry INFORMATION the viewer cannot get from the audio alone — a structured summary of the points being made, a chart of data/comparison mentioned, or a diagram that explains a concept. A graphic that only labels what the speaker is already saying is worthless — do NOT make it. These overlay the footage on a NEW transparent track (no opaque full-frame fill unless a selected full-frame asset deliberately reframes the shot).`,
+	);
+	lines.push("");
+	lines.push(`WHAT TO BUILD — pick the form that genuinely helps THIS content:`);
+	lines.push(
+		`  - RECAP / KEY-POINTS LIST: when the speaker makes several points on a topic, show a 3-5 item list summarizing them so the viewer can follow. Reveal items as each is discussed and keep the list on screen while the topic continues — a running recap, not a single line. Do NOT number the items (no "01/02/03") — the points stand on their own; separate them with a small accent dot, a thin rule, or whitespace.`,
+	);
+	lines.push(
+		`  - DATA CHART: when there are numbers, a comparison, or change over time (scores, dates, before/after, model-vs-model), build an animated chart from the REAL numbers in the transcript — bars, a line, or a progress fill. No pie charts, dashboards, gridlines, legends, or chart-library output; build it with SVG/CSS.`,
+	);
+	lines.push(
+		`  - EXPLANATORY CARD: when a concept needs unpacking, show its structure — a labeled A-vs-B comparison, a before/after, or the parts of the thing.`,
+	);
+	lines.push(`Prefer FEWER, information-dense graphics, each held long enough to read.`);
+	lines.push("");
+	lines.push(
+		`NEVER author: a segment or section title, a single-label "pill", a numbered "01 / 02 / 03" section break, a generic "KEY POINT" eyebrow card, or anything that merely restates the spoken line. Those add nothing and are banned.`,
 	);
 	lines.push(
 		`RENDER TARGET: ${canvas.width}x${canvas.height} @ ${canvas.fps}fps, total duration ${secs(durationSec)}s. Author every animation seekable and within [0, ${secs(durationSec)}]s — the editor places this composition at ${secs(scope.startSec)}s on ${scope.label}.`,
@@ -123,30 +195,120 @@ export function compileHyperframesPrompt(
 	if (densityHint?.trim()) {
 		lines.push(`DENSITY: ${densityHint.trim()}`);
 	}
-
-	// Selections — grouped by kind, framed as preferences.
-	lines.push("");
-	if (selections.length) {
+	if (input.speakerSafeZone?.trim()) {
 		lines.push(
-			`SELECTED ASSETS (the user checked these in the HyperFrames panel). Treat them as PREFERENCES, not a checklist: use your best judgment, fit them to the spoken moments below, and SKIP any that don't suit the content. You do not have to use all of them.`,
+			`SPEAKER LOCATION / SAFE ZONE (detected from this clip's footage — honor it precisely; keep the graphic entirely out of the speaker's region): ${input.speakerSafeZone.trim()}`,
 		);
-		const order: HfSelectionAsset["kind"][] = [
-			"template",
-			"block",
-			"component",
-			"example",
-		];
-		for (const kind of order) {
-			const group = selections.filter((s) => s.kind === kind);
-			if (!group.length) continue;
+	}
+
+	// Selections. ONE pick → use it (the user's deliberate choice, honored — this is
+	// what stopped Swiss Grid being silently skipped). MANY picks → a PALETTE: the
+	// skill chooses the best-fitting FORM per moment (code → code window, data →
+	// chart, several points → recap list), so no single style is forced onto every
+	// moment. Examples are LOOKS; blocks are ready GRAPHIC FORMS; components, effects.
+	lines.push("");
+	const examples = selections.filter((s) => s.kind === "example");
+	const blocks = selections.filter((s) => s.kind === "block");
+	const components = selections.filter((s) => s.kind === "component" || s.kind === "template");
+	// A large selection ("select all" = 100+ assets) would name every one with its
+	// full description and blow the brief past the author route's size cap — which
+	// truncates the TRANSCRIPT and FORM EXEMPLARS that come after it, so the skill
+	// gets neither the content nor the form. Past ~24 picks, list NAMES ONLY; the
+	// content->form rubric + the embedded FORM EXEMPLARS carry the detail.
+	const compact = selections.length > 24;
+
+	if (selections.length > 1) {
+		lines.push(
+			`ASSET PALETTE — the user selected these as the options for this video. For EACH moment, build the ONE graphic whose FORM best fits the spoken content, chosen from this palette. Pick the best fit EVERY time — do NOT force one asset, and do NOT default to the same look repeatedly; vary it with the content.`,
+		);
+		if (examples.length) {
 			lines.push("");
-			lines.push(`${groupHeading(kind)}:`);
-			lines.push(renderSelectionGroup(group));
+			lines.push(
+				`STYLES / LOOKS (full editorial designs — use one for a recap LIST of several key points, or a data chart in that style):`,
+			);
+			lines.push(renderSelectionGroup(examples, compact));
 		}
+		if (blocks.length) {
+			lines.push("");
+			lines.push(
+				`GRAPHIC FORMS (ready-made graphics — use the one whose form matches the content):`,
+			);
+			lines.push(renderSelectionGroup(blocks, compact));
+		}
+		if (components.length) {
+			lines.push("");
+			lines.push(`EFFECTS / SNIPPETS (layer subtly, only when they suit):`);
+			lines.push(renderSelectionGroup(components, compact));
+		}
+		lines.push("");
+		lines.push(
+			`MATCH BY CONTENT (pick the ONE form that fits — vary it, do not default to a text card): several points on a topic → an editorial / SWISS-GRID key-points CARD (a 3–5 item list, accent rules, NOT numbered "01/02/03"); numbers, a trend, or a comparison → a data CHART built from the real values; a process or cause→effect → a DIAGRAM with connected nodes; a place or region → the matching MAP; code → a CODE card; a social post or app shown on screen → that app's block; a name or quote → a lower-third; a brand/logo → the logo form. A moment with no strong fit gets NOTHING.`,
+		);
+	} else if (selections.length === 1) {
+		const only = selections[0];
+		lines.push(
+			`SELECTED ASSET — the user explicitly chose "${only.title}" (${only.name}). USE it: build its graphic in its exact design wherever the content fits, and do NOT substitute a different aesthetic. The style is the LOOK, not the layout — within it, build the informative STRUCTURE the content needs (a recap LIST, a real DATA CHART, an explanatory diagram). Where the content does not suit this asset, make NOTHING rather than forcing it.`,
+		);
+		lines.push(renderSelectionGroup(selections, false));
 	} else {
 		lines.push(
-			`No specific assets were selected — use your own judgment to add tasteful overlays (lower-thirds, kinetic titles, callouts) where the transcript warrants them.`,
+			`No specific assets were selected — use your own judgment to add tasteful, INFORMATIVE overlays (recap lists, data charts, explanatory cards) where the transcript warrants them.`,
 		);
+	}
+
+	// Reference compositions. The PICKED STYLE's composition is the skill's STYLE
+	// SOURCE — it must copy the base's design system (fonts, colors, type scale,
+	// motion) EXACTLY (anti-drift: this is what stopped the skill inventing a
+	// terminal/monospace look), but build the informative STRUCTURE the content
+	// needs rather than copy the base's single layout. Others stay loose inspiration.
+	const refs = (referenceCompositions ?? []).filter((r) => r.html.trim());
+	// A SINGLE chosen example is the STYLE SOURCE (copy its design system exactly).
+	// In palette mode the references are real designs to MATCH when that asset is the
+	// one chosen for a moment — no single style is forced.
+	const baseRef =
+		selections.length === 1 && examples.length === 1
+			? refs.find((r) => r.name === examples[0].name)
+			: undefined;
+	const otherRefs = refs.filter((r) => r !== baseRef);
+
+	if (baseRef) {
+		const html =
+			baseRef.html.length > BASE_HTML_MAX_CHARS
+				? `${baseRef.html.slice(0, BASE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`
+				: baseRef.html;
+		lines.push("");
+		lines.push(
+			`STYLE SOURCE — the user's chosen "${baseRef.title}" composition is below. COPY its DESIGN SYSTEM exactly: reuse its font-family declarations, color values, type scale, spacing, and motion language VERBATIM, and use ONLY those — never introduce a different font (no monospace/terminal/code) or a different palette. But do NOT just copy its single layout with new text: BUILD the structure THIS content needs (a 3-5 point recap list, a data chart, a labeled diagram) IN that exact design system. Same design system, right structure — every graphic must still read unmistakably as "${baseRef.title}".`,
+		);
+		lines.push("");
+		lines.push(
+			`--- ${baseRef.title} (${baseRef.name}) — STYLE SOURCE: copy its design system, build the right structure ---`,
+		);
+		lines.push("```html");
+		lines.push(html);
+		lines.push("```");
+	}
+	// Only embed reference HTML alongside a single-example STYLE SOURCE. In palette
+	// mode embedding several full compositions bloated the brief to ~38k chars and
+	// buried the real transcript (the skill then hallucinated off-topic content) —
+	// there the asset names + descriptions above are enough; the skill builds each
+	// form from its own knowledge.
+	if (baseRef && otherRefs.length) {
+		lines.push("");
+		lines.push(
+			`REFERENCE COMPOSITIONS (loose inspiration only — the STYLE SOURCE above wins any conflict):`,
+		);
+		for (const ref of otherRefs) {
+			const html =
+				ref.html.length > REFERENCE_HTML_MAX_CHARS
+					? `${ref.html.slice(0, REFERENCE_HTML_MAX_CHARS)}\n<!-- ...truncated... -->`
+					: ref.html;
+			lines.push("");
+			lines.push(`--- ${ref.title} (${ref.name}) ---`);
+			lines.push("```html");
+			lines.push(html);
+			lines.push("```");
+		}
 	}
 
 	// Look.
@@ -181,9 +343,37 @@ export function compileHyperframesPrompt(
 	// Transcript.
 	lines.push("");
 	lines.push(
-		`TRANSCRIPT of ${scope.label} (timestamps in seconds, relative to this segment):`,
+		`TRANSCRIPT of ${scope.label} — THIS IS THE SOURCE OF TRUTH for the graphics. Every word, number, and name on screen MUST come from here. Build the recap/list/chart from THESE spoken points only; do NOT borrow sample text from any reference design, and do NOT invent a topic that is not in this transcript. (timestamps in seconds, relative to this segment):`,
 	);
 	lines.push(transcript.trim() || "(no speech in this segment)");
+
+	// Palette-mode FORM exemplars. In palette mode there is no single STYLE SOURCE,
+	// so the skill otherwise has the asset NAME ("data-chart", "swiss-grid") but no
+	// HTML to instantiate — and was forbidden from reading the files. Embed a SMALL,
+	// capped set of the picked FORM compositions AFTER the transcript (grounding stays
+	// first), clearly framed as forms to INSTANTIATE with the transcript's content,
+	// never to copy. baseRef is only set in single-example mode, so this never
+	// double-embeds the STYLE SOURCE.
+	if (!baseRef && selections.length > 1 && refs.length) {
+		const exemplars = refs.slice(0, PALETTE_EXEMPLAR_COUNT);
+		lines.push("");
+		lines.push(
+			`FORM EXEMPLARS — concrete HTML for ${exemplars.length === 1 ? "a" : "the"} picked FORM${exemplars.length === 1 ? "" : "s"} below. When you choose this form for a moment (per MATCH BY CONTENT), INSTANTIATE its layout/structure with the TRANSCRIPT's real content — do NOT copy its sample text, numbers, or topic (that is placeholder). The transcript above is the only source of truth; these show the FORM, not the words.`,
+		);
+		for (const ref of exemplars) {
+			const html =
+				ref.html.length > PALETTE_EXEMPLAR_MAX_CHARS
+					? `${ref.html.slice(0, PALETTE_EXEMPLAR_MAX_CHARS)}\n<!-- ...truncated... -->`
+					: ref.html;
+			lines.push("");
+			lines.push(
+				`--- ${ref.title} (${ref.name}) — FORM to instantiate with transcript content ---`,
+			);
+			lines.push("```html");
+			lines.push(html);
+			lines.push("```");
+		}
+	}
 
 	// Hard requirements.
 	lines.push("");
@@ -192,7 +382,10 @@ export function compileHyperframesPrompt(
 		"- Transparent background; these are overlays, not a full-frame scene (unless a selected full-frame asset is explicitly used to reframe the footage).",
 	);
 	lines.push(
-		"- Time each graphic to the spoken moment it supports. Keep on-screen text short (titles ≤ 5 words). Copy any numbers EXACTLY as spoken.",
+		"- Time each graphic to the moment it supports and HOLD it long enough to read (a list or chart needs several seconds on screen). Build it from the REAL content of the transcript — the actual points, numbers, names — never invent data; copy numbers and names EXACTLY as spoken.",
+	);
+	lines.push(
+		"- A recap list = 3-5 short items, not one. A chart = the real values plotted. An explanatory card = the actual comparison. If you cannot make a graphic that adds information beyond the spoken words, make NOTHING for that moment — silence beats a useless title.",
 	);
 	lines.push(
 		"- When overlay text needs contrast, place a solid color bar/box BEHIND the text only — never fill the whole frame.",

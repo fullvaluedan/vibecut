@@ -6,6 +6,7 @@ import {
 	buildEmptyTrack,
 	getDefaultInsertIndexForTrack,
 } from "@/timeline/placement";
+import { isAtVideoTrackCap, lastVideoTrackId } from "@/timeline/placement/track-cap";
 
 export class AddTrackCommand extends Command {
 	private trackId: string;
@@ -26,13 +27,34 @@ export class AddTrackCommand extends Command {
 		this.index = index;
 		this.keepWhenEmpty = keepWhenEmpty;
 		this.trackId = generateUUID();
+
+		// Hard cap: never create a 9th video track. Once at the cap this command
+		// becomes a no-op that REUSES the topmost video lane. Resolved here (not in
+		// execute) because callers read getTrackId() BEFORE execute to wire an
+		// explicit InsertElementCommand into the same BatchCommand (drag-from-bin,
+		// AI lane packer). getInstance() lazily self-inits, so this never throws.
+		if (type === "video") {
+			const tracks = EditorCore.getInstance().scenes.getActiveSceneOrNull()
+				?.tracks;
+			if (tracks && isAtVideoTrackCap(tracks)) {
+				this.trackId = lastVideoTrackId(tracks);
+				this.cappedReuse = true;
+			}
+		}
 	}
 
 	private type: TrackType;
 	private index?: number;
 	private keepWhenEmpty?: boolean;
+	private cappedReuse = false;
 
 	execute(): CommandResult | undefined {
+		if (this.cappedReuse) {
+			// At the video-track cap — getTrackId() already points at an existing
+			// lane, so emit no track and no history entry.
+			return undefined;
+		}
+
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.scenes.getActiveScene().tracks;
 

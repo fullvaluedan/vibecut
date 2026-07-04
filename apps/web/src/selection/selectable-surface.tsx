@@ -85,6 +85,16 @@ export function SelectableSurface({
 		setSelectionState(clearSelection());
 	}, []);
 
+	const selectAll = useCallback(() => {
+		if (orderedIds.length === 0) return;
+		setSelectionState(
+			replaceSelection({
+				ids: orderedIds,
+				anchorId: orderedIds[orderedIds.length - 1] ?? null,
+			}),
+		);
+	}, [orderedIds]);
+
 	const selectedIdSet = useMemo(
 		() => new Set(selectionState.selectedIds),
 		[selectionState.selectedIds],
@@ -216,6 +226,37 @@ export function SelectableSurface({
 			}),
 		);
 	}, [orderedIds]);
+
+	// Ctrl/Cmd+A selects every item in THIS surface — but only when focus is
+	// within it, so the global (timeline) select-all still wins elsewhere. The
+	// window-capture listener fires before the document-capture keybinding
+	// dispatcher, and stopPropagation keeps the global handler from also running.
+	useEffect(() => {
+		const handleSelectAll = (event: KeyboardEvent) => {
+			if (event.key !== "a" && event.key !== "A") return;
+			if (!(event.ctrlKey || event.metaKey)) return;
+			if (event.shiftKey || event.altKey) return;
+			const container = containerRef.current;
+			const active = document.activeElement;
+			if (!container || !active || !container.contains(active)) return;
+			if (
+				active instanceof HTMLElement &&
+				(active.tagName === "INPUT" ||
+					active.tagName === "TEXTAREA" ||
+					active.isContentEditable)
+			) {
+				return;
+			}
+			if (orderedIds.length === 0) return;
+			event.preventDefault();
+			event.stopPropagation();
+			selectAll();
+		};
+
+		window.addEventListener("keydown", handleSelectAll, { capture: true });
+		return () =>
+			window.removeEventListener("keydown", handleSelectAll, { capture: true });
+	}, [orderedIds, selectAll]);
 
 	useEffect(() => {
 		onSelectionChange?.(selectionState);

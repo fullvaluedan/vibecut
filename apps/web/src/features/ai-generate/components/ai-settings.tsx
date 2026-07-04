@@ -174,7 +174,13 @@ export function AiSettingsContent() {
 
 			<BackgroundTranscriptionSection />
 
+			<CloudTranscriptionSection />
+
 			<DirectorVisionSection />
+
+			<DirectorVadDeadAirSection />
+
+			<DirectorVadGatedTranscriptionSection />
 
 			<LowPowerSection />
 
@@ -204,6 +210,111 @@ function DirectorVisionSection() {
 					tokens) and needs an API key or a vision-capable custom model; the
 					claude-code CLI falls back to text. Off by default.
 				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadDeadAirSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadDeadAirEnabled);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorVadDeadAirEnabled);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Director dead-air (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs a voice-activity pass during the Director&apos;s analysis to flag
+					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
+					candidates (a small model downloads once). Off by default; failures are
+					ignored so the Director still runs.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadGatedTranscriptionSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadGatedTranscriptionEnabled);
+	const setEnabled = useAiSettingsStore(
+		(s) => s.setDirectorVadGatedTranscriptionEnabled,
+	);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Speech-only transcription (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs voice-activity detection first and transcribes only the spoken
+					parts (skipping silence) on the analysis path — faster on long, gappy
+					recordings, and avoids hallucinated text over silence. Falls back to
+					full-audio transcription if VAD is off or fails. Off by default;
+					captions are unaffected.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function CloudTranscriptionSection() {
+	const backend = useAiSettingsStore((s) => s.transcriptionBackend);
+	const setBackend = useAiSettingsStore((s) => s.setTranscriptionBackend);
+	const groqApiKey = useAiSettingsStore((s) => s.groqApiKey);
+	const setGroqApiKey = useAiSettingsStore((s) => s.setGroqApiKey);
+	const isCloud = backend === "cloud";
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Transcribe on</SectionTitle>
+				<Select
+					value={backend}
+					onValueChange={(value) =>
+						setBackend(value === "cloud" ? "cloud" : "in-browser")
+					}
+				>
+					<SelectTrigger className="bg-transparent border-none p-1 h-auto">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="in-browser">In browser</SelectItem>
+						<SelectItem value="cloud">Groq (cloud)</SelectItem>
+					</SelectContent>
+				</Select>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+				<p className="text-muted-foreground text-xs">
+					In browser: transcribe locally (slower, segment-level only). Groq:
+					upload the timeline audio to whisper-large-v3-turbo — seconds instead
+					of minutes, word-level cuts for the Director, and no out-of-memory on
+					long videos. Audio is compressed before upload. More cloud providers
+					can slot in here later.
+				</p>
+				{isCloud && (
+					<>
+						<div className="flex flex-col gap-1">
+							<p className="text-xs font-medium">Groq API key</p>
+							<KeyInput
+								value={groqApiKey}
+								onChange={setGroqApiKey}
+								placeholder="gsk_..."
+							/>
+						</div>
+						<p className="text-muted-foreground text-xs">
+							Stored only in this browser on this device — sent only to
+							VibeCut&apos;s own <code>/api/transcribe</code> proxy, never to the
+							browser STT call. Get a key at console.groq.com. Without a key,
+							transcription stays in-browser.
+						</p>
+					</>
+				)}
 			</SectionContent>
 		</Section>
 	);

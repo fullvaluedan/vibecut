@@ -1,6 +1,9 @@
 import { Command, type CommandResult } from "@/commands/base-command";
 import { EditorCore } from "@/core";
 import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline";
+import { isRetimableElement } from "@/timeline";
+import { getSourceSpanAtClipTime } from "@/retime";
+import { addMediaTime, roundMediaTime } from "@/wasm";
 import { generateUUID } from "@/utils/id";
 
 export interface TimeRange {
@@ -47,13 +50,24 @@ function cutElement({
 	}
 	// Right remainder: keeps source continuity via trimStart, lands at the cut point.
 	if (end > range.end) {
-		const consumedFromSource = range.end - start;
+		// Clip-time consumed before the remainder is (range.end - start) TIMELINE
+		// ticks; trimStart is SOURCE ticks, so convert through the retime rate
+		// (cut * rate) — same discipline as split-elements.ts. rate==1 => cut.
+		const retimeRef = isRetimableElement(element)
+			? element.retime
+			: undefined;
+		const consumedFromSource = roundMediaTime({
+			time: getSourceSpanAtClipTime({
+				clipTime: range.end - start,
+				retime: retimeRef,
+			}),
+		});
 		pieces.push({
 			...element,
 			id: start < range.start ? generateUUID() : element.id,
 			startTime: range.start,
 			duration: end - range.end,
-			trimStart: element.trimStart + consumedFromSource,
+			trimStart: addMediaTime({ a: element.trimStart, b: consumedFromSource }),
 		} as TimelineElement);
 	}
 	return pieces;
@@ -118,7 +132,12 @@ export class RemoveRangesCommand extends Command {
 		}
 
 		editor.timeline.updateTracks(tracks);
-		return undefined;
+		// Ripple-delete removes / re-mints elements inside the cut ranges.
+		// updateTracks already pruned any orphaned selection ref live; declaring
+		// the reconciled selection as an override satisfies the documented
+		// invariant (commands that remove editor-owned selection targets must
+		// declare one) so undo restores the pre-cut selection cleanly.
+		return { selection: editor.selection.getSnapshot() };
 	}
 
 	undo(): void {

@@ -46,13 +46,13 @@ const KEEPER_COVER_FRACTION = 0.5;
 const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
 
-const spansOverlap = ({
-	a,
-	b,
-}: {
-	a: { startSec: number; endSec: number };
-	b: { startSec: number; endSec: number };
-}): boolean => a.startSec < b.endSec && b.startSec < a.endSec;
+/** Open-interval overlap: the two spans share more than a shared edge (seconds). */
+export function spansOverlap(
+	a: { startSec: number; endSec: number },
+	b: { startSec: number; endSec: number },
+): boolean {
+	return a.startSec < b.endSec && b.startSec < a.endSec;
+}
 
 /**
  * Merge deterministic detector cuts into a planner's ops in time order, with two
@@ -69,6 +69,27 @@ const spansOverlap = ({
  * Non-removal ops (keep/reorder) always pass through. With `keepers` empty the
  * behavior is identical to the pre-cluster merge (regression-safe).
  */
+/**
+ * A removal "covers" a keeper when it overlaps >= KEEPER_COVER_FRACTION of it,
+ * i.e. it would remove the take as a whole. A small intra-take trim overlaps only
+ * a sliver and is NOT protected away (it still cleans up the kept take). Shared by
+ * the pass-1 merge below and the second pass's own dedup so keeper semantics can
+ * never drift between passes.
+ */
+export function removalCoversKeeper({
+	op,
+	keepers,
+}: {
+	op: { startSec: number; endSec: number };
+	keepers: readonly KeeperSpan[];
+}): boolean {
+	return keepers.some((k) => {
+		const overlap = Math.min(op.endSec, k.endSec) - Math.max(op.startSec, k.startSec);
+		const keeperLen = k.endSec - k.startSec;
+		return keeperLen > 0 && overlap / keeperLen >= KEEPER_COVER_FRACTION;
+	});
+}
+
 export function mergeDetectedCuts({
 	planOps,
 	extraOps,
@@ -78,22 +99,15 @@ export function mergeDetectedCuts({
 	extraOps: DirectorOp[];
 	keepers?: readonly KeeperSpan[];
 }): DirectorOp[] {
-	// A removal "covers" a keeper when it overlaps ≥ KEEPER_COVER_FRACTION of it —
-	// i.e. it would remove the take as a whole. A small intra-take trim overlaps only
-	// a sliver and is NOT protected away (it still cleans up the kept take).
 	const coversKeeper = (op: DirectorOp): boolean =>
-		keepers.some((k) => {
-			const overlap = Math.min(op.endSec, k.endSec) - Math.max(op.startSec, k.startSec);
-			const keeperLen = k.endSec - k.startSec;
-			return keeperLen > 0 && overlap / keeperLen >= KEEPER_COVER_FRACTION;
-		});
+		removalCoversKeeper({ op, keepers });
 
 	// Rule 1, planner side: drop any LLM removal that would delete a keeper.
 	const planKept = planOps.filter((op) => !(isRemoval(op) && coversKeeper(op)));
 
 	const survivingRemovals = planKept.filter(isRemoval);
 	const overlapsRemoval = (op: DirectorOp): boolean =>
-		survivingRemovals.some((r) => spansOverlap({ a: op, b: r }));
+		survivingRemovals.some((r) => spansOverlap(op, r));
 
 	// Rule 1 (detector side) + rule 2: drop detector removals that would delete a
 	// keeper, or that overlap a surviving planner removal.

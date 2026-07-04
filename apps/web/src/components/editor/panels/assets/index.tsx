@@ -11,6 +11,7 @@ import { ShapesView } from "@/graphics/components/assets-view";
 import { TextView } from "@/text/components/assets-view";
 import { EffectsView } from "@/effects/components/assets-view";
 import { HyperframesPanel } from "@/features/ai-generate/components/hyperframes-panel";
+import { TranscriptView } from "@/features/transcription/components/assets-view";
 
 export function AssetsPanel() {
 	const { activeTab } = useAssetsPanelStore();
@@ -28,6 +29,7 @@ export function AssetsPanel() {
 			</div>
 		),
 		captions: <Captions />,
+		transcript: <TranscriptView />,
 		adjustment: (
 			<div className="text-muted-foreground p-4">
 				Adjustment view coming soon...

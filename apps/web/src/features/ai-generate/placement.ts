@@ -1,5 +1,9 @@
 import type { EditorCore } from "@/core";
 import { AddTrackCommand } from "@/commands";
+import {
+	MAX_VIDEO_TRACKS,
+	videoTrackCount,
+} from "@/timeline/placement/track-cap";
 
 /**
  * Placement lanes: one per AI overlay track. Each effect goes on the first
@@ -40,18 +44,31 @@ export function claimLane({
 	lanes,
 	start,
 	end,
+	editor,
 }: {
 	lanes: PlacementLane[];
 	start: number;
 	end: number;
+	editor: EditorCore;
 }): PlacementLane {
 	let lane = lanes.find(
 		(l) => !l.occupied.some((o) => start < o.end && end > o.start),
 	);
 	if (!lane) {
-		const addCommand = new AddTrackCommand({ type: "video", index: 0 });
-		lane = { trackId: addCommand.getTrackId(), addCommand, occupied: [] };
-		lanes.push(lane);
+		// Hard cap: existing video tracks + new lanes already planned this batch.
+		// Once at MAX_VIDEO_TRACKS, overflow onto the last lane instead of a 9th.
+		const baseVideoCount = videoTrackCount(
+			editor.scenes.getActiveScene().tracks,
+		);
+		const plannedNewLanes = lanes.filter((l) => l.addCommand !== null).length;
+		const reuseLane = lanes[lanes.length - 1];
+		if (baseVideoCount + plannedNewLanes >= MAX_VIDEO_TRACKS && reuseLane) {
+			lane = reuseLane;
+		} else {
+			const addCommand = new AddTrackCommand({ type: "video", index: 0 });
+			lane = { trackId: addCommand.getTrackId(), addCommand, occupied: [] };
+			lanes.push(lane);
+		}
 	}
 	lane.occupied.push({ start, end });
 	return lane;

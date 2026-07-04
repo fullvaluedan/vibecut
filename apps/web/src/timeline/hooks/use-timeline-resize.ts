@@ -2,7 +2,6 @@ import { useEffect, useReducer, useState } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
 import { useShiftKey } from "@/hooks/use-shift-key";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { registerCanceller } from "@/editor/cancel-interaction";
 import {
@@ -27,7 +26,6 @@ export function useTimelineResize({
 	const editor = useEditor();
 	const isShiftHeldRef = useShiftKey();
 	const snappingEnabled = useTimelineStore((state) => state.snappingEnabled);
-	const { selectedElements } = useElementSelection();
 
 	const config: ResizeConfig = {
 		zoomLevel,
@@ -36,7 +34,6 @@ export function useTimelineResize({
 		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
 		getCurrentPlayheadTime: () => editor.playback.getCurrentTime(),
 		getActiveProjectFps: () => editor.project.getActive()?.settings.fps ?? null,
-		selectedElements,
 		discardPreview: () => editor.timeline.discardPreview(),
 		previewElements: (updates) =>
 			editor.timeline.previewElements({

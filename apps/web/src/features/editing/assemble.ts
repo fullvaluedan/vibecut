@@ -10,6 +10,14 @@ import { TICKS_PER_SECOND, mediaTimeFromSeconds } from "@/wasm";
 import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
 import { insertMediaAsset } from "./insert-media";
 
+/** True when the active scene already has any element on any track. */
+export function timelineHasContent({ editor }: { editor: EditorCore }): boolean {
+	const { main, overlay, audio } = editor.scenes.getActiveScene().tracks;
+	return [main, ...overlay, ...audio].some(
+		(track) => track.elements.length > 0,
+	);
+}
+
 export function assembleBinToTimeline({
 	editor,
 	assets,

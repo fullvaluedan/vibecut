@@ -38,7 +38,7 @@ import type { SelectionBoxBounds } from "@/selection/types";
 import type {
 	TimelineElement as TimelineElementType,
 	TimelineTrack,
-	ElementDragView,
+	ElementDragSlice,
 	VideoElement,
 	ImageElement,
 	AudioElement,
@@ -90,10 +90,10 @@ import {
 } from "@/features/editing/remove-attributes";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
-import { useMemo, type ComponentProps, type ReactNode } from "react";
+import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
 import type { SelectedKeyframeRef, ElementKeyframe } from "@/animation/types";
 import { cn } from "@/utils/ui";
-import { computeAvSyncOffset } from "@/timeline/av-sync";
+import type { AvSyncMap } from "@/timeline/av-sync-map";
 import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
 import { getTrackTypeForElementType } from "@/timeline/placement/compatibility";
 import { useTimelineStore } from "@/timeline/timeline-store";
@@ -115,6 +115,12 @@ const ELEMENT_RING_WIDTH_PX = 1.5;
 const NARROW_CLIP_WIDTH_PX = 16;
 
 const PixelsPerSecondContext = createContext<number | null>(null);
+/**
+ * The A/V-sync offsets for every clip, precomputed once per tracks-change
+ * (U6/KTD7). Each `AvSyncBadge` reads its own entry by element id instead of
+ * re-running the O(total-elements) `computeAvSyncOffset` scan per render.
+ */
+export const AvSyncMapContext = createContext<AvSyncMap | null>(null);
 const THUMBNAIL_ASPECT_RATIO = 16 / 9;
 
 interface KeyframeIndicator {
@@ -236,11 +242,18 @@ interface TimelineElementProps {
 		event: React.MouseEvent;
 		element: TimelineElementType;
 	}) => void;
-	dragView: ElementDragView;
+	/**
+	 * This clip's slice of the active drag, or `null` when it is not being
+	 * dragged. `null` is a stable reference, so an untouched clip keeps identical
+	 * props across a drag move and the `memo` below skips its re-render. This is
+	 * the load-bearing invariant for a responsive drag on a large timeline. Only
+	 * dragged clips receive a fresh object (they must re-render to move).
+	 */
+	drag: ElementDragSlice | null;
 	isDropTarget?: boolean;
 }
 
-export function TimelineElement({
+function TimelineElementImpl({
 	element,
 	track,
 	zoomLevel,
@@ -248,7 +261,7 @@ export function TimelineElement({
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
-	dragView,
+	drag,
 	isDropTarget = false,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
@@ -275,19 +288,11 @@ export function TimelineElement({
 			selected.elementId === element.id && selected.trackId === track.id,
 	);
 
-	const isDragging = dragView.kind === "dragging";
-	const dragTimeOffset = isDragging
-		? dragView.memberTimeOffsets.get(element.id)
-		: undefined;
-	const isBeingDragged = dragTimeOffset !== undefined;
-	const dragOffsetY =
-		isDragging && isBeingDragged
-			? dragView.currentMouseY - dragView.startMouseY
-			: 0;
-	const elementStartTime =
-		isDragging && isBeingDragged
-			? addMediaTime({ a: dragView.currentTime, b: dragTimeOffset })
-			: renderElement.startTime;
+	const isBeingDragged = drag !== null;
+	const dragOffsetY = drag ? drag.offsetY : 0;
+	const elementStartTime = drag
+		? addMediaTime({ a: drag.currentTime, b: drag.timeOffset })
+		: renderElement.startTime;
 	const displayedStartTime = elementStartTime;
 	const displayedDuration = renderElement.duration;
 	const elementWidth = timelineTimeToPixels({
@@ -411,10 +416,9 @@ export function TimelineElement({
 								expandedRows.length > 0
 									? `${baseTrackHeight + expansionHeight}px`
 									: "100%",
-							transform:
-								isDragging && isBeingDragged
-									? `translate3d(0, ${dragOffsetY}px, 0)`
-									: undefined,
+							transform: isBeingDragged
+								? `translate3d(0, ${dragOffsetY}px, 0)`
+								: undefined,
 						}}
 					>
 						<ElementInner
@@ -644,6 +648,17 @@ export function TimelineElement({
 	);
 }
 
+/**
+ * Memoized so a drag move re-renders only the dragged clip(s). With a large
+ * timeline (hundreds of clips), every mousemove otherwise re-rendered all of
+ * them. The equality boundary holds because the track renderer feeds untouched
+ * clips referentially-stable props: `element`/`track` come straight from the
+ * (unmutated-during-drag) store, the callbacks are stabilized via committed
+ * refs, and `drag` is `null` (a stable reference) for any clip not being
+ * dragged. See `TimelineTrackContent` for where those props are built.
+ */
+export const TimelineElement = memo(TimelineElementImpl);
+
 function ElementInner({
 	element,
 	displayElement,
@@ -706,7 +721,11 @@ function ElementInner({
 			>
 				<div
 					className={cn(
-						"absolute inset-0 overflow-hidden rounded-sm",
+						// Faint hairline so each clip's edges read against the dark timeline
+						// (a black/dark thumbnail otherwise blends into the background). Sits
+						// INSIDE the blue selection ring (a boxShadow on the parent), so the
+						// two never read as the same thing.
+						"absolute inset-0 overflow-hidden rounded-sm border border-white/20",
 						isExpanded && "bg-background",
 					)}
 				>
@@ -1323,11 +1342,9 @@ function TiledMediaContent({
  * drifted out of sync. Hidden when in sync or there is no partner.
  */
 function AvSyncBadge({ element }: { element: TimelineElementType }) {
-	const tracks = useEditor((e) => e.scenes.getActiveSceneOrNull()?.tracks);
-	const fps = useEditor((e) => e.project.getActiveOrNull()?.settings.fps ?? null);
-	if (!tracks) return null;
+	const avSyncMap = useContext(AvSyncMapContext);
 	if (element.type !== "video" && element.type !== "audio") return null;
-	const sync = computeAvSyncOffset({ element, tracks, fps });
+	const sync = avSyncMap?.get(element.id) ?? null;
 	if (!sync || sync.offsetFrames === 0) return null;
 	const sign = sync.offsetFrames > 0 ? "+" : "";
 	return (

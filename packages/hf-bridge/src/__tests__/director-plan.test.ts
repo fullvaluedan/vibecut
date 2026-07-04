@@ -169,3 +169,50 @@ describe("sanitizeDirectorPlan", () => {
 		expect(() => sanitizeDirectorPlan({}, 12)).toThrow(/no operations array/);
 	});
 });
+
+describe("renderSignalTable — importance (keep-side)", () => {
+	test("adds an imp column when a segment carries importance; byte-identical when absent", () => {
+		const withImp = renderSignalTable([seg({ startSec: 0, endSec: 2, text: "hi", importance: 0.83 })]);
+		expect(withImp.split("\n")[0]).toContain(" imp ");
+		expect(withImp).toContain("0.83");
+		const without = renderSignalTable([seg({ startSec: 0, endSec: 2, text: "hi" })]);
+		expect(without).not.toContain("imp");
+		expect(without.split("\n")[0]).toBe("| time (s) | src | text | loudness | wpm | filler | silence(s) |");
+	});
+
+	test("grp and imp columns coexist", () => {
+		const header = renderSignalTable([
+			seg({ startSec: 0, endSec: 2, text: "hi", clusterId: "C1", importance: 0.5 }),
+		]).split("\n")[0];
+		expect(header).toContain(" grp ");
+		expect(header).toContain(" imp ");
+	});
+});
+
+describe("buildDirectorPrompt — importance (keep-side)", () => {
+	test("adds the imp guidance only when importance is present", () => {
+		const withImp = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi", importance: 0.7 })],
+			totalSec: 12,
+		});
+		expect(withImp).toContain('"imp" score');
+		const without = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi" })],
+			totalSec: 12,
+		});
+		expect(without).not.toContain('"imp" score');
+	});
+
+	test("asks for load-bearing keep ops only when importance is present (U4)", () => {
+		const withImp = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi", importance: 0.7 })],
+			totalSec: 12,
+		});
+		expect(withImp).toContain('Emit "keep" ops on the genuinely LOAD-BEARING');
+		const without = buildDirectorPrompt({
+			segments: [seg({ startSec: 0, endSec: 2, text: "hi" })],
+			totalSec: 12,
+		});
+		expect(without).not.toContain("LOAD-BEARING");
+	});
+});

@@ -7,6 +7,29 @@
 
 import type { DirectorOp } from "@framecut/hf-bridge";
 
+/**
+ * Format a timeline position (seconds) as M:SS.s — minutes:seconds, one decimal
+ * kept so sub-second cut spans (e.g. a 0.5s pause) stay distinguishable rather
+ * than collapsing to the same whole second. 108 → "1:48.0", 13.8 → "0:13.8".
+ */
+export function formatTimecode(sec: number): string {
+	const safe = Number.isFinite(sec) && sec > 0 ? sec : 0;
+	const minutes = Math.floor(safe / 60);
+	const seconds = safe - minutes * 60;
+	return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+/** A start–end span as "M:SS.s–M:SS.s" for the review rows. */
+export function formatTimeRange({
+	startSec,
+	endSec,
+}: {
+	startSec: number;
+	endSec: number;
+}): string {
+	return `${formatTimecode(startSec)}–${formatTimecode(endSec)}`;
+}
+
 /** What to render for one reviewed op. */
 export interface ReviewOpDisplay {
 	/** Primary badge for the op kind (Cut / Take / Reorder / Keep). */
@@ -32,6 +55,9 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	repeat: "Repeat",
 	vision: "Vision",
 	deadair: "Dead air",
+	noise: "Noise",
+	redundancy: "Repeat",
+	context: "Out of context",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -59,6 +85,12 @@ export function describeReviewOp({
 			rejectedHint = "Keeping both takes";
 		} else if (op.category === "repeat") {
 			rejectedHint = "Keeping the restatement";
+		} else if (op.category === "redundancy") {
+			// A group's non-keeper take: rejecting it keeps that take in the cut.
+			rejectedHint = "Keeping this take";
+		} else if (op.category === "context") {
+			// An out-of-context flag: rejecting it keeps the content in the video.
+			rejectedHint = "Keeping this content";
 		}
 	}
 
