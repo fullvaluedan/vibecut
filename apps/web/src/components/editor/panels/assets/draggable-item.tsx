@@ -21,6 +21,8 @@ export interface DraggableItemProps {
 	dragData: TimelineDragData;
 	onDragStart?: ({ e }: { e: React.DragEvent }) => void;
 	onAddToTimeline?: ({ currentTime }: { currentTime: MediaTime }) => void;
+	/** Double-click the tile — opens a preview (standard in every NLE). */
+	onDoubleClick?: () => void;
 	aspectRatio?: number;
 	className?: string;
 	containerClassName?: string;
@@ -37,6 +39,7 @@ export function DraggableItem({
 	dragData,
 	onDragStart,
 	onAddToTimeline,
+	onDoubleClick,
 	aspectRatio = 16 / 9,
 	className = "",
 	containerClassName,
@@ -53,6 +56,10 @@ export function DraggableItem({
 
 	const handleAddToTimeline = () => {
 		onAddToTimeline?.({ currentTime: editor.playback.getCurrentTime() });
+		// Drop focus off the "+" button so bare-key timeline shortcuts (Delete,
+		// gap-delete) work immediately instead of after the first manual interaction.
+		const active = document.activeElement;
+		if (active instanceof HTMLElement) active.blur();
 	};
 
 	const emptyImg = new window.Image();
@@ -115,6 +122,7 @@ export function DraggableItem({
 							draggable={isDraggable}
 							onDragStart={isDraggable ? handleDragStart : undefined}
 							onDragEnd={isDraggable ? handleDragEnd : undefined}
+							onDoubleClick={onDoubleClick}
 						>
 							{preview}
 							{!isDragging && (
@@ -154,6 +162,7 @@ export function DraggableItem({
 						draggable={isDraggable}
 						onDragStart={isDraggable ? handleDragStart : undefined}
 						onDragEnd={isDraggable ? handleDragEnd : undefined}
+						onDoubleClick={onDoubleClick}
 					>
 						<div className="size-6 shrink-0 overflow-hidden rounded-sm">
 							{preview}

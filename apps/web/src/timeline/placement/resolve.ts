@@ -13,12 +13,16 @@ import type {
 	PlacementSubject,
 	PlacementTimeSpan,
 } from "./types";
+import { isAtVideoTrackCap, lastVideoTrackId } from "./track-cap";
 import { ZERO_MEDIA_TIME } from "@/wasm";
 
 type ResolveTrackPlacementParams = PlacementSubject & {
 	tracks: SceneTracks;
 	timeSpans: PlacementTimeSpan[];
 	strategy: PlacementStrategy;
+	// Elements skipped from the overlap test on every candidate track (the whole
+	// moving set of a multi-clip drag). See `canPlaceTimeSpansOnTrack`.
+	excludeElementIds?: ReadonlySet<string>;
 };
 
 function buildExistingTrackResult({
@@ -26,20 +30,24 @@ function buildExistingTrackResult({
 	trackIndex,
 	tracks,
 	timeSpans,
+	skipMainTrackStart = false,
 }: {
 	track: TimelineTrack;
 	trackIndex: number;
 	tracks: SceneTracks;
 	timeSpans: PlacementTimeSpan[];
+	skipMainTrackStart?: boolean;
 }): PlacementResult {
 	const firstSpan = timeSpans[0];
 	const requestedStartTime = firstSpan?.startTime ?? ZERO_MEDIA_TIME;
-	const adjustedStartTime = enforceMainTrackStart({
-		tracks,
-		targetTrackId: track.id,
-		requestedStartTime,
-		excludeElementId: firstSpan?.excludeElementId,
-	});
+	const adjustedStartTime = skipMainTrackStart
+		? requestedStartTime
+		: enforceMainTrackStart({
+				tracks,
+				targetTrackId: track.id,
+				requestedStartTime,
+				excludeElementId: firstSpan?.excludeElementId,
+			});
 	return {
 		kind: "existingTrack",
 		trackId: track.id,
@@ -70,10 +78,12 @@ function findFirstAvailableTrackIndex({
 	tracks,
 	trackType,
 	timeSpans,
+	excludeElementIds,
 }: {
 	tracks: TimelineTrack[];
 	trackType: TrackType;
 	timeSpans: PlacementTimeSpan[];
+	excludeElementIds?: ReadonlySet<string>;
 }): number {
 	return tracks.findIndex((track) => {
 		return (
@@ -81,6 +91,7 @@ function findFirstAvailableTrackIndex({
 			canPlaceTimeSpansOnTrack({
 				track,
 				timeSpans,
+				excludeElementIds,
 			})
 		);
 	});
@@ -131,7 +142,65 @@ function getInsertDirection({
 	return hoverDirection;
 }
 
-export function resolveTrackPlacement({
+export function resolveTrackPlacement(
+	params: ResolveTrackPlacementParams,
+): PlacementResult | null {
+	const result = resolveTrackPlacementUncapped(params);
+
+	// Hard cap: never resolve to a 9th video track. Clamp the placement onto an
+	// existing video lane (first that can hold the span, else the topmost one) so
+	// drops/inserts/moves land there instead of spawning V9. Audio/text/graphic/
+	// effect placements are untouched. See `track-cap.ts`.
+	if (
+		result?.kind === "newTrack" &&
+		result.trackType === "video" &&
+		isAtVideoTrackCap(params.tracks)
+	) {
+		return clampToExistingVideoTrack({
+			tracks: params.tracks,
+			timeSpans: params.timeSpans,
+			excludeElementIds: params.excludeElementIds,
+		});
+	}
+
+	return result;
+}
+
+function clampToExistingVideoTrack({
+	tracks,
+	timeSpans,
+	excludeElementIds,
+}: {
+	tracks: SceneTracks;
+	timeSpans: PlacementTimeSpan[];
+	excludeElementIds?: ReadonlySet<string>;
+}): PlacementResult | null {
+	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
+	const availableIndex = findFirstAvailableTrackIndex({
+		tracks: orderedTracks,
+		trackType: "video",
+		timeSpans,
+		excludeElementIds,
+	});
+	const trackIndex =
+		availableIndex >= 0
+			? availableIndex
+			: orderedTracks.findIndex(
+					(track) => track.id === lastVideoTrackId(tracks),
+				);
+	if (trackIndex < 0) {
+		return null;
+	}
+
+	return buildExistingTrackResult({
+		track: orderedTracks[trackIndex],
+		trackIndex,
+		tracks,
+		timeSpans,
+	});
+}
+
+function resolveTrackPlacementUncapped({
 	tracks,
 	...placement
 }: ResolveTrackPlacementParams): PlacementResult | null {
@@ -142,7 +211,7 @@ export function resolveTrackPlacement({
 			: getTrackTypeForElementType({
 					elementType: placement.elementType,
 				});
-	const { timeSpans, strategy } = placement;
+	const { timeSpans, strategy, excludeElementIds } = placement;
 
 	if (strategy.type === "explicit") {
 		const trackIndex = orderedTracks.findIndex(
@@ -162,14 +231,39 @@ export function resolveTrackPlacement({
 			trackIndex,
 			tracks,
 			timeSpans,
+			skipMainTrackStart: strategy.skipMainTrackStart,
 		});
 	}
 
 	if (strategy.type === "firstAvailable") {
+		// An imported video should default to the main (V1) track. orderedTracks
+		// lists overlay BEFORE main, so plain first-available would grab an empty
+		// V2 overlay video track whenever one exists — divert video to main when
+		// it can hold the span (text/graphic/audio keep filling overlay/audio
+		// first; Assemble already targets main explicitly).
+		if (
+			trackType === "video" &&
+			canPlaceTimeSpansOnTrack({
+				track: tracks.main,
+				timeSpans,
+				excludeElementIds,
+			})
+		) {
+			return buildExistingTrackResult({
+				track: tracks.main,
+				trackIndex: orderedTracks.findIndex(
+					(track) => track.id === tracks.main.id,
+				),
+				tracks,
+				timeSpans,
+			});
+		}
+
 		const existingTrackIndex = findFirstAvailableTrackIndex({
 			tracks: orderedTracks,
 			trackType,
 			timeSpans,
+			excludeElementIds,
 		});
 		if (existingTrackIndex >= 0) {
 			return buildExistingTrackResult({
@@ -197,6 +291,7 @@ export function resolveTrackPlacement({
 			canPlaceTimeSpansOnTrack({
 				track: preferredTrack,
 				timeSpans,
+				excludeElementIds,
 			});
 		if (canUseExistingTrack) {
 			return buildExistingTrackResult({
@@ -234,6 +329,7 @@ export function resolveTrackPlacement({
 			canPlaceTimeSpansOnTrack({
 				track: aboveTrack,
 				timeSpans,
+				excludeElementIds,
 			})
 		) {
 			return buildExistingTrackResult({
@@ -248,6 +344,7 @@ export function resolveTrackPlacement({
 			tracks: orderedTracks,
 			trackType,
 			timeSpans,
+			excludeElementIds,
 		});
 		if (firstAvailableTrackIndex >= 0) {
 			return buildExistingTrackResult({

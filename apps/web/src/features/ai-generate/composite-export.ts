@@ -60,12 +60,16 @@ export async function compositeAiOverlays({
 		startSec: number;
 		durationSec: number;
 		trimStartSec: number;
-		/** Rendered rect in canvas pixels (matches the preview/compositor). */
+		/** Rendered rect in canvas pixels (matches the preview/compositor).
+		 *  x/y is the top-left of the ROTATED bbox when rotation != 0. */
 		x: number;
 		y: number;
 		w: number;
 		h: number;
 		opacity: number;
+		rotation: number;
+		flipX: boolean;
+		flipY: boolean;
 	}[] = [];
 	let index = 0;
 	for (const clip of clips) {
@@ -84,16 +88,34 @@ export async function compositeAiOverlays({
 			canvasW: canvasSize.width,
 			canvasH: canvasSize.height,
 		});
+		// ffmpeg rotate expands the frame to the rotated bbox; offset the
+		// top-left so the element CENTER stays where the preview puts it.
+		const cx = rect.x + rect.w / 2;
+		const cy = rect.y + rect.h / 2;
+		let x = rect.x;
+		let y = rect.y;
+		if (rect.rotation % 360 !== 0) {
+			const rad = (rect.rotation * Math.PI) / 180;
+			const rw =
+				Math.abs(rect.w * Math.cos(rad)) + Math.abs(rect.h * Math.sin(rad));
+			const rh =
+				Math.abs(rect.w * Math.sin(rad)) + Math.abs(rect.h * Math.cos(rad));
+			x = cx - rw / 2;
+			y = cy - rh / 2;
+		}
 		manifest.push({
 			field,
 			startSec: clip.startTime / TICKS_PER_SECOND,
 			durationSec: clip.duration / TICKS_PER_SECOND,
 			trimStartSec: clip.trimStart / TICKS_PER_SECOND,
-			x: Math.round(rect.x),
-			y: Math.round(rect.y),
+			x: Math.round(x),
+			y: Math.round(y),
 			w: Math.max(2, Math.round(rect.w)),
 			h: Math.max(2, Math.round(rect.h)),
 			opacity: rect.opacity,
+			rotation: rect.rotation,
+			flipX: rect.flipX,
+			flipY: rect.flipY,
 		});
 		index += 1;
 	}

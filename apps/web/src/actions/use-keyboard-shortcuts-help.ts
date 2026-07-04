@@ -2,7 +2,11 @@
 
 import { useMemo } from "react";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
-import { ACTIONS, type TActionWithOptionalArgs } from "@/actions";
+import {
+	ACTIONS,
+	isActionWithOptionalArgs,
+	type TActionWithOptionalArgs,
+} from "@/actions";
 import {
 	getPlatformAlternateKey,
 	getPlatformSpecialKey,
@@ -17,7 +21,11 @@ export interface KeyboardShortcut {
 	icon?: React.ReactNode;
 }
 
-function formatKey({ key }: { key: string }): string {
+export function formatKey({ key }: { key: string }): string {
+	// NOTE: combos already use "+" as their separator (e.g. "ctrl+c"), so the
+	// per-token replacements below leave it intact. We do NOT rewrite "-" to
+	// "+": "-" is the literal zoom-out key, and rewriting it produced an empty
+	// two-chip render once `split("+")` ran over it.
 	return key
 		.replace("ctrl", getPlatformSpecialKey())
 		.replace("alt", getPlatformAlternateKey())
@@ -31,15 +39,25 @@ function formatKey({ key }: { key: string }): string {
 		.replace("enter", "Enter")
 		.replace("end", "End")
 		.replace("delete", "Delete")
-		.replace("backspace", "Backspace")
-		.replace("-", "+");
+		.replace("backspace", "Backspace");
 }
 
 export function useKeyboardShortcutsHelp() {
 	const { keybindings } = useKeybindingsStore();
 
 	const shortcuts = useMemo(() => {
+		// Seed EVERY invokable action so unbound ones (e.g. stop-playback,
+		// toggle-ripple-editing) still appear in the editor as "Not set" and can
+		// be assigned a key — the editor was previously built from bound keys
+		// only, hiding actions that ship without a default shortcut. The
+		// asset-removal actions need a payload and can't be invoked from a bare
+		// hotkey, so they're excluded.
 		const actionToKeys = new Map<TActionWithOptionalArgs, string[]>();
+		for (const action of Object.keys(ACTIONS)) {
+			if (isActionWithOptionalArgs(action)) {
+				actionToKeys.set(action, []);
+			}
+		}
 
 		for (const [key, action] of keybindings) {
 			const existing = actionToKeys.get(action);

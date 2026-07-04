@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -69,6 +69,22 @@ function nodeBinary(): string {
 	return isBun ? "node" : process.execPath;
 }
 
+/**
+ * The `claude` CLI command + spawn mode for the AI steps that shell out to it
+ * (planEffects, authorComposition, the doctor). `FRAMECUT_CLAUDE` overrides the
+ * binary — the escape hatch when a failed CLI auto-update wipes the default
+ * Windows shim's target and `claude` becomes "not recognized" (a recurring break).
+ * With an explicit path we skip the shell so a direct `.exe` (and paths with
+ * spaces) work; bare `claude` still needs the shell on Windows to resolve its
+ * `.cmd` shim via PATHEXT.
+ */
+export function resolveClaude(): { command: string; useShell: boolean } {
+	const override = process.env.FRAMECUT_CLAUDE?.trim();
+	return override
+		? { command: override, useShell: false }
+		: { command: "claude", useShell: true };
+}
+
 export function runNode(args: string[], cwd: string): Promise<{ code: number; output: string }> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(nodeBinary(), args, {
@@ -82,6 +98,43 @@ export function runNode(args: string[], cwd: string): Promise<{ code: number; ou
 		child.on("error", reject);
 		child.on("close", (code) => resolve({ code: code ?? 1, output }));
 	});
+}
+
+/**
+ * Global render serialization: every hyperframes `render` (templates, authored
+ * comps, bakes) goes through this promise-chain mutex so concurrent requests —
+ * a chunked authored run, a 3-version variant batch, parallel bakes — never
+ * spawn more than ONE headless Chromium at a time. Critical on constrained
+ * machines: each render is a ~0.5–1 GB browser process. Studio (`preview`, a
+ * long-lived server) deliberately does NOT go through here.
+ */
+let renderChain: Promise<unknown> = Promise.resolve();
+export function enqueueRender<T>(task: () => Promise<T>): Promise<T> {
+	const run = renderChain.then(task, task);
+	renderChain = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+/**
+ * A previously rendered out.webm is reusable iff it's newer than every source
+ * input (index.html / vars.json). A Studio edit bumps index.html's mtime, so it
+ * correctly forces a fresh render; a no-op re-run reuses the cached file.
+ */
+export function renderCacheValid(compDir: string, outPath: string): boolean {
+	if (!existsSync(outPath)) return false;
+	try {
+		const outMs = statSync(outPath).mtimeMs;
+		for (const src of ["index.html", "vars.json"]) {
+			const p = path.join(compDir, src);
+			if (existsSync(p) && statSync(p).mtimeMs > outMs) return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -135,22 +188,24 @@ export async function renderTemplateJob(job: RenderJob): Promise<RenderOutcome> 
 
 	const cli = resolveHyperframesCli();
 	const outPath = path.join(compDir, "out.webm");
-	const { code, output } = await runNode(
-		[
-			cli,
-			"render",
-			"--format",
-			"webm",
-			"--quality",
-			"standard",
-			"--fps",
-			String(job.fps),
-			"--variables-file",
-			"vars.json",
-			"--output",
-			outPath,
-		],
-		compDir,
+	const { code, output } = await enqueueRender(() =>
+		runNode(
+			[
+				cli,
+				"render",
+				"--format",
+				"webm",
+				"--quality",
+				"standard",
+				"--fps",
+				String(job.fps),
+				"--variables-file",
+				"vars.json",
+				"--output",
+				outPath,
+			],
+			compDir,
+		),
 	);
 
 	if (code !== 0 || !existsSync(outPath)) {
@@ -192,6 +247,10 @@ export async function renderCompDir({
 
 	const cli = resolveHyperframesCli();
 	const outPath = path.join(compDir, "out.webm");
+	// Reuse an up-to-date render instead of spawning a browser again.
+	if (renderCacheValid(compDir, outPath)) {
+		return { videoPath: outPath, compDir };
+	}
 	const args = [
 		cli,
 		"render",
@@ -207,7 +266,7 @@ export async function renderCompDir({
 	if (existsSync(path.join(compDir, "vars.json"))) {
 		args.push("--variables-file", "vars.json");
 	}
-	const { code, output } = await runNode(args, compDir);
+	const { code, output } = await enqueueRender(() => runNode(args, compDir));
 	if (code !== 0 || !existsSync(outPath)) {
 		throw new Error(
 			`hyperframes render failed (exit ${code}):\n${output.slice(-4000)}`,

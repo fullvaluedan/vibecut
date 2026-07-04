@@ -35,6 +35,7 @@ export function PreviewInteractionOverlay() {
 		onPointerUp,
 		onDoubleClick,
 		editingText,
+		hoverCursor,
 		commitTextEdit,
 	} = usePreviewInteraction({
 		onSnapLinesChange: setSnapLines,
@@ -76,7 +77,9 @@ export function PreviewInteractionOverlay() {
 						? "grabbing"
 						: viewport.canPan
 							? "default"
-							: undefined,
+							: hoverCursor === "default"
+								? undefined
+								: hoverCursor,
 				}}
 				onPointerDown={handlePointerDown}
 				onPointerMove={handlePointerMove}

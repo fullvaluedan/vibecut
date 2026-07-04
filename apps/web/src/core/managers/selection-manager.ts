@@ -169,6 +169,44 @@ export class SelectionManager {
 		return this.getSnapshot();
 	}
 
+	/**
+	 * Drop any selected element / keyframe ref whose `trackId:elementId` is no
+	 * longer live. Called at the single track-swap chokepoint
+	 * (`TimelineManager.updateTracks`) so a command that removes or re-mints an
+	 * element (ripple-delete, rough-cut rebuild) can never leave a stale ref that
+	 * keeps a track row tinted with nothing actually selected. No-op (no notify)
+	 * when nothing is pruned, so a plain edit doesn't churn selection listeners.
+	 */
+	reconcileWithLiveElements({
+		livePairs,
+	}: {
+		livePairs: ReadonlySet<string>;
+	}): void {
+		const isLive = (ref: { trackId: string; elementId: string }): boolean =>
+			livePairs.has(`${ref.trackId}:${ref.elementId}`);
+
+		const nextElements = this.selectedElements.filter(isLive);
+		const nextKeyframes = this.selectedKeyframes.filter(isLive);
+		if (
+			nextElements.length === this.selectedElements.length &&
+			nextKeyframes.length === this.selectedKeyframes.length
+		) {
+			return;
+		}
+
+		this.selectedElements = nextElements;
+		this.selectedKeyframes = nextKeyframes;
+		if (nextKeyframes.length === 0) {
+			this.keyframeSelectionAnchor = null;
+		} else if (
+			this.keyframeSelectionAnchor &&
+			!isLive(this.keyframeSelectionAnchor)
+		) {
+			this.keyframeSelectionAnchor = null;
+		}
+		this.notify();
+	}
+
 	restoreSnapshot({ snapshot }: { snapshot: EditorSelectionSnapshot }): void {
 		this.selectedElements = [...snapshot.selectedElements];
 		this.selectedKeyframes = [...snapshot.selectedKeyframes];

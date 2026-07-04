@@ -28,6 +28,7 @@ import { Switch } from "@/components/ui/switch";
 const AUTH_MODE_LABELS: Record<AiAuthMode, string> = {
 	"claude-code": "Claude subscription (Claude Code)",
 	"api-key": "Anthropic API key",
+	custom: "Custom / local model",
 };
 
 const BACKEND_LABELS: Record<AiBackend, string> = {
@@ -40,6 +41,12 @@ export function AiSettingsContent() {
 	const setAuthMode = useAiSettingsStore((s) => s.setAuthMode);
 	const anthropicApiKey = useAiSettingsStore((s) => s.anthropicApiKey);
 	const setAnthropicApiKey = useAiSettingsStore((s) => s.setAnthropicApiKey);
+	const customBaseUrl = useAiSettingsStore((s) => s.customBaseUrl);
+	const setCustomBaseUrl = useAiSettingsStore((s) => s.setCustomBaseUrl);
+	const customModel = useAiSettingsStore((s) => s.customModel);
+	const setCustomModel = useAiSettingsStore((s) => s.setCustomModel);
+	const customApiKey = useAiSettingsStore((s) => s.customApiKey);
+	const setCustomApiKey = useAiSettingsStore((s) => s.setCustomApiKey);
 	const backend = useAiSettingsStore((s) => s.backend);
 	const setBackend = useAiSettingsStore((s) => s.setBackend);
 	const [isKeyVisible, setIsKeyVisible] = useState(false);
@@ -48,7 +55,7 @@ export function AiSettingsContent() {
 		<div className="flex flex-col">
 			<Section showTopBorder={false}>
 				<SectionHeader className="justify-between">
-					<SectionTitle className="flex-1">Claude account</SectionTitle>
+					<SectionTitle className="flex-1">AI connection</SectionTitle>
 					<Select
 						value={authMode}
 						onValueChange={(value) => setAuthMode(value as AiAuthMode)}
@@ -66,12 +73,13 @@ export function AiSettingsContent() {
 					</Select>
 				</SectionHeader>
 				<SectionContent className="px-3 pb-3 flex flex-col gap-2">
-					{authMode === "claude-code" ? (
+					{authMode === "claude-code" && (
 						<p className="text-muted-foreground text-xs">
 							Uses the Claude Code app installed on this computer. Generations
 							run on your Claude subscription — no API key needed.
 						</p>
-					) : (
+					)}
+					{authMode === "api-key" && (
 						<>
 							<div className="flex items-center gap-1">
 								<Input
@@ -93,6 +101,44 @@ export function AiSettingsContent() {
 							<p className="text-muted-foreground text-xs">
 								Stored only in this browser on this device — never saved into
 								project files or uploads. Get a key at console.anthropic.com.
+							</p>
+						</>
+					)}
+					{authMode === "custom" && (
+						<>
+							<div className="flex flex-col gap-1">
+								<p className="text-xs font-medium">Base URL</p>
+								<Input
+									placeholder="http://localhost:11434/v1"
+									value={customBaseUrl}
+									onChange={(e) => setCustomBaseUrl(e.target.value)}
+									autoComplete="off"
+									spellCheck={false}
+								/>
+							</div>
+							<div className="flex flex-col gap-1">
+								<p className="text-xs font-medium">Model</p>
+								<Input
+									placeholder="e.g. hermes-3-llama-3.1-8b"
+									value={customModel}
+									onChange={(e) => setCustomModel(e.target.value)}
+									autoComplete="off"
+									spellCheck={false}
+								/>
+							</div>
+							<div className="flex flex-col gap-1">
+								<p className="text-xs font-medium">API key (optional)</p>
+								<KeyInput
+									value={customApiKey}
+									onChange={setCustomApiKey}
+									placeholder="Leave blank for local servers"
+								/>
+							</div>
+							<p className="text-muted-foreground text-xs">
+								Point VibeCut at any OpenAI-compatible{" "}
+								<code>/chat/completions</code> endpoint — Ollama, LM Studio, or a
+								self-hosted model. Include <code>/v1</code> in the URL if your
+								server needs it. Everything stays on this device.
 							</p>
 						</>
 					)}
@@ -128,10 +174,171 @@ export function AiSettingsContent() {
 
 			<BackgroundTranscriptionSection />
 
+			<CloudTranscriptionSection />
+
+			<DirectorVisionSection />
+
+			<DirectorVadDeadAirSection />
+
+			<DirectorVadGatedTranscriptionSection />
+
+			<LowPowerSection />
+
 			<IntegrationsSection />
 
 			<SelfLearningSection />
 		</div>
+	);
+}
+
+function DirectorVisionSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVisionEnabled);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorVisionEnabled);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Director vision</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Lets AI CUT&apos;s Director SEE your footage: it samples a frame per
+					spoken segment so it can cut off-screen, frozen, or visually dead
+					moments — not just what the audio says. Costs more (frames use extra
+					tokens) and needs an API key or a vision-capable custom model; the
+					claude-code CLI falls back to text. Off by default.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadDeadAirSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadDeadAirEnabled);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorVadDeadAirEnabled);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Director dead-air (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs a voice-activity pass during the Director&apos;s analysis to flag
+					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
+					candidates (a small model downloads once). Off by default; failures are
+					ignored so the Director still runs.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorVadGatedTranscriptionSection() {
+	const enabled = useAiSettingsStore((s) => s.directorVadGatedTranscriptionEnabled);
+	const setEnabled = useAiSettingsStore(
+		(s) => s.setDirectorVadGatedTranscriptionEnabled,
+	);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Speech-only transcription (VAD)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Runs voice-activity detection first and transcribes only the spoken
+					parts (skipping silence) on the analysis path — faster on long, gappy
+					recordings, and avoids hallucinated text over silence. Falls back to
+					full-audio transcription if VAD is off or fails. Off by default;
+					captions are unaffected.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function CloudTranscriptionSection() {
+	const backend = useAiSettingsStore((s) => s.transcriptionBackend);
+	const setBackend = useAiSettingsStore((s) => s.setTranscriptionBackend);
+	const groqApiKey = useAiSettingsStore((s) => s.groqApiKey);
+	const setGroqApiKey = useAiSettingsStore((s) => s.setGroqApiKey);
+	const isCloud = backend === "cloud";
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Transcribe on</SectionTitle>
+				<Select
+					value={backend}
+					onValueChange={(value) =>
+						setBackend(value === "cloud" ? "cloud" : "in-browser")
+					}
+				>
+					<SelectTrigger className="bg-transparent border-none p-1 h-auto">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="in-browser">In browser</SelectItem>
+						<SelectItem value="cloud">Groq (cloud)</SelectItem>
+					</SelectContent>
+				</Select>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+				<p className="text-muted-foreground text-xs">
+					In browser: transcribe locally (slower, segment-level only). Groq:
+					upload the timeline audio to whisper-large-v3-turbo — seconds instead
+					of minutes, word-level cuts for the Director, and no out-of-memory on
+					long videos. Audio is compressed before upload. More cloud providers
+					can slot in here later.
+				</p>
+				{isCloud && (
+					<>
+						<div className="flex flex-col gap-1">
+							<p className="text-xs font-medium">Groq API key</p>
+							<KeyInput
+								value={groqApiKey}
+								onChange={setGroqApiKey}
+								placeholder="gsk_..."
+							/>
+						</div>
+						<p className="text-muted-foreground text-xs">
+							Stored only in this browser on this device — sent only to
+							VibeCut&apos;s own <code>/api/transcribe</code> proxy, never to the
+							browser STT call. Get a key at console.groq.com. Without a key,
+							transcription stays in-browser.
+						</p>
+					</>
+				)}
+			</SectionContent>
+		</Section>
+	);
+}
+
+function LowPowerSection() {
+	const enabled = useAiSettingsStore((s) => s.lowPowerMode);
+	const setEnabled = useAiSettingsStore((s) => s.setLowPowerMode);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Low-power mode</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					For lighter machines: pauses the in-browser speech model so it never
+					runs while you edit. Heavy HyperFrames renders already run one at a
+					time. Turn this on if the app feels sluggish.
+				</p>
+			</SectionContent>
+		</Section>
 	);
 }
 
@@ -244,10 +451,13 @@ function SelfLearningSection() {
 	const setEnabled = usePreferenceStore((s) => s.setSelfLearningEnabled);
 	const templateStats = usePreferenceStore((s) => s.templateStats);
 	const cutStats = usePreferenceStore((s) => s.cutStats);
+	const graphicsStats = usePreferenceStore((s) => s.graphicsStats);
 	const clearLearning = usePreferenceStore((s) => s.clearLearning);
 	const notes = usePreferenceStore.getState().buildPreferenceNotes();
 	const observedCount =
-		Object.keys(templateStats).length + Object.keys(cutStats).length;
+		Object.keys(templateStats).length +
+		Object.keys(cutStats).length +
+		(graphicsStats.placed + graphicsStats.deleted > 0 ? 1 : 0);
 
 	return (
 		<Section showTopBorder={false}>

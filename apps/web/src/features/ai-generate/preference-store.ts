@@ -3,7 +3,10 @@
  * that back into the planners as plain-language preference notes.
  *
  * Signals captured today:
- * - HyperFrames: which templates the user deletes vs. keeps on the timeline.
+ * - HyperFrames: which native templates the user deletes vs. keeps.
+ * - HyperFrames: authored (custom-generated) graphics kept vs. deleted in
+ *   aggregate — these carry a unique `authored:<compId>` id per run, so they
+ *   can't aggregate per-id like templates; they share one bucket instead.
  * - AI CUT: runs that get undone shortly after (treated as "too aggressive").
  *
  * Everything stays on this device (localStorage) and can be cleared in
@@ -15,6 +18,13 @@ import { persist } from "zustand/middleware";
 
 const UNDO_ATTRIBUTION_WINDOW_MS = 3 * 60 * 1000;
 
+/** Authored HyperFrames graphics carry this templateId prefix. */
+const AUTHORED_PREFIX = "authored:";
+
+/** Which planner a set of notes is for — keeps AI-Cut noise out of the
+ * graphics author brief, and vice-versa. */
+export type PreferenceScope = "all" | "graphics" | "cut";
+
 interface TemplateStat {
 	placed: number;
 	deleted: number;
@@ -23,6 +33,12 @@ interface TemplateStat {
 interface CutStat {
 	runs: number;
 	undone: number;
+}
+
+/** Aggregate keep/delete for AUTHORED (custom-generated) graphics. */
+interface GraphicsStat {
+	placed: number;
+	deleted: number;
 }
 
 /** What the user did between an AI Cut and hitting Export. */
@@ -39,6 +55,7 @@ interface PreferenceState {
 	selfLearningEnabled: boolean;
 	templateStats: Record<string, TemplateStat>;
 	cutStats: Record<string, CutStat>;
+	graphicsStats: GraphicsStat;
 	exportDiff: ExportDiffStats;
 	/** Last AI CUT run, so a quick undo can be attributed to it. */
 	lastCutRun: { mode: string; at: number } | null;
@@ -48,12 +65,14 @@ interface PreferenceState {
 	setSelfLearningEnabled: (enabled: boolean) => void;
 	noteTemplatesPlaced: (templateIds: string[]) => void;
 	noteTemplatesDeleted: (templateIds: string[]) => void;
+	/** An authored HyperFrames graphic landed on the timeline. */
+	noteGraphicsPlaced: () => void;
 	noteCutRun: (mode: string, extra?: { durationTicks: number }) => void;
 	noteUndo: () => void;
 	/** Call when the user exports: diffs the timeline against the AI Cut. */
 	noteExport: (args: { durationTicks: number }) => void;
 	clearLearning: () => void;
-	buildPreferenceNotes: () => string[];
+	buildPreferenceNotes: (scope?: PreferenceScope) => string[];
 }
 
 export const usePreferenceStore = create<PreferenceState>()(
@@ -62,6 +81,7 @@ export const usePreferenceStore = create<PreferenceState>()(
 			selfLearningEnabled: true,
 			templateStats: {},
 			cutStats: {},
+			graphicsStats: { placed: 0, deleted: 0 },
 			exportDiff: { kept: 0, restored: 0, trimmedMore: 0 },
 			lastCutRun: null,
 			lastCutSnapshot: null,
@@ -82,12 +102,35 @@ export const usePreferenceStore = create<PreferenceState>()(
 			noteTemplatesDeleted: (templateIds) =>
 				set((state) => {
 					const templateStats = { ...state.templateStats };
+					let authoredDeleted = 0;
 					for (const id of templateIds) {
+						// Authored graphics have a unique id per run — aggregate them in
+						// one bucket instead of polluting templateStats with singletons.
+						if (id.startsWith(AUTHORED_PREFIX)) {
+							authoredDeleted++;
+							continue;
+						}
 						const stat = templateStats[id] ?? { placed: 0, deleted: 0 };
 						templateStats[id] = { ...stat, deleted: stat.deleted + 1 };
 					}
-					return { templateStats };
+					return {
+						templateStats,
+						graphicsStats: authoredDeleted
+							? {
+									...state.graphicsStats,
+									deleted: state.graphicsStats.deleted + authoredDeleted,
+								}
+							: state.graphicsStats,
+					};
 				}),
+
+			noteGraphicsPlaced: () =>
+				set((state) => ({
+					graphicsStats: {
+						...state.graphicsStats,
+						placed: state.graphicsStats.placed + 1,
+					},
+				})),
 
 			noteCutRun: (mode, extra) =>
 				set((state) => {
@@ -142,41 +185,65 @@ export const usePreferenceStore = create<PreferenceState>()(
 				set({
 					templateStats: {},
 					cutStats: {},
+					graphicsStats: { placed: 0, deleted: 0 },
 					exportDiff: { kept: 0, restored: 0, trimmedMore: 0 },
 					lastCutRun: null,
 					lastCutSnapshot: null,
 				}),
 
-			buildPreferenceNotes: () => {
-				const { selfLearningEnabled, templateStats, cutStats, exportDiff } =
-					get();
+			buildPreferenceNotes: (scope = "all") => {
+				const {
+					selfLearningEnabled,
+					templateStats,
+					cutStats,
+					graphicsStats,
+					exportDiff,
+				} = get();
 				if (!selfLearningEnabled) return [];
+				// "graphics" notes guide the HyperFrames author/template planner;
+				// "cut" notes guide AI CUT. "all" (settings display) gets both.
+				const wantGraphics = scope === "all" || scope === "graphics";
+				const wantCut = scope === "all" || scope === "cut";
 				const notes: string[] = [];
-				for (const [id, stat] of Object.entries(templateStats)) {
-					if (stat.placed >= 2 && stat.deleted / stat.placed >= 0.5) {
+
+				if (wantGraphics) {
+					for (const [id, stat] of Object.entries(templateStats)) {
+						if (stat.placed >= 2 && stat.deleted / stat.placed >= 0.5) {
+							notes.push(
+								`The user deleted ${stat.deleted} of the last ${stat.placed} "${id}" effects — avoid "${id}" unless it is clearly the best fit.`,
+							);
+						}
+					}
+					if (
+						graphicsStats.placed >= 2 &&
+						graphicsStats.deleted / graphicsStats.placed >= 0.5
+					) {
 						notes.push(
-							`The user deleted ${stat.deleted} of the last ${stat.placed} "${id}" effects — avoid "${id}" unless it is clearly the best fit.`,
+							`The user removed ${graphicsStats.deleted} of the last ${graphicsStats.placed} authored graphics — be more selective: add a graphic only where the transcript clearly calls for one, keep it minimal (a single clean element beats a busy multi-layer composition), and keep it short-lived.`,
 						);
 					}
 				}
-				for (const [mode, stat] of Object.entries(cutStats)) {
-					if (stat.runs >= 2 && stat.undone / stat.runs >= 0.5) {
-						notes.push(
-							`The user undid ${stat.undone} of ${stat.runs} recent "${mode}" passes — cut noticeably more conservatively.`,
-						);
+
+				if (wantCut) {
+					for (const [mode, stat] of Object.entries(cutStats)) {
+						if (stat.runs >= 2 && stat.undone / stat.runs >= 0.5) {
+							notes.push(
+								`The user undid ${stat.undone} of ${stat.runs} recent "${mode}" passes — cut noticeably more conservatively.`,
+							);
+						}
 					}
-				}
-				const diffTotal =
-					exportDiff.kept + exportDiff.restored + exportDiff.trimmedMore;
-				if (diffTotal >= 2) {
-					if (exportDiff.restored / diffTotal >= 0.5) {
-						notes.push(
-							`Before exporting, the user usually puts back some of what AI Cut removed (${exportDiff.restored} of ${diffTotal} exports) — cut more conservatively.`,
-						);
-					} else if (exportDiff.trimmedMore / diffTotal >= 0.5) {
-						notes.push(
-							`Before exporting, the user usually trims even more than AI Cut did (${exportDiff.trimmedMore} of ${diffTotal} exports) — cut more aggressively.`,
-						);
+					const diffTotal =
+						exportDiff.kept + exportDiff.restored + exportDiff.trimmedMore;
+					if (diffTotal >= 2) {
+						if (exportDiff.restored / diffTotal >= 0.5) {
+							notes.push(
+								`Before exporting, the user usually puts back some of what AI Cut removed (${exportDiff.restored} of ${diffTotal} exports) — cut more conservatively.`,
+							);
+						} else if (exportDiff.trimmedMore / diffTotal >= 0.5) {
+							notes.push(
+								`Before exporting, the user usually trims even more than AI Cut did (${exportDiff.trimmedMore} of ${diffTotal} exports) — cut more aggressively.`,
+							);
+						}
 					}
 				}
 				return notes;
@@ -188,6 +255,7 @@ export const usePreferenceStore = create<PreferenceState>()(
 				selfLearningEnabled: state.selfLearningEnabled,
 				templateStats: state.templateStats,
 				cutStats: state.cutStats,
+				graphicsStats: state.graphicsStats,
 				exportDiff: state.exportDiff,
 				lastCutSnapshot: state.lastCutSnapshot,
 			}),

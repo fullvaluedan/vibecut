@@ -144,6 +144,12 @@ export interface VideoElement extends BaseTimelineElement {
 		 * panel offers a re-bake instead of an inapplicable template swap.
 		 */
 		registryBlock?: string;
+		/**
+		 * The authoring brief (the compiled HyperFrames prompt) for a skill-authored
+		 * clip. Lets the properties panel show an editable prompt and regenerate the
+		 * graphic through the skill with the user's edits. Set on `authored:*` clips.
+		 */
+		brief?: string;
 	};
 }
 
@@ -291,6 +297,18 @@ export type ElementDragView =
 			readonly dropTarget: DropTarget | null;
 	  };
 
+/**
+ * The per-clip slice of an active drag, derived from `ElementDragView` once per
+ * clip by the track renderer. A clip NOT under the drag gets `null` (a stable
+ * reference), so the memoized `TimelineElement` skips re-rendering the ~hundreds
+ * of untouched clips while a drag moves; only dragged clips get a fresh object.
+ */
+export interface ElementDragSlice {
+	readonly timeOffset: MediaTime;
+	readonly currentTime: MediaTime;
+	readonly offsetY: number;
+}
+
 export interface DropTarget {
 	trackIndex: number;
 	isNewTrack: boolean;
@@ -312,6 +330,9 @@ export interface ComputeDropTargetParams {
 	verticalDragDirection?: "up" | "down" | null;
 	startTimeOverride?: MediaTime;
 	excludeElementId?: string;
+	// The full moving-element id set for a multi-clip drag. Threaded to the
+	// overlap test so shifted siblings don't falsely block the group move.
+	excludeElementIds?: ReadonlySet<string>;
 	targetElementTypes?: string[];
 }
 

@@ -1,6 +1,7 @@
 import {
 	BASE_TIMELINE_PIXELS_PER_SECOND,
 	TIMELINE_ZOOM_MAX,
+	TIMELINE_ZOOM_MIN,
 } from "@/timeline/scale";
 import { TICKS_PER_SECOND } from "@/wasm";
 
@@ -15,6 +16,12 @@ export function getTimelineZoomMin({
 	duration: number;
 	containerWidth: number | null | undefined;
 }): number {
+	// An empty (or sub-second) timeline must NOT drive min-zoom from the 1s floor
+	// below — that produced a huge "fit 1 second" zoom that collapsed the ruler to
+	// a few frames after deleting clips. Fall back to the hard minimum instead.
+	if (duration / TICKS_PER_SECOND <= 0) {
+		return TIMELINE_ZOOM_MIN;
+	}
 	const safeDurationSeconds = Math.max(duration / TICKS_PER_SECOND, 1);
 	const safeContainerWidth = containerWidth ?? 1000;
 	const contentRatioAtMinZoom = 1 - PADDING_MAX_RATIO;

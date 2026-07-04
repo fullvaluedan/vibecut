@@ -1,6 +1,17 @@
 import type { FrameRate } from "opencut-wasm";
 import { EXPORT_MIME_TYPES } from "./mime-types";
 
+declare global {
+	interface Window {
+		/** File System Access API — Chromium only, hence optional. */
+		showSaveFilePicker?: (options: {
+			id?: string;
+			suggestedName?: string;
+			types?: { description: string; accept: Record<string, string[]> }[];
+		}) => Promise<FileSystemFileHandle>;
+	}
+}
+
 export const EXPORT_QUALITY_VALUES = [
 	"low",
 	"medium",
@@ -69,11 +80,65 @@ export function downloadBuffer({
 	URL.revokeObjectURL(url);
 }
 
+export type SaveLocation =
+	| { kind: "handle"; handle: FileSystemFileHandle }
+	| { kind: "cancelled" }
+	| { kind: "unsupported" };
+
 /**
- * Save with a real "where do I put this?" dialog (Chromium's File System
- * Access API). The `id` makes the browser REMEMBER the last directory you
- * exported to and default there next time. Falls back to a plain download
- * where the API is unavailable; cancelling saves nothing.
+ * Ask WHERE to save — up front, BEFORE a long encode, so a slow export isn't
+ * wasted when the user cancels the dialog. The `id` makes the browser remember
+ * the last export directory. Returns "unsupported" where the File System Access
+ * API is unavailable (the caller then falls back to a plain download).
+ */
+export async function pickSaveLocation({
+	filename,
+	mimeType,
+}: {
+	filename: string;
+	mimeType: string;
+}): Promise<SaveLocation> {
+	const picker = window.showSaveFilePicker;
+	if (!picker) return { kind: "unsupported" };
+	try {
+		const extension = filename.includes(".")
+			? `.${filename.split(".").pop()}`
+			: ".mp4";
+		const handle = await picker({
+			id: "vibecut-export",
+			suggestedName: filename,
+			types: [{ description: "Video", accept: { [mimeType]: [extension] } }],
+		});
+		return { kind: "handle", handle };
+	} catch (e) {
+		if (e instanceof DOMException && e.name === "AbortError") {
+			return { kind: "cancelled" };
+		}
+		// Picker failed for a non-cancel reason — fall back to a plain download.
+		return { kind: "unsupported" };
+	}
+}
+
+/** Write an already-encoded buffer to a handle picked earlier. */
+export async function writeBufferToHandle({
+	handle,
+	buffer,
+	mimeType,
+}: {
+	handle: FileSystemFileHandle;
+	buffer: ArrayBuffer;
+	mimeType: string;
+}): Promise<void> {
+	const writable = await handle.createWritable();
+	await writable.write(new Blob([buffer], { type: mimeType }));
+	await writable.close();
+}
+
+/**
+ * Save with a real "where do I put this?" dialog (Chromium's File System Access
+ * API), picking and writing in one step. Falls back to a plain download where
+ * the API is unavailable; cancelling saves nothing. (For pick-first/encode-after
+ * use `pickSaveLocation` + `writeBufferToHandle` directly.)
  */
 export async function saveBufferWithPicker({
 	buffer,
@@ -84,37 +149,16 @@ export async function saveBufferWithPicker({
 	filename: string;
 	mimeType: string;
 }): Promise<"saved" | "cancelled" | "downloaded"> {
-	const picker = (
-		window as unknown as {
-			showSaveFilePicker?: (options: {
-				id?: string;
-				suggestedName?: string;
-				types?: { description: string; accept: Record<string, string[]> }[];
-			}) => Promise<FileSystemFileHandle>;
-		}
-	).showSaveFilePicker;
-	if (!picker) {
+	const location = await pickSaveLocation({ filename, mimeType });
+	if (location.kind === "cancelled") return "cancelled";
+	if (location.kind === "unsupported") {
 		downloadBuffer({ buffer, filename, mimeType });
 		return "downloaded";
 	}
 	try {
-		const extension = filename.includes(".")
-			? `.${filename.split(".").pop()}`
-			: ".mp4";
-		const handle = await picker({
-			id: "vibecut-export",
-			suggestedName: filename,
-			types: [{ description: "Video", accept: { [mimeType]: [extension] } }],
-		});
-		const writable = await handle.createWritable();
-		await writable.write(new Blob([buffer], { type: mimeType }));
-		await writable.close();
+		await writeBufferToHandle({ handle: location.handle, buffer, mimeType });
 		return "saved";
-	} catch (e) {
-		if (e instanceof DOMException && e.name === "AbortError") {
-			return "cancelled";
-		}
-		// Picker failed for another reason — don't lose the render.
+	} catch {
 		downloadBuffer({ buffer, filename, mimeType });
 		return "downloaded";
 	}

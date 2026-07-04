@@ -14,6 +14,7 @@ import { SectionField } from "@/components/section";
 import { NumberField } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { ColorPicker } from "@/components/ui/color-picker";
+import { FontPicker } from "@/components/ui/font-picker";
 import {
 	Select,
 	SelectContent,
@@ -24,22 +25,6 @@ import {
 import { usePropertyDraft } from "../hooks/use-property-draft";
 import { KeyframeToggle } from "./keyframe-toggle";
 import { Textarea } from "@/components/ui/textarea";
-
-/** Fonts available on effectively every computer (Premiere-style quick list). */
-const COMMON_FONTS = [
-	"Arial",
-	"Helvetica",
-	"Verdana",
-	"Tahoma",
-	"Trebuchet MS",
-	"Segoe UI",
-	"Georgia",
-	"Times New Roman",
-	"Garamond",
-	"Courier New",
-	"Impact",
-	"Comic Sans MS",
-];
 
 export function PropertyParamField({
 	param,
@@ -188,29 +173,14 @@ function ParamInput({
 	}
 
 	if (param.type === "font") {
-		const current = String(value);
-		const fonts = COMMON_FONTS.includes(current)
-			? COMMON_FONTS
-			: [current, ...COMMON_FONTS];
 		return (
-			<Select
-				value={current}
+			<FontPicker
+				defaultValue={String(value)}
 				onValueChange={(selected) => {
 					onPreview(selected);
 					onCommit();
 				}}
-			>
-				<SelectTrigger className="w-full">
-					<SelectValue />
-				</SelectTrigger>
-				<SelectContent>
-					{fonts.map((font) => (
-						<SelectItem key={font} value={font}>
-							<span style={{ fontFamily: font }}>{font}</span>
-						</SelectItem>
-					))}
-				</SelectContent>
-			</Select>
+			/>
 		);
 	}
 

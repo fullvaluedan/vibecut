@@ -84,6 +84,7 @@ export function usePreviewInteraction({
 		onPointerUp: controller.onPointerUp,
 		onDoubleClick: controller.onDoubleClick,
 		editingText: controller.editingText,
+		hoverCursor: controller.hoverCursor,
 		commitTextEdit: controller.commitTextEdit,
 	};
 }

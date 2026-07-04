@@ -98,13 +98,8 @@ export function TimelineRuler({
 	}
 
 	return (
+		// eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- spatial scrub/seek surface; mousedown drives the seek and the keyboard equivalent is the playhead slider (timeline-playhead.tsx, role="slider" with arrow-key seek) plus global timeline shortcuts. This used to advertise role="slider" but reported a frozen aria-valuenow=0 (U6) — dropped rather than ship a slider stuck at 0.
 		<div
-			role="slider"
-			tabIndex={0}
-			aria-label="Timeline ruler"
-			aria-valuemin={0}
-			aria-valuemax={effectiveDurationSeconds}
-			aria-valuenow={0}
 			className="relative flex-1 overflow-x-visible"
 			style={{ height: TIMELINE_RULER_HEIGHT_PX }}
 			onWheel={handleWheel}
@@ -116,7 +111,6 @@ export function TimelineRuler({
 				}
 			}}
 			onMouseDown={handleRulerTrackingMouseDown}
-			onKeyDown={() => {}}
 		>
 			<div
 				role="none"

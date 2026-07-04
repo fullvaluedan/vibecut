@@ -49,12 +49,12 @@ export const ACTIONS = {
 		category: "navigation",
 	},
 	"jump-forward": {
-		description: "Jump forward 5 seconds",
+		description: "Nudge forward (frames — set in Settings → Hotkeys)",
 		category: "navigation",
 		args: { seconds: "number" },
 	},
 	"jump-backward": {
-		description: "Jump backward 5 seconds",
+		description: "Nudge backward (frames — set in Settings → Hotkeys)",
 		category: "navigation",
 		args: { seconds: "number" },
 	},
@@ -131,6 +131,10 @@ export const ACTIONS = {
 			"Track Select Forward tool — click the timeline to select everything to the right (Shift+click: one track)",
 		category: "editing",
 	},
+	"activate-selection-tool": {
+		description: "Selection tool (arrow) — the default move/trim tool",
+		category: "editing",
+	},
 	"open-speed-panel": {
 		description: "Open the Speed panel for the selected clip",
 		category: "editing",
@@ -141,6 +145,18 @@ export const ACTIONS = {
 	},
 	"toggle-source-audio": {
 		description: "Extract or recover source audio",
+		category: "editing",
+	},
+	"unlink-elements": {
+		description: "Unlink audio/video (move independently)",
+		category: "editing",
+	},
+	"nudge-selected-left": {
+		description: "Nudge selected element(s) one frame left",
+		category: "editing",
+	},
+	"nudge-selected-right": {
+		description: "Nudge selected element(s) one frame right",
 		category: "editing",
 	},
 	"select-all": {
@@ -231,6 +247,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["ripple-delete", ["shift+delete", "shift+backspace"]],
 	["select-clip-at-playhead", ["d"]],
 	["track-select-forward", ["a"]],
+	["activate-selection-tool", ["v"]],
 	["toggle-source-audio", ["ctrl+l"]],
 	["open-speed-panel", ["ctrl+r"]],
 	["copy-selected", ["ctrl+c"]],
@@ -246,6 +263,8 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],
+	["nudge-selected-left", ["alt+left"]],
+	["nudge-selected-right", ["alt+right"]],
 	["undo", ["ctrl+z"]],
 	["redo", ["ctrl+shift+z", "ctrl+y"]],
 ] as const satisfies ReadonlyArray<

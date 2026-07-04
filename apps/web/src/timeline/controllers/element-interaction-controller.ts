@@ -17,8 +17,16 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import { TIMELINE_DRAG_THRESHOLD_PX } from "@/timeline/components/interaction";
+import {
+	lockGestureCursor,
+	type GestureCursorLock,
+} from "@/timeline/gesture-cursor";
 import type { FrameRate } from "opencut-wasm";
 import { computeDropTarget } from "@/timeline/components/drop-target";
+import {
+	createRafCoalescer,
+	type RafCoalescer,
+} from "@/timeline/controllers/raf-coalesce";
 import { getMouseTimeFromClientX } from "@/timeline/drag-utils";
 import { generateUUID } from "@/utils/id";
 import { useTimelineStore } from "@/timeline/timeline-store";
@@ -206,6 +214,7 @@ function resolveDropTarget({
 	zoomLevel,
 	snappedTime,
 	verticalDragDirection,
+	movingElementIds,
 }: {
 	clientX: number;
 	clientY: number;
@@ -216,6 +225,11 @@ function resolveDropTarget({
 	zoomLevel: number;
 	snappedTime: MediaTime;
 	verticalDragDirection: "up" | "down" | null;
+	// The whole moving set (all selected members), not just the anchor, so the
+	// overlap test skips every clip this drag carries. Without this a same-track
+	// multi-clip shift falsely collides with its own siblings and diverts to a
+	// new track / no-op. Mirrors `canApplyMovesToExistingTracks` at commit time.
+	movingElementIds: ReadonlySet<string>;
 }): DropTarget | null {
 	const containerRect = viewport
 		.getTracksContainerEl()
@@ -245,6 +259,7 @@ function resolveDropTarget({
 		zoomLevel,
 		startTimeOverride: snappedTime,
 		excludeElementId: movingElement.id,
+		excludeElementIds: movingElementIds,
 		verticalDragDirection,
 	});
 }
@@ -298,12 +313,33 @@ export class ElementInteractionController {
 	// has already returned to idle, so the "was this a drag?" answer must
 	// outlive the session. Reset on the next mousedown.
 	private lastGestureWasDrag = false;
+	// Pins the body cursor to "grabbing" for the drag's lifetime. Set when the
+	// drag crosses the threshold (beginDragFromPending), released in
+	// finishSession — the single funnel every gesture-end path flows through.
+	private cursorLock: GestureCursorLock | null = null;
 
 	private readonly subscribers = new Set<() => void>();
 	private readonly depsRef: ElementInteractionDepsRef;
 
+	// A raw drag fires mousemove far faster than the display refreshes; without
+	// coalescing, every event re-runs the drop-target math and re-renders the
+	// whole timeline. Collapse to at most one processed move per animation frame,
+	// always with the latest coords, so the drag RESULT is identical and only the
+	// update cadence drops.
+	private readonly moveCoalescer: RafCoalescer<{
+		clientX: number;
+		clientY: number;
+	}>;
+
 	constructor(args: { depsRef: ElementInteractionDepsRef }) {
 		this.depsRef = args.depsRef;
+		this.moveCoalescer = createRafCoalescer({
+			scheduler: {
+				request: (cb) => requestAnimationFrame(cb),
+				cancel: (handle) => cancelAnimationFrame(handle),
+			},
+			flush: ({ clientX, clientY }) => this.processMove({ clientX, clientY }),
+		});
 	}
 
 	private get deps(): ElementInteractionDeps {
@@ -467,7 +503,10 @@ export class ElementInteractionController {
 	}
 
 	private finishSession(): void {
+		this.moveCoalescer.cancel();
 		this.session = { kind: "idle" };
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.deps.snap.onChange?.(null);
 		this.notify();
@@ -530,6 +569,9 @@ export class ElementInteractionController {
 				startMouseY: mousedown.origin.y,
 				currentMouseY: clientY,
 			}),
+			movingElementIds: new Set(
+				drag.moveGroup.members.map((member) => member.elementId),
+			),
 		});
 
 		const nextGroupMoveResult = anchorDropTarget
@@ -550,6 +592,16 @@ export class ElementInteractionController {
 	}
 
 	private handleMouseMove = ({ clientX, clientY }: MouseEvent): void => {
+		this.moveCoalescer.push({ clientX, clientY });
+	};
+
+	private processMove = ({
+		clientX,
+		clientY,
+	}: {
+		clientX: number;
+		clientY: number;
+	}): void => {
 		const scrollContainer = this.deps.viewport.getTracksScrollEl();
 		if (!scrollContainer) return;
 
@@ -643,6 +695,7 @@ export class ElementInteractionController {
 
 		this.session = { kind: "dragging", mousedown, drag };
 		this.lastGestureWasDrag = true;
+		this.cursorLock = lockGestureCursor({ cursor: "grabbing" });
 
 		this.updateDropTarget({
 			clientX,
@@ -701,6 +754,11 @@ export class ElementInteractionController {
 	}
 
 	private handleMouseUp = ({ clientX, clientY }: MouseEvent): void => {
+		// Apply any coalesced move still waiting for its frame so the final drag
+		// state (drop target, group move) reflects the last pointer position
+		// before we decide whether to commit.
+		this.moveCoalescer.flushNow();
+
 		if (this.session.kind === "pending") {
 			this.finishSession();
 			return;

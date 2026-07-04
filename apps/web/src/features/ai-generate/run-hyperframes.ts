@@ -20,9 +20,13 @@ import {
 	mediaTimeFromSeconds,
 } from "@/wasm";
 import { generateUUID } from "@/utils/id";
-import { buildAiAuthHeaders, useAiSettingsStore } from "@/features/ai-generate/store";
+import {
+	buildAiAuthHeaders,
+	useAiSettingsStore,
+} from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
+import { loadFonts } from "@/fonts/google-fonts";
 import { buildAiLanes, claimLane } from "@/features/ai-generate/placement";
 import { getMotionTemplate } from "@/features/motion-templates/templates";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
@@ -136,10 +140,13 @@ export async function runHyperframes({
 		.filter((id) => !disabledTemplateIds.includes(id));
 	if (!allowedTemplateIds.length) {
 		throw new Error(
-			"All templates are unchecked in the HyperFrames panel — check at least one.",
+			"Check at least one template, or pick a style/asset and let the Authored engine use it.",
 		);
 	}
-	onProgress({ stage: "planning", detail: "Claude is planning your effects..." });
+	onProgress({
+		stage: "planning",
+		detail: "Claude is planning your effects...",
+	});
 	const activeLook = getStyleById(useAiSettingsStore.getState().styleId);
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
@@ -156,13 +163,18 @@ export async function runHyperframes({
 		}),
 	});
 	if (!planRes.ok) {
-		const err = (await planRes.json().catch(() => null)) as { error?: string } | null;
+		const err = (await planRes.json().catch(() => null)) as {
+			error?: string;
+		} | null;
 		throw new Error(err?.error ?? `Planning failed (${planRes.status})`);
 	}
-	const plan = (await planRes.json()) as {
-		items: PlannedEffect[];
+	const plan = (await planRes.json().catch(() => null)) as {
+		items?: PlannedEffect[];
 		usage?: { inputTokens: number; outputTokens: number } | null;
-	};
+	} | null;
+	if (!plan || !Array.isArray(plan.items)) {
+		throw new Error("Planning returned an unexpected response — try again.");
+	}
 	const tokensUsed = plan.usage
 		? plan.usage.inputTokens + plan.usage.outputTokens
 		: 0;
@@ -170,7 +182,13 @@ export async function runHyperframes({
 		useAiSettingsStore.getState().addTokensUsed(tokensUsed);
 	}
 	if (!plan.items.length) {
-		throw new Error("Claude found no moments that need an effect. Try longer footage.");
+		// An empty plan is NOT a "too short" problem (it fires on long clips too):
+		// the planner returned nothing for a too-rough transcript (analysis uses the
+		// fast low-accuracy model), an over-narrow template selection, or genuinely no
+		// fitting moment. Say what to try, honestly.
+		throw new Error(
+			"The planner didn't mark any moments with the templates you allowed. Try checking more templates, adding a Direction (tell it what you want), or raising transcription accuracy: on a long clip a rough transcript can hide moments.",
+		);
 	}
 
 	// 3. Render each effect locally, then place all clips in one batch.
@@ -178,6 +196,9 @@ export async function runHyperframes({
 	// (unless the planner chose its own accent).
 	const themeStyle = getStyleById(useAiSettingsStore.getState().styleId);
 	const themeAccent = themeStyle.accent;
+	// Templates can use a Google font (kinetic-title defaults to Inter); fetch the
+	// fonts they need so AI-placed text renders in the right face, not a fallback.
+	void loadFonts({ families: ["Inter", themeStyle.fontFamily] });
 	for (const item of plan.items) {
 		if (item.variables.accent === undefined) {
 			item.variables.accent = themeAccent;
@@ -226,11 +247,32 @@ export async function runHyperframes({
 			}
 			placedTemplateIds.push(item.templateId);
 		}
+		let nativePlaced = 0;
 		if (commands.length) {
 			editor.command.execute({ command: new BatchCommand(commands) });
+			// Trust nothing: count what ACTUALLY landed on the timeline instead of
+			// the number of templates we tried to build. Returning the attempted
+			// count made a no-op look like success ("Placed N") with nothing added.
+			const after = editor.scenes.getActiveScene().tracks;
+			const onTimeline = new Set(
+				[after.main, ...after.overlay, ...after.audio].flatMap((t) =>
+					t.elements.map((el) => el.id),
+				),
+			);
+			nativePlaced = commands.filter((c) =>
+				onTimeline.has(c.getElementId() ?? ""),
+			).length;
 		}
 		usePreferenceStore.getState().noteTemplatesPlaced(placedTemplateIds);
-		return { placed: placedTemplateIds.length, skipped, tokensUsed };
+		// Never fail silently: if nothing landed, say why.
+		if (nativePlaced === 0 && skipped.length === 0) {
+			skipped.push(
+				plan.items.length === 0
+					? "the planner found no moments that fit a template"
+					: "the planner returned effects but none could be placed on the timeline",
+			);
+		}
+		return { placed: nativePlaced, skipped, tokensUsed };
 	}
 
 	// Rendering takes minutes — the user may click around (even into another
@@ -325,6 +367,7 @@ export async function runHyperframes({
 				lanes,
 				start: startTime,
 				end: startTime + durationTime,
+				editor,
 			});
 			return new InsertElementCommand({
 				element: {

@@ -43,7 +43,7 @@ function findElementAtPosition({
 	return { elementId: hit.id, trackId: track.id };
 }
 
-function getTrackAtY({
+export function getTrackAtY({
 	mouseY,
 	tracks,
 	verticalDragDirection,
@@ -113,6 +113,7 @@ export function computeDropTarget({
 	verticalDragDirection,
 	startTimeOverride,
 	excludeElementId,
+	excludeElementIds,
 	targetElementTypes,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
@@ -134,6 +135,7 @@ export function computeDropTarget({
 			tracks,
 			elementType,
 			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			excludeElementIds,
 			strategy: {
 				type: "preferIndex",
 				trackIndex: 0,
@@ -169,11 +171,15 @@ export function computeDropTarget({
 			tracks,
 			elementType,
 			timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+			excludeElementIds,
 			strategy: {
 				type: "preferIndex",
 				trackIndex: isAboveAllTracks ? 0 : orderedTracks.length - 1,
 				hoverDirection: isAboveAllTracks ? "above" : "below",
-				createNewTrackOnly: true,
+				// Dropping ABOVE all tracks intentionally makes a new top track.
+				// Dropping into the empty lane area BELOW should reuse the lowest
+				// free video track (V1/main) — Premiere parity — not spawn a V2.
+				createNewTrackOnly: isAboveAllTracks,
 			},
 		});
 		const outOfBoundsResult =
@@ -219,6 +225,7 @@ export function computeDropTarget({
 		tracks,
 		elementType,
 		timeSpans: [{ startTime: xPosition, duration: elementDuration, excludeElementId }],
+		excludeElementIds,
 		strategy: {
 			type: "preferIndex",
 			trackIndex,

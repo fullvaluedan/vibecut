@@ -390,6 +390,7 @@ function ToolbarRightSection({
 				<Button
 					variant="text"
 					size="icon"
+					aria-label="Zoom out timeline"
 					onClick={() => onZoom({ direction: "out" })}
 				>
 					<HugeiconsIcon icon={SearchMinusIcon} />
@@ -407,6 +408,7 @@ function ToolbarRightSection({
 				<Button
 					variant="text"
 					size="icon"
+					aria-label="Zoom in timeline"
 					onClick={() => onZoom({ direction: "in" })}
 				>
 					<HugeiconsIcon icon={SearchAddIcon} />
@@ -435,6 +437,8 @@ function ToolbarButton({
 		<Button
 			variant={isActive ? "secondary" : "text"}
 			size="icon"
+			aria-label={tooltip}
+			aria-pressed={isActive}
 			disabled={disabled}
 			onClick={onClick ? (event) => onClick({ event }) : undefined}
 			className={cn(

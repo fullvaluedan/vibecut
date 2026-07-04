@@ -106,16 +106,46 @@ export function TextEditOverlay({
 		? (bg.paddingY ?? DEFAULTS.text.background.paddingY) * fontSizeRatio
 		: 0;
 
+	// Counter-scale for the edit-mode hint so it stays a legible, fixed on-screen
+	// size regardless of the text element's own scale / the viewport zoom.
+	const editBoxScaleX = transform.scaleX * displayScaleX;
+	const hintCounterScale =
+		Number.isFinite(editBoxScaleX) && editBoxScaleX !== 0
+			? 1 / editBoxScaleX
+			: 1;
+
 	return (
 		<div
 			className="absolute"
 			style={{
 				left: posX,
 				top: posY,
-				transform: `translate(-50%, -50%) scale(${transform.scaleX * displayScaleX}, ${transform.scaleY * displayScaleX}) rotate(${transform.rotate}deg)`,
+				transform: `translate(-50%, -50%) scale(${editBoxScaleX}, ${transform.scaleY * displayScaleX}) rotate(${transform.rotate}deg)`,
 				transformOrigin: "center center",
 			}}
 		>
+			{/*
+			  Edit-mode affordance: a dashed ring around the caret box plus a small
+			  hint telling the user how to leave edit mode to reach the resize
+			  handles. Handles are intentionally hidden during caret edit (the
+			  modal pattern), so this signals the exit instead of forcing them back.
+			*/}
+			<div
+				className="pointer-events-none absolute -inset-1 rounded-sm"
+				style={{
+					outline: "1px dashed var(--primary)",
+					outlineOffset: "1px",
+				}}
+			/>
+			<div
+				className="pointer-events-none absolute left-1/2 top-full whitespace-nowrap rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-medium leading-tight text-white shadow-sm"
+				style={{
+					transform: `translate(-50%, 6px) scale(${hintCounterScale})`,
+					transformOrigin: "top center",
+				}}
+			>
+				Esc or click away to resize
+			</div>
 			<div
 				ref={divRef}
 				contentEditable

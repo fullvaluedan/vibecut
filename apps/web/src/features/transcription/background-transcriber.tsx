@@ -7,9 +7,10 @@
  * Settings → AI.
  */
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useEditor } from "@/editor/use-editor";
 import { useAiSettingsStore } from "@/features/ai-generate/store";
+import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import {
 	computeTimelineAudioHash,
 	ensureTimelineTranscript,
@@ -21,22 +22,33 @@ const SETTLE_MS = 5000;
 
 export function BackgroundTranscriber() {
 	const editor = useEditor();
-	const enabled = useAiSettingsStore((s) => s.backgroundTranscriptionEnabled);
+	const enabledSetting = useAiSettingsStore((s) => s.backgroundTranscriptionEnabled);
+	const lowPowerMode = useAiSettingsStore((s) => s.lowPowerMode);
+	// Don't run Whisper while a HyperFrames / AI CUT run is using the machine.
+	const aiBusy = useAiActivityStore((s) => s.busy);
+	const enabled = enabledSetting && !lowPowerMode && !aiBusy;
 	const setStatus = useTranscriptStatusStore((s) => s.setStatus);
-	const hash = useEditor((e) => {
+	// Subscribe to the cheap tracks REFERENCE (stable across scrub and selection;
+	// only a real edit replaces it) and derive the O(n) audio hash off that with
+	// useMemo — instead of recomputing the hash on every editor notify, which the
+	// previous selector form did, including on every playhead-scrub mousemove.
+	const tracks = useEditor((e) => e.scenes.getActiveSceneOrNull()?.tracks);
+	const hash = useMemo(() => {
+		if (!tracks) return "";
 		try {
-			return computeTimelineAudioHash(e);
+			return computeTimelineAudioHash(editor);
 		} catch {
 			return "";
 		}
-	});
+	}, [tracks, editor]);
 
 	useEffect(() => {
 		if (!enabled || !hash || hash.startsWith("0-")) {
 			setStatus("idle");
 			return;
 		}
-		if (getCachedTranscript(editor)?.length) {
+		if (getCachedTranscript(editor)) {
+			// A hash match (even an empty/no-speech transcript) is ready.
 			setStatus("ready");
 			return;
 		}
@@ -45,7 +57,12 @@ export function BackgroundTranscriber() {
 			setStatus("transcribing");
 			ensureTimelineTranscript({ editor })
 				.then(() => setStatus("ready"))
-				.catch(() => setStatus("idle"));
+				.catch((err) => {
+					// Surface real failures (the 'error' status was dead code);
+					// a genuine cancellation just goes back to idle.
+					const msg = String((err as Error)?.message ?? err);
+					setStatus(/cancel/i.test(msg) ? "idle" : "error");
+				});
 		}, SETTLE_MS);
 		return () => clearTimeout(timer);
 	}, [hash, enabled, editor, setStatus]);

@@ -21,6 +21,9 @@ import { mediaSupportsAudio } from "@/media/media-utils";
 import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
+import { StreamingLinearResampler } from "./streaming-resampler";
+import { timelineAudioFrameCount } from "./timeline-audio-size";
 import {
 	computeRmsBuckets,
 	type SampleBucket,
@@ -86,6 +89,40 @@ export async function decodeAudioToFloat32({
 	return { samples, sampleRate: audioBuffer.sampleRate };
 }
 
+/**
+ * Decode ONE bin asset's audio to mono Float32 at the analysis sample rate, with
+ * NO timeline/placement — works for video (mediabunny audio-track extraction)
+ * and audio assets. The per-clip primitive for bin-wide transcription/analysis
+ * (FrameCut auto-assemble). Returns null when the asset has no decodable audio.
+ */
+export async function decodeAssetAudioToFloat32({
+	asset,
+	sampleRate = DEFAULT_TRANSCRIPTION_SAMPLE_RATE,
+}: {
+	asset: MediaAsset;
+	sampleRate?: number;
+}): Promise<DecodedAudio | null> {
+	const audioContext = createAudioContext({ sampleRate });
+	try {
+		const buffer = await resolveAudioBufferForAsset({ asset, audioContext });
+		if (!buffer) return null;
+
+		const numChannels = buffer.numberOfChannels;
+		const length = buffer.length;
+		const samples = new Float32Array(length);
+		for (let i = 0; i < length; i++) {
+			let sum = 0;
+			for (let channel = 0; channel < numChannels; channel++) {
+				sum += buffer.getChannelData(channel)[i];
+			}
+			samples[i] = sum / numChannels;
+		}
+		return { samples, sampleRate: buffer.sampleRate };
+	} finally {
+		void audioContext.close();
+	}
+}
+
 export interface AudibleElementCandidate {
 	element: AudioElement | VideoElement;
 	mediaAsset: MediaAsset | null;
@@ -137,16 +174,36 @@ export async function collectAudioElements({
 	tracks,
 	mediaAssets,
 	audioContext,
+	onDecodeProgress,
 }: {
 	tracks: SceneTracks;
 	mediaAssets: MediaAsset[];
 	audioContext: AudioContext;
+	/** Fires 0..1 as each asset finishes decoding (export progress feedback). */
+	onDecodeProgress?: (fraction: number) => void;
 }): Promise<CollectedAudioElement[]> {
 	const candidates = collectAudibleCandidates({ tracks, mediaAssets });
 	const mediaMap = new Map<string, MediaAsset>(
 		mediaAssets.map((media) => [media.id, media]),
 	);
 	const pendingElements: Array<Promise<CollectedAudioElement | null>> = [];
+
+	// Decode each source asset's audio AT MOST ONCE. A silence-removed clip becomes
+	// many timeline elements that all reference the same asset; decoding the full
+	// asset buffer per element (in parallel, via Promise.all below) exhausts memory
+	// on long videos — "Array buffer allocation failed" / createBuffer NotSupported.
+	// The decoded buffer is shared READ-ONLY by the mix (mixAudioChannels reads the
+	// source into the output; renderRetimedBuffer returns a new buffer), so one
+	// decode safely serves every element referencing that asset. (See PATCHES.md.)
+	const assetBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+	const resolveAsset = ({ asset }: { asset: MediaAsset }): Promise<AudioBuffer | null> => {
+		let cached = assetBufferCache.get(asset.id);
+		if (!cached) {
+			cached = resolveAudioBufferForAsset({ asset, audioContext });
+			assetBufferCache.set(asset.id, cached);
+		}
+		return cached;
+	};
 
 	for (const { element, mediaAsset } of candidates) {
 		if (element.type === "audio") {
@@ -155,6 +212,7 @@ export async function collectAudioElements({
 					element,
 					mediaMap,
 					audioContext,
+					resolveAsset,
 				}).then((audioBuffer) => {
 					if (!audioBuffer) return null;
 					return {
@@ -181,10 +239,7 @@ export async function collectAudioElements({
 			if (!mediaAsset || !mediaSupportsAudio({ media: mediaAsset })) continue;
 
 			pendingElements.push(
-				resolveAudioBufferForAsset({
-					asset: mediaAsset,
-					audioContext,
-				}).then((audioBuffer) => {
+				resolveAsset({ asset: mediaAsset }).then((audioBuffer) => {
 					if (!audioBuffer) return null;
 					return {
 						timelineElement: element,
@@ -206,7 +261,15 @@ export async function collectAudioElements({
 		}
 	}
 
-	const resolvedElements = await Promise.all(pendingElements);
+	const total = pendingElements.length;
+	let settled = 0;
+	const tracked = pendingElements.map((pending) =>
+		pending.finally(() => {
+			settled++;
+			if (total > 0) onDecodeProgress?.(settled / total);
+		}),
+	);
+	const resolvedElements = await Promise.all(tracked);
 	const audioElements: CollectedAudioElement[] = [];
 	for (const element of resolvedElements) {
 		if (element) audioElements.push(element);
@@ -218,16 +281,19 @@ async function resolveAudioBufferForElement({
 	element,
 	mediaMap,
 	audioContext,
+	resolveAsset,
 }: {
 	element: AudioElement;
 	mediaMap: Map<string, MediaAsset>;
 	audioContext: AudioContext;
+	/** Per-asset cached decode (collectAudioElements) — dedupes same-asset elements. */
+	resolveAsset: (args: { asset: MediaAsset }) => Promise<AudioBuffer | null>;
 }): Promise<AudioBuffer | null> {
 	try {
 		if (element.sourceType === "upload") {
 			const asset = mediaMap.get(element.mediaId);
 			if (!asset) return null;
-			return await resolveAudioBufferForAsset({ asset, audioContext });
+			return await resolveAsset({ asset });
 		}
 
 		if (element.buffer) return element.buffer;
@@ -273,6 +339,15 @@ async function resolveAudioBufferForAsset({
 
 		const sink = new AudioBufferSink(audioTrack);
 		const targetSampleRate = audioContext.sampleRate;
+
+		// Heavy-downsample ANALYSIS path (→16kHz mono for transcription/silence):
+		// stream-resample each chunk straight into the output so a long source never
+		// holds its full native PCM (the prior ~3× hold OOM'd a 16-min recording at
+		// "Extracting timeline audio"). The export path (higher target rate) keeps
+		// the offline render below for quality.
+		if (targetSampleRate <= DEFAULT_TRANSCRIPTION_SAMPLE_RATE) {
+			return await streamResampleTrack({ input, sink, audioContext, targetSampleRate });
+		}
 
 		const chunks: AudioBuffer[] = [];
 		let totalSamples = 0;
@@ -336,6 +411,60 @@ async function resolveAudioBufferForAsset({
 	} finally {
 		input.dispose();
 	}
+}
+
+/** A few samples of slack on the pre-sized resample output for rounding. */
+const RESAMPLE_OUTPUT_SLACK = 16;
+
+/**
+ * Stream a track's audio through a linear resampler, writing each decoded chunk
+ * straight into the pre-sized output — never holding the full native PCM. Output
+ * length is pre-sized from the track duration (the resampler clamps to it).
+ */
+async function streamResampleTrack({
+	input,
+	sink,
+	audioContext,
+	targetSampleRate,
+}: {
+	input: Input;
+	sink: AudioBufferSink;
+	audioContext: AudioContext;
+	targetSampleRate: number;
+}): Promise<AudioBuffer | null> {
+	const durationSec = await input.computeDuration();
+	let resampler: StreamingLinearResampler | null = null;
+	let numChannels = 0;
+	for await (const { buffer } of sink.buffers(0)) {
+		if (!resampler) {
+			numChannels = Math.min(MAX_AUDIO_CHANNELS, buffer.numberOfChannels);
+			const maxOutputSamples =
+				Math.ceil(durationSec * targetSampleRate) + RESAMPLE_OUTPUT_SLACK;
+			resampler = new StreamingLinearResampler({
+				nativeRate: buffer.sampleRate,
+				targetRate: targetSampleRate,
+				numChannels,
+				maxOutputSamples,
+			});
+		}
+		const channels = Array.from({ length: numChannels }, (_, channel) =>
+			buffer.getChannelData(Math.min(channel, buffer.numberOfChannels - 1)),
+		);
+		resampler.push({ channels, length: buffer.length });
+	}
+	if (!resampler || resampler.outputLength === 0) return null;
+	const output = resampler.finish();
+	const outBuffer = audioContext.createBuffer(
+		numChannels,
+		output[0].length,
+		targetSampleRate,
+	);
+	for (let channel = 0; channel < numChannels; channel++) {
+		// `.set` (not copyToChannel) sidesteps the strict Float32Array<ArrayBuffer>
+		// vs <ArrayBufferLike> mismatch on the resampler's subarray views.
+		outBuffer.getChannelData(channel).set(output[channel]);
+	}
+	return outBuffer;
 }
 
 interface AudioMixSource {
@@ -627,62 +756,92 @@ export async function createTimelineAudioBuffer({
 	mediaAssets,
 	duration,
 	sampleRate = EXPORT_SAMPLE_RATE,
+	outputChannels = 2,
 	audioContext,
+	onProgress,
 }: {
 	tracks: SceneTracks;
 	mediaAssets: MediaAsset[];
 	duration: number;
 	sampleRate?: number;
+	/** Output channel count. Export uses 2 (stereo); the analysis/transcription
+	 * path passes 1 (mono) — together with a lower sampleRate this keeps the
+	 * buffer small enough that `createBuffer` doesn't reject a long timeline. */
+	outputChannels?: number;
 	audioContext?: AudioContext;
+	/** Fires 0..1 across decode → mix → mastering, so the export bar moves
+	 * during this stage instead of looking frozen. */
+	onProgress?: (fraction: number) => void;
 }): Promise<AudioBuffer | null> {
 	const context = audioContext ?? createAudioContext({ sampleRate });
 
+	// Decoding every asset is the slow part — give it the bulk of the bar.
 	const audioElements = await collectAudioElements({
 		tracks,
 		mediaAssets,
 		audioContext: context,
+		onDecodeProgress: (fraction) => onProgress?.(fraction * 0.7),
 	});
 
 	if (audioElements.length === 0) return null;
 
-	const outputChannels = 2;
 	const durationSeconds = duration / TICKS_PER_SECOND;
-	const outputLength = Math.ceil(durationSeconds * sampleRate);
-	const outputBuffer = context.createBuffer(
-		outputChannels,
-		outputLength,
+	const outputLength = timelineAudioFrameCount({
+		durationTicks: duration,
 		sampleRate,
-	);
-
-	for (const element of audioElements) {
-		if (element.muted) continue;
-
-		const renderedBuffer = shouldMaintainPitch({
-			rate: element.retime?.rate ?? 1,
-			maintainPitch: element.retime?.maintainPitch,
-		})
-			? await renderRetimedBuffer({
-					audioContext: context,
-					sourceBuffer: element.buffer,
-					trimStart: element.trimStart,
-					clipDuration: element.duration,
-					retime: element.retime,
-					maintainPitch: true,
-				})
-			: undefined;
-
-		mixAudioChannels({
-			element,
-			buffer: renderedBuffer ?? element.buffer,
-			trimStart: renderedBuffer ? 0 : element.trimStart,
-			retime: renderedBuffer ? undefined : element.retime,
-			outputBuffer,
-			outputLength,
-			sampleRate,
-		});
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	let outputBuffer: AudioBuffer;
+	try {
+		outputBuffer = context.createBuffer(outputChannels, outputLength, sampleRate);
+	} catch (error) {
+		// A long enough timeline overflows the browser's createBuffer allocation
+		// limit (~21 min stereo @ 44.1kHz ≈ 459 MB). Surface an actionable message
+		// instead of the raw "createBuffer(...) failed" DOMException.
+		const minutes = Math.max(1, Math.round(durationSeconds / 60));
+		throw new Error(
+			`Timeline audio is too large to process in one buffer (~${minutes} min, ${outputChannels}ch @ ${sampleRate}Hz). Shorten the timeline or split the export. (createBuffer failed: ${error instanceof Error ? error.message : String(error)})`,
+		);
 	}
 
-	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
+	let mixed = 0;
+	for (const element of audioElements) {
+		if (!element.muted) {
+			const renderedBuffer = shouldMaintainPitch({
+				rate: element.retime?.rate ?? 1,
+				maintainPitch: element.retime?.maintainPitch,
+			})
+				? await renderRetimedBuffer({
+						audioContext: context,
+						sourceBuffer: element.buffer,
+						trimStart: element.trimStart,
+						clipDuration: element.duration,
+						retime: element.retime,
+						maintainPitch: true,
+					})
+				: undefined;
+
+			mixAudioChannels({
+				element,
+				buffer: renderedBuffer ?? element.buffer,
+				trimStart: renderedBuffer ? 0 : element.trimStart,
+				retime: renderedBuffer ? undefined : element.retime,
+				outputBuffer,
+				outputLength,
+				sampleRate,
+			});
+		}
+		mixed++;
+		// Mixing spans 0.7 → 0.95 of the audio stage.
+		onProgress?.(0.7 + (mixed / audioElements.length) * 0.25);
+	}
+
+	onProgress?.(0.95);
+	const mastered = await applyAudioMasteringToBuffer({
+		audioBuffer: outputBuffer,
+	});
+	onProgress?.(1);
+	return mastered;
 }
 
 function collectPeakRange({
@@ -833,7 +992,9 @@ function mixAudioChannels({
 	const outputStartSample = Math.floor(startTime * sampleRate);
 	const renderedLength = Math.ceil(elementDuration * sampleRate);
 
-	const outputChannels = 2;
+	// Follow the output buffer's channel count: 2 for export (stereo), 1 for the
+	// mono analysis path. A source channel beyond the output folds to the last.
+	const outputChannels = outputBuffer.numberOfChannels;
 	for (let channel = 0; channel < outputChannels; channel++) {
 		const outputData = outputBuffer.getChannelData(channel);
 		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);

@@ -342,6 +342,26 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 
+	test("firstAvailable diverts a video to the main track over an empty overlay video track", () => {
+		const tracks = buildSceneTracks({
+			overlay: [buildTrack({ id: "video-overlay", type: "video" })],
+		});
+
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 0, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toEqual({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackIndex: 1,
+			trackType: "video",
+		});
+	});
+
 	test("firstAvailable creates a new track when all compatible tracks are full", () => {
 		const tracks = buildSceneTracks({
 			overlay: [
@@ -402,6 +422,53 @@ describe("resolveTrackPlacement", () => {
 			insertIndex: 1,
 			insertPosition: "below",
 		});
+	});
+
+	test("preferIndex group shift stays on the same lane when the moving set is excluded", () => {
+		// Two clips [a: 0..5][b: 5..10] on an overlay video lane, shifted right by
+		// 3. Excluding only the anchor makes the shifted anchor collide with b ->
+		// diverts to a new track. Excluding the whole set keeps it on the lane.
+		const buildLane = () =>
+			buildSceneTracks({
+				overlay: [
+					buildTrack({
+						id: "video-lane",
+						type: "video",
+						elements: [
+							buildElement({ id: "a", type: "video", startTime: 0, duration: 5 }),
+							buildElement({ id: "b", type: "video", startTime: 5, duration: 5 }),
+						],
+					}),
+				],
+			});
+
+		expect(
+			resolveTrackPlacement({
+				tracks: buildLane(),
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 3, duration: 5 })],
+				excludeElementIds: new Set(["a"]),
+				strategy: {
+					type: "preferIndex",
+					trackIndex: 0,
+					hoverDirection: "below",
+				},
+			}),
+		).toMatchObject({ kind: "newTrack" });
+
+		expect(
+			resolveTrackPlacement({
+				tracks: buildLane(),
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 3, duration: 5 })],
+				excludeElementIds: new Set(["a", "b"]),
+				strategy: {
+					type: "preferIndex",
+					trackIndex: 0,
+					hoverDirection: "below",
+				},
+			}),
+		).toMatchObject({ kind: "existingTrack", trackId: "video-lane" });
 	});
 
 	test("preferIndex creates a new overlay track above the main track", () => {
@@ -575,8 +642,8 @@ describe("resolveTrackPlacement", () => {
 				tracks,
 				elementType: "audio",
 				timeSpans: [
-					buildTimeSpan({ startTime: 2.5, duration: 1 }),
-					buildTimeSpan({ startTime: 5.5, duration: 1 }),
+					buildTimeSpan({ startTime: 3, duration: 1 }),
+					buildTimeSpan({ startTime: 5, duration: 1 }),
 				],
 				strategy: { type: "firstAvailable" },
 			}),
@@ -652,6 +719,42 @@ describe("resolveTrackPlacement", () => {
 		});
 	});
 
+	test("explicit skipMainTrackStart leaves the requested start unsnapped (ripple-insert)", () => {
+		// Main clip starts at tick 5 (a leading gap, i.e. does NOT start at 0).
+		// Requesting an insert at 5 would normally snap to 0 (see the test above).
+		// With skipMainTrackStart the ripple's already-opened hole is honored: no
+		// adjustedStartTime, so the clip lands at 5, not 0.
+		const tracks = buildSceneTracks({
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "a", type: "video", startTime: 5, duration: 5 }),
+				],
+			}),
+		});
+
+		const result = resolveTrackPlacement({
+			tracks,
+			elementType: "video",
+			timeSpans: [buildTimeSpan({ startTime: 5, duration: 2 })],
+			strategy: {
+				type: "explicit",
+				trackId: "video-main",
+				skipMainTrackStart: true,
+			},
+		});
+		expect(result).toEqual({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackIndex: 0,
+			trackType: "video",
+		});
+		expect(
+			(result as { adjustedStartTime?: number }).adjustedStartTime,
+		).toBeUndefined();
+	});
+
 	test("preferIndex uses vertical drag direction when hovered track is incompatible", () => {
 		const tracks = buildSceneTracks({
 			overlay: [buildTrack({ id: "text-1", type: "text" })],
@@ -677,5 +780,139 @@ describe("resolveTrackPlacement", () => {
 			insertIndex: 2,
 			insertPosition: "below",
 		});
+	});
+});
+
+describe("resolveTrackPlacement video-track cap (MAX_VIDEO_TRACKS = 8)", () => {
+	// main + 7 overlay video tracks = 8 video tracks (at the cap), each fully
+	// occupied across the probed span so a fresh placement would want a NEW track.
+	function buildCappedVideoScene(): SceneTracks {
+		const occupy = (id: string): VideoTrack["elements"] => [
+			buildElement({ id, type: "video", startTime: 0, duration: 100 }),
+		];
+		return buildSceneTracks({
+			overlay: Array.from({ length: 7 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: occupy(`vid-el-${i + 1}`),
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: occupy("vid-el-main"),
+			}),
+		});
+	}
+
+	test("clamps a would-be 9th video track onto an existing video lane", () => {
+		const result = resolveTrackPlacement({
+			tracks: buildCappedVideoScene(),
+			elementType: "video",
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+			strategy: { type: "firstAvailable" },
+		});
+		expect(result?.kind).toBe("existingTrack");
+		expect(result).toMatchObject({
+			kind: "existingTrack",
+			trackId: "video-overlay-1",
+			trackType: "video",
+		});
+	});
+
+	test("does NOT cap text/audio tracks even when video is at the cap", () => {
+		const tracks = buildCappedVideoScene();
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "text",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "text" });
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "audio",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "audio" });
+	});
+
+	test("a same-track group shift still resolves to an existing lane at the cap", () => {
+		// main + 7 overlay video tracks all fully occupied = at the cap. A group
+		// of two clips on the main lane shifting right must resolve back onto the
+		// main lane (existingTrack), not divert to a would-be 9th track / null.
+		const occupy = (id: string): VideoTrack["elements"] => [
+			buildElement({ id, type: "video", startTime: 0, duration: 100 }),
+		];
+		const tracks = buildSceneTracks({
+			overlay: Array.from({ length: 7 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: occupy(`vid-el-${i + 1}`),
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "m-a", type: "video", startTime: 0, duration: 20 }),
+					buildElement({ id: "m-b", type: "video", startTime: 20, duration: 20 }),
+					buildElement({ id: "m-c", type: "video", startTime: 60, duration: 20 }),
+				],
+			}),
+		});
+
+		const result = resolveTrackPlacement({
+			tracks,
+			elementType: "video",
+			// Shift [m-a, m-b] right into the 40..60 gap; excluding both moving ids
+			// lets the anchor span pass on the main lane.
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 20 })],
+			excludeElementIds: new Set(["m-a", "m-b"]),
+			strategy: {
+				type: "preferIndex",
+				trackIndex: 7,
+				hoverDirection: "below",
+			},
+		});
+		expect(result).toMatchObject({
+			kind: "existingTrack",
+			trackId: "video-main",
+			trackType: "video",
+		});
+	});
+
+	test("below the cap, a video still resolves to a new track", () => {
+		const tracks = buildSceneTracks({
+			overlay: Array.from({ length: 6 }, (_, i) =>
+				buildTrack({
+					id: `video-overlay-${i + 1}`,
+					type: "video",
+					elements: [
+						buildElement({ id: `vid-el-${i + 1}`, type: "video", startTime: 0, duration: 100 }),
+					],
+				}),
+			),
+			main: buildTrack({
+				id: "video-main",
+				type: "video",
+				elements: [
+					buildElement({ id: "vid-el-main", type: "video", startTime: 0, duration: 100 }),
+				],
+			}),
+		});
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "video" });
 	});
 });

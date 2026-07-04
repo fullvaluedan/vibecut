@@ -5,6 +5,7 @@ import {
 	CanvasSink,
 	type WrappedCanvas,
 } from "mediabunny";
+import { isSeekSuperseded } from "./seek-supersede";
 
 interface VideoSinkData {
 	input: Input;
@@ -21,7 +22,15 @@ export class VideoCache {
 	private sinks = new Map<string, VideoSinkData>();
 	private initPromises = new Map<string, Promise<void>>();
 	private frameChain = new Map<string, Promise<unknown>>();
-	private seekGenerations = new Map<string, number>();
+	// Latest requested frame time per mediaId. A queued decode is superseded only
+	// when a DIFFERENT time has since been requested — not by same-time RAF repeats
+	// (the count-based supersession this replaced let those repeats cancel a slow
+	// deep-seek forever, freezing the preview on the first frame of a long source).
+	private latestSeekTime = new Map<string, number>();
+	// Negative cache: mediaIds whose codec can't be decoded. Without this every
+	// getFrameAt re-creates the mediabunny Input, re-throws, and the preview
+	// re-probes an undecodable clip on every frame.
+	private undecodableMediaIds = new Set<string>();
 
 	async getFrameAt({
 		mediaId,
@@ -32,17 +41,38 @@ export class VideoCache {
 		file: File;
 		time: number;
 	}): Promise<WrappedCanvas | null> {
+		if (this.undecodableMediaIds.has(mediaId)) return null;
+
 		await this.ensureSink({ mediaId, file });
 
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
 
-		const generation = (this.seekGenerations.get(mediaId) ?? 0) + 1;
-		this.seekGenerations.set(mediaId, generation);
+		// Fast path: the already-decoded frame still covers this time → return it
+		// synchronously without touching the async decode chain. The preview RAF
+		// loop re-requests the current frame every tick (×N video nodes with an
+		// overlay + PIP); running resolveFrame each time was needless per-frame
+		// churn that made playback/scrubbing lag.
+		if (
+			sinkData.currentFrame &&
+			this.isFrameValid({ frame: sinkData.currentFrame, time })
+		) {
+			return sinkData.currentFrame;
+		}
+
+		this.latestSeekTime.set(mediaId, time);
 
 		const previous = this.frameChain.get(mediaId) ?? Promise.resolve();
 		const current = previous.then(() => {
-			if (this.seekGenerations.get(mediaId) !== generation) {
+			// Skip only if a DIFFERENT time was requested since this one was queued.
+			// Same-time repeats from the RAF loop fall through so a slow deep seek
+			// completes and updates currentFrame instead of being cancelled forever.
+			if (
+				isSeekSuperseded({
+					requestedTime: time,
+					latestTime: this.latestSeekTime.get(mediaId),
+				})
+			) {
 				return sinkData.currentFrame ?? null;
 			}
 			return this.resolveFrame({ sinkData, time });
@@ -52,6 +82,29 @@ export class VideoCache {
 			current.catch(() => {}),
 		);
 		return current;
+	}
+
+	/**
+	 * Best-effort, lowest-priority warm of a frame the playhead is about to cross
+	 * into (U8 boundary prefetch). It routes through the SAME `getFrameAt` path,
+	 * so the supersede-by-time guarantee (KTD3 / commit 68ba04c7) is preserved
+	 * unchanged: a newer DISTINCT seek on this mediaId (a real user scrub) still
+	 * wins and is never starved by this prefetch, because the queued prefetch
+	 * decode bails the moment a different latest time is recorded (see
+	 * `isSeekSuperseded`). The decoded frame is intentionally discarded here; it
+	 * lands in the sink cache for the crossing and stays evictable by the normal
+	 * cache policy if the crossing never happens (playback paused / seeked away).
+	 */
+	prefetchFrameAt({
+		mediaId,
+		file,
+		time,
+	}: {
+		mediaId: string;
+		file: File;
+		time: number;
+	}): void {
+		void this.getFrameAt({ mediaId, file, time }).catch(() => {});
 	}
 
 	private async resolveFrame({
@@ -239,6 +292,7 @@ export class VideoCache {
 		mediaId: string;
 		file: File;
 	}): Promise<void> {
+		if (this.undecodableMediaIds.has(mediaId)) return;
 		if (this.sinks.has(mediaId)) return;
 
 		if (this.initPromises.has(mediaId)) {
@@ -251,6 +305,10 @@ export class VideoCache {
 
 		try {
 			await initPromise;
+		} catch {
+			// initializeSink already logged. Record the failure so we stop
+			// re-creating the Input and re-throwing on every subsequent frame.
+			this.undecodableMediaIds.add(mediaId);
 		} finally {
 			this.initPromises.delete(mediaId);
 		}
@@ -313,7 +371,8 @@ export class VideoCache {
 
 		this.initPromises.delete(mediaId);
 		this.frameChain.delete(mediaId);
-		this.seekGenerations.delete(mediaId);
+		this.latestSeekTime.delete(mediaId);
+		this.undecodableMediaIds.delete(mediaId);
 	}
 
 	clearAll(): void {

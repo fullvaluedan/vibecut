@@ -9,13 +9,17 @@
  * styles/components are saved for releases that render them directly.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
-import { useAiSettingsStore } from "@/features/ai-generate/store";
+import {
+	useAiSettingsStore,
+	MAX_HF_PRESETS,
+	type HfPreset,
+} from "@/features/ai-generate/store";
 import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
 import { bakeAndPlaceBlock } from "@/features/ai-generate/bake-block";
 import { useEditor } from "@/editor/use-editor";
@@ -40,6 +44,8 @@ interface RegistryAsset {
 	previewPoster: string | null;
 	durationSec: number | null;
 	tags?: string[];
+	/** True when the item has a composition file (can bake to a droppable clip). */
+	renderable?: boolean;
 }
 
 /**
@@ -197,9 +203,7 @@ function Preview({
 			<video
 				src={item.previewVideo}
 				poster={
-					item.previewPoster && !posterFailed
-						? item.previewPoster
-						: undefined
+					item.previewPoster && !posterFailed ? item.previewPoster : undefined
 				}
 				className={cn(base, "object-cover")}
 				autoPlay
@@ -239,8 +243,7 @@ function Preview({
 	}
 	// No hosted preview (e.g. the example styles): a deterministic gradient
 	// tile from the asset name, so nothing reads as broken or missing.
-	const hue =
-		[...item.id].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
+	const hue = [...item.id].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
 	return (
 		<div
 			className={cn(base, "flex items-center justify-center")}
@@ -345,6 +348,38 @@ const SHOWCASE_PRESETS: {
 		direction:
 			"Add ONE lower-third introducing the speaker near the start (infer the name/role from the transcript; use a fitting description if unnamed). Then pull the 2-4 most quotable lines as callout pills, verbatim.",
 	},
+	{
+		id: "product-launch",
+		title: "Product launch",
+		description: "Big title, features as pills, specs pop.",
+		templateIds: ["kinetic-title", "callout-pill", "number-pop"],
+		direction:
+			"This is a PRODUCT LAUNCH video. Open with ONE kinetic-title naming the product the moment it's introduced. Name the 2-4 standout features as callout pills as they're described. Pop every price, spec, or number with number-pop, exactly as spoken. Keep it punchy.",
+	},
+	{
+		id: "feature-announcement",
+		title: "Feature announcement",
+		description: "Announce it, name it, list the benefits.",
+		templateIds: ["kinetic-title", "lower-third", "callout-pill"],
+		direction:
+			"This is a FEATURE ANNOUNCEMENT. Lead with ONE kinetic-title on the headline feature. Add a lower-third naming the feature when it's first shown. Pull the 2-3 concrete benefits as callout pills, in the speaker's words. Nothing else.",
+	},
+	{
+		id: "hype-teaser",
+		title: "Hype teaser",
+		description: "High-energy: bold titles, every number pops.",
+		templateIds: ["kinetic-title", "number-pop", "section-break"],
+		direction:
+			"This is a high-energy TEASER. Put a bold kinetic-title on each of the punchiest lines (use sparingly — at most one per ~15s). Pop EVERY number. Mark each beat change with a section-break. Fast and loud.",
+	},
+	{
+		id: "explainer",
+		title: "Explainer / demo",
+		description: "Chaptered walkthrough with labelled steps.",
+		templateIds: ["section-break", "lower-third", "callout-pill"],
+		direction:
+			"This is an EXPLAINER / product demo. Mark each step or section with a section-break naming it in 2-4 words. Use a lower-third to label the tool or screen being shown. Reinforce one key takeaway per step with a callout pill. Calm and clear.",
+	},
 ];
 
 function ShowcaseSection({
@@ -381,6 +416,182 @@ function ShowcaseSection({
 	);
 }
 
+/** One-line summary of what a saved preset will re-apply. */
+function presetSummary(p: HfPreset): string {
+	const templateCount = describeTemplateCatalog().filter(
+		(t) => !p.disabledTemplateIds.includes(t.id),
+	).length;
+	const parts = [`${templateCount} template${templateCount === 1 ? "" : "s"}`];
+	if (p.promptHfAssets.length) {
+		parts.push(
+			`${p.promptHfAssets.length} pick${p.promptHfAssets.length === 1 ? "" : "s"}`,
+		);
+	}
+	parts.push(getStyleById(p.styleId).name);
+	if (p.hfDirection.trim()) parts.push("direction");
+	return parts.join(" · ");
+}
+
+function PresetAction({
+	label,
+	title,
+	onClick,
+}: {
+	label: string;
+	title: string;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			title={title}
+			onClick={onClick}
+			className="text-muted-foreground hover:text-foreground rounded px-1 text-[10px]"
+		>
+			{label}
+		</button>
+	);
+}
+
+/**
+ * User-saved HyperFrames presets ("Custom Template 1–5"): snapshot the current
+ * templates + pinned picks + look + direction, then re-apply them in one click.
+ * The active preset is highlighted and clears the moment a selection diverges.
+ */
+function CustomPresetsSection() {
+	const presets = useAiSettingsStore((s) => s.hfPresets);
+	const activeId = useAiSettingsStore((s) => s.activeHfPresetId);
+	const savePreset = useAiSettingsStore((s) => s.saveHfPreset);
+	const loadPreset = useAiSettingsStore((s) => s.loadHfPreset);
+	const renamePreset = useAiSettingsStore((s) => s.renameHfPreset);
+	const deletePreset = useAiSettingsStore((s) => s.deleteHfPreset);
+
+	const [editingId, setEditingId] = useState<string | null>(null);
+	const [draftName, setDraftName] = useState("");
+	const renameInputRef = useRef<HTMLInputElement>(null);
+
+	// Focus the rename field when it opens (avoids the autoFocus prop, which
+	// the a11y lint forbids, and the re-focus-every-keystroke of a callback ref).
+	useEffect(() => {
+		if (editingId) renameInputRef.current?.focus();
+	}, [editingId]);
+
+	const startRename = (p: HfPreset) => {
+		setEditingId(p.id);
+		setDraftName(p.name);
+	};
+	const commitRename = () => {
+		if (editingId) renamePreset(editingId, draftName);
+		setEditingId(null);
+	};
+
+	const atCap = presets.length >= MAX_HF_PRESETS;
+
+	return (
+		<div className="flex flex-col gap-1.5 px-3 pt-1 pb-2">
+			<div className="flex items-center justify-between">
+				<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+					Custom templates
+				</p>
+				<span className="text-muted-foreground text-[10px]">
+					{presets.length}/{MAX_HF_PRESETS}
+				</span>
+			</div>
+			{presets.length === 0 ? (
+				<p className="text-muted-foreground text-[10px] leading-snug">
+					Save the current templates, pinned picks, look, and direction as a
+					reusable preset — then load it before any RUN HYPERFRAMES.
+				</p>
+			) : (
+				<div className="flex flex-col gap-1">
+					{presets.map((p) => {
+						const active = p.id === activeId;
+						return (
+							<div
+								key={p.id}
+								className={cn(
+									"flex items-center gap-1 rounded-md px-2 py-1.5 ring-1 transition-colors",
+									active
+										? "bg-primary/10 ring-primary/50"
+										: "bg-foreground/5 hover:bg-foreground/10 ring-transparent",
+								)}
+							>
+								{editingId === p.id ? (
+									<input
+										ref={renameInputRef}
+										value={draftName}
+										onChange={(e) => setDraftName(e.target.value)}
+										onBlur={commitRename}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") commitRename();
+											if (e.key === "Escape") setEditingId(null);
+										}}
+										className="border-input bg-background min-w-0 flex-1 rounded border px-1 py-0.5 text-xs outline-none"
+									/>
+								) : (
+									<button
+										type="button"
+										className="min-w-0 flex-1 text-left"
+										title="Load this preset's selections"
+										onClick={() => loadPreset(p.id)}
+									>
+										<span className="flex items-center gap-1.5">
+											<span className="truncate text-xs font-medium">
+												{p.name}
+											</span>
+											{active && (
+												<span className="text-primary text-[9px] tracking-wide uppercase">
+													active
+												</span>
+											)}
+										</span>
+										<span className="text-muted-foreground block truncate text-[10px]">
+											{presetSummary(p)}
+										</span>
+									</button>
+								)}
+								{editingId !== p.id && (
+									<div className="flex shrink-0 items-center gap-0.5">
+										<PresetAction
+											label="Update"
+											title="Overwrite this preset with the current selection"
+											onClick={() => savePreset(p.id)}
+										/>
+										<PresetAction
+											label="Rename"
+											title="Rename this preset"
+											onClick={() => startRename(p)}
+										/>
+										<PresetAction
+											label="Delete"
+											title="Delete this preset"
+											onClick={() => deletePreset(p.id)}
+										/>
+									</div>
+								)}
+							</div>
+						);
+					})}
+				</div>
+			)}
+			<Button
+				size="sm"
+				variant="secondary"
+				className="h-7 self-start text-xs"
+				disabled={atCap}
+				title={
+					atCap
+						? `You can save up to ${MAX_HF_PRESETS} presets — delete one first.`
+						: "Save the current templates, picks, look, and direction as a new preset"
+				}
+				onClick={() => savePreset()}
+			>
+				+ Save current selection
+			</Button>
+		</div>
+	);
+}
+
 function EngineSection() {
 	const engine = useAiSettingsStore((s) => s.hfEngine);
 	const setEngine = useAiSettingsStore((s) => s.setHfEngine);
@@ -392,8 +603,9 @@ function EngineSection() {
 			<div className="bg-foreground/5 flex rounded-md p-0.5">
 				{(
 					[
-						["native", "Instant (native)"],
-						["cinematic", "Cinematic (render)"],
+						["authored", "Authored"],
+						["native", "Instant"],
+						["cinematic", "Cinematic"],
 					] as const
 				).map(([value, label]) => (
 					<button
@@ -412,9 +624,11 @@ function EngineSection() {
 				))}
 			</div>
 			<p className="text-muted-foreground text-[10px] leading-snug">
-				{engine === "native"
-					? "Places editable motion-template elements instantly — exports at full speed."
-					: "Renders each effect with HyperFrames (~real time per effect) and burns them in at export."}
+				{engine === "authored"
+					? "Default. Claude authors a custom composition from your checked assets, direction, and transcript, overlaid on your footage. Runs the HyperFrames skill; slower in-browser render."
+					: engine === "native"
+						? "Fast: places editable motion-template elements instantly. Ignores your style and asset picks."
+						: "Renders the built-in templates with HyperFrames and burns them in at export. Ignores your style and asset picks."}
 			</p>
 		</div>
 	);
@@ -423,8 +637,8 @@ function EngineSection() {
 export function HyperframesPanel() {
 	const disabledTemplateIds = useAiSettingsStore((s) => s.disabledTemplateIds);
 	const toggleTemplate = useAiSettingsStore((s) => s.toggleTemplate);
-	const disabledHfAssets = useAiSettingsStore((s) => s.disabledHfAssets);
-	const toggleHfAsset = useAiSettingsStore((s) => s.toggleHfAsset);
+	const promptHfAssets = useAiSettingsStore((s) => s.promptHfAssets);
+	const togglePromptHfAsset = useAiSettingsStore((s) => s.togglePromptHfAsset);
 	const styleId = useAiSettingsStore((s) => s.styleId);
 	const setStyleId = useAiSettingsStore((s) => s.setStyleId);
 	const hfDirection = useAiSettingsStore((s) => s.hfDirection);
@@ -433,18 +647,28 @@ export function HyperframesPanel() {
 	const view = useAiSettingsStore((s) => s.hfBrowserView);
 	const setView = useAiSettingsStore((s) => s.setHfBrowserView);
 	const setTemplatesEnabled = useAiSettingsStore((s) => s.setTemplatesEnabled);
-	const setHfAssetsEnabled = useAiSettingsStore((s) => s.setHfAssetsEnabled);
+	const setPromptHfAssetsEnabled = useAiSettingsStore(
+		(s) => s.setPromptHfAssetsEnabled,
+	);
 
 	const editor = useEditor();
 	const [bakingName, setBakingName] = useState<string | null>(null);
-	const addBlock = async (name: string, title: string) => {
+	const addBlock = async ({
+		name,
+		title,
+		type,
+	}: {
+		name: string;
+		title: string;
+		type: string;
+	}) => {
 		setBakingName(name);
 		const toastId = toast.loading(`Baking ${title}...`, {
 			description:
 				"First bake renders once on your computer (~10-30s), then it's instant.",
 		});
 		try {
-			const result = await bakeAndPlaceBlock({ editor, name });
+			const result = await bakeAndPlaceBlock({ editor, name, type });
 			toast.success(`Added ${result.title}`, {
 				id: toastId,
 				description: result.cached
@@ -452,7 +676,7 @@ export function HyperframesPanel() {
 					: "Baked once and cached — next time is instant.",
 			});
 		} catch (e) {
-			toast.error("Could not add block", {
+			toast.error("Could not add asset", {
 				id: toastId,
 				description: e instanceof Error ? e.message : String(e),
 			});
@@ -499,8 +723,8 @@ export function HyperframesPanel() {
 				id: a.name,
 				title: a.title,
 				description: a.description,
-				checked: !disabledHfAssets.includes(a.name),
-				onToggle: () => toggleHfAsset(a.name),
+				checked: promptHfAssets.includes(a.name),
+				onToggle: () => togglePromptHfAsset(a.name),
 				// Example styles publish no preview media — we bake posters and
 				// short hover clips locally from real renders (hf-demos/styles/).
 				previewVideo:
@@ -509,11 +733,13 @@ export function HyperframesPanel() {
 				previewPoster:
 					a.previewPoster ??
 					(kind === "example" ? `/hf-demos/styles/${a.name}.png` : null),
-				// Only OVERLAY-SAFE blocks (graphics/cards, not transitions) get an
-				// Add — transitions bake to a self-demo, not a usable overlay.
-				...(kind === "block" && !isTransitionBlock(a)
+				// Any renderable, non-transition item (block, full-frame example, or
+				// composition-bearing component) gets an Add — it bakes to a droppable
+				// clip. Transitions still need a between-clips slot, so they get none.
+				...(a.renderable && !isTransitionBlock(a)
 					? {
-							onAdd: () => void addBlock(a.name, a.title),
+							onAdd: () =>
+								void addBlock({ name: a.name, title: a.title, type: a.type }),
 							adding: bakingName === a.name,
 						}
 					: {}),
@@ -563,6 +789,7 @@ export function HyperframesPanel() {
 						});
 					}}
 				/>
+				<CustomPresetsSection />
 				<Section
 					title="Templates"
 					subtitle="used by RUN HYPERFRAMES"
@@ -577,11 +804,11 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Styles"
-					subtitle="looks — apply to your whole edit (coming soon)"
+					subtitle="whole-video looks; check to use, RUN authors it over your footage"
 					items={registryItems("example")}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("example").map((i) => i.id),
 							enabled,
 						)
@@ -589,11 +816,11 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Blocks"
-					subtitle="graphics & cards — Add drops on the timeline"
+					subtitle="graphics & cards; Add drops one, or check to use in RUN"
 					items={registryItems("block", (a) => !isTransitionBlock(a))}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("block", (a) => !isTransitionBlock(a)).map(
 								(i) => i.id,
 							),
@@ -607,7 +834,7 @@ export function HyperframesPanel() {
 					items={registryItems("block", isTransitionBlock)}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("block", isTransitionBlock).map((i) => i.id),
 							enabled,
 						)
@@ -615,18 +842,20 @@ export function HyperframesPanel() {
 				/>
 				<Section
 					title="Components"
-					subtitle="captions & effects — not droppable yet"
+					subtitle="caption & effect snippets; check to use in the RUN prompt"
 					items={registryItems("component")}
 					view={view}
 					onSetAll={(enabled) =>
-						setHfAssetsEnabled(
+						setPromptHfAssetsEnabled(
 							registryItems("component").map((i) => i.id),
 							enabled,
 						)
 					}
 				/>
 				{registryError && (
-					<p className="text-muted-foreground text-[0.65rem]">{registryError}</p>
+					<p className="text-muted-foreground text-[0.65rem]">
+						{registryError}
+					</p>
 				)}
 
 				<div className="pt-2">
@@ -656,10 +885,12 @@ export function HyperframesPanel() {
 						))}
 					</div>
 					<p className="text-muted-foreground mt-1.5 text-[0.65rem]">
-						<span className="text-foreground">{getStyleById(styleId).name}</span>
+						<span className="text-foreground">
+							{getStyleById(styleId).name}
+						</span>
 						{" — "}
-						{getStyleById(styleId).fontFamily} type + accent.
-						Sets every template&apos;s font + color and biases RUN HYPERFRAMES.
+						{getStyleById(styleId).fontFamily} type + accent. Sets every
+						template&apos;s font + color and biases RUN HYPERFRAMES.
 					</p>
 				</div>
 
@@ -676,12 +907,12 @@ export function HyperframesPanel() {
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
 					Checked templates are the palette RUN HYPERFRAMES picks from today.
-					<span className="text-foreground"> Blocks</span> (graphics & cards) bake
-					once on your computer and drop straight onto the timeline (cached after
-					the first render). Transitions, styles, and components can&apos;t be
-					dropped yet — transitions need a between-clips slot, styles apply as a
-					whole look, and components are caption/effect layers. Claude usage on
-					this device: ~{tokensUsedTotal.toLocaleString()} tokens.
+					<span className="text-foreground">Check</span> any style, block, or
+					component to add it to the RUN HYPERFRAMES prompt; the Authored engine
+					(default) authors them over your footage. Instant and Cinematic are
+					fast modes that ignore picks. Blocks can also be dropped with Add.
+					Claude usage on this device: ~{tokensUsedTotal.toLocaleString()}{" "}
+					tokens.
 				</p>
 			</div>
 		</PanelView>

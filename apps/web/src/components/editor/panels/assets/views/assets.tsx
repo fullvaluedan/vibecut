@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { MediaDragOverlay } from "@/components/editor/panels/assets/drag-overlay";
 import { DraggableItem } from "@/components/editor/panels/assets/draggable-item";
+import {
+	MediaPreviewDialog,
+	useMediaPreviewStore,
+} from "@/components/editor/panels/assets/media-preview-dialog";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import {
@@ -191,6 +195,7 @@ export function MediaView() {
 	return (
 		<>
 			<input {...fileInputProps} />
+			<MediaPreviewDialog />
 
 			<PanelView
 				title="Assets"
@@ -302,6 +307,12 @@ function MediaAssetDraggable({
 	isRounded?: boolean;
 }) {
 	const editor = useEditor();
+	const { isSelected, selectedIds } = useSelection();
+
+	// Dragging a tile that's part of a multi-selection drags the whole selection
+	// (so all of them land); dragging an unselected tile drags just that one.
+	const dragMediaIds =
+		isSelected(item.id) && selectedIds.length > 1 ? selectedIds : undefined;
 
 	const addElementAtTime = ({
 		asset,
@@ -326,11 +337,13 @@ function MediaAssetDraggable({
 				...(item.type !== "audio" && {
 					targetElementTypes: [...MASKABLE_ELEMENT_TYPES],
 				}),
+				...(dragMediaIds ? { mediaIds: dragMediaIds } : {}),
 			}}
 			shouldShowPlusOnDrag={false}
 			onAddToTimeline={({ currentTime }) =>
 				addElementAtTime({ asset: item, startTime: currentTime })
 			}
+			onDoubleClick={() => useMediaPreviewStore.getState().open(item)}
 			variant={variant}
 			isRounded={isRounded}
 		/>
@@ -408,7 +421,7 @@ function MediaItemWithContextMenu({
 							: "Convert for editing"}
 					</ContextMenuItem>
 				)}
-				<ContextMenuItem>Export clips</ContextMenuItem>
+				<ContextMenuItem disabled>Export clips</ContextMenuItem>
 				<ContextMenuItem
 					variant="destructive"
 					onClick={(event: React.MouseEvent<HTMLDivElement>) =>
@@ -518,6 +531,17 @@ function MediaTypePlaceholder({
 	);
 }
 
+function NoPreviewBadge() {
+	return (
+		<div
+			className="absolute top-1 left-1 rounded bg-red-600/90 px-1 text-[0.6rem] font-semibold text-white"
+			title="This browser can't decode this video. Right-click → Convert for editing."
+		>
+			No preview
+		</div>
+	);
+}
+
 function MediaPreview({
 	item,
 	variant = "grid",
@@ -556,14 +580,7 @@ function MediaPreview({
 						loading="lazy"
 						unoptimized
 					/>
-					{item.canDecode === false && (
-						<div
-							className="absolute top-1 left-1 rounded bg-red-600/90 px-1 text-[0.6rem] font-semibold text-white"
-							title="This browser can't decode this video. Right-click → Convert for editing."
-						>
-							No preview
-						</div>
-					)}
+					{item.canDecode === false && <NoPreviewBadge />}
 					{shouldShowDurationBadge ? (
 						<MediaDurationBadge duration={item.duration} />
 					) : null}
@@ -571,13 +588,19 @@ function MediaPreview({
 			);
 		}
 
+		// Undecodable videos have no thumbnail (thumbnail render is gated on
+		// canDecode), so they fall through here — show the warning over the
+		// placeholder tile too rather than a plain "Video" tile with no hint.
 		return (
-			<MediaTypePlaceholder
-				icon={Video01Icon}
-				label="Video"
-				duration={item.duration}
-				variant="muted"
-			/>
+			<div className="relative size-full">
+				<MediaTypePlaceholder
+					icon={Video01Icon}
+					label="Video"
+					duration={item.duration}
+					variant="muted"
+				/>
+				{item.canDecode === false && <NoPreviewBadge />}
+			</div>
 		);
 	}
 
@@ -624,6 +647,7 @@ function MediaActions({
 						<Button
 							size="icon"
 							variant="ghost"
+							aria-label="Assemble all assets onto the timeline as one video"
 							onClick={onAssemble}
 							disabled={isProcessing}
 							className="items-center justify-center"
@@ -640,6 +664,11 @@ function MediaActions({
 						<Button
 							size="icon"
 							variant="ghost"
+							aria-label={
+								mediaViewMode === "grid"
+									? "Switch to list view"
+									: "Switch to grid view"
+							}
 							onClick={() =>
 								setMediaViewMode(mediaViewMode === "grid" ? "list" : "grid")
 							}
@@ -668,6 +697,7 @@ function MediaActions({
 								<Button
 									size="icon"
 									variant="ghost"
+									aria-label="Sort media assets"
 									disabled={isProcessing}
 									className="items-center justify-center"
 								>

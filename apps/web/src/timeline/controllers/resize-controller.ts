@@ -10,7 +10,7 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 import {
-	computeGroupResize,
+	computeResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -23,6 +23,10 @@ import {
 	type SnapPoint,
 } from "@/timeline/snapping";
 import { getElementEdgeSnapPoints } from "@/timeline/element-snap-source";
+import {
+	lockGestureCursor,
+	type GestureCursorLock,
+} from "@/timeline/gesture-cursor";
 import { getPlayheadSnapPoints } from "@/timeline/playhead-snap-source";
 import { getAnimationKeyframeSnapPointsForTimeline } from "@/timeline/animation-snap-points";
 import {
@@ -56,7 +60,6 @@ export interface ResizeConfig {
 	getSceneTracks: () => SceneTracks;
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
-	selectedElements: ElementRef[];
 	discardPreview: () => void;
 	previewElements: (updates: GroupResizeUpdate[]) => void;
 	commitElements: (updates: GroupResizeUpdate[]) => void;
@@ -161,6 +164,9 @@ function hasResizeChanges({
 
 export class ResizeController {
 	private session: Session = { kind: "idle" };
+	// Pins the body cursor to "ew-resize" for the resize's lifetime; released in
+	// finishSession (the single funnel for finish/cancel/destroy).
+	private cursorLock: GestureCursorLock | null = null;
 	private readonly subscribers = new Set<() => void>();
 	private readonly configRef: ResizeConfigRef;
 
@@ -190,6 +196,8 @@ export class ResizeController {
 	}
 
 	destroy(): void {
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.subscribers.clear();
 	}
@@ -215,16 +223,16 @@ export class ResizeController {
 		const fps = this.config.getActiveProjectFps();
 		if (!fps) return;
 
+		// A trim resizes ONLY the grabbed clip, always (no group-resize). Building
+		// a one-member session from the grabbed ref means computeGroupResize is
+		// clamped solely by this clip's own source/neighbor bounds, never fanned
+		// out across the selection or clamped by another selected clip's tighter
+		// limit. (U2 / OQ2: group-resize removed by decision.)
 		const ref = { trackId: track.id, elementId: element.id };
-		const activeSelection = this.config.selectedElements.some(
-			(el) => el.trackId === track.id && el.elementId === element.id,
-		)
-			? this.config.selectedElements
-			: [ref];
 
 		const members = buildResizeMembers({
 			tracks: this.config.getSceneTracks(),
-			selectedElements: activeSelection,
+			selectedElements: [ref],
 		});
 		if (members.length === 0) return;
 
@@ -238,6 +246,7 @@ export class ResizeController {
 			members,
 			result: null,
 		};
+		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
 		this.notify();
 	}
@@ -258,6 +267,8 @@ export class ResizeController {
 
 	private finishSession(): void {
 		this.session = { kind: "idle" };
+		this.cursorLock?.release();
+		this.cursorLock = null;
 		this.deactivate();
 		this.config.onSnapPointChange?.(null);
 		this.notify();
@@ -334,8 +345,8 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeGroupResize({
-			members: session.members,
+		const result = computeResize({
+			member: session.members[0],
 			side: session.side,
 			deltaTime,
 			fps: session.fps,

@@ -78,8 +78,12 @@ export async function readVideoFile({
 	}
 }
 
-const SAMPLE_RATE = 44100;
-const NUM_CHANNELS = 2;
+// The extracted timeline audio feeds transcription + silence/speech analysis
+// ONLY — every consumer immediately resamples it to DEFAULT_TRANSCRIPTION_SAMPLE_RATE
+// (16kHz mono). Mix it there directly: mixing at 44.1kHz stereo first over-sampled
+// by ~5.5x and overflowed the browser's createBuffer on long (~21 min+) timelines.
+const SAMPLE_RATE = 16000;
+const NUM_CHANNELS = 1;
 const EMPTY_TIMELINE_SILENT_DURATION_SECONDS = 0.1;
 const MIN_SILENT_DURATION_SECONDS = 0.001;
 
@@ -109,6 +113,7 @@ export const extractTimelineAudio = async ({
 		mediaAssets,
 		duration: totalDuration,
 		sampleRate: SAMPLE_RATE,
+		outputChannels: NUM_CHANNELS,
 	});
 
 	if (!audioBuffer) {

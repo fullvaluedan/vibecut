@@ -9,6 +9,10 @@ import {
 	buildEmptyTrack,
 	validateElementTrackCompatibility,
 } from "@/timeline/placement";
+import {
+	MAX_VIDEO_TRACKS,
+	videoTrackCount,
+} from "@/timeline/placement/track-cap";
 import type {
 	PlannedElementMove,
 	PlannedTrackCreation,
@@ -36,6 +40,20 @@ export class MoveElementCommand extends Command {
 	execute(): CommandResult | undefined {
 		const editor = EditorCore.getInstance();
 		this.savedState = editor.scenes.getActiveScene().tracks;
+
+		// Hard floor on the video-track cap: a move's createTracks normally arrive
+		// already capped (resolveNewTrackMove), but refuse outright if any other
+		// producer (e.g. a Director apply) would push past MAX_VIDEO_TRACKS. Moves
+		// target the createTracks ids, so it's all-or-nothing.
+		const newVideoTracks = this.createTracks.filter(
+			(track) => track.type === "video",
+		).length;
+		if (
+			newVideoTracks > 0 &&
+			videoTrackCount(this.savedState) + newVideoTracks > MAX_VIDEO_TRACKS
+		) {
+			return undefined;
+		}
 
 		let tracksToUpdate = this.savedState;
 		for (const createTrack of [...this.createTracks].sort(

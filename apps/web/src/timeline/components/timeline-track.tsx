@@ -1,22 +1,34 @@
 "use client";
 
+import { useCallback } from "react";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
+import { useCommittedRef } from "@/hooks/use-committed-ref";
 import { TimelineElement } from "./timeline-element";
+import {
+	useVisibleClips,
+	type VisibleWindow,
+} from "@/timeline/hooks/use-visible-clips";
 import type { TimelineTrack } from "@/timeline";
 import type { TimelineElement as TimelineElementType } from "@/timeline";
 import { TIMELINE_LAYERS } from "./layers";
-import type { ElementDragView } from "@/timeline";
+import type { ElementDragSlice, ElementDragView } from "@/timeline";
 import { useEditor } from "@/editor/use-editor";
 import { useGapSelectionStore } from "@/timeline/gap-selection-store";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { BASE_TIMELINE_PIXELS_PER_SECOND } from "@/timeline/scale";
 import { timelineTimeToPixels } from "@/timeline/pixel-utils";
 import { TICKS_PER_SECOND } from "@/wasm";
+import { cn } from "@/utils/ui";
 
 interface TimelineTrackContentProps {
 	track: TimelineTrack;
 	zoomLevel: number;
 	dragView: ElementDragView;
+	/**
+	 * Viewport-culling window (U7/KTD6). Only clips intersecting it (plus the
+	 * active drag target) are mounted. Null disables culling (renders all).
+	 */
+	visibleWindow: VisibleWindow | null;
 	onResizeStart: (params: {
 		event: React.MouseEvent;
 		element: TimelineElementType;
@@ -43,6 +55,7 @@ export function TimelineTrackContent({
 	track,
 	zoomLevel,
 	dragView,
+	visibleWindow,
 	onResizeStart,
 	onElementMouseDown,
 	onElementClick,
@@ -68,7 +81,13 @@ export function TimelineTrackContent({
 
 	// Premiere's Track Select Forward: everything to the right of the click
 	// on all tracks; Shift+click = just this track.
-	const selectForwardFrom = (event: React.MouseEvent, time: number) => {
+	const selectForwardFrom = ({
+		event,
+		time,
+	}: {
+		event: React.MouseEvent;
+		time: number;
+	}) => {
 		const tracks = editor.scenes.getActiveScene().tracks;
 		const pool = event.shiftKey
 			? [track]
@@ -105,15 +124,119 @@ export function TimelineTrackContent({
 	const handleBackgroundMouseUp = (event: React.MouseEvent): boolean => {
 		const time = clickedTimeTicks(event);
 		if (isForwardTool) {
-			selectForwardFrom(event, time);
+			selectForwardFrom({ event, time });
 			return true; // consumed — no seek, no deselect
 		}
 		if (!trySelectGapAt(time)) setGap(null);
 		return false;
 	};
 
+	// The per-clip callbacks below MUST keep a stable identity across a drag so
+	// the memoized TimelineElement skips re-rendering untouched clips. They close
+	// over values that change identity every render (selectForwardFrom, setGap,
+	// the handlers), so read those from a committed ref and keep the callbacks
+	// themselves referentially stable. Behavior is unchanged: the ref always
+	// holds the latest values by the time an event fires.
+	const clipHandlerCtxRef = useCommittedRef({
+		track,
+		isForwardTool,
+		isElementSelected,
+		selectForwardFrom,
+		setGap,
+		onResizeStart,
+		onElementMouseDown,
+		onElementClick,
+	});
+
+	const handleClipResizeStart = useCallback(
+		({
+			event,
+			element,
+			side,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+			side: "left" | "right";
+		}) => {
+			const ctx = clipHandlerCtxRef.current;
+			ctx.onResizeStart({ event, element, track: ctx.track, side });
+		},
+		[clipHandlerCtxRef],
+	);
+
+	const handleClipMouseDown = useCallback(
+		({
+			event,
+			element,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+		}) => {
+			const ctx = clipHandlerCtxRef.current;
+			// Track Select Forward: pressing an unselected clip selects everything
+			// forward AND begins a drag in the same gesture, so one press-drag shoves
+			// the whole group right (open a gap to drag a cut clip's head into). A
+			// plain press still just forward-selects (the controller only commits a
+			// move if you actually move). The controller reads LIVE selection, so the
+			// just-made forward selection is the move group.
+			if (
+				ctx.isForwardTool &&
+				!ctx.isElementSelected({
+					trackId: ctx.track.id,
+					elementId: element.id,
+				})
+			) {
+				ctx.selectForwardFrom({ event, time: element.startTime as number });
+			}
+			ctx.onElementMouseDown({ event, element, track: ctx.track });
+		},
+		[clipHandlerCtxRef],
+	);
+
+	const handleClipClick = useCallback(
+		({
+			event,
+			element,
+		}: {
+			event: React.MouseEvent;
+			element: TimelineElementType;
+		}) => {
+			const ctx = clipHandlerCtxRef.current;
+			if (ctx.isForwardTool) {
+				// Only (re)select forward when the clip isn't already part of the
+				// selection, so the click that follows a move-drag doesn't reset what
+				// you just moved.
+				if (
+					!ctx.isElementSelected({
+						trackId: ctx.track.id,
+						elementId: element.id,
+					})
+				) {
+					ctx.selectForwardFrom({ event, time: element.startTime as number });
+				}
+				return;
+			}
+			ctx.setGap(null);
+			ctx.onElementClick({ event, element, track: ctx.track });
+		},
+		[clipHandlerCtxRef],
+	);
+
+	const isDragging = dragView.kind === "dragging";
+
+	// Force-include the active drag target(s) so a clip dragged out of the visible
+	// window stays mounted (unmounting it mid-drag breaks the drag). memberTimeOffsets
+	// is keyed by dragged element id, so it doubles as the `.has(id)` lookup.
+	const forceInclude = isDragging ? dragView.memberTimeOffsets : null;
+	const visibleElements = useVisibleClips({
+		elements: track.elements,
+		zoomLevel,
+		window: visibleWindow,
+		forceInclude,
+	});
+
 	return (
-		<div className="relative size-full">
+		<div className={cn("relative size-full", isForwardTool && "cursor-e-resize")}>
 			<button
 				type="button"
 				className="absolute inset-0 m-0 size-full appearance-none border-0 bg-transparent p-0"
@@ -165,11 +288,27 @@ export function TimelineTrackContent({
 				{track.elements.length === 0 ? (
 					<div className="text-muted-foreground border-muted/30 pointer-events-none flex size-full items-center justify-center rounded-sm border-2 border-dashed text-xs" />
 				) : (
-					track.elements.map((element) => {
+					visibleElements.map((element) => {
 						const isSelected = isElementSelected({
 							trackId: track.id,
 							elementId: element.id,
 						});
+
+						// Only clips actually carried by the drag get a (fresh) drag slice;
+						// every other clip gets `null` (a stable reference) so its props are
+						// unchanged and the memoized TimelineElement skips re-rendering.
+						const timeOffset =
+							isDragging && dragView.kind === "dragging"
+								? dragView.memberTimeOffsets.get(element.id)
+								: undefined;
+						const drag: ElementDragSlice | null =
+							timeOffset !== undefined && dragView.kind === "dragging"
+								? {
+										timeOffset,
+										currentTime: dragView.currentTime,
+										offsetY: dragView.currentMouseY - dragView.startMouseY,
+									}
+								: null;
 
 						return (
 							<TimelineElement
@@ -178,23 +317,10 @@ export function TimelineTrackContent({
 								track={track}
 								zoomLevel={zoomLevel}
 								isSelected={isSelected}
-								onResizeStart={({ event, element, side }) =>
-									onResizeStart({ event, element, track, side })
-								}
-								onElementMouseDown={({ event, element }) => {
-									if (isForwardTool) return; // no drag with the tool armed
-									onElementMouseDown({ event, element, track });
-								}}
-								onElementClick={({ event, element }) => {
-									if (isForwardTool) {
-										// Clicking a clip selects it and everything after it.
-										selectForwardFrom(event, element.startTime as number);
-										return;
-									}
-									setGap(null);
-									onElementClick({ event, element, track });
-								}}
-								dragView={dragView}
+								onResizeStart={handleClipResizeStart}
+								onElementMouseDown={handleClipMouseDown}
+								onElementClick={handleClipClick}
+								drag={drag}
 								isDropTarget={element.id === targetElementId}
 							/>
 						);

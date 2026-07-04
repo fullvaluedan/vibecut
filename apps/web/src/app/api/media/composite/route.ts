@@ -46,12 +46,18 @@ interface OverlaySpec {
 	durationSec: number;
 	trimStartSec: number;
 	/** Rendered rect in canvas pixels (top-left x/y + size), matching the
-	 *  preview. Older callers may omit these → fall back to full-frame. */
+	 *  preview. Older callers may omit these → fall back to full-frame.
+	 *  When rotation is set, x/y is the top-left of the ROTATED bounding box
+	 *  (so the element's center stays put) and w/h is the pre-rotation size. */
 	x?: number;
 	y?: number;
 	w?: number;
 	h?: number;
 	opacity?: number;
+	/** Degrees clockwise about the element center (matches the CSS preview). */
+	rotation?: number;
+	flipX?: boolean;
+	flipY?: boolean;
 }
 
 /**
@@ -105,9 +111,21 @@ export async function POST(req: NextRequest) {
 				typeof spec.opacity === "number" && spec.opacity < 1
 					? `,format=rgba,colorchannelmixer=aa=${spec.opacity}`
 					: "";
+			// Flip then rotate, matching the preview's CSS `rotate() scale(flip)`
+			// (CSS applies scale/flip first, then rotate). rotate expands the frame
+			// (ow=rotw/oh=roth) and fills new corners transparent (c=none); the
+			// client already offset x/y to the rotated bbox so center stays put.
+			const flip = `${spec.flipX ? ",hflip" : ""}${spec.flipY ? ",vflip" : ""}`;
+			const rotate =
+				typeof spec.rotation === "number" && spec.rotation % 360 !== 0
+					? (() => {
+							const rad = ((spec.rotation * Math.PI) / 180).toFixed(6);
+							return `,rotate=${rad}:ow=rotw(${rad}):oh=roth(${rad}):c=none`;
+						})()
+					: "";
 			const x = typeof spec.x === "number" ? spec.x : 0;
 			const y = typeof spec.y === "number" ? spec.y : 0;
-			const trimmed = `[${inputIndex}:v]trim=start=${spec.trimStartSec}:duration=${spec.durationSec},setpts=PTS-STARTPTS+${start}/TB${scale}${fade}[ov${inputIndex}]`;
+			const trimmed = `[${inputIndex}:v]trim=start=${spec.trimStartSec}:duration=${spec.durationSec},setpts=PTS-STARTPTS+${start}/TB${scale}${flip}${rotate}${fade}[ov${inputIndex}]`;
 			const outLabel = `[v${inputIndex}]`;
 			filters.push(trimmed);
 			filters.push(
@@ -162,6 +180,9 @@ export async function POST(req: NextRequest) {
 			// Listed hardware encoders can still fail at runtime (driver/session
 			// limits) — software is the always-works fallback.
 			result = await runFfmpeg(buildArgs(SOFTWARE_ENCODER.args));
+			// The probed hardware encoder is present but unusable here — demote
+			// the cache so later exports don't repeat the doomed hardware pass.
+			if (result.code === 0) cachedEncoder = SOFTWARE_ENCODER;
 		}
 		if (result.code !== 0) {
 			return NextResponse.json(

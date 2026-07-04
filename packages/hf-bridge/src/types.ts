@@ -50,7 +50,14 @@ export interface TranscriptSegment {
 
 export type ClaudeAuth =
 	| { mode: "claude-code" }
-	| { mode: "api-key"; apiKey: string };
+	| { mode: "api-key"; apiKey: string }
+	/**
+	 * A user-supplied OpenAI-compatible chat-completions endpoint (Ollama,
+	 * LM Studio, a self-hosted Nous-Hermes server, etc.). baseUrl should include
+	 * any version prefix the server needs (e.g. ".../v1"); apiKey is optional
+	 * (many local servers need none).
+	 */
+	| { mode: "custom"; baseUrl: string; apiKey?: string; model: string };
 
 export interface RenderJob {
 	templateId: string;

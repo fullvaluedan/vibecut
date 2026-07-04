@@ -42,7 +42,12 @@ export async function showMediaUploadToast<T extends MediaUploadToastResult>({
 				return `${uploadedCount} media assets have been uploaded`;
 			}
 
-			return "No media assets were uploaded";
+			// 0 uploaded means every file was unsupported/rejected (already surfaced
+			// by per-file error toasts). Rendering a green "success" here contradicts
+			// those — show a neutral info toast and suppress the success toast by
+			// returning a falsy formatter result.
+			toast.info("No media assets were uploaded");
+			return undefined;
 		},
 		error: `Failed to upload ${getAssetLabel({ count: filesCount })}`,
 	});

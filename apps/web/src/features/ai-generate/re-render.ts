@@ -9,6 +9,7 @@ import { processMediaAssets } from "@/media/processing";
 import { frameRateToFloat } from "@/fps/utils";
 import { TICKS_PER_SECOND, mediaTimeFromSeconds } from "@/wasm";
 import { getTemplate } from "@framecut/hf-bridge/templates";
+import { buildAiAuthHeaders, useAiSettingsStore } from "./store";
 import type { EditorCore } from "@/core";
 import type { VideoElement } from "@/timeline";
 
@@ -139,6 +140,90 @@ export async function reRenderAiClip({
 						duration: durationTime,
 						sourceDuration: durationTime,
 						framecutAi: { compId, templateId, variables, groupId: ai.groupId },
+					},
+				},
+			],
+		}),
+	});
+}
+
+/**
+ * Re-author a skill-authored clip from an edited brief: sends the prompt back
+ * through the hyperframes skill (`/api/hyperframes/author`), then swaps the
+ * rendered overlay in place and stores the new brief + compId on the clip so
+ * the panel keeps showing the live prompt. This is the per-graphic "customize"
+ * path — the user edits the prompt and regenerates the same graphic.
+ */
+export async function regenerateAuthoredClip({
+	editor,
+	trackId,
+	element,
+	brief,
+}: {
+	editor: EditorCore;
+	trackId: string;
+	element: VideoElement;
+	brief: string;
+}): Promise<void> {
+	const ai = element.framecutAi;
+	if (!ai) throw new Error("Not an AI-generated clip");
+
+	const project = editor.project.getActive();
+	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
+	const { width, height } = project.settings.canvasSize;
+	const durationSec = Math.min(
+		Math.max(element.duration / TICKS_PER_SECOND, 3),
+		10,
+	);
+
+	const res = await fetch("/api/hyperframes/author", {
+		method: "POST",
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		body: JSON.stringify({ prompt: brief, fps, width, height, durationSec }),
+	});
+	if (!res.ok) {
+		const err = (await res.json().catch(() => null)) as { error?: string } | null;
+		throw new Error(err?.error ?? `Regenerate failed (${res.status})`);
+	}
+	const compId = res.headers.get("x-framecut-comp-id") ?? ai.compId;
+	const tokens = Number(res.headers.get("x-framecut-tokens")) || 0;
+	if (tokens > 0) useAiSettingsStore.getState().addTokensUsed(tokens);
+
+	const blob = await res.blob();
+	const file = new File([blob], "hf-authored-regenerate.webm", {
+		type: "video/webm",
+	});
+	const [processed] = await processMediaAssets({ files: [file] });
+	if (!processed) throw new Error("Could not process the rendered video");
+
+	const addAsset = new AddMediaAssetCommand({
+		projectId: project.metadata.id,
+		asset: processed,
+	});
+	editor.command.execute({ command: addAsset });
+	const assetId = addAsset.getAssetId();
+	if (!assetId) throw new Error("Could not store the rendered video");
+
+	const renderedDuration = processed.duration
+		? mediaTimeFromSeconds({ seconds: processed.duration })
+		: element.duration;
+	editor.command.execute({
+		command: new UpdateElementsCommand({
+			updates: [
+				{
+					trackId,
+					elementId: element.id,
+					patch: {
+						mediaId: assetId,
+						duration: renderedDuration,
+						sourceDuration: renderedDuration,
+						framecutAi: {
+							compId,
+							templateId: `authored:${compId}`,
+							variables: ai.variables,
+							groupId: ai.groupId,
+							brief,
+						},
 					},
 				},
 			],

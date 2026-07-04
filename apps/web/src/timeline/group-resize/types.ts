@@ -29,8 +29,8 @@ export interface GroupResizeResult {
 	updates: GroupResizeUpdate[];
 }
 
-export interface ComputeGroupResizeArgs {
-	members: GroupResizeMember[];
+export interface ComputeResizeArgs {
+	member: GroupResizeMember;
 	side: ResizeSide;
 	deltaTime: MediaTime;
 	fps: FrameRate;

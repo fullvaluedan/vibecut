@@ -12,7 +12,18 @@ export type PlacementSubject =
 	| { trackType: TrackType };
 
 export type PlacementStrategy =
-	| { type: "explicit"; trackId: string }
+	| {
+			type: "explicit";
+			trackId: string;
+			/**
+			 * Opt out of the main-track snap-to-0 rule for THIS insert. Used by
+			 * ripple-insert: the ripple already opened a gap-free hole at the exact
+			 * insert point, so snapping the new clip to 0 would misplace it (and
+			 * desync it from its linked audio, which inserts unsnapped). Default
+			 * false = normal main-track enforcement.
+			 */
+			skipMainTrackStart?: boolean;
+	  }
 	| { type: "firstAvailable" }
 	| {
 			type: "preferIndex";

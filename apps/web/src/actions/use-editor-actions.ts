@@ -20,6 +20,8 @@ import {
 } from "@/wasm";
 import { useKeyframeSelection } from "@/timeline/hooks/element/use-keyframe-selection";
 import { getElementsAtTime, hasMediaId } from "@/timeline";
+import { buildMoveGroup, resolveGroupMove } from "@/timeline/group-move";
+import { frameOffsetTicks } from "@/timeline/frame-offset";
 import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { toast } from "sonner";
@@ -33,6 +35,28 @@ import {
 	type ScopeEntry,
 } from "@/selection/scope";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
+
+/**
+ * Delta for a Shift+←/→ "jump": the configured frame nudge (read from the
+ * timeline store) by default, or a caller-supplied seconds value (the seek
+ * API's escape hatch for any programmatic invocation).
+ */
+function jumpDelta({
+	fps,
+	frames,
+	seconds,
+}: {
+	fps: { numerator: number; denominator: number };
+	frames: number;
+	seconds?: number;
+}) {
+	if (seconds != null) return mediaTimeFromSeconds({ seconds });
+	return mediaTime({
+		ticks: Math.round(
+			((TICKS_PER_SECOND * fps.denominator) / fps.numerator) * frames,
+		),
+	});
+}
 
 export function useEditorActions() {
 	const editor = useEditor();
@@ -175,8 +199,11 @@ export function useEditorActions() {
 	useActionHandler(
 		"jump-forward",
 		(args) => {
-			const seconds = args?.seconds ?? 5;
-			const delta = mediaTimeFromSeconds({ seconds });
+			const delta = jumpDelta({
+				fps: editor.project.getActive().settings.fps,
+				frames: useTimelineStore.getState().timelineNudgeFrames,
+				seconds: args?.seconds,
+			});
 			editor.playback.seek({
 				time: minMediaTime({
 					a: editor.timeline.getTotalDuration(),
@@ -193,8 +220,11 @@ export function useEditorActions() {
 	useActionHandler(
 		"jump-backward",
 		(args) => {
-			const seconds = args?.seconds ?? 5;
-			const delta = mediaTimeFromSeconds({ seconds });
+			const delta = jumpDelta({
+				fps: editor.project.getActive().settings.fps,
+				frames: useTimelineStore.getState().timelineNudgeFrames,
+				seconds: args?.seconds,
+			});
 			editor.playback.seek({
 				time: maxMediaTime({
 					a: ZERO_MEDIA_TIME,
@@ -384,6 +414,24 @@ export function useEditorActions() {
 	);
 
 	useActionHandler(
+		"unlink-elements",
+		() => {
+			if (selectedElements.length !== 1) {
+				return;
+			}
+			const selectedElement = editor.timeline.getElementsWithTracks({
+				elements: selectedElements,
+			})[0];
+			const linkId = selectedElement?.element.linkId;
+			if (!linkId) {
+				return;
+			}
+			editor.timeline.unlinkElements({ linkId });
+		},
+		undefined,
+	);
+
+	useActionHandler(
 		"select-all",
 		() => {
 			const scene = editor.scenes.getActiveScene();
@@ -444,6 +492,55 @@ export function useEditorActions() {
 		undefined,
 	);
 
+	// Alt+←/→: shift the selection by one frame using the SAME group-move
+	// pipeline as a mouse drag, so collision/track rules match exactly. The
+	// anchor stays on its own track (a nudge never changes tracks).
+	const nudgeSelected = (direction: 1 | -1) => {
+		if (selectedElements.length === 0) return;
+		const anchorRef = selectedElements[0];
+		const tracks = editor.scenes.getActiveScene().tracks;
+		const group = buildMoveGroup({
+			anchorRef,
+			selectedElements,
+			tracks,
+		});
+		if (!group) return;
+
+		const fps = editor.project.getActive().settings.fps;
+		const delta = mediaTime({
+			ticks: frameOffsetTicks({
+				ticksPerSecond: TICKS_PER_SECOND,
+				fpsNumerator: fps.numerator,
+				fpsDenominator: fps.denominator,
+				direction,
+			}),
+		});
+		const anchorElement = editor.timeline.getElementsWithTracks({
+			elements: [anchorRef],
+		})[0];
+		if (!anchorElement) return;
+		const anchorStartTime = maxMediaTime({
+			a: ZERO_MEDIA_TIME,
+			b: addMediaTime({ a: anchorElement.element.startTime, b: delta }),
+		});
+
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime,
+			target: { kind: "existingTrack", anchorTargetTrackId: anchorRef.trackId },
+		});
+		if (!result || result.moves.length === 0) return;
+
+		editor.timeline.moveElements({
+			moves: result.moves,
+			createTracks: result.createTracks,
+		});
+		setElementSelection({ elements: result.targetSelection });
+	};
+	useActionHandler("nudge-selected-left", () => nudgeSelected(-1), undefined);
+	useActionHandler("nudge-selected-right", () => nudgeSelected(1), undefined);
+
 	useActionHandler(
 		"toggle-elements-muted-selected",
 		() => {
@@ -487,6 +584,10 @@ export function useEditorActions() {
 				? sorted.find((t) => t > now + EPSILON_TICKS)
 				: [...sorted].reverse().find((t) => t < now - EPSILON_TICKS);
 		if (target !== undefined) {
+			// Pause before seeking — Up/Down NAVIGATES edit points (Premiere parity);
+			// landing on a cut and rolling past it isn't navigation. Pause first so
+			// the seek doesn't re-anchor a still-running playhead.
+			editor.playback.pause();
 			editor.playback.seek({ time: target as typeof now });
 		}
 	};
@@ -535,9 +636,14 @@ export function useEditorActions() {
 			const withTracks = editor.timeline.getElementsWithTracks({
 				elements: selectedElements,
 			});
-			const ranges = withTracks.map(({ element }) => ({
+			// Scope each ripple to the selected clip's OWN track. Without this, the
+			// cut span was extracted from every track — so ripple-deleting an
+			// overlay/HyperFrames block sliced out the footage beneath it. A
+			// linked A/V pair selects both halves, so both their tracks ripple.
+			const ranges = withTracks.map(({ element, track }) => ({
 				start: element.startTime as number,
 				end: (element.startTime + element.duration) as number,
+				trackId: track.id,
 			}));
 			if (!ranges.length) return;
 			editor.command.execute({
@@ -581,6 +687,16 @@ export function useEditorActions() {
 					? null
 					: { kind: "track-select-forward" },
 			);
+		},
+		undefined,
+	);
+
+	// Premiere V: the Selection (arrow) tool — clears any armed place tool so
+	// the default move/trim cursor is active.
+	useActionHandler(
+		"activate-selection-tool",
+		() => {
+			usePlaceToolStore.getState().setTool(null);
 		},
 		undefined,
 	);

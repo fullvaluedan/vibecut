@@ -22,7 +22,7 @@ const tooltipVariants = cva(
 				important:
 					"bg-amber-100/90 text-amber-900 dark:bg-amber-900/20 dark:text-amber-300 border-amber-900 [border-width:0.5px]",
 				promotions:
-					"bg-red-100/90 text-redb-900 dark:bg-red-900/20 dark:text-red-300 border-red-900 [border-width:0.5px]",
+					"bg-red-100/90 text-red-900 dark:bg-red-900/20 dark:text-red-300 border-red-900 [border-width:0.5px]",
 				personal:
 					"bg-green-100/90 text-green-900 dark:bg-green-900/20 dark:text-green-300 border-green-900 [border-width:0.5px]",
 				updates:

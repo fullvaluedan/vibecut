@@ -1,8 +1,10 @@
 # VibeCut — Session Handoff
 
-> Read this first in a new session, together with `docs/BRIEF.md` (product brief) and
-> `PATCHES.md` (every upstream file we've modified). This file is the working memory:
-> goals, state, architecture, mistakes, and the rules that keep rounds shipping cleanly.
+> Read this first in a new session, together with `docs/BRIEF.md` (product brief),
+> `PATCHES.md` (every upstream file we've modified), and `docs/QUALITY-PLAYBOOK.md`
+> (the hardening patterns + keep-it-alive checklist distilled from rounds 1–24).
+> This file is the working memory: goals, state, architecture, mistakes, and the rules
+> that keep rounds shipping cleanly.
 > Last updated: 2026-06-13, after round 21 (template sizing root cause + Swiss grid rebuild).
 
 ## 1. What this is
@@ -282,3 +284,168 @@ cached under `~/.framecut/baked/` — safe to keep (the cache is the point). Dan
 real projects live in his own Chrome profile — untouched by preview-browser resets.
 Self-learning store was cleared after synthetic tests in R12; R18/R19 testing added
 no learning data (no undo-attributed runs; bake drops aren't template placements).
+
+## 9. Round 25 (2026-06-14) — HyperFrames skill-as-producer + editor reliability
+
+**The big shift: "the HyperFrames panel is a PROMPT GENERATOR."** Panel selections +
+picked registry assets (new ★ allow-list) + the clip/whole-video transcript + the
+active look + the direction box compile into a brief; Claude AUTHORS a custom
+HyperFrames composition (HTML, via `claude -p` text output — it never writes files,
+the product does), which is rendered to a transparent overlay and placed on a NEW
+track (non-destructive). Verified end-to-end live (the "Aurora" and "Q4 RESULTS"
+overlays). Both entry points now use this author path:
+- **Right-click a clip → "Run through HyperFrames"** (`run-hyperframes-scoped.ts`
+  `runHyperframesOnClip`) → graphic over that segment.
+- **RUN HYPERFRAMES + the new "Authored" engine** (`runHyperframesWholeTimeline`) →
+  one composition for the whole video on a new track at t=0.
+
+New files: `packages/hf-bridge/src/author-composition.ts` (`authorComposition` —
+claude-code spawn OR api-key, strip-to-HTML, write comp dir, render), API route
+`app/api/hyperframes/author/route.ts`, `features/ai-generate/{compile-hyperframes-prompt,
+place-hyperframes-render,run-hyperframes-scoped,run-log-store}.ts` + `run-log-panel.tsx`,
+`assets/media-preview-dialog.tsx`.
+
+Also shipped this round (all tsc-clean, most live-verified): editor-correctness fixes
+from a 26-agent audit — ripple-delete track-scoping (Shift+Del on an overlay no longer
+rips the footage under it), drag→V1 (was V2), Transform Effect-Controls always shown for
+paired/multi selection, V=Selection tool, honest RUN HYPERFRAMES placement count; export
+rotation/flip for alpha overlays (preview==export, verified via ffmpeg); transcription
+inFlight progress broadcast (fixed frozen "Reading audio 5%"); a live "Log" terminal next
+to RUN; Stop/cancel; transcript-on-demand (audio-guarded); launch-video showcase presets;
+double-click asset → preview modal. Plus a HyperFrames RELIABILITY sweep (45-agent
+adversarial audit, 22 confirmed) — fixed 7: missing-claude-CLI → actionable error,
+right-click re-entrancy guard, authored-engine token counter, no-speech transcript cache
+hit (was re-running Whisper), transcription 'error' status wired, plan-response JSON guard,
+encoder-cache demotion.
+
+**IMMEDIATE NEXT STEPS (in order):**
+1. ~~**Server-side CANCEL**~~ ✅ DONE (2026-06-14). Cancel is no longer cosmetic:
+   `req.signal` is threaded `route.ts` → `authorComposition({signal})` → a new
+   `killTree(child)` that force-kills the spawned `claude -p` **process tree**
+   (win32 `taskkill /T`; posix `detached:true` group + negative-pid `SIGKILL`) on
+   abort/timeout. API-key mode forwards the signal to its fetch. The transcript step
+   is abortable too — `gatherClipTranscript` passes the signal into
+   `ensureTimelineTranscript` and now RE-THROWS on a user cancel (instead of
+   swallowing it and authoring anyway). Both run paths (`runHyperframesOnClip`,
+   `runHyperframesWholeTimeline`) re-check `signal.aborted` right before placement so
+   a cancel as the bytes land can't still drop a graphic. Route returns 499 on abort
+   instead of a bogus 500. tsc-clean. NOTE: `renderCompDir` itself is not yet
+   abortable (render is the short pole — author is ~30–90s, render is seconds); a
+   cancel during render still completes the render for a dead connection. Verify
+   live: start an author, hit Cancel mid-run, confirm no orphaned `claude` process
+   (Task Manager) and nothing lands on the timeline.
+2. **Self-learning** — 🟡 PARTIAL (2026-06-14). The rule-based loop in
+   `features/ai-generate/preference-store.ts` now ALSO feeds the AUTHOR brief and
+   learns **graphics taste**:
+   - New `graphicsStats {placed,deleted}` bucket. Authored graphics carry a unique
+     `authored:<compId>` id (can't aggregate per-id like native templates), so
+     `noteTemplatesDeleted` routes `authored:`-prefixed deletes into this one bucket;
+     both scoped run paths call `noteGraphicsPlaced()` on a successful place. Once the
+     user removes ≥half of ≥2 authored graphics, a "be more selective / keep it
+     minimal" note is emitted.
+   - `buildPreferenceNotes(scope?: "all"|"graphics"|"cut")` — the AUTHOR brief gets
+     `"graphics"` (template-delete + authored-graphics notes; no AI-Cut noise); AI CUT
+     can ask for `"cut"`; settings display uses `"all"` (default → unchanged behavior
+     for the existing template-planner/cut callers).
+   - `compileHyperframesPrompt` takes `preferenceNotes` and renders a "LEARNED
+     PREFERENCES (soft guidance, USER DIRECTION wins conflicts)" section; both
+     `runHyperframesOnClip` and `runHyperframesWholeTimeline` pass the graphics-scoped
+     notes. New unit tests (`__tests__/preference-store.test.ts`,
+     `compile-hyperframes-prompt.test.ts`) — 12 pass; tsc-clean; no new lint errors.
+   - STILL TODO: **b-roll/music taste** — blocked on provenance: b-roll clips
+     (`/api/broll`) are plain media imports with no `framecutAi` marker, so a delete
+     can't be told apart from deleting real footage. Needs a provenance tag on b-roll
+     placement before its keep/delete can be learned. Also not yet learned: per-LOOK
+     acceptance (which style's graphics get kept), which would need to key the look by
+     compId at placement and map it on delete.
+2b. **Custom HyperFrames presets ("Custom Template 1–5")** — ✅ DONE (2026-06-14, user
+   request). Users save up to `MAX_HF_PRESETS` (5) named snapshots of the prompt-shaping
+   selections — enabled templates (`disabledTemplateIds`), pinned registry picks
+   (`promptHfAssets`), look (`styleId`), and direction (`hfDirection`) — and load any in
+   one click before a RUN HYPERFRAMES. In `store.ts`: `hfPresets: HfPreset[]` +
+   `activeHfPresetId` + `saveHfPreset(id?)`/`loadHfPreset`/`renameHfPreset`/`deleteHfPreset`;
+   the active highlight clears the moment a selection diverges (the relevant setters set
+   `activeHfPresetId: null`; `loadHfPreset` applies atomically to bypass that). UI: a
+   "Custom templates" section in `hyperframes-panel.tsx` (above Templates, next to the
+   built-in Showcase presets) — per-row Load/Update/Rename(inline, focus-managed via
+   ref)/Delete + a "Save current selection" button (disabled at the cap). New unit tests
+   `__tests__/hf-presets.test.ts` (13). tsc-clean, no new lint beyond one idiom-consistent
+   positional-param setter. **Live-verified end-to-end** in the editor preview: render,
+   save, divergence-clear, load (snapshot restored + decoupled from live edits), rename,
+   delete — no console errors. NOTE: presets capture brief-shaping selections only, NOT
+   `hfEngine` (deliberate — loading a preset shouldn't silently switch native↔authored).
+3. ~~LLM-connection settings~~ ✅ DONE (2026-06-14). Added a THIRD AI connection mode,
+   **"Custom / local model"** — a user-supplied OpenAI-compatible `/chat/completions`
+   endpoint (Ollama, LM Studio, a self-hosted Nous-Hermes server, etc.). ("Hermes" in the
+   old note was a red herring — that's the build orchestrator, not a user LLM; confirmed
+   with Dan, who wanted BYO local/custom model support.) Plumbing:
+   - `ClaudeAuth` (hf-bridge `types.ts`) gained `{ mode: "custom"; baseUrl; apiKey?; model }`.
+   - hf-bridge `author.ts` (`planViaCustomSchema` + a `planDispatch` that the 3 planner
+     entry points now share) and `author-composition.ts` (`authorViaCustom`, signal-aware)
+     both route to the custom endpoint. `customChatUrl()` appends `/chat/completions` to the
+     base URL. JSON asks use `response_format: {type:"json_object"}` with `extractJson` as
+     the fallback for servers that ignore it.
+   - Client: `store.ts` adds `authMode "custom"` + `customBaseUrl/customApiKey/customModel`
+     + setters; `buildAiAuthHeaders` sends `x-framecut-custom-{base-url,model,key}`.
+   - **Server dedup**: the `resolveAuth` that was copy-pasted in all 4 AI routes
+     (author/plan/cuts/assistant) is now ONE shared `resolve-ai-auth.ts` (`resolveAiAuth`),
+     which also handles the custom mode + a mode-agnostic 401 message.
+   - UI: the "Claude account" section is now "AI connection" with the third option; picking
+     it reveals Base URL / Model / optional-key fields + OpenAI-compatible help.
+   - Tests: `__tests__/ai-auth.test.ts` (9) — `buildAiAuthHeaders` + `resolveAiAuth` across
+     all three modes. 34 ai-generate tests pass; tsc-clean; no new lint.
+   - **Live-verified** in the editor preview: switched the Settings → AI dropdown to Custom,
+     the fields rendered, filled base-URL+model, confirmed they persist to the store, no
+     console errors. (Did NOT hit a real local model — no server was running; the request
+     path is unit-covered + type-checked.)
+4. Low/later: automatic transcript-driven b-roll (SerpAPI images + HyperFrames graphics +
+   auto-using fitting standalone footage from the bin); punch-in/auto-zoom centered on
+   the speaker's eyes; the remaining reliability fixes (placement undo atomicity = 3 history
+   entries → BatchCommand; concurrent-author back-pressure; orphaned comp-dir cleanup);
+   the structural overlay-into-compositor fix (collapses z-order/snapshot/animated-export).
+
+## 10. Round 26 (2026-06-15) — authored coverage + variant picker + resource relief
+
+**Problem from real use:** the Authored engine gave ONE sparse graphic on an 8-min video
+(~19 min run) and was very heavy on a constrained machine. Three coordinated fixes:
+
+1. **Chunked coverage (default authored run).** `runHyperframesWholeTimeline` no longer sends
+   one capped 5-min composition. It splits the timeline into ~90s segments
+   (`chunk-plan.ts` `planAuthorChunks` — pure, unit-tested), authors a graphic-rich comp per
+   segment (each with a duration-derived `densityHint` in the brief), and places them ALL on
+   one new overlay track at their offsets via the new `placeHyperframesRenders` (plural) in
+   `place-hyperframes-render.ts`. Real placed count (fixes "Placed 1"). Author fan-out uses
+   `concurrency.ts` `runWithConcurrency` (1 for claude-code, 2 for api/custom). Author route
+   `durationSec` ceiling 300→180; FORMAT_RULES gained a "stagger graphics across [0,D]" bullet;
+   api-key `max_tokens` 8000→16000.
+2. **Variant picker — "Versions ×3".** New button (authored engine only) →
+   `runHyperframesVariants` authors N=3 distinct whole-video passes (coarser ~150s chunks,
+   `VARIANT_ANGLES`), renders them, and opens `variant-picker-dialog.tsx` (a media-preview-style
+   store+Dialog) showing each version's segment previews; "Use this version" places that
+   version's chunks. ("5 live Studios" is impossible — Studio is a singleton on port 3217 — so
+   this render-and-pick grid is the realization.)
+3. **Resource relief (the big one for a constrained machine).**
+   - **Global render serialization** in `renderer.ts`: `enqueueRender()` promise-chain mutex —
+     EVERY hyperframes `render` (templates, authored comps, bakes via `bake.ts`) goes through it,
+     so concurrent requests never spawn more than ONE headless Chromium. Studio `preview` (long-
+     lived) deliberately stays off the queue.
+   - **Render caching**: `renderCompDir` reuses `out.webm` when it's newer than the source
+     (`renderCacheValid` via mtime) — a Studio edit still forces a fresh render.
+   - **Auto-pause background transcription during AI runs**: new `ai-activity-store.ts`
+     (`useAiActivityStore {busy}`); RUN HYPERFRAMES + AI CUT set busy; `background-transcriber.tsx`
+     gates on `!busy` (stops Whisper fighting renders).
+   - **Low-power mode** toggle (`store.ts` `lowPowerMode`, Settings → AI): force-pauses background
+     transcription. NOTE: the preview-resolution-reduction half was DEFERRED — the WASM/GPU
+     compositor (`services/renderer`) has no simple render-scale knob; a follow-up should add one
+     and apply ~0.6× in low-power.
+
+New files: `chunk-plan.ts`, `concurrency.ts`, `ai-activity-store.ts`,
+`components/variant-picker-dialog.tsx`. New unit tests: `chunk-plan.test.ts`,
+`concurrency.test.ts`, `render-queue.test.ts` (hf-bridge), + a `densityHint` case — 49 tests
+pass (46 web + 3 bridge); tsc-clean; lint has only pre-existing/idiom positional-param + copied
+fetch-cast patterns. **Live-verified**: build serves clean, Versions ×3 shows in authored / hides
+in native, Low-power toggle flips the flag, AI-connection custom mode intact, no console errors.
+NOT run live by me: a full authored chunked run + the picker with real renders (spends real Claude
+tokens + minutes; left for the user, who has the 8-min test project loaded).
+
+Per-increment detail + gotchas are in the `vibecut.md` auto-memory (read at session start).

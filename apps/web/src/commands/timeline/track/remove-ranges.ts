@@ -1,6 +1,9 @@
 import { Command, type CommandResult } from "@/commands/base-command";
 import { EditorCore } from "@/core";
 import type { SceneTracks, TimelineElement, TimelineTrack } from "@/timeline";
+import { isRetimableElement } from "@/timeline";
+import { getSourceSpanAtClipTime } from "@/retime";
+import { addMediaTime, roundMediaTime } from "@/wasm";
 import { generateUUID } from "@/utils/id";
 
 export interface TimeRange {
@@ -8,6 +11,13 @@ export interface TimeRange {
 	start: number;
 	/** ticks */
 	end: number;
+	/**
+	 * When set, the range is cut from ONLY this track (a per-track ripple, like
+	 * Premiere's ripple-delete on a selected clip). When omitted, the range is
+	 * cut from every track (the all-track extract used by Remove Silences /
+	 * Repeats / Autocut and gap ripple).
+	 */
+	trackId?: string;
 }
 
 function cutElement({
@@ -40,13 +50,24 @@ function cutElement({
 	}
 	// Right remainder: keeps source continuity via trimStart, lands at the cut point.
 	if (end > range.end) {
-		const consumedFromSource = range.end - start;
+		// Clip-time consumed before the remainder is (range.end - start) TIMELINE
+		// ticks; trimStart is SOURCE ticks, so convert through the retime rate
+		// (cut * rate) — same discipline as split-elements.ts. rate==1 => cut.
+		const retimeRef = isRetimableElement(element)
+			? element.retime
+			: undefined;
+		const consumedFromSource = roundMediaTime({
+			time: getSourceSpanAtClipTime({
+				clipTime: range.end - start,
+				retime: retimeRef,
+			}),
+		});
 		pieces.push({
 			...element,
 			id: start < range.start ? generateUUID() : element.id,
 			startTime: range.start,
 			duration: end - range.end,
-			trimStart: element.trimStart + consumedFromSource,
+			trimStart: addMediaTime({ a: element.trimStart, b: consumedFromSource }),
 		} as TimelineElement);
 	}
 	return pieces;
@@ -68,10 +89,12 @@ function cutTrack<T extends TimelineTrack>({
 }
 
 /**
- * Removes time ranges from the whole timeline: content inside each range is
- * deleted (elements split where they straddle a boundary) and everything
- * after slides left — across main, overlay, and audio tracks. Powers
- * Remove Silences / Remove Repeats / Autocut.
+ * Removes time ranges from the timeline: content inside each range is deleted
+ * (elements split where they straddle a boundary) and everything after slides
+ * left. A range with no `trackId` cuts every track (the all-track extract that
+ * powers Remove Silences / Remove Repeats / Autocut and gap ripple); a range
+ * scoped to a `trackId` ripples only that track (ripple-deleting a selected
+ * clip, which must never disturb footage on tracks the user didn't act on).
  */
 export class RemoveRangesCommand extends Command {
 	private savedState: SceneTracks | null = null;
@@ -93,17 +116,28 @@ export class RemoveRangesCommand extends Command {
 
 		let tracks = this.savedState;
 		for (const range of ranges) {
+			// A range scoped to one track ripples only that track; otherwise the
+			// cut applies to every track (all-track extract).
+			const apply = <T extends TimelineTrack>(track: T): T =>
+				range.trackId && track.id !== range.trackId
+					? track
+					: cutTrack({ track, range });
 			tracks = {
 				...tracks,
-				main: cutTrack({ track: tracks.main, range }),
-				overlay: tracks.overlay.map((t) => cutTrack({ track: t, range })),
-				audio: tracks.audio.map((t) => cutTrack({ track: t, range })),
+				main: apply(tracks.main),
+				overlay: tracks.overlay.map(apply),
+				audio: tracks.audio.map(apply),
 			};
 			this.removedCount += 1;
 		}
 
 		editor.timeline.updateTracks(tracks);
-		return undefined;
+		// Ripple-delete removes / re-mints elements inside the cut ranges.
+		// updateTracks already pruned any orphaned selection ref live; declaring
+		// the reconciled selection as an override satisfies the documented
+		// invariant (commands that remove editor-owned selection targets must
+		// declare one) so undo restores the pre-cut selection cleanly.
+		return { selection: editor.selection.getSnapshot() };
 	}
 
 	undo(): void {

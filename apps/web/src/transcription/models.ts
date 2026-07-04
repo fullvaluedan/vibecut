@@ -28,6 +28,29 @@ export const TRANSCRIPTION_MODELS: TranscriptionModel[] = [
 		huggingFaceId: "onnx-community/whisper-large-v3-turbo",
 		description: "Best accuracy, requires WebGPU for good performance",
 	},
+	// Word-timestamp-capable exports (cross-attention) for the Director/analysis
+	// path. `whisper-tiny-timestamped` is VERIFIED (U1 spike, 2026-06-24: loads +
+	// emits word timestamps in our transformers.js) and is the analysis default;
+	// base/medium remain UNVERIFIED (base failed a headless load — confirm in-app
+	// before the selector adopts them).
+	{
+		id: "whisper-tiny-timestamped",
+		name: "Tiny (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-tiny_timestamped",
+		description: "Fast, multilingual, emits word-level timestamps — the analysis-path default",
+	},
+	{
+		id: "whisper-base-timestamped",
+		name: "Base (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-base_timestamped",
+		description: "Small, multilingual, emits word-level timestamps",
+	},
+	{
+		id: "whisper-medium-en-timestamped",
+		name: "Medium EN (word timestamps)",
+		huggingFaceId: "onnx-community/whisper-medium.en_timestamped",
+		description: "Accurate, English-only, emits word-level timestamps",
+	},
 ];
 
 export const DEFAULT_TRANSCRIPTION_MODEL: TranscriptionModelId =

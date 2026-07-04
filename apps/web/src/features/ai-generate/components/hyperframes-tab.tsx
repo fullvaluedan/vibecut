@@ -11,6 +11,7 @@ import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
 import {
 	reRenderAiClip,
 	reRenderFromCompDir,
+	regenerateAuthoredClip,
 } from "@/features/ai-generate/re-render";
 import {
 	Select,
@@ -129,6 +130,13 @@ function RegistryBlockTab({
 			const assetId = addAsset.getAssetId();
 			if (!assetId) throw new Error("Could not store the baked block");
 
+			// A re-baked block can be a different length than before; update the
+			// clip's duration so it doesn't play stale (was left unchanged).
+			const newDuration =
+				processed.duration != null
+					? mediaTimeFromSeconds({ seconds: processed.duration })
+					: element.duration;
+
 			editor.command.execute({
 				command: new UpdateElementsCommand({
 					updates: [
@@ -137,6 +145,8 @@ function RegistryBlockTab({
 							elementId: element.id,
 							patch: {
 								mediaId: assetId,
+								duration: newDuration,
+								sourceDuration: newDuration,
 								framecutAi: {
 									...element.framecutAi,
 									compId: bakeKey,
@@ -192,6 +202,82 @@ function RegistryBlockTab({
 						and re-renders it in place. Use the Transform tab to position and
 						scale it on the canvas.
 					</p>
+				</SectionContent>
+			</Section>
+		</div>
+	);
+}
+
+/**
+ * Properties tab for a skill-authored HyperFrames graphic (RUN HyperFrames).
+ * Shows the authoring brief as an editable prompt and a Regenerate button that
+ * re-authors the same graphic through the skill with the user's edits. This is
+ * the per-graphic "customize" surface — same window as the HyperFrames panel,
+ * top-right, when an authored graphic is selected on the timeline.
+ */
+function AuthoredClipTab({
+	element,
+	trackId,
+}: {
+	element: VideoElement;
+	trackId: string;
+}) {
+	const editor = useEditor();
+	const ai = element.framecutAi;
+	const [brief, setBrief] = useState(ai?.brief ?? "");
+	const [isRegenerating, setIsRegenerating] = useState(false);
+
+	const regenerate = async () => {
+		const trimmed = brief.trim();
+		if (!trimmed) {
+			toast.info("Add a prompt first");
+			return;
+		}
+		setIsRegenerating(true);
+		const toastId = toast.loading("Regenerating this graphic with HyperFrames…");
+		try {
+			await regenerateAuthoredClip({ editor, trackId, element, brief: trimmed });
+			toast.success("Graphic regenerated", { id: toastId });
+		} catch (e) {
+			toast.error("Could not regenerate", {
+				id: toastId,
+				description: e instanceof Error ? e.message : String(e),
+			});
+		} finally {
+			setIsRegenerating(false);
+		}
+	};
+
+	return (
+		<div className="flex flex-col gap-3 p-3">
+			<Section>
+				<SectionHeader>
+					<SectionTitle>Customize this graphic</SectionTitle>
+				</SectionHeader>
+				<SectionContent>
+					{ai?.brief ? (
+						<div className="flex flex-col gap-2">
+							<p className="text-muted-foreground text-xs">
+								Edit the prompt, then regenerate. The HyperFrames skill re-authors
+								this graphic with your changes.
+							</p>
+							<textarea
+								value={brief}
+								onChange={(e) => setBrief(e.target.value)}
+								spellCheck={false}
+								disabled={isRegenerating}
+								className="border-input bg-background min-h-[180px] w-full resize-y rounded-md border p-2 font-mono text-xs leading-relaxed"
+							/>
+							<Button onClick={regenerate} disabled={isRegenerating}>
+								{isRegenerating ? "Regenerating…" : "Regenerate"}
+							</Button>
+						</div>
+					) : (
+						<p className="text-muted-foreground text-xs">
+							This graphic was authored before prompt-editing existed, so its prompt
+							is not stored. Re-run HyperFrames on this clip to get an editable prompt.
+						</p>
+					)}
 				</SectionContent>
 			</Section>
 		</div>
@@ -272,7 +358,14 @@ export function HyperframesTab({
 			for (const track of tracks.overlay) {
 				if (track.type !== "video") continue;
 				for (const el of track.elements) {
-					if (el.type === "video" && el.framecutAi) {
+					// Baked registry blocks have framecutAi but no native template
+					// (templateId "registry:<name>"); reRenderAiClip can't restyle
+					// them and threw, aborting the whole batch. Skip them.
+					if (
+						el.type === "video" &&
+						el.framecutAi &&
+						!el.framecutAi.registryBlock
+					) {
 						targets.push({ trackId: track.id, element: el });
 					}
 				}
@@ -342,6 +435,12 @@ export function HyperframesTab({
 				blockName={ai.registryBlock}
 			/>
 		);
+	}
+
+	// Skill-authored graphics (RUN HyperFrames) have no parametrized template —
+	// they're freeform HTML. Customizing = edit the brief and re-author.
+	if (ai.templateId?.startsWith("authored:")) {
+		return <AuthoredClipTab element={element} trackId={trackId} />;
 	}
 
 	const applySwap = async () => {
