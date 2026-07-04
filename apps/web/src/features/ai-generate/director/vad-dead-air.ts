@@ -18,8 +18,14 @@ export interface SpeechGap {
 
 /** A gap shorter than this isn't worth a cut row. */
 const DEFAULT_MIN_GAP_SECONDS = 1.5;
-/** Leave this much silence at each edge so the cut doesn't butt against speech. */
-const DEFAULT_PAD_SECONDS = 0.3;
+/**
+ * Extra silence to leave at each speech-bounded gap edge. Defaults to 0 because
+ * the VAD speech-edge padding (`refineSpeechIntervals`, U6 asymmetric head/tail)
+ * is now the single silence-margin source, so the gaps arriving here are already
+ * trimmed and must not be padded twice. Kept as an honored override so U7 can
+ * dial an additional trim without another code change.
+ */
+const DEFAULT_PAD_SECONDS = 0;
 /**
  * Leading/trailing silence has no speech rhythm to preserve, so it gets a LOWER
  * floor (anything past the surviving-clip floor is dead weight before/after the

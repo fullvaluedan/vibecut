@@ -43,6 +43,19 @@ describe("detectVadDeadAirCuts", () => {
 		const ops = detectVadDeadAirCuts({ gaps: [gap({ startSec: 10, endSec: 14 })], minGapSeconds: 1.5, padSeconds: 0.3 });
 		expect(ops[0].reason).toContain("4.0s");
 	});
+
+	// U6: padding moved to the speech-edge stage (refineSpeechIntervals), so the
+	// dead-air detector adds NO extra trim by default (the gap arrives already
+	// padded and is cut in full). padSeconds stays an honored override (above).
+	test("with no padSeconds the interior gap is cut in full (no double pad)", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 10, endSec: 14 })],
+			minGapSeconds: 1.5,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBeCloseTo(10, 5);
+		expect(ops[0].endSec).toBeCloseTo(14, 5);
+	});
 });
 
 // Silence rework (2026-07-04): leading/trailing silence cuts FLUSH at the timeline

@@ -6,7 +6,7 @@
  * + Silero model from its default CDN, so no local asset serving is required.
  */
 import { NonRealTimeVAD } from "@ricky0123/vad-web";
-import { refineSpeechIntervals, type Interval } from "./intervals";
+import { OFFLINE_VAD_OPTIONS, refineSpeechIntervals, type Interval } from "./intervals";
 
 export type VadWorkerMessage = {
 	type: "detect";
@@ -23,7 +23,9 @@ self.onmessage = async (event: MessageEvent<VadWorkerMessage>) => {
 	const message = event.data;
 	if (message.type !== "detect") return;
 	try {
-		const vad = await NonRealTimeVAD.new();
+		// Offline-tuned (U6): raised minSpeechMs + explicit redemptionMs so this
+		// finds cut-worthy silences over a whole recording, not mic-stream speech.
+		const vad = await NonRealTimeVAD.new(OFFLINE_VAD_OPTIONS);
 		const raw: Interval[] = [];
 		// run() yields speech segments with start/end in MILLISECONDS.
 		for await (const segment of vad.run(message.samples, message.sampleRate)) {
