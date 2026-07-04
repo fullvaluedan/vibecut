@@ -146,6 +146,31 @@ describe("buildRemappedTranscript", () => {
 		expect(rw[0].start).toBeCloseTo(7.5, 6);
 		expect(rw[0].end).toBeCloseTo(8.0, 6); // clamped, no reach into removed footage
 	});
+
+	test("a SEGMENT keeps its tail across an interior micro-cut (review X1)", () => {
+		// Clamping to the first removal amputated the whole tail: [10,20] with an
+		// interior 0.4s filler cut became [10,12], leaving a fake 8s hole the pacing
+		// detector then cut as a 'long pause' over real speech. Subtraction shrinks
+		// the segment by exactly the removed duration instead.
+		const segments = [{ start: 10, end: 20, text: "s1" }];
+		const removals: RemovalSpan[] = [{ startSec: 12, endSec: 12.4 }];
+		const { segments: rs } = buildRemappedTranscript({ words: [], segments, removals });
+		expect(rs).toHaveLength(1);
+		expect(rs[0].start).toBeCloseTo(10, 6);
+		expect(rs[0].end).toBeCloseTo(19.6, 6); // 20 minus the 0.4s interior cut
+	});
+
+	test("a segment spanning MULTIPLE interior cuts subtracts them all", () => {
+		const segments = [{ start: 0, end: 10, text: "s" }];
+		const removals: RemovalSpan[] = [
+			{ startSec: 2, endSec: 2.5 },
+			{ startSec: 5, endSec: 6 },
+			{ startSec: 9.5, endSec: 12 }, // straddles the end: only [9.5,10) counts
+		];
+		const { segments: rs } = buildRemappedTranscript({ words: [], segments, removals });
+		expect(rs).toHaveLength(1);
+		expect(rs[0].end).toBeCloseTo(10 - 0.5 - 1 - 0.5, 6); // 8.0
+	});
 });
 
 describe("acceptedRemovalSpans", () => {
@@ -257,6 +282,37 @@ describe("runSecondPass", () => {
 			redundancyRan: false,
 		});
 		expect(extraOps).toHaveLength(0);
+	});
+
+	test("an interior micro-cut never manufactures a fake pacing gap (review X1 regression)", () => {
+		// End-to-end: segments with an accepted filler cut INSIDE the first one. The
+		// truncation bug compressed seg1 to [10,12], showed pacing an 8s fake pause,
+		// and shipped a pre-checked sp- pacing cut over 7.6s of real speech.
+		const tokens = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+		const words: WordTiming[] = [
+			...tokens.map((text, i) => ({ text, start: 10 + i * 1.6, end: 10 + i * 1.6 + 1.2 })),
+			...["golf", "hotel", "india"].map((text, i) => ({
+				text,
+				start: 23 + i * 2,
+				end: 23 + i * 2 + 1.2,
+			})),
+		];
+		const segments = [
+			{ start: 10, end: 20, text: "first sentence" },
+			{ start: 23, end: 30, text: "second sentence" },
+		];
+		const mergedOps = [
+			cut(12.0, 12.4, { id: "filler-inside", category: "filler" }), // interior micro-cut
+			cut(20.4, 23, { id: "pause-tighten", category: "pacing" }), // real inter-take pause
+		];
+		const { extraOps } = runSecondPass({
+			ops: mergedOps,
+			words,
+			segments,
+			redundancyRan: false,
+		});
+		const fakePacing = extraOps.filter((op) => op.category === "pacing");
+		expect(fakePacing).toEqual([]); // no manufactured pause over real speech
 	});
 
 	test("no new findings: the loop runs one extra pass and exits with zero ops", () => {

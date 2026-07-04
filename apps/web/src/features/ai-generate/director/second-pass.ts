@@ -164,8 +164,21 @@ function applyRemovalsToItems<T extends { start: number; end: number }>(
 		}
 		const next = removals[ri]; // first removal ending after this item starts
 		if (next && item.start >= next.startSec) continue; // starts inside -> gone
-		const end = next && item.end > next.startSec ? next.startSec : item.end;
-		out.push({ ...item, start: item.start - removedBefore, end: end - removedBefore });
+		// Subtract EVERY removal overlapping the item's interior, not just clamp to
+		// the first one. Clamping amputated a SEGMENT's whole tail whenever a
+		// micro-cut sat inside it, and the fake inter-segment hole that left in the
+		// compressed transcript read as a giant pause over real speech, which the
+		// pacing detector then cut, pre-checked (review X1). Subtraction keeps the
+		// survivors disjoint, sorted, and consistent with forwardRemapTime.
+		let interior = 0;
+		for (let j = ri; j < removals.length && removals[j].startSec < item.end; j++) {
+			interior += Math.min(item.end, removals[j].endSec) - removals[j].startSec;
+		}
+		out.push({
+			...item,
+			start: item.start - removedBefore,
+			end: item.end - removedBefore - interior,
+		});
 	}
 	return out;
 }
