@@ -4,6 +4,7 @@ import {
 	initKeepRows,
 	selectAccepted,
 	selectAcceptedKeeps,
+	selectApplyGuardSpans,
 	toggleDecision,
 	toggleWithPremiseGuard,
 	useDirectorPlanStore,
@@ -191,5 +192,49 @@ describe("highlight keep decisions", () => {
 	test("rejecting every keep leaves nothing (caller must guard the empty apply)", () => {
 		const rows = initKeepRows(keeps);
 		expect(selectAcceptedKeeps({ keeps: rows, decisions: {} })).toEqual([]);
+	});
+});
+
+describe("selectApplyGuardSpans (review F5/X6)", () => {
+	const spanOp = (id: string, startSec: number, endSec: number, kind: DirectorOp["op"] = "cut"): DirectorOp => ({
+		id,
+		op: kind,
+		startSec,
+		endSec,
+		reason: "r",
+		confidence: 0.8,
+	});
+	const plan2: DirectorPlan = {
+		operations: [
+			spanOp("acc", 0, 2), // accepted
+			spanOp("rej", 3, 4), // rejected removal
+			spanOp("rord", 5, 6, "reorder"), // rejected but not a removal
+		],
+	};
+	const decisions = { acc: true, rej: false, rord: false };
+
+	test("rejected removal rows become both rejected AND protected spans; reorders excluded", () => {
+		const g = selectApplyGuardSpans({ plan: plan2, decisions, protectedSpans: [] });
+		expect(g.rejectedSpansSec).toEqual([{ startSec: 3, endSec: 4 }]);
+		// protected = plan-time keepers + rejected (superset), reorder never included.
+		expect(g.protectedSpansSec).toEqual([{ startSec: 3, endSec: 4 }]);
+	});
+
+	test("plan-time keepers ride along in protected but not in rejected", () => {
+		const g = selectApplyGuardSpans({
+			plan: plan2,
+			decisions,
+			protectedSpans: [{ startSec: 10, endSec: 11 }],
+		});
+		expect(g.protectedSpansSec).toEqual([
+			{ startSec: 10, endSec: 11 },
+			{ startSec: 3, endSec: 4 },
+		]);
+		expect(g.rejectedSpansSec).toEqual([{ startSec: 3, endSec: 4 }]);
+	});
+
+	test("a null plan yields empty guard sets", () => {
+		const g = selectApplyGuardSpans({ plan: null, decisions: {}, protectedSpans: [] });
+		expect(g).toEqual({ protectedSpansSec: [], rejectedSpansSec: [] });
 	});
 });

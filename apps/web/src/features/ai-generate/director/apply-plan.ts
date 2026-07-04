@@ -24,6 +24,7 @@ import type { DirectorOp } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
 import {
 	coalesceRemovalRanges,
+	subtractRemovalRanges,
 	type ProtectedSpanSec,
 } from "./coalesce-removal-ranges";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
@@ -216,6 +217,7 @@ export function applyDirectorPlan({
 	words,
 	fps = 30,
 	protectedSpansSec = [],
+	rejectedSpansSec = [],
 }: {
 	editor: DirectorApplyEditor;
 	ops: readonly DirectorOp[];
@@ -226,8 +228,12 @@ export function applyDirectorPlan({
 	/** Spans (seconds) coalescing must never swallow: user-rejected review rows,
 	 * emphasis-pause keepers, justify-reverted cuts (review F5). */
 	protectedSpansSec?: readonly ProtectedSpanSec[];
+	/** Spans of explicitly REJECTED rows (seconds): carved OUT of the final ranges
+	 * so reject stays authoritative even when an accepted wider op covers one
+	 * (review X6). */
+	rejectedSpansSec?: readonly ProtectedSpanSec[];
 }): ApplyDirectorPlanResult {
-	const { ranges: rawRanges, removedSec } = planRemovalRanges({
+	const { ranges: rawRanges } = planRemovalRanges({
 		ops,
 		ticksPerSecond: TICKS_PER_SECOND,
 	});
@@ -238,12 +244,18 @@ export function applyDirectorPlan({
 	const floorTicks = Math.round(
 		(MIN_SURVIVING_CLIP_FRAMES / (fps > 0 ? fps : 30)) * TICKS_PER_SECOND,
 	);
-	const ranges = coalesceRemovalRanges({
-		ranges: rawRanges,
-		words,
-		floorTicks,
+	// Order matters: coalesce first (gap protection consulted), THEN carve rejected
+	// spans out, so a swallow can never re-remove footage a rejection carved back.
+	const ranges = subtractRemovalRanges({
+		ranges: coalesceRemovalRanges({
+			ranges: rawRanges,
+			words,
+			floorTicks,
+			ticksPerSecond: TICKS_PER_SECOND,
+			protectedSpansSec,
+		}),
+		spansSec: rejectedSpansSec,
 		ticksPerSecond: TICKS_PER_SECOND,
-		protectedSpansSec,
 	});
 
 	const tracks = editor.scenes.getActiveScene().tracks;
@@ -294,7 +306,11 @@ export function applyDirectorPlan({
 
 	return {
 		cuts: removalCommand ? removalCommand.getRemovedCount() : 0,
-		removedSec,
+		// Report what actually leaves the timeline: coalescing widens the raw op
+		// ranges and the rejected-span carve-out (X6) shrinks them, so sum the FINAL
+		// ranges instead of trusting the pre-transform op spans.
+		removedSec:
+			ranges.reduce((acc, r) => acc + (r.end - r.start), 0) / TICKS_PER_SECOND,
 		reorders: reorderMoves.length,
 	};
 }

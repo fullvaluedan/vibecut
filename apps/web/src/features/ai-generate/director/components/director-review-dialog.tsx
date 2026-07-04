@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
 import { applyDirectorPlan, applyHighlightPlan } from "../apply-plan";
-import { useDirectorPlanStore } from "../director-plan-store";
+import { selectApplyGuardSpans, useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
 import { describeReviewOp, formatTimecode, formatTimeRange } from "../review-format";
 import { formatHighlightPreview } from "../highlight-preview";
@@ -179,21 +179,17 @@ export function DirectorReviewDialog() {
 		const fps = editor.project.getActive().settings.fps;
 		const fpsFloat =
 			fps.denominator > 0 && fps.numerator > 0 ? fps.numerator / fps.denominator : 30;
-		// A REJECTED row's span must survive apply-time coalescing (review F5): its gap
-		// between two accepted cuts would otherwise be swallowed, deleting exactly what
-		// the user chose to keep. Plan-time keepers ride along from the store.
-		const protectedSpansSec = [
-			...protectedSpans,
-			...ops
-				.filter((op) => !decisions[op.id] && (op.op === "cut" || op.op === "take_select"))
-				.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
-		];
+		// Rejected rows must survive apply (F5/X6): carved out of the final ranges and
+		// shielded from gap coalescing. One shared selector so this modal and the
+		// docked panel can never drift.
+		const guards = selectApplyGuardSpans({ plan, decisions, protectedSpans });
 		const result = applyDirectorPlan({
 			editor,
 			ops: accepted,
 			words,
 			fps: fpsFloat,
-			protectedSpansSec,
+			protectedSpansSec: guards.protectedSpansSec,
+			rejectedSpansSec: guards.rejectedSpansSec,
 		});
 		// Seed the taste signal from every reviewed decision (accepted or not).
 		useDirectorTasteStore.getState().noteReviewDecisions(

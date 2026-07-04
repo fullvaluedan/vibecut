@@ -109,6 +109,35 @@ export function selectAccepted({
 	return plan.operations.filter((op) => decisions[op.id]);
 }
 
+/**
+ * The two guard-span sets `applyDirectorPlan` needs (review F5/X6), derived in ONE
+ * place so the modal and the docked panel can never drift: rejected removal rows
+ * must survive apply (carved out of the final ranges) and, together with the
+ * plan-time keepers, must never be swallowed by gap coalescing.
+ */
+export function selectApplyGuardSpans({
+	plan,
+	decisions,
+	protectedSpans,
+}: {
+	plan: DirectorPlan | null;
+	decisions: OpDecisions;
+	protectedSpans: readonly { startSec: number; endSec: number }[];
+}): {
+	protectedSpansSec: { startSec: number; endSec: number }[];
+	rejectedSpansSec: { startSec: number; endSec: number }[];
+} {
+	const rejectedSpansSec = (plan?.operations ?? [])
+		.filter(
+			(op) => !decisions[op.id] && (op.op === "cut" || op.op === "take_select"),
+		)
+		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
+	return {
+		protectedSpansSec: [...protectedSpans, ...rejectedSpansSec],
+		rejectedSpansSec,
+	};
+}
+
 interface DirectorPlanState {
 	open: boolean;
 	/** "modal" = the cut/highlight review dialog; "panel" = the assemble review in the right inspector. */

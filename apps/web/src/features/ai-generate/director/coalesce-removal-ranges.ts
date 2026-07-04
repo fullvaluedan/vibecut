@@ -21,6 +21,45 @@ export interface ProtectedSpanSec {
 }
 
 /**
+ * Carve every `spans` window OUT of `ranges` (review X6). A review row the user
+ * explicitly REJECTED must survive apply even when an accepted WIDER op (a
+ * second-pass repeat legitimately containing pass-1 micro-cuts) directly covers
+ * it: gap protection cannot help there because no gap exists, so subtraction is
+ * what makes reject authoritative. Ticks in, ticks out; empty leftovers dropped.
+ */
+export function subtractRemovalRanges({
+	ranges,
+	spansSec,
+	ticksPerSecond,
+}: {
+	ranges: readonly TimeRange[];
+	spansSec: readonly ProtectedSpanSec[];
+	ticksPerSecond: number;
+}): TimeRange[] {
+	if (spansSec.length === 0) return [...ranges];
+	const sub = spansSec
+		.map((s) => ({
+			start: Math.round(s.startSec * ticksPerSecond),
+			end: Math.round(s.endSec * ticksPerSecond),
+		}))
+		.filter((s) => s.end > s.start)
+		.sort((a, b) => a.start - b.start);
+	const out: TimeRange[] = [];
+	for (const range of ranges) {
+		let cursor = range.start;
+		for (const s of sub) {
+			if (s.end <= cursor) continue;
+			if (s.start >= range.end) break;
+			if (s.start > cursor) out.push({ start: cursor, end: s.start });
+			cursor = Math.max(cursor, s.end);
+			if (cursor >= range.end) break;
+		}
+		if (cursor < range.end) out.push({ start: cursor, end: range.end });
+	}
+	return out;
+}
+
+/**
  * Coalesce accepted removal ranges (ticks) across sub-floor gaps. Sorts the ranges,
  * walks adjacent pairs, and merges `prev`+`next` when they overlap/touch, OR when the
  * retained gap between them is shorter than `floorTicks` AND contains no complete

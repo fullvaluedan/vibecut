@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { coalesceRemovalRanges } from "../coalesce-removal-ranges";
+import {
+	coalesceRemovalRanges,
+	subtractRemovalRanges,
+} from "../coalesce-removal-ranges";
 import type { WordTiming } from "../cut-utils";
 
 // 120k ticks/sec, 30fps → 15-frame floor = 60_000 ticks (0.5s), 1 frame = 4_000 ticks.
@@ -214,5 +217,72 @@ describe("coalesceRemovalRanges", () => {
 			const gap = out[i].start - out[i - 1].end;
 			expect(gap).toBeGreaterThanOrEqual(FLOOR);
 		}
+	});
+});
+
+// Review X6: rejected rows are carved out of the final ranges so reject stays
+// authoritative even when an accepted WIDER op directly covers them (TPS=120_000).
+describe("subtractRemovalRanges", () => {
+	test("carves a rejected span out of the middle of an accepted range", () => {
+		// Accepted [0,10s]; user rejected [3,4s] -> two ranges around it.
+		const out = subtractRemovalRanges({
+			ranges: [{ start: 0, end: 10 * TPS }],
+			spansSec: [{ startSec: 3, endSec: 4 }],
+			ticksPerSecond: TPS,
+		});
+		expect(out).toEqual([
+			{ start: 0, end: 3 * TPS },
+			{ start: 4 * TPS, end: 10 * TPS },
+		]);
+	});
+
+	test("a rejected span at a range edge trims, does not split", () => {
+		const out = subtractRemovalRanges({
+			ranges: [{ start: 0, end: 10 * TPS }],
+			spansSec: [{ startSec: 0, endSec: 2 }],
+			ticksPerSecond: TPS,
+		});
+		expect(out).toEqual([{ start: 2 * TPS, end: 10 * TPS }]);
+	});
+
+	test("a rejected span covering a whole range drops it entirely", () => {
+		const out = subtractRemovalRanges({
+			ranges: [{ start: 5 * TPS, end: 8 * TPS }],
+			spansSec: [{ startSec: 4, endSec: 9 }],
+			ticksPerSecond: TPS,
+		});
+		expect(out).toEqual([]);
+	});
+
+	test("multiple rejected spans in one range carve multiple holes", () => {
+		const out = subtractRemovalRanges({
+			ranges: [{ start: 0, end: 10 * TPS }],
+			spansSec: [
+				{ startSec: 2, endSec: 3 },
+				{ startSec: 6, endSec: 7 },
+			],
+			ticksPerSecond: TPS,
+		});
+		expect(out).toEqual([
+			{ start: 0, end: 2 * TPS },
+			{ start: 3 * TPS, end: 6 * TPS },
+			{ start: 7 * TPS, end: 10 * TPS },
+		]);
+	});
+
+	test("no rejected spans returns the ranges unchanged", () => {
+		const ranges = [{ start: 0, end: TPS }];
+		expect(subtractRemovalRanges({ ranges, spansSec: [], ticksPerSecond: TPS })).toEqual(ranges);
+	});
+
+	test("a rejected span outside every range is a no-op", () => {
+		const ranges = [{ start: 0, end: 2 * TPS }];
+		expect(
+			subtractRemovalRanges({
+				ranges,
+				spansSec: [{ startSec: 50, endSec: 51 }],
+				ticksPerSecond: TPS,
+			}),
+		).toEqual(ranges);
 	});
 });
