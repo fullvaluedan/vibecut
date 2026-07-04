@@ -1,8 +1,16 @@
 /**
- * Director orchestrator (U5): assemble -> remove silences -> transcribe -> fuse
- * the audio/source senses -> plan -> OPEN the Review modal. Apply happens on user
- * accept (in the modal), so this resolves once the plan is on screen. Reuses the
- * existing AI-CUT spine; text-only, so it runs on every auth mode.
+ * Director orchestrator (U5): assemble -> transcribe ONCE -> fuse the audio/source
+ * senses -> plan -> OPEN the Review modal. Apply happens on user accept (in the
+ * modal), so this resolves once the plan is on screen. Reuses the existing AI-CUT
+ * spine; text-only, so it runs on every auth mode.
+ *
+ * Silence is REVIEW-ONLY here (Dan's cut-storm report 2026-07-04): the old
+ * unreviewed remove-silences pre-pass hard-spliced every 0.6s+ pause BEFORE any
+ * guard existed, shattering the timeline and forcing a second transcription. Now
+ * VAD dead-air (long gaps) + pacing (tighten, keep a beat) surface every pause as
+ * review ops that flow through the full guard chain (keepers, justify, coalesce,
+ * consolidation, the user's checkboxes). The standalone Remove Silences menu
+ * action is unchanged.
  *
  * Browser-only (audio decode + fetch) — verified live, not under bun; the pure
  * fusion (`build-signal-table`) and the planner/apply/taste are tested separately.
@@ -12,7 +20,6 @@ import {
 	assembleBinToTimeline,
 	timelineHasContent,
 } from "@/features/editing/assemble";
-import { runRemoveSilences } from "@/features/editing/remove-silences";
 import { ensureTimelineTranscript } from "@/features/transcription/transcript-cache";
 import { extractTimelineAudio } from "@/media/mediabunny";
 import { decodeAudioToFloat32 } from "@/media/audio";
@@ -163,25 +170,10 @@ export async function runDirector({
 	}
 	abort();
 
-	// Transcribe the FULL timeline FIRST so silence removal has word timings for its
-	// emphasis-pause protection. On a fresh project with background transcription off
-	// nothing is cached yet, so without this the protection was inert and every short
-	// mid-sentence pause got cut. The result is fed straight into runRemoveSilences.
-	onProgress?.("Transcribing...");
-	const preSilence = await ensureTimelineTranscript({
-		editor,
-		signal,
-		wantWords: true,
-		onProgress: (p) => onProgress?.(p.detail),
-	});
-	abort();
-
-	onProgress?.("Removing silences...");
-	await runRemoveSilences({ editor, words: preSilence.words });
-	abort();
-
-	// Re-transcribe the SHORTENED timeline: the ripple changed the audio hash, so this
-	// is a cache miss that re-aligns every downstream coordinate to the new timeline.
+	// ONE transcription of the full timeline. Silence is no longer pre-cut by an
+	// unreviewed command, so this transcript stays aligned to the timeline the user
+	// actually sees, no re-transcription needed, and every pause reaches the review
+	// as a VAD dead-air / pacing op with the full guard chain applied.
 	onProgress?.("Transcribing...");
 	const { segments, words } = await ensureTimelineTranscript({
 		editor,
@@ -273,7 +265,10 @@ export async function runDirector({
 				sampleRate,
 				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
 			});
-			vadDeadAirCuts = detectVadDeadAirCuts({ gaps }).filter(
+			vadDeadAirCuts = detectVadDeadAirCuts({
+				gaps,
+				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
+			}).filter(
 				(op) =>
 					![...wordCuts, ...noiseCuts, ...tinyClipCuts].some(
 						(other) => other.startSec < op.endSec && op.startSec < other.endSec,

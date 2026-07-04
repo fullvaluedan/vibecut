@@ -163,13 +163,13 @@ export function DirectorReviewDialog() {
 		}
 	}
 
-	// Cancelling/dismissing the modal does NOT roll back the timeline: run-director
-	// already ran assemble + remove-silences (each its own command) BEFORE opening
-	// this modal. Signpost that it's reversible. (One-undo rollback is a follow-up.)
+	// Cancelling/dismissing the modal applies NO cuts. Auto-assemble (empty-timeline
+	// case) and the chronological reorder may have run before this opened; both are
+	// undoable.
 	const handleCancel = () => {
 		close();
 		toast.info("Director: review cancelled", {
-			description: "Footage was assembled and silences removed — Ctrl+Z to undo.",
+			description: "No cuts were applied. Any auto-assembled footage stays (Ctrl+Z to undo).",
 		});
 	};
 

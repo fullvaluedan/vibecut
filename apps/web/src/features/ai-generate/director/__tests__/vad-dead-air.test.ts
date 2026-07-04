@@ -14,14 +14,14 @@ describe("detectVadDeadAirCuts", () => {
 		expect(ops[0].endSec).toBeCloseTo(13.7, 5);
 	});
 
-	test("a gap at or below the threshold → no op", () => {
-		expect(detectVadDeadAirCuts({ gaps: [gap({ startSec: 0, endSec: 1.5 })], minGapSeconds: 1.5 })).toHaveLength(0);
-		expect(detectVadDeadAirCuts({ gaps: [gap({ startSec: 0, endSec: 1.2 })], minGapSeconds: 1.5 })).toHaveLength(0);
+	test("an interior gap at or below the threshold → no op", () => {
+		expect(detectVadDeadAirCuts({ gaps: [gap({ startSec: 10, endSec: 11.5 })], minGapSeconds: 1.5 })).toHaveLength(0);
+		expect(detectVadDeadAirCuts({ gaps: [gap({ startSec: 10, endSec: 11.2 })], minGapSeconds: 1.5 })).toHaveLength(0);
 	});
 
-	test("padding that would collapse the cut → no op", () => {
+	test("padding that would collapse an interior cut → no op", () => {
 		// over the (low) min-gap, but 2×pad ≥ duration leaves nothing to cut
-		const ops = detectVadDeadAirCuts({ gaps: [gap({ startSec: 0, endSec: 0.5 })], minGapSeconds: 0.1, padSeconds: 0.3 });
+		const ops = detectVadDeadAirCuts({ gaps: [gap({ startSec: 10, endSec: 10.5 })], minGapSeconds: 0.1, padSeconds: 0.3 });
 		expect(ops).toHaveLength(0);
 	});
 
@@ -40,7 +40,64 @@ describe("detectVadDeadAirCuts", () => {
 	});
 
 	test("reason reports the FULL gap duration, not the padded cut", () => {
-		const ops = detectVadDeadAirCuts({ gaps: [gap({ startSec: 0, endSec: 4 })], minGapSeconds: 1.5, padSeconds: 0.3 });
+		const ops = detectVadDeadAirCuts({ gaps: [gap({ startSec: 10, endSec: 14 })], minGapSeconds: 1.5, padSeconds: 0.3 });
 		expect(ops[0].reason).toContain("4.0s");
+	});
+});
+
+// Silence rework (2026-07-04): leading/trailing silence cuts FLUSH at the timeline
+// edge with a lower floor - padding there protected nothing and left the silent
+// stub that became the tiny head clip on Dan's timeline.
+describe("detectVadDeadAirCuts edge handling", () => {
+	test("leading silence cuts FLUSH at 0 (no head stub)", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 0, endSec: 3 })],
+			minGapSeconds: 1.5,
+			padSeconds: 0.3,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBe(0); // flush, not 0.3
+		expect(ops[0].endSec).toBeCloseTo(2.7, 5); // speech side keeps its pad
+		expect(ops[0].reason).toContain("Leading silence");
+	});
+
+	test("a short leading gap above the edge floor still cuts (0.8s head silence)", () => {
+		// 0.8s is below the 1.5s interior floor but above the 0.5s edge floor.
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 0, endSec: 0.8 })],
+			minGapSeconds: 1.5,
+			padSeconds: 0.3,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBe(0);
+		expect(ops[0].endSec).toBeCloseTo(0.5, 5);
+	});
+
+	test("a leading gap below the edge floor → no op", () => {
+		expect(
+			detectVadDeadAirCuts({ gaps: [gap({ startSec: 0, endSec: 0.4 })], minGapSeconds: 1.5 }),
+		).toHaveLength(0);
+	});
+
+	test("trailing silence cuts FLUSH at the timeline end", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 57, endSec: 60 })],
+			minGapSeconds: 1.5,
+			padSeconds: 0.3,
+			totalSec: 60,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBeCloseTo(57.3, 5); // speech side keeps its pad
+		expect(ops[0].endSec).toBe(60); // flush at the end
+		expect(ops[0].reason).toContain("Trailing silence");
+	});
+
+	test("without totalSec a gap at the end is treated as interior (no flush guess)", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 57, endSec: 60 })],
+			minGapSeconds: 1.5,
+			padSeconds: 0.3,
+		});
+		expect(ops[0].endSec).toBeCloseTo(59.7, 5);
 	});
 });
