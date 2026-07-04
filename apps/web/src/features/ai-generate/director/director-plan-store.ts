@@ -109,6 +109,36 @@ export function selectAccepted({
 	return plan.operations.filter((op) => decisions[op.id]);
 }
 
+/** The review-panel row filter (U8): all rows, or one slice of them. */
+export type ReviewRowFilter = "all" | "recommended" | "optin" | "rejected";
+
+/**
+ * Pure row filter for the review panel (U8). "recommended" = the default-accepted
+ * rows; "optin" = the `defaultAccept:false` rows the user must opt into; "rejected"
+ * = anything not currently accepted (a turned-off recommendation or an untouched
+ * opt-in). "all" passes everything through. Order is preserved.
+ */
+export function selectFilteredOps({
+	ops,
+	decisions,
+	filter,
+}: {
+	ops: readonly DirectorOp[];
+	decisions: OpDecisions;
+	filter: ReviewRowFilter;
+}): DirectorOp[] {
+	switch (filter) {
+		case "recommended":
+			return ops.filter((op) => op.defaultAccept !== false);
+		case "optin":
+			return ops.filter((op) => op.defaultAccept === false);
+		case "rejected":
+			return ops.filter((op) => !decisions[op.id]);
+		default:
+			return [...ops];
+	}
+}
+
 /**
  * The two guard-span sets `applyDirectorPlan` needs (review F5/X6/RX1), derived in
  * ONE place so the modal and the docked panel can never drift.
@@ -162,6 +192,24 @@ interface DirectorPlanState {
 	surface: "modal" | "panel";
 	/** "cut"/"highlight" = the modal review; "assemble" = the right-panel auto-assemble review. */
 	mode: "cut" | "highlight" | "assemble";
+	/**
+	 * Cut-review lifecycle (U8). "review" = proposing, nothing applied yet. "applied"
+	 * = the plan is on the timeline but the panel STAYS OPEN and editable: toggling a
+	 * row revises the applied cut in place, and only an explicit dismiss clears it.
+	 */
+	phase: "review" | "applied";
+	/**
+	 * A/B preview state (U8, applied phase only). "with" = the applied cuts are on
+	 * the timeline; "without" = the Director batch is temporarily undone to preview
+	 * the original. Neither clears the plan.
+	 */
+	abShowing: "with" | "without";
+	/**
+	 * Whether a Director BatchCommand is currently the top undoable step (U8). False
+	 * when the accepted decisions produced no cuts. A revise only undoes first when a
+	 * batch is actually applied AND showing, so it never pops the pre-Director step.
+	 */
+	appliedHasBatch: boolean;
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
 	/** Ids the premise guard auto-downgraded (not user rejects), so apply never carves
@@ -225,7 +273,15 @@ interface DirectorPlanState {
 	acceptedOps: () => DirectorOp[];
 	/** The currently-accepted keep rows (highlight mode). */
 	acceptedKeeps: () => HighlightKeepRow[];
-	/** Close and clear. */
+	/**
+	 * Mark the plan APPLIED (U8): the panel stays open in the applied phase with the
+	 * plan + decisions intact. `hasBatch` records whether the apply produced an
+	 * undoable Director batch, so a later revise knows whether to undo first.
+	 */
+	markApplied: (hasBatch: boolean) => void;
+	/** Set the A/B preview state (U8). Never clears the plan. */
+	setAbShowing: (showing: "with" | "without") => void;
+	/** Close and clear. The ONLY thing that discards an applied plan (U8). */
 	close: () => void;
 }
 
@@ -233,6 +289,9 @@ const CLEARED = {
 	open: false,
 	surface: "modal" as const,
 	mode: "cut" as const,
+	phase: "review" as const,
+	abShowing: "with" as const,
+	appliedHasBatch: false,
 	plan: null,
 	decisions: {},
 	autoDowngradedIds: [],
@@ -351,5 +410,10 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		const { keeps, decisions } = get();
 		return selectAcceptedKeeps({ keeps, decisions });
 	},
+	// Applied phase (U8): keep the whole recipe (plan, decisions, guards, words) so a
+	// row toggle can revise in place; only `close` clears it.
+	markApplied: (hasBatch) =>
+		set({ phase: "applied", appliedHasBatch: hasBatch, abShowing: "with" }),
+	setAbShowing: (showing) => set({ abShowing: showing }),
 	close: () => set({ ...CLEARED }),
 }));

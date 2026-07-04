@@ -5,6 +5,7 @@ import {
 	selectAccepted,
 	selectAcceptedKeeps,
 	selectApplyGuardSpans,
+	selectFilteredOps,
 	toggleDecision,
 	toggleWithPremiseGuard,
 	useDirectorPlanStore,
@@ -313,6 +314,92 @@ describe("store toggle tracks auto-downgraded ids (review RX1)", () => {
 		useDirectorPlanStore.getState().toggle("sp-1"); // user re-checks sp-1
 		s = useDirectorPlanStore.getState();
 		expect(s.autoDowngradedIds).toEqual([]); // no longer system-driven
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("selectFilteredOps (U8 row filter)", () => {
+	const rows: DirectorOp[] = [
+		{ id: "rec", op: "cut", startSec: 0, endSec: 1, reason: "r", confidence: 0.8 },
+		{
+			id: "opt",
+			op: "cut",
+			startSec: 1,
+			endSec: 2,
+			reason: "r",
+			confidence: 0.8,
+			defaultAccept: false,
+		},
+	];
+	const decisions = { rec: false, opt: false }; // rec turned off, opt untouched
+
+	test("all returns every row", () => {
+		expect(selectFilteredOps({ ops: rows, decisions: {}, filter: "all" }).map((o) => o.id)).toEqual([
+			"rec",
+			"opt",
+		]);
+	});
+	test("recommended = default-accepted rows only", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions: {}, filter: "recommended" }).map((o) => o.id),
+		).toEqual(["rec"]);
+	});
+	test("optin = defaultAccept:false rows only", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions: {}, filter: "optin" }).map((o) => o.id),
+		).toEqual(["opt"]);
+	});
+	test("rejected = rows not currently accepted", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions, filter: "rejected" }).map((o) => o.id),
+		).toEqual(["rec", "opt"]);
+	});
+});
+
+describe("applied phase (U8): persist, dismiss clears, premise guard holds", () => {
+	const applyPlan: DirectorPlan = {
+		operations: [
+			{ id: "prem", op: "cut", startSec: 100, endSec: 100.4, reason: "r", confidence: 0.8 },
+			{ id: "sp-1", op: "cut", startSec: 28, endSec: 33, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("markApplied keeps the plan and flips to the applied phase", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		expect(useDirectorPlanStore.getState().phase).toBe("review");
+		useDirectorPlanStore.getState().markApplied(true);
+		const s = useDirectorPlanStore.getState();
+		expect(s.phase).toBe("applied");
+		expect(s.appliedHasBatch).toBe(true);
+		expect(s.abShowing).toBe("with");
+		expect(s.plan).not.toBeNull(); // recipe survives apply
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("only close clears the applied plan (A/B + toggle do not)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().markApplied(true);
+		useDirectorPlanStore.getState().setAbShowing("without");
+		useDirectorPlanStore.getState().toggle("sp-1");
+		expect(useDirectorPlanStore.getState().plan).not.toBeNull(); // still there
+		useDirectorPlanStore.getState().close();
+		const s = useDirectorPlanStore.getState();
+		expect(s.plan).toBeNull();
+		expect(s.phase).toBe("review"); // reset for the next run
+	});
+
+	test("the premise guard still downgrades sp- rows during post-apply revision", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().markApplied(true);
+		// Reject the premise AFTER apply: the still-accepted sp- row must downgrade.
+		useDirectorPlanStore.getState().toggle("prem");
+		const s = useDirectorPlanStore.getState();
+		expect(s.phase).toBe("applied"); // toggle never leaves the applied phase
+		expect(s.decisions["sp-1"]).toBe(false);
+		expect(s.autoDowngradedIds).toEqual(["sp-1"]);
 		useDirectorPlanStore.getState().close();
 	});
 });
