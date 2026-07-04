@@ -11,7 +11,7 @@
  */
 
 import type { TimeRange } from "@/commands/timeline/track/remove-ranges";
-import type { WordTiming } from "./cut-utils";
+import { spansOverlap, type WordTiming } from "./cut-utils";
 import { spanHasContentWord } from "./content-word";
 
 /** A span (seconds) the coalescer must never swallow, whatever the word-guard says. */
@@ -112,8 +112,8 @@ export function coalesceRemovalRanges({
 		const gapTicks = next.start - prev.end;
 		const gapStartSec = prev.end / ticksPerSecond;
 		const gapEndSec = next.start / ticksPerSecond;
-		const gapProtected = protectedSpansSec.some(
-			(p) => p.startSec < gapEndSec && gapStartSec < p.endSec,
+		const gapProtected = protectedSpansSec.some((p) =>
+			spansOverlap(p, { startSec: gapStartSec, endSec: gapEndSec }),
 		);
 		const swallow =
 			hasWords &&

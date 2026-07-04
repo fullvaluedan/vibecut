@@ -13,13 +13,8 @@
  */
 
 import type { ContextFlag, DirectorOp } from "@framecut/hf-bridge";
-import { stableCutId } from "./cut-utils";
+import { spansOverlap, stableCutId } from "./cut-utils";
 import { DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD } from "./redundancy-apply";
-
-const spansOverlap = (
-	a: { startSec: number; endSec: number },
-	b: { startSec: number; endSec: number },
-): boolean => a.startSec < b.endSec && b.startSec < a.endSec;
 
 /**
  * Map the context flags to `cut` ops, dropping any flag that overlaps a cut another

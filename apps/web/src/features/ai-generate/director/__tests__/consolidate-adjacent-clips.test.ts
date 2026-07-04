@@ -166,6 +166,38 @@ describe("consolidateAdjacentClips (U4/KTD5)", () => {
 		).toEqual([]);
 	});
 
+	test("lockstep FIXPOINT: a guard-blocked element propagates to its own partners (review X7)", () => {
+		// linkId L, offset spans (reachable via single-element split / per-track ripple):
+		//   video V1[0,2] effect -> intrinsically unmergeable
+		//   audio B1[0,2.5]  -> blocked by V1 (overlaps [0,2])
+		//   video V2[2,4]    -> does NOT overlap V1's [0,2], but DOES overlap B1's [2,2.5]
+		// Without the fixpoint, B1's block never propagated, so V2 merged and re-paired
+		// the merged video with B1. The fixpoint must block V2 too.
+		const clips = [
+			{ linkId: "L", startTime: 0, duration: 2, mergeable: false }, // V1 (effect)
+			{ linkId: "L", startTime: 0, duration: 2.5, mergeable: true }, // B1 (audio)
+			{ linkId: "L", startTime: 2, duration: 2, mergeable: true }, // V2
+		];
+		const blocked = collectBlockedLinkedSpans(clips);
+		// V2 overlaps a blocked same-link span (B1's) -> held split.
+		expect(
+			isBlockedByLinkedPartner({ linkId: "L", startTime: 2, duration: 2, blocked }),
+		).toBe(true);
+		// A same-link element far away still merges (fixpoint terminates, no over-block).
+		expect(
+			isBlockedByLinkedPartner({ linkId: "L", startTime: 100, duration: 2, blocked }),
+		).toBe(false);
+	});
+
+	test("lockstep fixpoint terminates with no unmergeable seed (all mergeable)", () => {
+		expect(
+			collectBlockedLinkedSpans([
+				{ linkId: "L", startTime: 0, duration: 2, mergeable: true },
+				{ linkId: "L", startTime: 0, duration: 2, mergeable: true },
+			]),
+		).toEqual([]);
+	});
+
 	test("R9 (2P-U5): a pure split that removed nothing collapses back to one clip", () => {
 		// Dan's mid-continuous-speech boundary: a clip split into two source-contiguous,
 		// timeline-adjacent halves with NOTHING removed. No boundary should survive.

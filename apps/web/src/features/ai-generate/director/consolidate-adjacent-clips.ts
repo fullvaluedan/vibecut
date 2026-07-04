@@ -59,28 +59,14 @@ export interface BlockedLinkedSpan {
 	end: number;
 }
 
-/**
- * Lockstep guard (review F7). Merging is per-track, but linked pairing downstream is
- * linkId + timelineOverlap: if a video run holds its splits (an effect makes every
- * fragment unmergeable) while its linked audio merges into one element, each video
- * slice then pairs with the WHOLE merged audio, and a linked move/trim of one slice
- * drags the audio out from under its siblings. So: collect the spans of unmergeable
- * linked elements across ALL tracks, and any linked element overlapping one of them
- * must hold its splits too.
- */
-export function collectBlockedLinkedSpans(
-	clips: readonly { linkId?: string; startTime: number; duration: number; mergeable: boolean }[],
-): BlockedLinkedSpan[] {
-	const blocked: BlockedLinkedSpan[] = [];
-	for (const c of clips) {
-		if (c.linkId && !c.mergeable) {
-			blocked.push({ linkId: c.linkId, start: c.startTime, end: c.startTime + c.duration });
-		}
-	}
-	return blocked;
+interface LinkedClip {
+	linkId?: string;
+	startTime: number;
+	duration: number;
+	mergeable: boolean;
 }
 
-/** Whether a (mergeable) linked clip overlaps an unmergeable same-link span. */
+/** Whether a linked clip overlaps an unmergeable same-link span. */
 export function isBlockedByLinkedPartner({
 	linkId,
 	startTime,
@@ -97,6 +83,53 @@ export function isBlockedByLinkedPartner({
 	return blocked.some(
 		(b) => b.linkId === linkId && b.start < end && startTime < b.end,
 	);
+}
+
+/**
+ * Lockstep guard (review F7/X7). Merging is per-track, but linked pairing downstream
+ * is linkId + timelineOverlap: if a video run holds its splits (an effect makes every
+ * fragment unmergeable) while its linked audio merges into one element, each video
+ * slice then pairs with the WHOLE merged audio, and a linked move/trim of one slice
+ * drags the audio out from under its siblings. So collect the spans of every linked
+ * element that must hold its splits.
+ *
+ * FIXPOINT (X7): a clip held split ONLY by the guard (not intrinsically unmergeable)
+ * must ALSO contribute its span, or ITS partners on a third track can still merge and
+ * recreate the mispairing one hop removed. Iterate: seed with intrinsically
+ * unmergeable linked clips, then keep adding any linked clip that overlaps an already
+ * blocked same-link span, until the set stops growing. Bounded by clip count.
+ */
+export function collectBlockedLinkedSpans(
+	clips: readonly LinkedClip[],
+): BlockedLinkedSpan[] {
+	const linked = clips.filter((c): c is LinkedClip & { linkId: string } => !!c.linkId);
+	const blocked: BlockedLinkedSpan[] = [];
+	const isBlocked = new Set<LinkedClip>();
+	const add = (c: LinkedClip & { linkId: string }) => {
+		isBlocked.add(c);
+		blocked.push({ linkId: c.linkId, start: c.startTime, end: c.startTime + c.duration });
+	};
+	for (const c of linked) if (!c.mergeable) add(c);
+
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const c of linked) {
+			if (isBlocked.has(c)) continue;
+			if (
+				isBlockedByLinkedPartner({
+					linkId: c.linkId,
+					startTime: c.startTime,
+					duration: c.duration,
+					blocked,
+				})
+			) {
+				add(c);
+				grew = true;
+			}
+		}
+	}
+	return blocked;
 }
 
 function canMerge(

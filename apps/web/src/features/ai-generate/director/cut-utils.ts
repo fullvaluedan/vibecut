@@ -46,13 +46,13 @@ const KEEPER_COVER_FRACTION = 0.5;
 const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
 
-const spansOverlap = ({
-	a,
-	b,
-}: {
-	a: { startSec: number; endSec: number };
-	b: { startSec: number; endSec: number };
-}): boolean => a.startSec < b.endSec && b.startSec < a.endSec;
+/** Open-interval overlap: the two spans share more than a shared edge (seconds). */
+export function spansOverlap(
+	a: { startSec: number; endSec: number },
+	b: { startSec: number; endSec: number },
+): boolean {
+	return a.startSec < b.endSec && b.startSec < a.endSec;
+}
 
 /**
  * Merge deterministic detector cuts into a planner's ops in time order, with two
@@ -107,7 +107,7 @@ export function mergeDetectedCuts({
 
 	const survivingRemovals = planKept.filter(isRemoval);
 	const overlapsRemoval = (op: DirectorOp): boolean =>
-		survivingRemovals.some((r) => spansOverlap({ a: op, b: r }));
+		survivingRemovals.some((r) => spansOverlap(op, r));
 
 	// Rule 1 (detector side) + rule 2: drop detector removals that would delete a
 	// keeper, or that overlap a surviving planner removal.

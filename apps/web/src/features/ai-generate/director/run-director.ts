@@ -514,7 +514,7 @@ export async function runDirector({
 	};
 	onProgress?.("Checking repeats and the throughline...");
 	await Promise.all([redundancyPass(), contextPass()]);
-	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5) — kept for intent
+	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5), kept for intent
 	abort();
 
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
@@ -558,6 +558,16 @@ export async function runDirector({
 		words: words ?? [],
 		repeatSpans: repeatMistakeSpans,
 	});
+	// The full protected-span set, in one place (X8): take-cluster keepers, the capped
+	// importance floor, LLM keep ops, and emphasis-pause keepers. Both merges and the
+	// apply-time protection derive from this, so a new keeper class is one edit, not
+	// three spread sites that can silently drift.
+	const allKeepers = [
+		...keepers,
+		...protectedSpans,
+		...llmKeepSpans,
+		...emphasisPauseKeepers,
+	];
 	// 15-frame floor (#3): a pause that WOULD be a beat but sits next to a repeat/
 	// mistake is disqualified above (no keeper), so it would otherwise stay whole. It's
 	// part of the mess we're cutting there anyway, so tighten it to a PAUSE_FLOOR_FRAMES
@@ -604,7 +614,7 @@ export async function runDirector({
 			...pauseFloorCuts,
 			...contextCuts,
 		],
-		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
+		keepers: allKeepers,
 	}).filter((op) => op.op !== "keep"); // protection is invisible in normal mode (KTD6)
 	// Redundancy cuts are the redundancy AUTHORITY (KTD-7): folded in protected ONLY by
 	// explicit LLM keep ops — the capped importance floor must not veto them.
@@ -649,7 +659,7 @@ export async function runDirector({
 		ops: mergedOps,
 		words: words ?? [],
 		segments,
-		keepers: [...keepers, ...protectedSpans, ...llmKeepSpans, ...emphasisPauseKeepers],
+		keepers: allKeepers,
 		redundancyRan,
 	});
 	if (secondPass.extraOps.length > 0) {

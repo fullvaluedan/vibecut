@@ -31,6 +31,7 @@ import { detectPacingCuts } from "./pacing";
 import { detectPhraseRepeatCuts } from "./phrase-repeat";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { lexicalBackstopDefaultAccept } from "./redundancy-apply";
+import { mergeSpans } from "./keep-select";
 
 /** A transcript segment with timeline-relative timing (seconds). */
 export interface SecondPassSegment {
@@ -65,32 +66,11 @@ const NEW_COVERAGE_FLOOR_SEC = 0.5;
  * merged so the forward/inverse remap math sees clean disjoint ranges.
  */
 export function acceptedRemovalSpans(ops: readonly DirectorOp[]): RemovalSpan[] {
-	return unionSpans(
+	return mergeSpans(
 		ops
 			.filter((op) => isRemoval(op) && op.defaultAccept !== false)
 			.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
 	);
-}
-
-/** Union raw spans into sorted disjoint ranges (degenerate spans dropped). */
-function unionSpans(spans: readonly RemovalSpan[]): RemovalSpan[] {
-	const sorted = spans
-		.filter((s) => s.endSec > s.startSec)
-		.map((s) => ({ ...s }))
-		.sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
-	if (sorted.length === 0) return [];
-
-	const merged: RemovalSpan[] = [sorted[0]];
-	for (let i = 1; i < sorted.length; i++) {
-		const prev = merged[merged.length - 1];
-		const cur = sorted[i];
-		if (cur.startSec <= prev.endSec) {
-			prev.endSec = Math.max(prev.endSec, cur.endSec);
-		} else {
-			merged.push(cur);
-		}
-	}
-	return merged;
 }
 
 /**
@@ -320,7 +300,7 @@ export function runSecondPass({
 		// survives only when it adds at least NEW_COVERAGE_FLOOR_SEC of footage no
 		// existing removal op (accepted OR opt-in) already covers - a true re-detection
 		// of an existing cut adds ~none and still dedups away.
-		const allRemovalSpans = unionSpans(
+		const allRemovalSpans = mergeSpans(
 			allOps
 				.filter(isRemoval)
 				.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),

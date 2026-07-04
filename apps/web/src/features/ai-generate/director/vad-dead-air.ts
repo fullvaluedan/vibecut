@@ -69,10 +69,7 @@ export function detectVadDeadAirCuts({
 		const leading = gap.startSec <= EDGE_EPSILON_SEC;
 		const trailing =
 			totalSec !== undefined && gap.endSec >= totalSec - EDGE_EPSILON_SEC;
-		const floor =
-			leading || trailing
-				? Math.min(minGapSeconds, EDGE_MIN_GAP_SECONDS)
-				: minGapSeconds;
+		const floor = leading || trailing ? EDGE_MIN_GAP_SECONDS : minGapSeconds;
 		if (duration <= floor) continue;
 		const cutStart = leading ? gap.startSec : gap.startSec + padSeconds;
 		const cutEnd = trailing ? gap.endSec : gap.endSec - padSeconds;
