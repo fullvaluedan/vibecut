@@ -237,4 +237,82 @@ describe("selectApplyGuardSpans (review F5/X6)", () => {
 		const g = selectApplyGuardSpans({ plan: null, decisions: {}, protectedSpans: [] });
 		expect(g).toEqual({ protectedSpansSec: [], rejectedSpansSec: [] });
 	});
+
+	test("an opt-in op the user never checked is NOT carved out, only gap-protected (RX1)", () => {
+		// defaultAccept:false op left unchecked was never 'on' -> not a user reject.
+		// Carving it would punch a hole in any accepted wider cut covering it.
+		const plan3: DirectorPlan = {
+			operations: [
+				{ ...spanOp("optin", 3, 4), defaultAccept: false },
+				spanOp("wide", 0, 10), // accepted wider cut covering the opt-in span
+			],
+		};
+		const g = selectApplyGuardSpans({
+			plan: plan3,
+			decisions: { optin: false, wide: true },
+			protectedSpans: [],
+		});
+		expect(g.rejectedSpansSec).toEqual([]); // never carved
+		expect(g.protectedSpansSec).toEqual([{ startSec: 3, endSec: 4 }]); // still gap-protected
+	});
+
+	test("an AUTO-downgraded sp- row is NOT carved out (RX1: X2 x X6 fix)", () => {
+		// The premise guard downgraded sp-1; the user never rejected it. Carving its
+		// wide span would delete accepted narrower cuts inside it.
+		const plan4: DirectorPlan = {
+			operations: [
+				spanOp("filler", 30.2, 30.6), // accepted narrow cut inside the sp span
+				spanOp("sp-1", 28, 33), // auto-downgraded wide repeat
+			],
+		};
+		const g = selectApplyGuardSpans({
+			plan: plan4,
+			decisions: { filler: true, "sp-1": false },
+			protectedSpans: [],
+			autoDowngradedIds: ["sp-1"],
+		});
+		expect(g.rejectedSpansSec).toEqual([]); // sp-1 not carved -> filler cut survives
+		expect(g.protectedSpansSec).toEqual([{ startSec: 28, endSec: 33 }]); // gap-protected only
+	});
+
+	test("a user-rejected sp- row (not auto-downgraded) IS carved out", () => {
+		const plan5: DirectorPlan = { operations: [spanOp("sp-1", 28, 33)] };
+		const g = selectApplyGuardSpans({
+			plan: plan5,
+			decisions: { "sp-1": false },
+			protectedSpans: [],
+			autoDowngradedIds: [], // user unchecked it explicitly
+		});
+		expect(g.rejectedSpansSec).toEqual([{ startSec: 28, endSec: 33 }]);
+	});
+});
+
+describe("store toggle tracks auto-downgraded ids (review RX1)", () => {
+	const plan6: DirectorPlan = {
+		operations: [
+			{ id: "prem", op: "cut", startSec: 100, endSec: 100.4, reason: "r", confidence: 0.8 },
+			{ id: "sp-1", op: "cut", startSec: 28, endSec: 33, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("rejecting a premise records the downgraded sp- id; re-checking clears it", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: plan6 });
+		useDirectorPlanStore.getState().toggle("prem"); // reject the premise
+		let s = useDirectorPlanStore.getState();
+		expect(s.decisions["sp-1"]).toBe(false); // auto-downgraded
+		expect(s.autoDowngradedIds).toEqual(["sp-1"]);
+		// The guard set must NOT carve the auto-downgraded sp span.
+		const g = selectApplyGuardSpans({
+			plan: s.plan,
+			decisions: s.decisions,
+			protectedSpans: s.protectedSpans,
+			autoDowngradedIds: s.autoDowngradedIds,
+		});
+		expect(g.rejectedSpansSec).toEqual([{ startSec: 100, endSec: 100.4 }]); // only the premise
+		useDirectorPlanStore.getState().toggle("sp-1"); // user re-checks sp-1
+		s = useDirectorPlanStore.getState();
+		expect(s.autoDowngradedIds).toEqual([]); // no longer system-driven
+		useDirectorPlanStore.getState().close();
+	});
 });

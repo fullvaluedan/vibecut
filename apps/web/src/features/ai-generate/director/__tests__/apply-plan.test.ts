@@ -290,6 +290,28 @@ describe("applyDirectorPlan (composition glue)", () => {
 		expect(result.cuts).toBe(2);
 	});
 
+	test("X6: a rejectedSpansSec span is carved OUT of an accepted wider range, and removedSec reflects the final ranges", () => {
+		const { editor, executed } = fakeEditor();
+		// One accepted 10s cut; the user rejected a 1s span inside it (an accepted
+		// wider repeat covering a rejected filler). Reject must survive apply.
+		const result = applyDirectorPlan({
+			editor,
+			ops: [op({ op: "cut", startSec: 0, endSec: 10 })],
+			rejectedSpansSec: [{ startSec: 3, endSec: 4 }],
+			fps: 30,
+		});
+		const ranges = appliedRanges(executed).map((r) => ({
+			startSec: r.start / 120_000,
+			endSec: r.end / 120_000,
+		}));
+		expect(ranges).toEqual([
+			{ startSec: 0, endSec: 3 },
+			{ startSec: 4, endSec: 10 },
+		]);
+		// removedSec is summed from the FINAL ranges: 10s minus the carved 1s = 9s.
+		expect(result.removedSec).toBeCloseTo(9, 5);
+	});
+
 	test("2P-U1: without words nothing coalesces (fail-open) - byte-identical to pre-guard", () => {
 		const { editor, executed } = fakeEditor();
 		const result = applyDirectorPlan({

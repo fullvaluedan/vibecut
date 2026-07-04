@@ -110,30 +110,48 @@ export function selectAccepted({
 }
 
 /**
- * The two guard-span sets `applyDirectorPlan` needs (review F5/X6), derived in ONE
- * place so the modal and the docked panel can never drift: rejected removal rows
- * must survive apply (carved out of the final ranges) and, together with the
- * plan-time keepers, must never be swallowed by gap coalescing.
+ * The two guard-span sets `applyDirectorPlan` needs (review F5/X6/RX1), derived in
+ * ONE place so the modal and the docked panel can never drift.
+ *
+ * `protectedSpansSec` (gap protection, F5): every unchecked removal + plan-time
+ * keepers. Benign, since it only stops sub-floor gap coalescing from swallowing a
+ * span, never deletes an accepted cut.
+ *
+ * `rejectedSpansSec` (authoritative carve-out, X6): carved OUT of the final ranges,
+ * so it must be ONLY genuine user rejections (RX1). An opt-in op the user never
+ * checked (`defaultAccept === false`) was never on, and an auto-downgraded sp- row
+ * was turned off by the premise guard, not the user; carving either would punch
+ * holes in unrelated ACCEPTED wider cuts that legitimately cover them.
  */
 export function selectApplyGuardSpans({
 	plan,
 	decisions,
 	protectedSpans,
+	autoDowngradedIds = [],
 }: {
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
 	protectedSpans: readonly { startSec: number; endSec: number }[];
+	/** Ids the premise guard auto-downgraded (never a user reject). */
+	autoDowngradedIds?: readonly string[];
 }): {
 	protectedSpansSec: { startSec: number; endSec: number }[];
 	rejectedSpansSec: { startSec: number; endSec: number }[];
 } {
-	const rejectedSpansSec = (plan?.operations ?? [])
+	const auto = new Set(autoDowngradedIds);
+	const ops = plan?.operations ?? [];
+	const isUncheckedRemoval = (op: DirectorOp): boolean =>
+		!decisions[op.id] && (op.op === "cut" || op.op === "take_select");
+	const span = (op: DirectorOp) => ({ startSec: op.startSec, endSec: op.endSec });
+
+	const uncheckedSpans = ops.filter(isUncheckedRemoval).map(span);
+	const rejectedSpansSec = ops
 		.filter(
-			(op) => !decisions[op.id] && (op.op === "cut" || op.op === "take_select"),
+			(op) => isUncheckedRemoval(op) && op.defaultAccept !== false && !auto.has(op.id),
 		)
-		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
+		.map(span);
 	return {
-		protectedSpansSec: [...protectedSpans, ...rejectedSpansSec],
+		protectedSpansSec: [...protectedSpans, ...uncheckedSpans],
 		rejectedSpansSec,
 	};
 }
@@ -146,6 +164,9 @@ interface DirectorPlanState {
 	mode: "cut" | "highlight" | "assemble";
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
+	/** Ids the premise guard auto-downgraded (not user rejects), so apply never carves
+	 * their span out of other accepted cuts (review RX1). */
+	autoDowngradedIds: string[];
 	/** Transcript words (seconds) backing the apply-time sliver word-guard (2P-U1). */
 	words: WordTiming[];
 	/** Spans (seconds) apply-time coalescing must never swallow: plan-time keepers +
@@ -214,6 +235,7 @@ const CLEARED = {
 	mode: "cut" as const,
 	plan: null,
 	decisions: {},
+	autoDowngradedIds: [],
 	words: [],
 	protectedSpans: [],
 	nearTies: [],
@@ -293,13 +315,22 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set({ ...CLEARED, open: true, mode: "highlight", keeps: rows, decisions, preview, totalSec });
 	},
 	toggle: (id) =>
-		set((state) => ({
-			decisions: toggleWithPremiseGuard({
-				operations: state.plan?.operations ?? [],
-				decisions: state.decisions,
-				id,
-			}),
-		})),
+		set((state) => {
+			const operations = state.plan?.operations ?? [];
+			const before = state.decisions;
+			const decisions = toggleWithPremiseGuard({ operations, decisions: before, id });
+			// Track which ids the premise guard flipped off WITHOUT the user clicking
+			// them (RX1), so apply never carves their span out of unrelated accepted
+			// cuts. The clicked id is always a user decision; any op the user re-checks
+			// leaves the auto set.
+			const auto = new Set(state.autoDowngradedIds);
+			auto.delete(id);
+			for (const op of operations) {
+				if (decisions[op.id]) auto.delete(op.id);
+				else if (op.id !== id && before[op.id] === true) auto.add(op.id);
+			}
+			return { decisions, autoDowngradedIds: [...auto] };
+		}),
 	setAll: (accepted) =>
 		set((state) => {
 			const ids =
@@ -308,7 +339,9 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 					: (state.plan?.operations ?? []).map((o) => o.id);
 			const decisions: OpDecisions = { ...state.decisions };
 			for (const id of ids) decisions[id] = accepted;
-			return { decisions };
+			// A bulk select-all / deselect-all is an explicit user decision on every
+			// row, so nothing remains system-downgraded (RX1).
+			return { decisions, autoDowngradedIds: [] };
 		}),
 	acceptedOps: () => {
 		const { plan, decisions } = get();

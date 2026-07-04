@@ -30,6 +30,7 @@ export function DirectorCutPanel() {
 	const swapRedundancyKeeper = useDirectorPlanStore((s) => s.swapRedundancyKeeper);
 	const words = useDirectorPlanStore((s) => s.words);
 	const protectedSpans = useDirectorPlanStore((s) => s.protectedSpans);
+	const autoDowngradedIds = useDirectorPlanStore((s) => s.autoDowngradedIds);
 
 	if (!plan) return null;
 
@@ -63,7 +64,7 @@ export function DirectorCutPanel() {
 		// Rejected rows must survive apply (F5/X6): carved out of the final ranges and
 		// shielded from gap coalescing. One shared selector so the modal and this
 		// panel can never drift.
-		const guards = selectApplyGuardSpans({ plan, decisions, protectedSpans });
+		const guards = selectApplyGuardSpans({ plan, decisions, protectedSpans, autoDowngradedIds });
 		const result = applyDirectorPlan({
 			editor,
 			ops: accepted,

@@ -126,8 +126,10 @@ export function inverseRemapTime(
  * the start-based shift on words straddling a removal edge (the second pass runs
  * BEFORE energy snapping, so LLM/VAD/take_select edges land mid-word routinely),
  * leaving unshifted survivors that garbled the compressed order and inverse-mapped
- * detector findings onto the wrong footage. A survivor reaching INTO the next removal
- * is clamped to the removal's start so the compressed items stay disjoint and sorted.
+ * detector findings onto the wrong footage. A survivor that overlaps one or more
+ * removals in its interior has each overlap's duration SUBTRACTED from its end (X1),
+ * so a segment holding an interior micro-cut keeps its tail instead of being
+ * amputated at the first removal; the compressed items stay disjoint and sorted.
  */
 function applyRemovalsToItems<T extends { start: number; end: number }>(
 	items: readonly T[],

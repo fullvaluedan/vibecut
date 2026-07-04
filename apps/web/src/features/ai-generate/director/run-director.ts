@@ -550,9 +550,13 @@ export async function runDirector({
 		...redundancyOps,
 		...redundancyCuts,
 	].map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
-	// Segment gaps PLUS word-level gaps (X3): emphasis beats live inside segments
-	// too, and VAD detects gaps anywhere, so protection must see the same pauses.
+	// Emphasis-pause PROTECTION sees segment gaps PLUS word-level gaps (X3): beats
+	// live inside segments too, and VAD detects gaps anywhere, so protection must see
+	// the same pauses. This WIDENING is protection-only: it must not feed the
+	// pause-FLOOR cuts below, or intra-sentence word gaps near a repeat would spawn
+	// new auto-accepted pacing cuts the segment-only version never made (review RX2).
 	const pauseGaps = collectPauseGaps({ segments, words: words ?? [] });
+	const segmentPauseGaps = collectPauseGaps({ segments, words: [] });
 	const emphasisPauseKeepers = computeEmphasisPauseKeepers({
 		gaps: pauseGaps,
 		words: words ?? [],
@@ -574,7 +578,7 @@ export async function runDirector({
 	// breath instead of leaving the full pause. Added as removals below; they can't be
 	// protected away because these gaps have no keeper (the near-repeat test excluded them).
 	const pauseFloorCuts: DirectorOp[] = computeRepeatAdjacentPauseFloors({
-		gaps: pauseGaps,
+		gaps: segmentPauseGaps, // segment-only (RX2): word gaps protect, never cut
 		words: words ?? [],
 		repeatSpans: repeatMistakeSpans,
 		floorSec: PAUSE_FLOOR_FRAMES / fpsFloat,
