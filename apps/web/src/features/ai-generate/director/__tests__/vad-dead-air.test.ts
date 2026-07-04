@@ -101,3 +101,50 @@ describe("detectVadDeadAirCuts edge handling", () => {
 		expect(ops[0].endSec).toBeCloseTo(59.7, 5);
 	});
 });
+
+// Review X5: VAD gaps are NON-speech, not silence. Energetic edge gaps (music,
+// b-roll) and whole-timeline cuts must never auto-accept.
+describe("detectVadDeadAirCuts intent guards (review X5)", () => {
+	test("an ENERGETIC leading gap (music intro) is opt-in with an honest reason", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 0, endSec: 3 })],
+			totalSec: 60,
+			isEnergetic: () => true,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+		expect(ops[0].reason).toContain("music or b-roll");
+	});
+
+	test("a genuinely silent leading gap still auto-accepts", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 0, endSec: 3 })],
+			totalSec: 60,
+			isEnergetic: () => false,
+		});
+		expect(ops[0].defaultAccept).toBeUndefined(); // absent = accepted
+		expect(ops[0].reason).toContain("Leading silence");
+	});
+
+	test("an energetic INTERIOR gap keeps the default (scope: edges only)", () => {
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 20, endSec: 24 })],
+			totalSec: 60,
+			isEnergetic: () => true,
+		});
+		expect(ops[0].defaultAccept).toBeUndefined();
+	});
+
+	test("a cut spanning most of the timeline is never auto-accepted (wipe guard)", () => {
+		// VAD found no speech: one gap covering everything -> one flush cut.
+		const ops = detectVadDeadAirCuts({
+			gaps: [gap({ startSec: 0, endSec: 60 })],
+			totalSec: 60,
+			isEnergetic: () => false,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBe(0);
+		expect(ops[0].endSec).toBe(60);
+		expect(ops[0].defaultAccept).toBe(false); // one row cannot wipe the timeline
+	});
+});

@@ -30,7 +30,12 @@ import { MoveElementCommand } from "@/commands/timeline/element/move-elements";
 import type { PlannedElementMove } from "@/timeline/group-move/types";
 import type { EditorCore } from "@/core";
 import type { ContextFlag, DirectorAssetSummary, DirectorOp, DirectorVisionFrame } from "@framecut/hf-bridge";
-import { computeEnergyEnvelope, computeSpeechFeatures, ENERGY_WINDOW_SEC } from "./audio-features";
+import {
+	computeEnergyEnvelope,
+	computeSpeechFeatures,
+	ENERGY_WINDOW_SEC,
+	meanEnergyOverRange,
+} from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
 import {
@@ -273,9 +278,29 @@ export async function runDirector({
 			const acceptedOverlapSources = [...wordCuts, ...noiseCuts, ...tinyClipCuts].filter(
 				(other) => other.defaultAccept !== false,
 			);
+			// Energy test for edge gaps (X5): Silero gaps are NON-speech, not silence. A
+			// music sting / b-roll cold open reads as a gap but carries real energy, so
+			// compare each gap's mean RMS against the median SPEECH segment energy; at or
+			// above the ratio it is deliberate audio, opt-in rather than auto-removed.
+			const speechEnergies = features.map((f) => f.energy).sort((a, b) => a - b);
+			const medianSpeechEnergy =
+				speechEnergies.length > 0
+					? speechEnergies[Math.floor(speechEnergies.length / 2)]
+					: 0;
+			const ENERGETIC_GAP_RATIO = 0.35;
+			const isEnergetic = (gap: { startSec: number; endSec: number }): boolean =>
+				medianSpeechEnergy > 0 &&
+				meanEnergyOverRange({
+					envelope,
+					windowSec: ENERGY_WINDOW_SEC,
+					startSec: gap.startSec,
+					endSec: gap.endSec,
+				}) >=
+					medianSpeechEnergy * ENERGETIC_GAP_RATIO;
 			vadDeadAirCuts = detectVadDeadAirCuts({
 				gaps,
 				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
+				isEnergetic,
 			}).filter(
 				(op) =>
 					!acceptedOverlapSources.some(
