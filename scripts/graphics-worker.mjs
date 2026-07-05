@@ -21,6 +21,11 @@ const [jobId, engine] = process.argv.slice(2);
 const TEMP_ROOT = process.env.GRAPHICS_TEMP_ROOT || "D:\\Claude\\_temp";
 const REMOTION_DIR = process.env.GRAPHICS_REMOTION_DIR || "D:\\Hermes\\remotion-v2";
 const DRY_RUN = process.env.GRAPHICS_DRY_RUN === "1";
+const FFMPEG = process.env.GRAPHICS_FFMPEG || "ffmpeg";
+// The generation step registers the composition under this id so `remotion render`
+// is deterministic (no guessing what claude named it). Overridable for tuning.
+const COMP_ID = process.env.GRAPHICS_REMOTION_COMP || "GraphicsMain";
+const ENTRY = process.env.GRAPHICS_REMOTION_ENTRY || "src/index.ts";
 
 const dir = path.join(TEMP_ROOT, jobId);
 const jobFile = path.join(dir, "job.json");
@@ -118,6 +123,20 @@ function run(cmd, args, opts, onLine) {
 	});
 }
 
+/** DRY_RUN only: synthesize a real N-second clip (colour bars + a tone) via ffmpeg so the
+ *  import path has genuine video+audio to place and split. */
+function makeSampleClip(outPath, seconds) {
+	const args = [
+		"-y",
+		"-f", "lavfi", "-i", `color=c=0x1a73e8:s=1280x720:d=${seconds}`,
+		"-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`,
+		"-shortest", "-pix_fmt", "yuv420p",
+		"-c:v", "libx264", "-c:a", "aac",
+		outPath,
+	];
+	return run(FFMPEG, args, { cwd: dir }, () => {});
+}
+
 // ---- phase implementations ----------------------------------------------------------
 
 async function generate() {
@@ -138,8 +157,9 @@ async function generate() {
 	const prompt =
 		"Load the dan-video skill and generate a Remotion graphics-overlay composition " +
 		"for public/source.mp4 using public/transcript.json, per the skill. Reuse the " +
-		"src/danL kit. Register the composition so `remotion render` can find it. Do NOT " +
-		"start a full render; stop once the composition compiles.";
+		`src/danL kit. Register the composition in src/Root.tsx with the exact id "${COMP_ID}" ` +
+		"so `remotion render` can find it deterministically. Do NOT start a full render; " +
+		"stop once the composition compiles.";
 	await run(
 		"claude",
 		["-p", JSON.stringify(prompt), "--dangerously-skip-permissions"],
@@ -161,14 +181,17 @@ async function render(kind /* "proof" | "full" */) {
 			job.progress = f / total;
 			if (f % 5 === 0) log(`(dry-run) ${kind} render frame ${f * 100}/${total * 100}`);
 		}
-		fs.writeFileSync(outPath, "dry-run placeholder");
+		// Emit a REAL short clip (video + audio) so the timeline-import path is genuinely
+		// exercised, not a fake byte blob. Falls back to a placeholder if ffmpeg is absent.
+		await makeSampleClip(outPath, isProof ? 2 : 3).catch((e) => {
+			log(`(dry-run) ffmpeg sample failed, writing placeholder: ${e.message}`, "warn");
+			fs.writeFileSync(outPath, "dry-run placeholder");
+		});
 		return outPath;
 	}
-	// LIVE: remotion render. Composition id + entry are read live from the project the
-	// generation step wired up; the proof caps frames to ~100s (30fps * 100 = 3000).
-	const entry = process.env.GRAPHICS_REMOTION_ENTRY || "src/index.ts";
-	const compId = process.env.GRAPHICS_REMOTION_COMP || "Main";
-	const args = ["remotion", "render", entry, compId, outPath];
+	// LIVE: remotion render. The generation step registered the composition under COMP_ID;
+	// the proof caps frames to ~100s (30fps * 100 = 3000).
+	const args = ["remotion", "render", ENTRY, COMP_ID, outPath];
 	if (isProof) args.push("--frames=0-3000");
 	await run("npx", args, { cwd: REMOTION_DIR }, (line) => {
 		// Remotion prints "Rendered X/Y" progress; surface it.

@@ -6,6 +6,7 @@
  */
 import type { EditorCore } from "@/core";
 import { ensureTimelineTranscript } from "@/features/transcription/transcript-cache";
+import { placeHyperframesRender } from "@/features/ai-generate/place-hyperframes-render";
 import type { GraphicsEngine, GraphicsJob } from "./job-types";
 
 /** Find the source talking-head video File to hand the graphics generator: the first
@@ -76,6 +77,39 @@ export async function fetchGraphicsStatus(id: string): Promise<GraphicsJob | nul
 	if (!res.ok) return null;
 	const { job } = (await res.json()) as { job: GraphicsJob };
 	return job;
+}
+
+/**
+ * Pull a finished render back from the worker and drop it on the timeline. Reuses the
+ * blessed HyperFrames placement: a BRAND-NEW video track at t=0 (never overwrites Dan's
+ * footage) with its audio split onto its own fresh audio track. Returns where it landed.
+ */
+export async function importGraphicsRender({
+	editor,
+	id,
+	engine,
+	kind = "full",
+}: {
+	editor: EditorCore;
+	id: string;
+	engine: GraphicsEngine;
+	kind?: "full" | "proof";
+}) {
+	const res = await fetch(`/api/graphics/file?id=${encodeURIComponent(id)}&kind=${kind}`);
+	if (!res.ok) {
+		const msg = await res.json().catch(() => ({}));
+		throw new Error(msg?.error || `Could not fetch the render (${res.status})`);
+	}
+	const blob = await res.blob();
+	const label = engine === "remotion" ? "Remotion" : "HyperFrames";
+	const file = new File([blob], `${id}-${kind}.mp4`, { type: "video/mp4" });
+	return placeHyperframesRender({
+		editor,
+		file,
+		scope: { kind: "timeline", label: `${label} graphics`, startSec: 0 },
+		name: `${label} graphics${kind === "proof" ? " (proof)" : ""}`,
+		templateId: `graphics:${engine}`,
+	});
 }
 
 export async function approveFullRender(id: string): Promise<void> {

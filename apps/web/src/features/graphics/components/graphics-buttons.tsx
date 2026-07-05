@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useEditor } from "@/editor/use-editor";
 import { cn } from "@/utils/ui";
-import { startGraphicsJob } from "../run-graphics";
+import { startGraphicsJob, importGraphicsRender } from "../run-graphics";
 import { useGraphicsJobStore } from "../graphics-job-store";
 import { HEARTBEAT_STALE_MS, type GraphicsEngine } from "../job-types";
 
@@ -40,14 +40,27 @@ export function GraphicsButtons() {
 		return () => clearInterval(t);
 	}, [job]);
 
-	// Skeleton import hand-off: when the full render lands, tell the user (real timeline
-	// placement is G-P2).
+	// When the full render lands, pull it back and drop it on a new video + audio track.
+	// clearPendingImport() first so a re-render mid-import cannot double-place it.
 	useEffect(() => {
-		if (pendingImport) {
-			toast.success("Graphics render complete", { description: pendingImport });
-			clearPendingImport();
-		}
-	}, [pendingImport, clearPendingImport]);
+		if (!pendingImport || !job) return;
+		const engine = job.engine;
+		clearPendingImport();
+		void (async () => {
+			const t = toast.loading("Adding the graphics render to your timeline...");
+			try {
+				const placed = await importGraphicsRender({ editor, id: job.id, engine });
+				toast.success(
+					placed.splitAudio
+						? "Added as a new video track + its own audio track."
+						: "Added as a new video track.",
+					{ id: t },
+				);
+			} catch (e) {
+				toast.error(e instanceof Error ? e.message : String(e), { id: t });
+			}
+		})();
+	}, [pendingImport, job, editor, clearPendingImport]);
 
 	const busy = starting || (job !== null && !["done", "error", "cancelled"].includes(job.phase));
 
@@ -104,11 +117,23 @@ export function GraphicsButtons() {
 					</div>
 
 					{job.phase === "proof-ready" && (
-						<div className="flex items-center gap-2 pt-1">
-							<span className="text-muted-foreground">Proof rendered. Approve the full render?</span>
-							<Button size="sm" className="h-6 px-2" onClick={() => void approve()}>
-								Render full
-							</Button>
+						<div className="flex flex-col gap-1 pt-1">
+							<span className="text-muted-foreground">Proof rendered. Review it, then approve the full ~2hr render.</span>
+							<div className="flex items-center gap-2">
+								<Button
+									size="sm"
+									variant="outline"
+									className="h-6 px-2"
+									onClick={() =>
+										window.open(`/api/graphics/file?id=${encodeURIComponent(job.id)}&kind=proof`, "_blank")
+									}
+								>
+									View proof
+								</Button>
+								<Button size="sm" className="h-6 px-2" onClick={() => void approve()}>
+									Render full
+								</Button>
+							</div>
 						</div>
 					)}
 
