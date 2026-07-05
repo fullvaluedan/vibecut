@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildRedundancyPrompt,
+	mergeRedundancyGroups,
 	renderRedundancyCatalog,
 	sanitizeRedundancyPlan,
+	type RedundancyGroup,
 	type RedundancyLine,
 } from "../llm-redundancy";
 
@@ -147,5 +149,39 @@ describe("sanitizeRedundancyPlan", () => {
 	test("empty / no-groups input returns an empty plan", () => {
 		expect(sanitizeRedundancyPlan({ groups: [] }, lines).groups).toEqual([]);
 		expect(sanitizeRedundancyPlan({}, lines).groups).toEqual([]);
+	});
+});
+
+describe("mergeRedundancyGroups (R6 windowed merge)", () => {
+	const grp = (ids: string[], keeper: string, confidence = 0.9): RedundancyGroup => ({
+		members: ids.map((lineId) => ({ lineId, startSec: 0, endSec: 1, text: lineId })),
+		keeperLineId: keeper,
+		confidence,
+		reason: "r",
+	});
+
+	test("a group surfaced in two overlapping windows collapses to one", () => {
+		const merged = mergeRedundancyGroups([
+			grp(["L1", "L2"], "L2"),
+			grp(["L2", "L1"], "L2"), // same member set, different order, from the next window
+		]);
+		expect(merged).toHaveLength(1);
+	});
+
+	test("first group to claim a line wins; a later group sharing it is dropped", () => {
+		const merged = mergeRedundancyGroups([
+			grp(["L1", "L2"], "L2"),
+			grp(["L2", "L3"], "L3"), // shares L2 with the kept group -> dropped
+			grp(["L4", "L5"], "L5"), // disjoint -> kept
+		]);
+		expect(merged.map((g) => g.members.map((m) => m.lineId).sort())).toEqual([
+			["L1", "L2"],
+			["L4", "L5"],
+		]);
+	});
+
+	test("disjoint groups all survive", () => {
+		const merged = mergeRedundancyGroups([grp(["L0", "L1"], "L1"), grp(["L2", "L3"], "L3")]);
+		expect(merged).toHaveLength(2);
 	});
 });

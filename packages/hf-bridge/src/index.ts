@@ -50,6 +50,7 @@ export {
 	buildRedundancyPrompt,
 	renderRedundancyCatalog,
 	sanitizeRedundancyPlan,
+	mergeRedundancyGroups,
 	type RedundancyLine,
 	type RedundancyMember,
 	type RedundancyGroup,
@@ -63,6 +64,22 @@ export {
 	type ContextFlag,
 	type ContextPlan,
 } from "./llm-context";
+export {
+	resolveReferencedOps,
+	sanitizeReferencedPlan,
+	type ReferenceLine,
+	type ReferenceWord,
+	type ReferenceCatalog,
+	type RawReferencedOp,
+	type ResolvedOp,
+	type SanitizeResult,
+} from "./llm-reference-sanitizer";
+export {
+	chunkTranscriptLines,
+	transcriptExceedsBudget,
+	dedupeByKey,
+	type ChunkLine,
+} from "./transcript-chunk";
 export {
 	renderTemplateJob,
 	renderCompDir,
