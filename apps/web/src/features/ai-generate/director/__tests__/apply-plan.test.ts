@@ -199,7 +199,8 @@ describe("applyDirectorPlan (composition glue)", () => {
 			expect(batch.commands[0]).toBeInstanceOf(FakeRemoveRangesCommand);
 			expect(batch.commands[1]).toBeInstanceOf(FakeConsolidateAdjacentClipsCommand);
 		}
-		expect(result).toEqual({ cuts: 1, removedSec: 1, reorders: 0 });
+		expect(result).toMatchObject({ cuts: 1, removedSec: 1, reorders: 0 });
+		expect(result.appliedCommand).not.toBeNull(); // batch handle captured (U8 fix)
 	});
 
 	test("reorder + cut executes ONE BatchCommand wrapping [Move, Remove] in that order (KTD-1)", () => {
@@ -238,7 +239,8 @@ describe("applyDirectorPlan (composition glue)", () => {
 		expect(executed).toHaveLength(1);
 		expect(executed[0]).toBeInstanceOf(FakeMoveElementCommand);
 		expect(executed[0]).not.toBeInstanceOf(FakeBatchCommand);
-		expect(result).toEqual({ cuts: 0, removedSec: 0, reorders: 1 });
+		expect(result).toMatchObject({ cuts: 0, removedSec: 0, reorders: 1 });
+		expect(result.appliedCommand).not.toBeNull();
 	});
 
 	test("empty / all-keep plan executes nothing", () => {
@@ -248,7 +250,7 @@ describe("applyDirectorPlan (composition glue)", () => {
 			ops: [op({ op: "keep", startSec: 1, endSec: 2 })],
 		});
 		expect(executed).toHaveLength(0);
-		expect(result).toEqual({ cuts: 0, removedSec: 0, reorders: 0 });
+		expect(result).toEqual({ cuts: 0, removedSec: 0, reorders: 0, appliedCommand: null });
 	});
 
 	// The applied removal ranges live inside the [Remove, Consolidate] batch.

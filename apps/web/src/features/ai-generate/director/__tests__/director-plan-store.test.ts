@@ -5,6 +5,7 @@ import {
 	selectAccepted,
 	selectAcceptedKeeps,
 	selectApplyGuardSpans,
+	selectFilteredOps,
 	toggleDecision,
 	toggleWithPremiseGuard,
 	useDirectorPlanStore,
@@ -313,6 +314,151 @@ describe("store toggle tracks auto-downgraded ids (review RX1)", () => {
 		useDirectorPlanStore.getState().toggle("sp-1"); // user re-checks sp-1
 		s = useDirectorPlanStore.getState();
 		expect(s.autoDowngradedIds).toEqual([]); // no longer system-driven
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("selectFilteredOps (U8 row filter)", () => {
+	const rows: DirectorOp[] = [
+		{ id: "rec", op: "cut", startSec: 0, endSec: 1, reason: "r", confidence: 0.8 },
+		{
+			id: "opt",
+			op: "cut",
+			startSec: 1,
+			endSec: 2,
+			reason: "r",
+			confidence: 0.8,
+			defaultAccept: false,
+		},
+	];
+	const decisions = { rec: false, opt: false }; // rec turned off, opt untouched
+
+	test("all returns every row", () => {
+		expect(selectFilteredOps({ ops: rows, decisions: {}, filter: "all" }).map((o) => o.id)).toEqual([
+			"rec",
+			"opt",
+		]);
+	});
+	test("recommended = default-accepted rows only", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions: {}, filter: "recommended" }).map((o) => o.id),
+		).toEqual(["rec"]);
+	});
+	test("optin = defaultAccept:false rows only", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions: {}, filter: "optin" }).map((o) => o.id),
+		).toEqual(["opt"]);
+	});
+	test("rejected = rows not currently accepted", () => {
+		expect(
+			selectFilteredOps({ ops: rows, decisions, filter: "rejected" }).map((o) => o.id),
+		).toEqual(["rec", "opt"]);
+	});
+});
+
+describe("applied phase (U8): persist, dismiss clears, premise guard holds", () => {
+	// A stand-in Director batch handle; the store only stores + returns it.
+	const BATCH = { id: "batch" } as never;
+	const applyPlan: DirectorPlan = {
+		operations: [
+			{ id: "prem", op: "cut", startSec: 100, endSec: 100.4, reason: "r", confidence: 0.8 },
+			{ id: "sp-1", op: "cut", startSec: 28, endSec: 33, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("markApplied keeps the plan, captures the batch, and flips to the applied phase", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		expect(useDirectorPlanStore.getState().phase).toBe("review");
+		useDirectorPlanStore.getState().markApplied({ batch: BATCH });
+		const s = useDirectorPlanStore.getState();
+		expect(s.phase).toBe("applied");
+		expect(s.appliedHasBatch).toBe(true);
+		expect(s.appliedBatch).toBe(BATCH);
+		expect(s.abShowing).toBe("with");
+		expect(s.plan).not.toBeNull(); // recipe survives apply
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("markApplied with a null batch records no controllable batch", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().markApplied({ batch: null });
+		const s = useDirectorPlanStore.getState();
+		expect(s.appliedHasBatch).toBe(false);
+		expect(s.appliedBatch).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("only close clears the applied plan (A/B + toggle + lock do not)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().markApplied({ batch: BATCH });
+		useDirectorPlanStore.getState().setAbShowing("without");
+		useDirectorPlanStore.getState().toggle("sp-1");
+		useDirectorPlanStore.getState().lockApplied();
+		expect(useDirectorPlanStore.getState().plan).not.toBeNull(); // still there
+		useDirectorPlanStore.getState().close();
+		const s = useDirectorPlanStore.getState();
+		expect(s.plan).toBeNull();
+		expect(s.phase).toBe("review"); // reset for the next run
+		expect(s.appliedBatch).toBeNull();
+	});
+
+	test("lockApplied moves a live applied phase to applied-locked (and is a no-op otherwise)", () => {
+		useDirectorPlanStore.getState().close();
+		// No-op while still reviewing.
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().lockApplied();
+		expect(useDirectorPlanStore.getState().phase).toBe("review");
+		// Locks once applied (an intervening edit / manual Ctrl+Z is what triggers this).
+		useDirectorPlanStore.getState().markApplied({ batch: BATCH });
+		useDirectorPlanStore.getState().lockApplied();
+		expect(useDirectorPlanStore.getState().phase).toBe("applied-locked");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("the premise guard still downgrades sp- rows during post-apply revision", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: applyPlan });
+		useDirectorPlanStore.getState().markApplied({ batch: BATCH });
+		// Reject the premise AFTER apply: the still-accepted sp- row must downgrade.
+		useDirectorPlanStore.getState().toggle("prem");
+		const s = useDirectorPlanStore.getState();
+		expect(s.phase).toBe("applied"); // toggle never leaves the applied phase
+		expect(s.decisions["sp-1"]).toBe(false);
+		expect(s.autoDowngradedIds).toEqual(["sp-1"]);
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("setAll scoping (U8 fix): a bulk toggle respects the active row filter", () => {
+	const plan: DirectorPlan = {
+		operations: [
+			{ id: "a", op: "cut", startSec: 0, endSec: 1, reason: "r", confidence: 0.8 },
+			{ id: "b", op: "cut", startSec: 1, endSec: 2, reason: "r", confidence: 0.8 },
+			{ id: "c", op: "cut", startSec: 2, endSec: 3, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("with ids, only the passed (visible/filtered) rows flip; hidden rows keep state", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		// Deselect ONLY the filtered subset [a, b]; c is hidden and must stay accepted.
+		useDirectorPlanStore.getState().setAll(false, ["a", "b"]);
+		const d = useDirectorPlanStore.getState().decisions;
+		expect(d.a).toBe(false);
+		expect(d.b).toBe(false);
+		expect(d.c).toBe(true); // untouched hidden row
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("without ids, every row flips (unchanged bulk behavior)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		useDirectorPlanStore.getState().setAll(false);
+		const d = useDirectorPlanStore.getState().decisions;
+		expect([d.a, d.b, d.c]).toEqual([false, false, false]);
 		useDirectorPlanStore.getState().close();
 	});
 });

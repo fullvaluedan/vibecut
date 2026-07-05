@@ -36,6 +36,13 @@ export interface ApplyDirectorPlanResult {
 	removedSec: number;
 	/** Reorder ops applied as element moves. */
 	reorders: number;
+	/**
+	 * The executed Director command (the `BatchCommand`, or a single command), or
+	 * null when nothing was applied. The revisable-apply flow (U8) captures this
+	 * handle so it can verify the batch is still the controllable top of the undo
+	 * stack before it undoes/redoes it (U8 fix against manual Ctrl+Z / external edits).
+	 */
+	appliedCommand: Command | null;
 }
 
 /** One element to relocate, in plain ticks (wasm-free so it's unit-testable). */
@@ -298,7 +305,7 @@ export function applyDirectorPlan({
 	}
 
 	if (commands.length === 0) {
-		return { cuts: 0, removedSec: 0, reorders: 0 };
+		return { cuts: 0, removedSec: 0, reorders: 0, appliedCommand: null };
 	}
 	const command =
 		commands.length === 1 ? commands[0] : new BatchCommand(commands);
@@ -312,6 +319,7 @@ export function applyDirectorPlan({
 		removedSec:
 			ranges.reduce((acc, r) => acc + (r.end - r.start), 0) / TICKS_PER_SECOND,
 		reorders: reorderMoves.length,
+		appliedCommand: command,
 	};
 }
 
