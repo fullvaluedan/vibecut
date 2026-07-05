@@ -8,13 +8,20 @@
  * deselecting all clips. Apply is still one BatchCommand (Ctrl+Z restores everything).
  */
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
+import type { EditorCore } from "@/core";
 import { applyDirectorPlan } from "../apply-plan";
-import { reviseAppliedPlan, toggleAbPreview } from "../applied-plan";
+import {
+	isBatchControllable,
+	isReactorSuppressed,
+	reviseAppliedPlan,
+	toggleAbPreview,
+	withReactorSuppressed,
+} from "../applied-plan";
 import {
 	selectApplyGuardSpans,
 	selectFilteredOps,
@@ -31,6 +38,29 @@ const ROW_FILTERS: { id: ReviewRowFilter; label: string }[] = [
 	{ id: "rejected", label: "Rejected" },
 ];
 
+// Register (once per editor) a command reactor that LOCKS the applied phase the
+// moment an external edit or redo moves the Director batch off the controllable
+// stack top. Suppressed during our own revise/A-B so those never self-lock. A
+// manual Ctrl+Z (undo does not fire reactors) is caught instead by the guard inside
+// reviseAppliedPlan/toggleAbPreview on the next interaction, which refuses to touch
+// the moved batch and locks then. Either way the user never loses work.
+const reactorRegistered = new WeakSet<object>();
+function ensureAppliedReactor(editor: EditorCore): void {
+	if (reactorRegistered.has(editor)) return;
+	reactorRegistered.add(editor);
+	editor.command.registerReactor(() => {
+		if (isReactorSuppressed()) return;
+		const s = useDirectorPlanStore.getState();
+		if (s.phase !== "applied") return;
+		const controllable = isBatchControllable(editor, {
+			appliedBatch: s.appliedBatch,
+			appliedHasBatch: s.appliedHasBatch,
+			abShowing: s.abShowing,
+		});
+		if (!controllable) s.lockApplied();
+	});
+}
+
 export function DirectorCutPanel() {
 	const editor = useEditor();
 	const plan = useDirectorPlanStore((s) => s.plan);
@@ -46,14 +76,41 @@ export function DirectorCutPanel() {
 	const appliedHasBatch = useDirectorPlanStore((s) => s.appliedHasBatch);
 	const markApplied = useDirectorPlanStore((s) => s.markApplied);
 	const setAbShowing = useDirectorPlanStore((s) => s.setAbShowing);
+	const lockApplied = useDirectorPlanStore((s) => s.lockApplied);
 	const [rowFilter, setRowFilter] = useState<ReviewRowFilter>("all");
+
+	// Register the applied-phase safety reactor once for this editor.
+	useEffect(() => {
+		ensureAppliedReactor(editor);
+	}, [editor]);
 
 	if (!plan) return null;
 
 	const ops = plan.operations;
 	const acceptedCount = ops.filter((op) => decisions[op.id]).length;
-	const applied = phase === "applied";
+	// "applied" covers both the live and the locked applied phases; "locked" disables
+	// revise + A/B (the batch is no longer the controllable top of the undo stack).
+	const applied = phase === "applied" || phase === "applied-locked";
+	const locked = phase === "applied-locked";
 	const visibleOps = selectFilteredOps({ ops, decisions, filter: rowFilter });
+
+	/** The applied-phase stack slice the guard reads (fresh from the store). */
+	const revisableState = () => {
+		const s = useDirectorPlanStore.getState();
+		return {
+			appliedBatch: s.appliedBatch,
+			appliedHasBatch: s.appliedHasBatch,
+			abShowing: s.abShowing,
+		};
+	};
+
+	const notifyLocked = () => {
+		lockApplied();
+		toast.info("Director: this cut is now part of your timeline", {
+			description:
+				"You edited or undid since applying, so it can't be revised here anymore. Reopen AI CUT to recut.",
+		});
+	};
 
 	// Swap-to-alternate (U5b): render ONE keeper dropdown per redundancy group, on the
 	// group's first visible row, so a 3-take group with 2 cut rows shows a single picker.
@@ -110,7 +167,7 @@ export function DirectorCutPanel() {
 				accepted: Boolean(useDirectorPlanStore.getState().decisions[op.id]),
 			})),
 		);
-		markApplied(result.cuts > 0 || result.reorders > 0);
+		markApplied({ batch: result.appliedCommand });
 		if (result.cuts === 0 && result.reorders === 0) {
 			toast.info("Director: nothing applied");
 		} else {
@@ -130,38 +187,62 @@ export function DirectorCutPanel() {
 	};
 
 	// Revise the applied cut in place (U8): undo the prior Director batch and re-apply
-	// the current decisions, so it stays ONE undoable batch. Only undo first when a
-	// batch is actually applied AND showing (an A/B "without" state already undid it).
+	// the current decisions, so it stays ONE undoable batch. GUARDED (U8 fix): if a
+	// manual Ctrl+Z / external edit moved the batch off the controllable top, the
+	// revise is refused and the phase locks instead of touching the wrong command.
 	const revise = () => {
 		const args = resolveApplyArgs();
 		if (!args) return;
-		const s = useDirectorPlanStore.getState();
-		const result = reviseAppliedPlan({
-			...args,
-			undoFirst: s.appliedHasBatch && s.abShowing === "with",
-		});
-		markApplied(result.cuts > 0 || result.reorders > 0);
+		const outcome = reviseAppliedPlan({ ...args, state: revisableState() });
+		if (outcome.status === "locked") {
+			notifyLocked();
+			return;
+		}
+		markApplied({ batch: outcome.result.appliedCommand });
 	};
 
 	// A row toggle revises live once applied; before apply it just records the choice.
+	// In the locked phase revise is disabled (the checkbox is disabled too).
 	const handleToggle = (id: string) => {
 		toggle(id);
 		if (useDirectorPlanStore.getState().phase === "applied") revise();
 	};
 
-	// A/B: undo/redo the batch to preview the timeline without vs with the cuts.
-	const handleAb = () => {
-		setAbShowing(
-			toggleAbPreview({ editor, showing: useDirectorPlanStore.getState().abShowing }),
+	// Bulk select/deselect the currently FILTERED visible rows only (U8 fix: never
+	// flips hidden rows), then revise live if applied.
+	const handleSetAll = (accepted: boolean) => {
+		setAll(
+			accepted,
+			visibleOps.map((op) => op.id),
 		);
+		if (useDirectorPlanStore.getState().phase === "applied") revise();
 	};
 
-	// Dismiss is the ONLY thing that clears the plan (U8). If mid A/B "without", redo
-	// first so the applied cuts (not the previewed original) are what stays.
+	// A/B: undo/redo the batch to preview the timeline without vs with the cuts.
+	// GUARDED (U8 fix): a moved batch locks instead of undoing/redoing the wrong one.
+	const handleAb = () => {
+		const outcome = toggleAbPreview({ editor, state: revisableState() });
+		if (outcome.status === "locked") {
+			notifyLocked();
+			return;
+		}
+		setAbShowing(outcome.showing);
+	};
+
+	// Dismiss is the ONLY thing that clears the plan (U8). If mid A/B "without" AND the
+	// batch is still controllable, redo first so the applied cuts (not the previewed
+	// original) are what stays; in the locked phase we must not touch the moved stack.
 	const handleDismiss = () => {
 		const s = useDirectorPlanStore.getState();
-		if (s.phase === "applied") {
-			if (s.appliedHasBatch && s.abShowing === "without") editor.command.redo();
+		if (s.phase === "applied" || s.phase === "applied-locked") {
+			if (
+				s.phase === "applied" &&
+				s.appliedHasBatch &&
+				s.abShowing === "without" &&
+				isBatchControllable(editor, revisableState())
+			) {
+				withReactorSuppressed(() => editor.command.redo());
+			}
 			close();
 			toast.info("Director: review closed", {
 				description: "Applied cuts stay on the timeline (Ctrl+Z to undo).",
@@ -179,16 +260,19 @@ export function DirectorCutPanel() {
 			<div className="border-b p-3">
 				<div className="flex items-center justify-between">
 					<h2 className="text-sm font-semibold">
-						Director&apos;s cut &middot; {applied ? "applied" : "review"}
+						Director&apos;s cut &middot;{" "}
+						{locked ? "applied (locked)" : applied ? "applied" : "review"}
 					</h2>
 					<Button variant="ghost" size="sm" onClick={handleDismiss}>
 						Done
 					</Button>
 				</div>
 				<p className="text-muted-foreground text-xs">
-					{applied
-						? "Applied. Toggle any row to revise the cut in place, or A/B the original. Ctrl+Z restores everything."
-						: "Review each proposed change and apply the ones you want. Ctrl+Z restores everything."}
+					{locked
+						? "This cut is now part of your timeline (you edited or undid since applying). Reopen AI CUT to recut. Ctrl+Z still works."
+						: applied
+							? "Applied. Toggle any row to revise the cut in place, or A/B the original. Ctrl+Z restores everything."
+							: "Review each proposed change and apply the ones you want. Ctrl+Z restores everything."}
 				</p>
 			</div>
 
@@ -199,13 +283,23 @@ export function DirectorCutPanel() {
 			) : (
 				<>
 					<div className="flex flex-wrap items-center gap-2 px-2 pt-2">
-						<Button variant="ghost" size="sm" onClick={() => setAll(true)}>
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={locked}
+							onClick={() => handleSetAll(true)}
+						>
 							Select all
 						</Button>
-						<Button variant="ghost" size="sm" onClick={() => setAll(false)}>
+						<Button
+							variant="ghost"
+							size="sm"
+							disabled={locked}
+							onClick={() => handleSetAll(false)}
+						>
 							Deselect all
 						</Button>
-						{applied && appliedHasBatch ? (
+						{applied && appliedHasBatch && !locked ? (
 							<Button
 								variant="outline"
 								size="sm"
@@ -251,6 +345,7 @@ export function DirectorCutPanel() {
 										<Checkbox
 											id={`director-cut-op-${op.id}`}
 											checked={accepted}
+											disabled={locked}
 											onCheckedChange={() => handleToggle(op.id)}
 											className="mt-1"
 										/>
@@ -332,8 +427,9 @@ export function DirectorCutPanel() {
 			{applied ? (
 				<div className="flex items-center justify-between gap-2 border-t p-3">
 					<span className="text-muted-foreground text-xs">
-						Applied {acceptedCount} of {ops.length}
-						{abShowing === "without" ? " · previewing original" : ""}
+						{locked
+								? "Cut locked into the timeline"
+								: `Applied ${acceptedCount} of ${ops.length}${abShowing === "without" ? " · previewing original" : ""}`}
 					</span>
 					<Button size="sm" onClick={handleDismiss}>
 						Done

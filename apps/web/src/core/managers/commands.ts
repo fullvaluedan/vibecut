@@ -106,6 +106,25 @@ export class CommandManager {
 		return this.redoStack.length > 0;
 	}
 
+	/** The command a call to `undo()` would act on (top of the undo stack), or null.
+	 * Read-only peek: the revisable-apply flow (U8 fix) checks its captured Director
+	 * batch is still the stack top before undoing, so a manual Ctrl+Z or an external
+	 * edit that moved it can never make it undo the wrong command. */
+	peekUndoCommand(): Command | null {
+		return this.history.length > 0
+			? this.history[this.history.length - 1].command
+			: null;
+	}
+
+	/** The command a call to `redo()` would act on (top of the redo stack), or null.
+	 * Same read-only peek as `peekUndoCommand`, for the A/B "without" state where the
+	 * captured batch has been temporarily undone onto the redo stack. */
+	peekRedoCommand(): Command | null {
+		return this.redoStack.length > 0
+			? this.redoStack[this.redoStack.length - 1].command
+			: null;
+	}
+
 	clear(): void {
 		this.history = [];
 		this.redoStack = [];

@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import type { Command } from "@/commands/base-command";
 import type { DirectorOp, DirectorPlan } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
 import type { NearTieNote } from "./redundancy";
@@ -196,8 +197,12 @@ interface DirectorPlanState {
 	 * Cut-review lifecycle (U8). "review" = proposing, nothing applied yet. "applied"
 	 * = the plan is on the timeline but the panel STAYS OPEN and editable: toggling a
 	 * row revises the applied cut in place, and only an explicit dismiss clears it.
+	 * "applied-locked" (U8 fix) = the applied batch is no longer the controllable top
+	 * of the undo stack (the user made an intervening edit or a manual Ctrl+Z), so
+	 * revise + A/B are disabled and only Dismiss remains: the AI cut is now just part
+	 * of the user's timeline, which is the correct, expected behavior.
 	 */
-	phase: "review" | "applied";
+	phase: "review" | "applied" | "applied-locked";
 	/**
 	 * A/B preview state (U8, applied phase only). "with" = the applied cuts are on
 	 * the timeline; "without" = the Director batch is temporarily undone to preview
@@ -210,6 +215,13 @@ interface DirectorPlanState {
 	 * batch is actually applied AND showing, so it never pops the pre-Director step.
 	 */
 	appliedHasBatch: boolean;
+	/**
+	 * The applied Director command handle (U8 fix). The revisable flow verifies this
+	 * is still the stack top a revise / A/B would act on BEFORE it undoes/redoes, so
+	 * an intervening manual Ctrl+Z or timeline edit can never make it touch the wrong
+	 * command. Null before apply and when the decisions cut nothing.
+	 */
+	appliedBatch: Command | null;
 	plan: DirectorPlan | null;
 	decisions: OpDecisions;
 	/** Ids the premise guard auto-downgraded (not user rejects), so apply never carves
@@ -267,20 +279,33 @@ interface DirectorPlanState {
 	}) => void;
 	/** Flip one op/keep-row's accept/reject. */
 	toggle: (id: string) => void;
-	/** Set every row's decision at once (bulk select-all / deselect-all). */
-	setAll: (accepted: boolean) => void;
+	/**
+	 * Set rows' decisions at once (bulk select-all / deselect-all). Without `ids`
+	 * this flips every row; with `ids` it flips ONLY those rows (U8 fix: the panel
+	 * passes the currently-FILTERED visible ids so a bulk toggle never flips hidden
+	 * rows). Cleared ids leave the auto-downgraded set (only the flipped rows become
+	 * explicit).
+	 */
+	setAll: (accepted: boolean, ids?: readonly string[]) => void;
 	/** The currently-accepted ops (cut mode). */
 	acceptedOps: () => DirectorOp[];
 	/** The currently-accepted keep rows (highlight mode). */
 	acceptedKeeps: () => HighlightKeepRow[];
 	/**
 	 * Mark the plan APPLIED (U8): the panel stays open in the applied phase with the
-	 * plan + decisions intact. `hasBatch` records whether the apply produced an
-	 * undoable Director batch, so a later revise knows whether to undo first.
+	 * plan + decisions intact. `batch` is the executed Director command handle (null
+	 * when the decisions cut nothing); `appliedHasBatch` is derived from it. Resets
+	 * the phase to a live "applied" and A/B to "with".
 	 */
-	markApplied: (hasBatch: boolean) => void;
+	markApplied: (args: { batch: Command | null }) => void;
 	/** Set the A/B preview state (U8). Never clears the plan. */
 	setAbShowing: (showing: "with" | "without") => void;
+	/**
+	 * Lock the applied phase (U8 fix): the batch is no longer controllable (an
+	 * intervening edit / manual Ctrl+Z moved it), so disable revise + A/B. Only
+	 * Dismiss remains. No-op unless currently in the live "applied" phase.
+	 */
+	lockApplied: () => void;
 	/** Close and clear. The ONLY thing that discards an applied plan (U8). */
 	close: () => void;
 }
@@ -292,6 +317,7 @@ const CLEARED = {
 	phase: "review" as const,
 	abShowing: "with" as const,
 	appliedHasBatch: false,
+	appliedBatch: null,
 	plan: null,
 	decisions: {},
 	autoDowngradedIds: [],
@@ -390,17 +416,24 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			}
 			return { decisions, autoDowngradedIds: [...auto] };
 		}),
-	setAll: (accepted) =>
+	setAll: (accepted, ids) =>
 		set((state) => {
-			const ids =
-				state.mode === "highlight"
+			const targetIds =
+				ids ??
+				(state.mode === "highlight"
 					? state.keeps.map((k) => k.id)
-					: (state.plan?.operations ?? []).map((o) => o.id);
+					: (state.plan?.operations ?? []).map((o) => o.id));
 			const decisions: OpDecisions = { ...state.decisions };
-			for (const id of ids) decisions[id] = accepted;
-			// A bulk select-all / deselect-all is an explicit user decision on every
-			// row, so nothing remains system-downgraded (RX1).
-			return { decisions, autoDowngradedIds: [] };
+			for (const id of targetIds) decisions[id] = accepted;
+			// A bulk toggle is an explicit user decision on each row it touches, so
+			// those rows are no longer system-downgraded (RX1). Rows OUTSIDE the target
+			// set keep whatever downgrade state they had (a filtered bulk toggle must
+			// not silently re-arm hidden auto-downgraded rows).
+			const target = new Set(targetIds);
+			return {
+				decisions,
+				autoDowngradedIds: state.autoDowngradedIds.filter((id) => !target.has(id)),
+			};
 		}),
 	acceptedOps: () => {
 		const { plan, decisions } = get();
@@ -412,8 +445,15 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	},
 	// Applied phase (U8): keep the whole recipe (plan, decisions, guards, words) so a
 	// row toggle can revise in place; only `close` clears it.
-	markApplied: (hasBatch) =>
-		set({ phase: "applied", appliedHasBatch: hasBatch, abShowing: "with" }),
+	markApplied: ({ batch }) =>
+		set({
+			phase: "applied",
+			appliedBatch: batch,
+			appliedHasBatch: batch !== null,
+			abShowing: "with",
+		}),
 	setAbShowing: (showing) => set({ abShowing: showing }),
+	lockApplied: () =>
+		set((state) => (state.phase === "applied" ? { phase: "applied-locked" } : {})),
 	close: () => set({ ...CLEARED }),
 }));
