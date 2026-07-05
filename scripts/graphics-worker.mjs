@@ -26,6 +26,11 @@ const FFMPEG = process.env.GRAPHICS_FFMPEG || "ffmpeg";
 // is deterministic (no guessing what claude named it). Overridable for tuning.
 const COMP_ID = process.env.GRAPHICS_REMOTION_COMP || "GraphicsMain";
 const ENTRY = process.env.GRAPHICS_REMOTION_ENTRY || "src/index.ts";
+// HyperFrames engine: the HF gen writes an HTML comp into this dir, then `npx hyperframes
+// render` turns it into a clip. Overridable so Dan can point it at his HF project.
+const HF_DIR = process.env.GRAPHICS_HF_DIR || REMOTION_DIR;
+const HF_COMP_DIR = process.env.GRAPHICS_HF_COMP_DIR || "comps/graphics";
+const isHF = engine === "hyperframes";
 
 const dir = path.join(TEMP_ROOT, jobId);
 const jobFile = path.join(dir, "job.json");
@@ -150,20 +155,24 @@ async function generate() {
 		}
 		return;
 	}
-	// LIVE: a headless claude session in the engine project, loaded with the dan-video
-	// skill, writes the composition. Uses the source.mp4 + transcript.json the API
-	// already staged in the project. Tuned live (first real run signs off a proof clip
-	// before any full render, per the skill).
-	const prompt =
-		"Load the dan-video skill and generate a Remotion graphics-overlay composition " +
-		"for public/source.mp4 using public/transcript.json, per the skill. Reuse the " +
-		`src/danL kit. Register the composition in src/Root.tsx with the exact id "${COMP_ID}" ` +
-		"so `remotion render` can find it deterministically. Do NOT start a full render; " +
-		"stop once the composition compiles.";
+	// LIVE: a headless claude session, loaded with the dan-video skill, writes the
+	// composition from the source.mp4 + transcript.json the API already staged. Both
+	// engines share the skill (content + light Google-Material style); they differ only
+	// in the render target. Tuned live (first real run signs off a proof before full).
+	const prompt = isHF
+		? "Load the dan-video skill and author a HyperFrames HTML graphics composition " +
+			"for public/source.mp4 using public/transcript.json, matching the skill's content " +
+			`and light Google-Material style. Write the comp into "${HF_COMP_DIR}" and run ` +
+			"`npx hyperframes lint` until it passes. Do NOT start a full render; stop once it lints clean."
+		: "Load the dan-video skill and generate a Remotion graphics-overlay composition " +
+			"for public/source.mp4 using public/transcript.json, per the skill. Reuse the " +
+			`src/danL kit. Register the composition in src/Root.tsx with the exact id "${COMP_ID}" ` +
+			"so `remotion render` can find it deterministically. Do NOT start a full render; " +
+			"stop once the composition compiles.";
 	await run(
 		"claude",
 		["-p", JSON.stringify(prompt), "--dangerously-skip-permissions"],
-		{ cwd: REMOTION_DIR },
+		{ cwd: isHF ? HF_DIR : REMOTION_DIR },
 		(line) => log(`gen: ${line}`),
 	);
 }
@@ -189,12 +198,14 @@ async function render(kind /* "proof" | "full" */) {
 		});
 		return outPath;
 	}
-	// LIVE: remotion render. The generation step registered the composition under COMP_ID;
-	// the proof caps frames to ~100s (30fps * 100 = 3000).
-	const args = ["remotion", "render", ENTRY, COMP_ID, outPath];
-	if (isProof) args.push("--frames=0-3000");
-	await run("npx", args, { cwd: REMOTION_DIR }, (line) => {
-		// Remotion prints "Rendered X/Y" progress; surface it.
+	// LIVE: render the generated composition. Both CLIs print "X/Y" frame progress which we
+	// surface identically; the proof caps to ~100s so review is fast.
+	// - HyperFrames: `npx hyperframes render <compDir> <out>` (proof via a frames cap).
+	// - Remotion:    `npx remotion render <entry> <compId> <out>` (proof via --frames).
+	const args = isHF
+		? ["hyperframes", "render", HF_COMP_DIR, outPath, ...(isProof ? ["--frames=0-3000"] : [])]
+		: ["remotion", "render", ENTRY, COMP_ID, outPath, ...(isProof ? ["--frames=0-3000"] : [])];
+	await run("npx", args, { cwd: isHF ? HF_DIR : REMOTION_DIR }, (line) => {
 		const m = line.match(/(\d+)\s*\/\s*(\d+)/);
 		if (m) job.progress = Math.min(1, Number(m[1]) / Math.max(1, Number(m[2])));
 		if (/error|failed/i.test(line)) log(`render: ${line}`, "warn");
