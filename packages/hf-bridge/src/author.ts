@@ -357,84 +357,6 @@ function sanitizePlan(
 	return { items: nonOverlapping.slice(0, 8) };
 }
 
-const CUTS_SCHEMA = {
-	type: "object",
-	properties: {
-		cuts: {
-			type: "array",
-			items: {
-				type: "object",
-				properties: {
-					startSec: { type: "number" },
-					endSec: { type: "number" },
-					reason: { type: "string" },
-				},
-				required: ["startSec", "endSec", "reason"],
-				additionalProperties: false,
-			},
-		},
-	},
-	required: ["cuts"],
-	additionalProperties: false,
-} as const;
-
-export interface RepeatCut {
-	startSec: number;
-	endSec: number;
-	reason: string;
-}
-
-export type CutsMode = "repeats" | "cleanup" | "youtube";
-
-function buildCutsPrompt({
-	segments,
-	mode,
-	preferences,
-}: {
-	segments: TranscriptSegment[];
-	mode: CutsMode;
-	preferences?: string[];
-}): string {
-	const transcript = segments
-		.map((s) => `[${s.start.toFixed(2)}–${s.end.toFixed(2)}] ${s.text.trim()}`)
-		.join("\n");
-	const goal =
-		mode === "repeats"
-			? `Find RETAKES: places where the speaker repeats or restarts the same sentence/thought (often after a stumble, filler, or self-correction). For each retake, the LAST attempt is the keeper — return cut ranges that remove the earlier attempt(s), including any stumble between them.
-
-Rules:
-- Only cut clear repeats/restarts of the same content. Do not cut intentional repetition for emphasis.`
-			: mode === "youtube"
-				? `You are editing this footage into a HIGH-RETENTION YOUTUBE VIDEO. First read the whole transcript and infer what the video is about and who it is for. Then return cut ranges that remove:
-1. RETAKES — repeated/restarted sentences; the LAST attempt is always the keeper.
-2. STUTTERS & FALSE STARTS — stumbles, abandoned fragments, contentless filler runs ("um, uh, so, like" chains).
-3. OFF-TOPIC TANGENTS — anything that does not serve the video's subject (asides, technical interruptions, "where was I" moments).
-4. DEAD WEIGHT — rambling intros before the speaker gets to the point, over-long wind-ups, redundant restatements of something already said, and weak outro rambling. YouTube viewers leave in the first 30 seconds: the strongest hook line should end up as close to the start as the cuts allow.
-
-Rules:
-- Pacing beats completeness: prefer the tighter edit when a passage adds little, but NEVER cut content the video's point depends on.
-- Keep the speaker's personality — don't sand off every aside, only the ones that stall the video.
-- Do not cut intentional repetition for emphasis.`
-				: `This is a FULL CLEANUP pass. The goal is a tight, high-quality video. Return cut ranges that remove:
-1. RETAKES — repeated/restarted sentences; the LAST attempt is always the keeper.
-2. STUTTERS & FALSE STARTS — stumbles, abandoned sentence fragments, long filler runs ("um, uh, so, like" chains that carry no content).
-3. OFF-TOPIC TANGENTS — passages clearly irrelevant to the video's main subject (asides to someone off-camera, technical interruptions, "where was I" moments). Infer the main subject from the transcript as a whole.
-
-Rules:
-- Be decisive but conservative with meaning: never cut content that develops the main subject; when in doubt about relevance, keep it.
-- Do not cut intentional repetition for emphasis.`;
-	return `You are an expert video editor cleaning up a talking-head recording. Below is the transcript with timestamps in seconds.
-
-${goal}
-- Cut boundaries must align with the transcript timestamps.
-- If there is nothing to cut, return an empty list.
-
-TRANSCRIPT:
-${transcript}
-${buildPreferencesBlock(preferences)}
-Respond with ONLY JSON: {"cuts": [{"startSec", "endSec", "reason"}, ...]}.`;
-}
-
 /**
  * Generic schema-constrained Claude call — same auth paths as the planners.
  * Used by the assistant prompt box and any future one-shot JSON asks.
@@ -1143,41 +1065,6 @@ export async function planDirectorVision({
 		signal,
 	});
 	return { plan: sanitizeDirectorPlan(raw, totalSec), usage, degraded };
-}
-
-export async function planRepeatCuts({
-	segments,
-	auth,
-	mode = "repeats",
-	preferences,
-}: {
-	segments: TranscriptSegment[];
-	auth: ClaudeAuth;
-	/** "repeats" = retakes; "cleanup" adds stutters + tangents; "youtube" adds pacing/hook editing. */
-	mode?: CutsMode;
-	/** Self-learning notes from the user's past edits. */
-	preferences?: string[];
-}): Promise<RepeatCut[]> {
-	if (!segments.length) return [];
-	const prompt = buildCutsPrompt({ segments, mode, preferences });
-	const { raw } = await planDispatch(prompt, auth, CUTS_SCHEMA);
-	const cuts = (raw as { cuts?: unknown[] })?.cuts;
-	if (!Array.isArray(cuts)) return [];
-	return cuts
-		.map((c) => {
-			const cut = c as Record<string, unknown>;
-			return {
-				startSec: Number(cut.startSec),
-				endSec: Number(cut.endSec),
-				reason: String(cut.reason ?? "").slice(0, 200),
-			};
-		})
-		.filter(
-			(c) =>
-				Number.isFinite(c.startSec) &&
-				Number.isFinite(c.endSec) &&
-				c.endSec > c.startSec,
-		);
 }
 
 export async function planEffects({

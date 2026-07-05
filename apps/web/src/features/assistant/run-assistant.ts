@@ -66,22 +66,18 @@ export async function runAssistant({
 				);
 				return;
 			}
-			const { runRemoveRepeats, runFullCleanup, runYouTubeCut } = await import(
-				"@/features/editing/remove-repeats"
+			// Repeats / cleanup / youtube: the legacy segment-seconds cut planner is
+			// retired (U4). Route to the word-level, review-gated Director; it opens the
+			// review panel and applies on the user's accept instead of cutting raw
+			// seconds directly.
+			const { runDirector } = await import(
+				"@/features/ai-generate/director/run-director"
 			);
-			const fn =
-				mode === "repeats"
-					? () => runRemoveRepeats({ editor, onProgress: onStage })
-					: mode === "cleanup"
-						? () => runFullCleanup({ editor, onProgress: onStage })
-						: () => runYouTubeCut({ editor, onProgress: onStage });
-			const r = await fn();
-			toast.success(
-				r.cuts === 0
-					? "Nothing to cut"
-					: `AI Cut: ${r.cuts} cut${r.cuts === 1 ? "" : "s"}, ${r.removedSec.toFixed(1)}s removed`,
-				{ description: "Ctrl+Z restores everything." },
-			);
+			await runDirector({ editor, onProgress: onStage });
+			toast.info("AI Director: review the proposed cuts", {
+				description:
+					"Check the cuts you want in the panel, then Apply. Ctrl+Z restores everything.",
+			});
 			return;
 		}
 

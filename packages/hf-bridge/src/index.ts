@@ -17,7 +17,6 @@ export {
 } from "./templates/index";
 export {
 	planEffects,
-	planRepeatCuts,
 	planJson,
 	planMultimodal,
 	planDirector,
@@ -25,8 +24,6 @@ export {
 	buildDirectorVisionPrompt,
 	buildDirectorVisionBlocks,
 	MAX_MULTIMODAL_IMAGES,
-	type CutsMode,
-	type RepeatCut,
 	type TokenUsage,
 	type MultimodalBlock,
 	type MultimodalImageMediaType,
