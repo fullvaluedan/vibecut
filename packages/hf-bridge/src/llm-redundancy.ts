@@ -14,6 +14,11 @@
 
 import { planJson, type TokenUsage } from "./author";
 import type { ClaudeAuth } from "./types";
+import {
+	chunkTranscriptLines,
+	dedupeByKey,
+	transcriptExceedsBudget,
+} from "./transcript-chunk";
 
 /** One transcript line as the model sees it (timeline coordinates). */
 export interface RedundancyLine {
@@ -184,8 +189,56 @@ export function sanitizeRedundancyPlan(
 }
 
 /**
+ * Chunking budget (R6): a transcript whose line text exceeds this is split into
+ * overlapping windows so a 30+ minute recording never overflows the prompt and
+ * silently loses its tail. Conservative (line signals + prompt scaffolding add
+ * overhead on top of the text). The overlap keeps a take that straddles a window
+ * boundary visible in one window.
+ */
+const REDUNDANCY_MAX_CHARS = 12_000;
+const REDUNDANCY_OVERLAP_LINES = 4;
+
+/**
+ * Merge redundancy groups gathered across chunk windows into one plan (R6). The
+ * overlap re-surfaces a straddling group in two windows, so: dedupe by member-set,
+ * then enforce the same one-group-per-line rule the single-window sanitizer applies
+ * (first group to claim a line wins; a later group sharing a claimed line is
+ * dropped). Pure → unit-tested.
+ */
+export function mergeRedundancyGroups(
+	groups: readonly RedundancyGroup[],
+): RedundancyGroup[] {
+	const unique = dedupeByKey(groups, (g) =>
+		g.members
+			.map((m) => m.lineId)
+			.sort()
+			.join(","),
+	);
+	const claimed = new Set<string>();
+	const out: RedundancyGroup[] = [];
+	for (const group of unique) {
+		if (group.members.some((m) => claimed.has(m.lineId))) continue;
+		out.push(group);
+		for (const m of group.members) claimed.add(m.lineId);
+	}
+	return out;
+}
+
+function addUsage(a: TokenUsage | null, b: TokenUsage | null): TokenUsage | null {
+	if (!a) return b;
+	if (!b) return a;
+	return {
+		inputTokens: a.inputTokens + b.inputTokens,
+		outputTokens: a.outputTokens + b.outputTokens,
+	};
+}
+
+/**
  * Build the redundancy prompt, dispatch it text-only, and return the sanitized plan
- * plus token usage. Mirrors `planAssembly` / `planDirector`.
+ * plus token usage. Mirrors `planAssembly` / `planDirector`. A transcript over the
+ * prompt budget is chunked into overlapping windows (R6): each window is planned +
+ * sanitized against the FULL line set (so every id resolves), then the groups are
+ * merged/deduped so a straddling take reported in two windows becomes one.
  */
 export async function planRedundancy({
 	lines,
@@ -196,7 +249,26 @@ export async function planRedundancy({
 	taste?: string;
 	auth: ClaudeAuth;
 }): Promise<{ plan: RedundancyPlan; usage: TokenUsage | null }> {
-	const prompt = buildRedundancyPrompt({ lines, taste });
-	const { raw, usage } = await planJson({ prompt, auth, schema: REDUNDANCY_SCHEMA });
-	return { plan: sanitizeRedundancyPlan(raw, lines), usage };
+	if (!transcriptExceedsBudget({ lines, maxChars: REDUNDANCY_MAX_CHARS })) {
+		const prompt = buildRedundancyPrompt({ lines, taste });
+		const { raw, usage } = await planJson({ prompt, auth, schema: REDUNDANCY_SCHEMA });
+		return { plan: sanitizeRedundancyPlan(raw, lines), usage };
+	}
+
+	const windows = chunkTranscriptLines({
+		lines,
+		maxChars: REDUNDANCY_MAX_CHARS,
+		overlapLines: REDUNDANCY_OVERLAP_LINES,
+	});
+	const allGroups: RedundancyGroup[] = [];
+	let usage: TokenUsage | null = null;
+	for (const window of windows) {
+		const prompt = buildRedundancyPrompt({ lines: window, taste });
+		const { raw, usage: u } = await planJson({ prompt, auth, schema: REDUNDANCY_SCHEMA });
+		// Sanitize against the FULL line set so every referenced id resolves even
+		// though the window only showed a slice.
+		allGroups.push(...sanitizeRedundancyPlan(raw, lines).groups);
+		usage = addUsage(usage, u);
+	}
+	return { plan: { groups: mergeRedundancyGroups(allGroups) }, usage };
 }
