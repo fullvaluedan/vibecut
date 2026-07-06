@@ -12,3 +12,7 @@
 next-env.d.ts
 
 *.tsbuildinfo
+# E2E harness artifacts
+e2e/fixtures/.generated/
+playwright-report/
+test-results/
