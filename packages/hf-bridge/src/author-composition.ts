@@ -18,6 +18,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { generatedRoot, resolveClaude } from "./renderer";
 import { customChatUrl } from "./author";
+import { killTree } from "./kill-tree";
 import type { ClaudeAuth } from "./types";
 
 const FORMAT_RULES = `You are authoring a HyperFrames video composition (HTML that renders to video). Output ONLY the raw contents of index.html — start with <!doctype html> and end with </html>. NO markdown code fences, NO explanation, NO preamble.
@@ -130,33 +131,6 @@ const AUTHOR_TIMEOUT_MS = 150_000;
 const CLI_MISSING = /not found|is not recognized|ENOENT|command not found/i;
 const CLI_MISSING_HELP =
 	"The Claude CLI isn't available on this machine. Install it (npm i -g @anthropic-ai/claude-code) or switch to API-key mode and add an Anthropic key in Settings → AI.";
-
-/**
- * Kill the WHOLE process tree of a `shell:true` spawn, not just the shell.
- * `child.kill()` only reaps the cmd.exe / sh wrapper, leaving the actual
- * `claude` (→ node) child running the model call. So:
- *  - win32: taskkill /T walks and force-kills the tree by pid.
- *  - posix: the child was spawned `detached` (its own process group, pgid ===
- *    pid), so a negative pid signals the whole group in one shot.
- * Both fall back to a plain kill if the tree kill can't be issued.
- */
-function killTree(child: ReturnType<typeof spawn>): void {
-	const pid = child.pid;
-	if (pid == null) return;
-	try {
-		if (process.platform === "win32") {
-			spawn("taskkill", ["/pid", String(pid), "/t", "/f"]);
-		} else {
-			process.kill(-pid, "SIGKILL");
-		}
-	} catch {
-		try {
-			child.kill("SIGKILL");
-		} catch {
-			// already gone
-		}
-	}
-}
 
 /** Wrap the panel brief in a skill-triggering request for one overlay composition. */
 function buildSkillBrief({

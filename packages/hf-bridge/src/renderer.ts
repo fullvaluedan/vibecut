@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getTemplate } from "./templates/index";
+import { killTree } from "./kill-tree";
 import type { RenderJob, RenderOutcome } from "./types";
 
 /**
@@ -85,7 +86,18 @@ export function resolveClaude(): { command: string; useShell: boolean } {
 		: { command: "claude", useShell: true };
 }
 
-export function runNode(args: string[], cwd: string): Promise<{ code: number; output: string }> {
+/** A wedged render child (headless Chromium can hang without exiting) used to
+ * block the render queue FOREVER — every later render silently queued behind
+ * it. Kill the whole tree after this long and fail loudly instead. */
+const RENDER_TIMEOUT_MS = Number(
+	process.env.HF_RENDER_TIMEOUT_MS || 15 * 60_000,
+);
+
+export function runNode(
+	args: string[],
+	cwd: string,
+	{ timeoutMs = RENDER_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<{ code: number; output: string }> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(nodeBinary(), args, {
 			cwd,
@@ -93,10 +105,33 @@ export function runNode(args: string[], cwd: string): Promise<{ code: number; ou
 			env: { ...process.env, NO_COLOR: "1" },
 		});
 		let output = "";
+		let timedOut = false;
+		const timer =
+			timeoutMs > 0
+				? setTimeout(() => {
+						timedOut = true;
+						killTree(child);
+					}, timeoutMs)
+				: null;
 		child.stdout.on("data", (d) => (output += d.toString()));
 		child.stderr.on("data", (d) => (output += d.toString()));
-		child.on("error", reject);
-		child.on("close", (code) => resolve({ code: code ?? 1, output }));
+		child.on("error", (e) => {
+			if (timer) clearTimeout(timer);
+			reject(e);
+		});
+		child.on("close", (code) => {
+			if (timer) clearTimeout(timer);
+			if (timedOut) {
+				// Resolve (not reject) with a failing code so every caller's
+				// existing `code !== 0` error path handles it uniformly.
+				resolve({
+					code: 124,
+					output: `${output}\n[hf-bridge] render killed after ${Math.round(timeoutMs / 60_000)}min timeout (HF_RENDER_TIMEOUT_MS to change)`,
+				});
+				return;
+			}
+			resolve({ code: code ?? 1, output });
+		});
 	});
 }
 
