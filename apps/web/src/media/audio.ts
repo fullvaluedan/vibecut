@@ -30,7 +30,7 @@ import {
 } from "@/media/waveform-summary";
 
 const MAX_AUDIO_CHANNELS = 2;
-const EXPORT_SAMPLE_RATE = 44100;
+export const EXPORT_SAMPLE_RATE = 44100;
 
 export interface CollectedAudioElement {
 	timelineElement: AudioCapableElement;
@@ -844,6 +844,146 @@ export async function createTimelineAudioBuffer({
 	return mastered;
 }
 
+/** Default mixing window for the chunked export path. */
+export const EXPORT_AUDIO_CHUNK_SECONDS = 60;
+
+/** Pure window math for the chunked mix (unit-tested): total frames split into
+ * chunkFrames-sized windows, last one partial. */
+export function planAudioChunks({
+	totalFrames,
+	chunkFrames,
+}: {
+	totalFrames: number;
+	chunkFrames: number;
+}): { startFrame: number; frames: number }[] {
+	if (totalFrames <= 0 || chunkFrames <= 0) return [];
+	const chunks: { startFrame: number; frames: number }[] = [];
+	for (let start = 0; start < totalFrames; start += chunkFrames) {
+		chunks.push({
+			startFrame: start,
+			frames: Math.min(chunkFrames, totalFrames - start),
+		});
+	}
+	return chunks;
+}
+
+/**
+ * Windowed version of {@link createTimelineAudioBuffer} for LONG exports: the
+ * single-buffer path allocates the whole timeline at 44.1kHz stereo, which
+ * overflows the browser's createBuffer limit at ~21 minutes (~459 MB) and
+ * hard-fails the export. This mixes the same elements into small sequential
+ * windows instead — peak memory is one window regardless of timeline length —
+ * and yields each mastered chunk for the encoder to consume (mediabunny's
+ * AudioBufferSource timestamps sequential adds back to back).
+ *
+ * Sources are decoded ONCE (that's the slow part); per-window mixing reuses
+ * the decoded buffers with a window-shifted startTime. Mastering runs per
+ * chunk under the same peak gate as the single-buffer path; the limiter's
+ * state resets at window boundaries, a minor trade against the export
+ * failing outright.
+ */
+export async function* createTimelineAudioChunks({
+	tracks,
+	mediaAssets,
+	duration,
+	sampleRate = EXPORT_SAMPLE_RATE,
+	outputChannels = 2,
+	audioContext,
+	chunkSeconds = EXPORT_AUDIO_CHUNK_SECONDS,
+	onProgress,
+}: {
+	tracks: SceneTracks;
+	mediaAssets: MediaAsset[];
+	duration: number;
+	sampleRate?: number;
+	outputChannels?: number;
+	audioContext?: AudioContext;
+	chunkSeconds?: number;
+	onProgress?: (fraction: number) => void;
+}): AsyncGenerator<AudioBuffer> {
+	const context = audioContext ?? createAudioContext({ sampleRate });
+
+	const audioElements = await collectAudioElements({
+		tracks,
+		mediaAssets,
+		audioContext: context,
+		onDecodeProgress: (fraction) => onProgress?.(fraction * 0.7),
+	});
+	if (audioElements.length === 0) return;
+
+	// Pitch-maintained retimes render ONCE up front (not per window).
+	const prepared: {
+		element: CollectedAudioElement;
+		buffer: AudioBuffer;
+		trimStart: number;
+		retime?: RetimeConfig;
+	}[] = [];
+	for (const element of audioElements) {
+		if (element.muted) continue;
+		const renderedBuffer = shouldMaintainPitch({
+			rate: element.retime?.rate ?? 1,
+			maintainPitch: element.retime?.maintainPitch,
+		})
+			? await renderRetimedBuffer({
+					audioContext: context,
+					sourceBuffer: element.buffer,
+					trimStart: element.trimStart,
+					clipDuration: element.duration,
+					retime: element.retime,
+					maintainPitch: true,
+				})
+			: undefined;
+		prepared.push({
+			element,
+			buffer: renderedBuffer ?? element.buffer,
+			trimStart: renderedBuffer ? 0 : element.trimStart,
+			retime: renderedBuffer ? undefined : element.retime,
+		});
+	}
+
+	const totalFrames = timelineAudioFrameCount({
+		durationTicks: duration,
+		sampleRate,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	const chunks = planAudioChunks({
+		totalFrames,
+		chunkFrames: Math.max(1, Math.floor(chunkSeconds * sampleRate)),
+	});
+
+	for (let c = 0; c < chunks.length; c++) {
+		const { startFrame, frames } = chunks[c];
+		const windowStartSec = startFrame / sampleRate;
+		const windowEndSec = (startFrame + frames) / sampleRate;
+		const chunk = context.createBuffer(outputChannels, frames, sampleRate);
+
+		for (const p of prepared) {
+			const { startTime, duration: elementDuration } = p.element;
+			if (
+				startTime >= windowEndSec ||
+				startTime + elementDuration <= windowStartSec
+			) {
+				continue;
+			}
+			mixAudioChannels({
+				// Window-relative start; mixAudioChannels skips the pre-window
+				// span in O(1) and clamps to the window's length.
+				element: { ...p.element, startTime: startTime - windowStartSec },
+				buffer: p.buffer,
+				trimStart: p.trimStart,
+				retime: p.retime,
+				outputBuffer: chunk,
+				outputLength: frames,
+				sampleRate,
+			});
+		}
+
+		const mastered = await applyAudioMasteringToBuffer({ audioBuffer: chunk });
+		onProgress?.(0.7 + ((c + 1) / chunks.length) * 0.3);
+		yield mastered;
+	}
+}
+
 function collectPeakRange({
 	buffer,
 	count,
@@ -995,12 +1135,15 @@ function mixAudioChannels({
 	// Follow the output buffer's channel count: 2 for export (stereo), 1 for the
 	// mono analysis path. A source channel beyond the output folds to the last.
 	const outputChannels = outputBuffer.numberOfChannels;
+	// Chunked export mixes with a window-shifted (possibly negative) startTime;
+	// skip the pre-window span in O(1) instead of iterating no-op writes.
+	const firstSample = outputStartSample < 0 ? -outputStartSample : 0;
 	for (let channel = 0; channel < outputChannels; channel++) {
 		const outputData = outputBuffer.getChannelData(channel);
 		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
 		const sourceData = buffer.getChannelData(sourceChannel);
 
-		for (let i = 0; i < renderedLength; i++) {
+		for (let i = firstSample; i < renderedLength; i++) {
 			const outputIndex = outputStartSample + i;
 			if (outputIndex >= outputLength) break;
 
