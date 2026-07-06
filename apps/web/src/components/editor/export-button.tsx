@@ -42,6 +42,7 @@ import {
 	collectAiOverlayClips,
 } from "@/features/ai-generate/composite-export";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
+import { reportFatal } from "@/utils/report-error";
 import { toast } from "sonner";
 
 function isExportFormat(value: string): value is ExportFormat {
@@ -156,20 +157,40 @@ function ExportPopover({
 		const location = await pickSaveLocation({ filename, mimeType });
 		if (location.kind === "cancelled") return;
 
-		const result = await editor.project.export({
-			options: {
-				format,
-				quality,
-				fps: activeProject.settings.fps,
-				includeAudio: shouldIncludeAudio,
-			},
-		});
+		let result;
+		try {
+			result = await editor.project.export({
+				options: {
+					format,
+					quality,
+					fps: activeProject.settings.fps,
+					includeAudio: shouldIncludeAudio,
+				},
+			});
+		} catch (e) {
+			// An export that THROWS (OOM, encoder crash) used to vanish as an
+			// unhandled rejection — the user watched progress stop with no
+			// explanation. Surface it persistently.
+			editor.project.clearExportState();
+			reportFatal({ title: "Export failed", error: e, context: "export/encode" });
+			return;
+		}
 
 		if (result.cancelled) {
 			editor.project.clearExportState();
 			return;
 		}
-		if (!result.success || !result.buffer) return;
+		if (!result.success || !result.buffer) {
+			// A failed export was silently discarded here (the `error` field was
+			// never read) — minutes of encoding with zero feedback.
+			editor.project.clearExportState();
+			reportFatal({
+				title: "Export failed",
+				error: new Error(result.error ?? "The encoder produced no output."),
+				context: "export/encode",
+			});
+			return;
+		}
 
 		// Self-learning: compare what's being exported against the last
 		// AI Cut: did the user keep it, restore content, or trim more?

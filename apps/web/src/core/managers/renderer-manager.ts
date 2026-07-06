@@ -6,7 +6,12 @@ import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import {
+	EXPORT_SAMPLE_RATE,
+	createTimelineAudioBuffer,
+	createTimelineAudioChunks,
+} from "@/media/audio";
+import { TICKS_PER_SECOND } from "@/wasm";
 import { formatTimecode } from "opencut-wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
@@ -14,6 +19,32 @@ import { downloadBlob } from "@/utils/browser";
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
 	| { success: false; error: string };
+
+/** Above this the export mixes audio in windows instead of one giant buffer
+ * (the single stereo buffer overflows createBuffer at ~21min). 10min keeps
+ * short exports byte-identical to the old path. The window.__exportAudio*
+ * overrides exist so the E2E harness can drive the chunked path on a short
+ * fixture — they are dev/test dials, not user settings. */
+const EXPORT_AUDIO_CHUNK_THRESHOLD_SECONDS = 10 * 60;
+
+function exportAudioChunkThresholdSeconds(): number {
+	const override =
+		typeof window !== "undefined"
+			? (window as { __exportAudioChunkThresholdSec?: number })
+					.__exportAudioChunkThresholdSec
+			: undefined;
+	return typeof override === "number"
+		? override
+		: EXPORT_AUDIO_CHUNK_THRESHOLD_SECONDS;
+}
+
+function exportAudioChunkSeconds(): number | undefined {
+	const override =
+		typeof window !== "undefined"
+			? (window as { __exportAudioChunkSec?: number }).__exportAudioChunkSec
+			: undefined;
+	return typeof override === "number" ? override : undefined;
+}
 
 export class RendererManager {
 	private renderTree: RootNode | null = null;
@@ -174,18 +205,35 @@ export class RendererManager {
 			const canvasSize = activeProject.settings.canvasSize;
 
 			let audioBuffer: AudioBuffer | null = null;
+			let audioChunks: AsyncIterable<AudioBuffer> | undefined;
 			if (includeAudio) {
 				// The audio stage owns the first 5% of the bar. Feed its real
 				// decode/mix/master progress through so it moves instead of looking
 				// frozen at 5% for the whole (often slow) audio build.
 				onProgress?.({ progress: 0.01 });
-				audioBuffer = await createTimelineAudioBuffer({
-					tracks,
-					mediaAssets,
-					duration,
-					onProgress: (fraction) =>
-						onProgress?.({ progress: 0.01 + fraction * 0.04 }),
-				});
+				const durationSeconds = (duration as number) / TICKS_PER_SECOND;
+				if (durationSeconds > exportAudioChunkThresholdSeconds()) {
+					// P0.4: past ~21min the single stereo buffer overflows the
+					// browser's createBuffer limit and the export hard-fails.
+					// Long timelines mix in windows and stream to the encoder;
+					// peak memory is one window regardless of length.
+					audioChunks = createTimelineAudioChunks({
+						tracks,
+						mediaAssets,
+						duration,
+						chunkSeconds: exportAudioChunkSeconds(),
+						onProgress: (fraction) =>
+							onProgress?.({ progress: 0.01 + fraction * 0.04 }),
+					});
+				} else {
+					audioBuffer = await createTimelineAudioBuffer({
+						tracks,
+						mediaAssets,
+						duration,
+						onProgress: (fraction) =>
+							onProgress?.({ progress: 0.01 + fraction * 0.04 }),
+					});
+				}
 			}
 
 			const scene = buildScene({
@@ -204,6 +252,10 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				audioChunks,
+				audioFormat: audioChunks
+					? { sampleRate: EXPORT_SAMPLE_RATE, numberOfChannels: 2 }
+					: undefined,
 			});
 
 			exporter.on("progress", (progress) => {

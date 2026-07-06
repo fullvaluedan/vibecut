@@ -11,6 +11,7 @@ import { PropertiesPanel } from "@/components/editor/panels/properties";
 import { Timeline } from "@/timeline/components";
 import { PreviewPanel } from "@/preview/components";
 import { EditorHeader } from "@/components/editor/editor-header";
+import { EditorErrorBoundary } from "@/components/error-boundary";
 import { EditorProvider } from "@/components/providers/editor-provider";
 import { Onboarding } from "@/components/editor/onboarding";
 import { MigrationDialog } from "@/project/components/migration-dialog";
@@ -48,19 +49,21 @@ export default function Editor() {
 
 	return (
 		<MobileGate>
-			<EditorProvider projectId={projectId}>
-				<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
-					<DegradedRendererBanner />
-					<EditorHeader />
-					<div className="min-h-0 min-w-0 flex-1">
-						<EditorLayout />
+			<EditorErrorBoundary>
+				<EditorProvider projectId={projectId}>
+					<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
+						<DegradedRendererBanner />
+						<EditorHeader />
+						<div className="min-h-0 min-w-0 flex-1">
+							<EditorLayout />
+						</div>
+						<Onboarding />
+						<MigrationDialog />
+						<ChangelogNotification />
+						<BackgroundTranscriber />
 					</div>
-					<Onboarding />
-					<MigrationDialog />
-					<ChangelogNotification />
-					<BackgroundTranscriber />
-				</div>
-			</EditorProvider>
+				</EditorProvider>
+			</EditorErrorBoundary>
 		</MobileGate>
 	);
 }

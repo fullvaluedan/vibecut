@@ -28,6 +28,7 @@ import { loadFonts } from "@/fonts/google-fonts";
 import { DEFAULTS } from "@/timeline/defaults";
 import { getElementFontFamilies } from "@/timeline/element-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
+import { reportFatal } from "@/utils/report-error";
 import type { MediaAsset } from "@/media/types";
 
 export interface MigrationState {
@@ -67,13 +68,26 @@ export class ProjectManager {
 		}
 
 		this.storageMigrationPromise = (async () => {
-			await runStorageMigrations({
+			const { failedProjects } = await runStorageMigrations({
 				migrations,
 				onProgress: (progress: MigrationProgress) => {
 					this.migrationState = progress;
 					this.notify();
 				},
 			});
+			// A failed chain leaves that project's stored data UNTOUCHED (the
+			// runner writes only after the whole chain succeeds) — say so, or
+			// the user's next symptom is a project that won't open properly
+			// with no explanation.
+			for (const failure of failedProjects) {
+				reportFatal({
+					title: `Project "${failure.projectName ?? failure.projectId}" couldn't be upgraded`,
+					error: new Error(
+						`${failure.error} — the project was NOT modified and a pre-upgrade backup exists. Copy the details and report this.`,
+					),
+					context: "storage/migrations",
+				});
+			}
 		})();
 
 		await this.storageMigrationPromise;
@@ -143,6 +157,26 @@ export class ProjectManager {
 			}
 
 			const project = result.project;
+
+			// Load-time sanitizer repaired or dropped corrupt data — say so
+			// (persistently) instead of letting the user wonder where a clip
+			// went. A pre-upgrade backup may exist via the migration runner.
+			const report = result.sanitizeReport;
+			if (report) {
+				const dropped = report.droppedElements.length;
+				const parts = [
+					dropped > 0 ? `${dropped} unrecoverable clip(s) removed` : null,
+					report.repairedFields > 0
+						? `${report.repairedFields} field(s) repaired`
+						: null,
+					...report.rebuilt,
+				].filter(Boolean);
+				toast.warning("This project had corrupted data", {
+					description: parts.join(" · "),
+					duration: Number.POSITIVE_INFINITY,
+					closeButton: true,
+				});
+			}
 
 			this.active = project;
 			this.notify();

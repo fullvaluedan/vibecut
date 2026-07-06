@@ -28,6 +28,12 @@ type ExportParams = {
 	quality: ExportQuality;
 	shouldIncludeAudio?: boolean;
 	audioBuffer?: AudioBuffer;
+	/** Long-export alternative to audioBuffer: sequential mix windows (P0.4).
+	 * mediabunny timestamps consecutive add() calls back to back, so feeding
+	 * chunks is equivalent to one giant buffer without the giant allocation. */
+	audioChunks?: AsyncIterable<AudioBuffer>;
+	/** Encoder config for the chunked path (normally read off audioBuffer). */
+	audioFormat?: { sampleRate: number; numberOfChannels: number };
 };
 
 const qualityMap = {
@@ -36,6 +42,36 @@ const qualityMap = {
 	high: QUALITY_HIGH,
 	very_high: QUALITY_VERY_HIGH,
 };
+
+/** Chromium reports "prefer-hardware" configs as UNSUPPORTED when no GPU
+ * encoder exists (headless, VMs, some laptops on battery) rather than falling
+ * back to software — which failed the whole export. Probe a representative
+ * config once and only ask for hardware when it's actually there. */
+async function resolveHardwareAcceleration({
+	codec,
+	width,
+	height,
+}: {
+	codec: "vp9" | "avc";
+	width: number;
+	height: number;
+}): Promise<"prefer-hardware" | "no-preference"> {
+	if (typeof VideoEncoder === "undefined") return "no-preference";
+	try {
+		const { supported } = await VideoEncoder.isConfigSupported({
+			codec: codec === "vp9" ? "vp09.00.10.08" : "avc1.42001f",
+			width,
+			height,
+			// Representative probe bitrate; hw presence doesn't hinge on it.
+			bitrate: 1_000_000,
+			hardwareAcceleration: "prefer-hardware",
+		});
+		if (supported) return "prefer-hardware";
+	} catch {
+		// fall through to software
+	}
+	return "no-preference";
+}
 
 export type SceneExporterEvents = {
 	progress: [progress: number];
@@ -50,6 +86,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
+	private audioChunks?: AsyncIterable<AudioBuffer>;
+	private audioFormat?: { sampleRate: number; numberOfChannels: number };
 
 	private isCancelled = false;
 
@@ -61,6 +99,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		quality,
 		shouldIncludeAudio,
 		audioBuffer,
+		audioChunks,
+		audioFormat,
 	}: ExportParams) {
 		super();
 		this.renderer = new CanvasRenderer({
@@ -73,6 +113,8 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
+		this.audioChunks = audioChunks;
+		this.audioFormat = audioFormat;
 	}
 
 	cancel(): void {
@@ -99,26 +141,40 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 			target: new BufferTarget(),
 		});
 
+		const videoCodec = this.format === "webm" ? "vp9" : "avc";
 		const videoSource = new CanvasSource(this.renderer.getOutputCanvas(), {
-			codec: this.format === "webm" ? "vp9" : "avc",
+			codec: videoCodec,
 			bitrate: qualityMap[this.quality],
 			// Use the GPU's hardware video encoder (NVENC/QSV/AMF/VideoToolbox)
 			// when available — typically several times faster than software
-			// encode. Falls back to software automatically where unsupported.
-			hardwareAcceleration: "prefer-hardware",
+			// encode. Chromium treats "prefer-hardware" as unsupported on
+			// GPU-less machines (VMs, headless) instead of falling back, which
+			// used to fail the whole export — probe first and drop the hint
+			// when no hardware encoder exists.
+			hardwareAcceleration: await resolveHardwareAcceleration({
+				codec: videoCodec,
+				width: this.renderer.getOutputCanvas().width,
+				height: this.renderer.getOutputCanvas().height,
+			}),
 		});
 
 		output.addVideoTrack(videoSource, { frameRate: fpsFloat });
 
 		let audioSource: AudioBufferSource | null = null;
-		if (this.shouldIncludeAudio && this.audioBuffer) {
+		const audioConfig = this.audioBuffer
+			? {
+					sampleRate: this.audioBuffer.sampleRate,
+					numberOfChannels: this.audioBuffer.numberOfChannels,
+				}
+			: this.audioFormat;
+		if (this.shouldIncludeAudio && (this.audioBuffer || this.audioChunks) && audioConfig) {
 			let audioCodec: "aac" | "opus" = this.format === "webm" ? "opus" : "aac";
 
 			if (audioCodec === "aac" && typeof AudioEncoder !== "undefined") {
 				const { supported } = await AudioEncoder.isConfigSupported({
 					codec: "mp4a.40.2",
-					sampleRate: this.audioBuffer.sampleRate,
-					numberOfChannels: this.audioBuffer.numberOfChannels,
+					sampleRate: audioConfig.sampleRate,
+					numberOfChannels: audioConfig.numberOfChannels,
 					bitrate: 192000,
 				});
 				if (!supported) audioCodec = "opus";
@@ -133,8 +189,17 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		await output.start();
 
-		if (audioSource && this.audioBuffer) {
-			await audioSource.add(this.audioBuffer);
+		if (audioSource) {
+			if (this.audioChunks) {
+				// Chunked long-export path: sequential windows, each timestamped
+				// after the previous by mediabunny. Peak memory = one window.
+				for await (const chunk of this.audioChunks) {
+					if (this.isCancelled) break;
+					await audioSource.add(chunk);
+				}
+			} else if (this.audioBuffer) {
+				await audioSource.add(this.audioBuffer);
+			}
 			audioSource.close();
 		}
 
