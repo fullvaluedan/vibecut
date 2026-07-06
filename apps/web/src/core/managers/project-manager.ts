@@ -158,6 +158,26 @@ export class ProjectManager {
 
 			const project = result.project;
 
+			// Load-time sanitizer repaired or dropped corrupt data — say so
+			// (persistently) instead of letting the user wonder where a clip
+			// went. A pre-upgrade backup may exist via the migration runner.
+			const report = result.sanitizeReport;
+			if (report) {
+				const dropped = report.droppedElements.length;
+				const parts = [
+					dropped > 0 ? `${dropped} unrecoverable clip(s) removed` : null,
+					report.repairedFields > 0
+						? `${report.repairedFields} field(s) repaired`
+						: null,
+					...report.rebuilt,
+				].filter(Boolean);
+				toast.warning("This project had corrupted data", {
+					description: parts.join(" · "),
+					duration: Number.POSITIVE_INFINITY,
+					closeButton: true,
+				});
+			}
+
 			this.active = project;
 			this.notify();
 

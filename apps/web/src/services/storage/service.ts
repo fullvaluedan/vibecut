@@ -23,6 +23,11 @@ import {
 } from "@/services/storage/migrations";
 import type { Bookmark, SceneTracks, TScene } from "@/timeline";
 import { roundMediaTime } from "@/wasm";
+import {
+	isSanitizeReportClean,
+	sanitizeLoadedProject,
+	type SanitizeReport,
+} from "./validate-project";
 
 function normalizeBookmarks({ raw }: { raw: unknown }): Bookmark[] {
 	if (!Array.isArray(raw)) return [];
@@ -180,7 +185,7 @@ class StorageService {
 		id,
 	}: {
 		id: string;
-	}): Promise<{ project: TProject } | null> {
+	}): Promise<{ project: TProject; sanitizeReport?: SanitizeReport } | null> {
 		await this.ensureMigrations();
 		const serializedProject = await this.projectsAdapter.get(id);
 
@@ -230,7 +235,16 @@ class StorageService {
 			timelineViewState: serializedProject.timelineViewState,
 		};
 
-		return { project };
+		// P0.3: corrupt persisted data used to load unchecked and crash later,
+		// deep in the renderer. Sanitize here — drop/repair what's broken and
+		// report it so the caller can warn instead of mystery-crashing.
+		const { project: sanitized, report } = sanitizeLoadedProject({ project });
+		if (!isSanitizeReportClean(report)) {
+			console.warn("[storage] project needed repair on load:", { id, report });
+			return { project: sanitized, sanitizeReport: report };
+		}
+
+		return { project: sanitized };
 	}
 
 	async loadAllProjects(): Promise<TProject[]> {
