@@ -17,8 +17,14 @@ import {
 	getCachedTranscript,
 	useTranscriptStatusStore,
 } from "@/features/transcription/transcript-cache";
+import { reportFatal } from "@/utils/report-error";
 
 const SETTLE_MS = 5000;
+
+// A background failure (model won't load, decode crash) re-fires on every
+// edit; report each DISTINCT failure once per session instead of stacking
+// identical toasts.
+const reportedFailures = new Set<string>();
 
 export function BackgroundTranscriber() {
 	const editor = useEditor();
@@ -61,7 +67,21 @@ export function BackgroundTranscriber() {
 					// Surface real failures (the 'error' status was dead code);
 					// a genuine cancellation just goes back to idle.
 					const msg = String((err as Error)?.message ?? err);
-					setStatus(/cancel/i.test(msg) ? "idle" : "error");
+					if (/cancel/i.test(msg)) {
+						setStatus("idle");
+						return;
+					}
+					setStatus("error");
+					// The status dot alone is easy to miss — AI CUT later fails
+					// mysteriously on a cold cache. Say it once, persistently.
+					if (!reportedFailures.has(msg)) {
+						reportedFailures.add(msg);
+						reportFatal({
+							title: "Background transcription failed",
+							error: err,
+							context: "transcription/background",
+						});
+					}
 				});
 		}, SETTLE_MS);
 		return () => clearTimeout(timer);
