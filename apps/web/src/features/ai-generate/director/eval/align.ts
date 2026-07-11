@@ -36,7 +36,19 @@ export interface AlignmentResult {
 	/** Final-side words with no raw counterpart (added VO/b-roll audio) —
 	 * ignored for labels but reported. */
 	finalOnlyWords: number;
+	/** Raw words that vanish from their original spot but REAPPEAR elsewhere in
+	 * the final (a reorder, not a cut) — kept, excluded from truth cuts, but
+	 * counted so a heavily-reordered edit is visible in the report (R3). */
+	movedWords: number;
+	/** Raw spans relabeled kept/moved by the reorder pass — reported so a move
+	 * can be spot-checked against the videos. */
+	movedSpans: TruthCutSpan[];
 }
+
+/** A raw run must carry at least this many content words to pair as a MOVE —
+ * shorter runs are stock phrases ("so the first step is") that recur by chance,
+ * so a short reappearance stays a cut under the old deletion semantics (R3). */
+const MIN_MOVE_RUN_WORDS = 5;
 
 function normalizeToken(text: string): string {
 	return text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
@@ -259,6 +271,72 @@ export function alignTranscripts({
 		}
 	}
 
+	// Move-aware pass (R3): a run cut from one place in RAW that REAPPEARS as a
+	// final-only insertion elsewhere is a REORDER, not a cut — the global diff
+	// can't align it (it would break the monotonic anchor chain), so it lands as
+	// a raw deletion AND a final-only run. Pair unmatched raw runs with unmatched
+	// final runs by identical normalized content-token text (>= MIN_MOVE_RUN_WORDS
+	// words, greedy longest-first, each final run consumed at most once), relabel
+	// the raw run kept/moved, and drop the final run from the final-only count.
+	const contentTokens = (
+		tokens: string[],
+		start: number,
+		end: number,
+	): string[] => {
+		const out: string[] = [];
+		for (let k = start; k < end; k++) if (tokens[k]) out.push(tokens[k]);
+		return out;
+	};
+	// Unmatched raw runs (the deletion runs just labeled above).
+	const rawRuns: { start: number; end: number; key: string; len: number }[] = [];
+	for (let k = 0; k < rawWords.length; k++) {
+		if (rawKept[k]) continue;
+		const start = k;
+		while (k < rawWords.length && !rawKept[k]) k++;
+		const toks = contentTokens(rawTokens, start, k);
+		rawRuns.push({ start, end: k, key: toks.join(""), len: toks.length });
+	}
+	// Unmatched final runs, indexed by their content-token text for O(1) pairing.
+	const finalRunsByKey = new Map<
+		string,
+		{ start: number; end: number; len: number }[]
+	>();
+	for (let j = 0; j < finalWords.length; j++) {
+		if (finalMatched[j]) continue;
+		const start = j;
+		while (j < finalWords.length && !finalMatched[j]) j++;
+		const toks = contentTokens(finalTokens, start, j);
+		if (toks.length < MIN_MOVE_RUN_WORDS) continue;
+		const key = toks.join("");
+		const list = finalRunsByKey.get(key) ?? [];
+		list.push({ start, end: j, len: toks.length });
+		finalRunsByKey.set(key, list);
+	}
+	const movedSpans: TruthCutSpan[] = [];
+	let movedWords = 0;
+	// Greedy longest-first: a long distinctive run claims its final twin before a
+	// shorter run can steal it, and a consumed final run can't pair twice (so a
+	// genuine retake — cut copy + surviving copy — keeps exactly one copy cut).
+	for (const run of [...rawRuns].sort((a, b) => b.len - a.len)) {
+		if (run.len < MIN_MOVE_RUN_WORDS) continue;
+		const twins = finalRunsByKey.get(run.key);
+		if (!twins || twins.length === 0) continue;
+		const twin = twins.shift()!;
+		for (let k = run.start; k < run.end; k++) rawKept[k] = true;
+		movedWords += run.end - run.start;
+		finalOnlyWords -= twin.len;
+		movedSpans.push({
+			startIndex: run.start,
+			endIndex: run.end - 1,
+			startSec: rawWords[run.start].start,
+			endSec: rawWords[run.end - 1].end,
+			text: rawWords
+				.slice(run.start, run.end)
+				.map((w) => w.text)
+				.join(" "),
+		});
+	}
+
 	// Derive spans from consecutive cut words.
 	const truthCutSpans: TruthCutSpan[] = [];
 	let spanStart = -1;
@@ -280,5 +358,12 @@ export function alignTranscripts({
 		}
 	}
 
-	return { rawKept, truthCutSpans, substitutionWords, finalOnlyWords };
+	return {
+		rawKept,
+		truthCutSpans,
+		substitutionWords,
+		finalOnlyWords,
+		movedWords,
+		movedSpans,
+	};
 }

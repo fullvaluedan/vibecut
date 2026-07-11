@@ -112,6 +112,7 @@ function runFixture(fixture: Fixture): {
 	proposalsBySource: Record<string, number>;
 	substitutionWords: number;
 	finalOnlyWords: number;
+	movedWords: number;
 } {
 	const alignment = alignTranscripts({
 		rawWords: fixture.rawWords,
@@ -132,6 +133,7 @@ function runFixture(fixture: Fixture): {
 		proposalsBySource,
 		substitutionWords: alignment.substitutionWords,
 		finalOnlyWords: alignment.finalOnlyWords,
+		movedWords: alignment.movedWords,
 	};
 }
 
@@ -201,9 +203,9 @@ function main(): void {
 			.map(([k, v]) => `${k}:${v}`)
 			.join("  ");
 		console.log(`proposals by source    ${sources || "(none)"}`);
-		if (r.substitutionWords > 0 || r.finalOnlyWords > 0) {
+		if (r.substitutionWords > 0 || r.finalOnlyWords > 0 || r.movedWords > 0) {
 			console.log(
-				`transcript noise       ${r.substitutionWords} substituted, ${r.finalOnlyWords} final-only (ignored)`,
+				`transcript noise       ${r.substitutionWords} substituted, ${r.finalOnlyWords} final-only (ignored), ${r.movedWords} moved (reordered, not cut)`,
 			);
 		}
 		console.log("");

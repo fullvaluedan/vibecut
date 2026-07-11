@@ -82,6 +82,61 @@ describe("alignTranscripts (ground truth from raw vs final)", () => {
 		expect(result.substitutionWords).toBeGreaterThan(0);
 	});
 
+	test("a reordered block is labeled moved, not cut (R3)", () => {
+		// A distinctive 8-word block appears EARLY in raw and LATE in final —
+		// Dan relocated it, he didn't cut it.
+		const block = "remember to back up your project before you deploy";
+		const raw = words(
+			`${block} welcome back today we are building a website from scratch`,
+		);
+		const final = words(
+			`welcome back today we are building a website from scratch ${block}`,
+		);
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		expect(result.movedWords).toBe(9); // the block's word count
+		expect(result.truthCutSpans).toEqual([]); // moved, so no cut label
+		// The block's words are relabeled kept.
+		expect(result.rawKept.every(Boolean)).toBe(true);
+		// The relocated final copy stops counting as a final-only insertion.
+		expect(result.finalOnlyWords).toBe(0);
+		expect(result.movedSpans).toHaveLength(1);
+		expect(result.movedSpans[0].text).toContain("back up your project");
+	});
+
+	test("a retake with a moved survivor keeps exactly one copy cut (R3)", () => {
+		// Two identical copies of a distinctive line in raw, each separated by
+		// distinctive KEPT context that anchors in order. Both line copies fall
+		// out of the diff (they can't align in order with the single relocated
+		// final copy), so BOTH land as raw cuts and the final copy is the lone
+		// twin. Greedy pairing consumes that twin ONCE: one copy is relabeled
+		// moved, the other STAYS a cut — a move must never double-count a retake.
+		const line = "open the settings panel and switch the theme to dark mode";
+		const kept1 = "meanwhile the camera pans across the studio floor now";
+		const kept2 = "afterwards we review the color grading in fine detail";
+		const raw = words(`${line} ${kept1} ${line} ${kept2}`);
+		const final = words(`${kept1} ${kept2} ${line}`);
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		// Exactly ONE copy moved (the twin is consumed once) and ONE copy stays
+		// cut — a move must never double-count a retake into two moves.
+		expect(result.movedSpans).toHaveLength(1);
+		expect(result.movedWords).toBeGreaterThanOrEqual(5); // MIN_MOVE_RUN_WORDS
+		const cutWords = result.rawKept.filter((k) => !k).length;
+		expect(cutWords).toBeGreaterThanOrEqual(5); // the un-paired retake copy stays cut
+		const cutText = result.truthCutSpans.map((s) => s.text).join(" | ");
+		expect(cutText).toContain("settings panel");
+	});
+
+	test("a moved block shorter than the minimum stays a cut (R3)", () => {
+		// A 3-word reappearance is below MIN_MOVE_RUN_WORDS — too generic to trust
+		// as a move, so it keeps the old deletion semantics.
+		const raw = words("save the file welcome back today we build a website");
+		const final = words("welcome back today we build a website save the file");
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		expect(result.movedWords).toBe(0);
+		// "save the file" is cut from the front and appears final-only at the end.
+		expect(result.truthCutSpans.length).toBeGreaterThan(0);
+	});
+
 	test("punctuation-only tokens never form cuts", () => {
 		const raw: TranscriptionWord[] = [
 			...words("this works"),
