@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { scoreCutProposals, formatScorecard } from "../score";
+import {
+	formatScorecard,
+	proposalsBySource,
+	scoreCutProposals,
+	scoreDual,
+	toProposedCutSpans,
+} from "../score";
+import { buildDirectorProposals } from "../../build-director-proposals";
 import type { TruthCutSpan } from "../align";
+import type { DirectorOp } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 
 function words(text: string, startAt = 0): TranscriptionWord[] {
@@ -138,5 +146,107 @@ describe("scoreCutProposals", () => {
 		const text = formatScorecard("fixture-a", sc);
 		expect(text).toContain("ESSENTIAL WORDS LOST  3");
 		expect(text).toContain('"the real content"');
+	});
+});
+
+describe("dual proposal sets (auto vs offered, R6/KTD4)", () => {
+	const raw = words("intro line here um wait no the real content follows");
+	const truth = [truthSpan(raw, 3, 5)];
+	const ops: DirectorOp[] = [
+		{ id: "a", op: "cut", startSec: 1, endSec: 2, reason: "filler", confidence: 0.9, category: "filler" },
+		{ id: "b", op: "cut", startSec: 3, endSec: 4, reason: "repeat", confidence: 0.6, category: "redundancy", defaultAccept: false },
+		{ id: "k", op: "keep", startSec: 0, endSec: 0.5, reason: "keep", confidence: 0.9 },
+		{ id: "r", op: "reorder", startSec: 5, endSec: 6, reason: "move", confidence: 0.9 },
+	];
+
+	test("offered = all cut rows; auto drops the opt-in (defaultAccept false) rows", () => {
+		const offered = toProposedCutSpans(ops, "offered");
+		const auto = toProposedCutSpans(ops, "auto");
+		expect(offered).toHaveLength(2); // a + b, keep/reorder excluded
+		expect(auto).toHaveLength(1); // a only (b is opt-in)
+		// auto ⊆ offered.
+		for (const a of auto) {
+			expect(offered.some((o) => o.startSec === a.startSec && o.endSec === a.endSec)).toBe(true);
+		}
+	});
+
+	test("per-source counts follow op provenance", () => {
+		expect(proposalsBySource(ops, "offered")).toEqual({ filler: 1, redundancy: 1 });
+		expect(proposalsBySource(ops, "auto")).toEqual({ filler: 1 });
+	});
+
+	test("scoreDual: auto is never worse-recall-per-word than offered's superset", () => {
+		const dual = scoreDual({
+			rawWords: raw,
+			truthCutSpans: truth,
+			operations: ops.map((o) => ({ ...o, startSec: raw[3].start, endSec: raw[5].end })),
+		});
+		// Both engage the truth span; offered's larger set can only match >= auto.
+		expect(dual.offered.counts.proposedCutWords).toBeGreaterThanOrEqual(
+			dual.auto.counts.proposedCutWords,
+		);
+	});
+});
+
+describe("stub-adapter end-to-end (fixture → proposals → dual scorecards)", () => {
+	function mkWords(text: string): TranscriptionWord[] {
+		return text
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((w, i) => ({ text: w, start: i * 0.3, end: i * 0.3 + 0.28 }));
+	}
+
+	test("dual scorecards computed off the real pipeline; auto ⊆ offered", async () => {
+		const w = mkWords("so um lets deploy the the project and verify the logs now");
+		const segments = [
+			{ text: "so um lets deploy the the project", start: w[0].start, end: w[6].end },
+			{ text: "and verify the logs now", start: w[7].start, end: w[11].end },
+		];
+		const totalSec = w[w.length - 1].end;
+		const { operations } = await buildDirectorProposals({
+			words: w,
+			segments,
+			features: segments.map((s) => ({
+				startSec: s.start,
+				endSec: s.end,
+				energy: 0.1,
+				loudnessRelative: 0.8,
+				wpm: 150,
+				wordCount: s.text.split(/\s+/).length,
+				fillerCandidate: false,
+			})),
+			envelope: new Array(Math.ceil(totalSec / 0.05)).fill(0.05),
+			gaps: [],
+			clipSpans: [{ startSec: 0, endSec: totalSec }],
+			fps: 30,
+			elements: [{ id: "el1", mediaId: "a1", startTime: 0, duration: Math.round(totalSec * 120_000), trimStart: 0 }],
+			assets: [{ id: "a1", name: "clip.mp4", durationSec: totalSec }],
+			frames: [],
+			taste: undefined,
+			totalSec,
+			config: { vadEnabled: false, visionEnabled: false },
+			llm: {
+				async plan() {
+					return { plan: { operations: [] } };
+				},
+				async redundancy() {
+					return { plan: { groups: [] } };
+				},
+				async context() {
+					return { plan: { flags: [] } };
+				},
+			},
+		});
+		const dual = scoreDual({
+			rawWords: w,
+			truthCutSpans: [truthSpan(w, 1, 1)], // Dan cut "um"
+			operations,
+		});
+		// auto is a subset of offered → its proposed-word count can't exceed it.
+		expect(dual.auto.counts.proposedCutWords).toBeLessThanOrEqual(
+			dual.offered.counts.proposedCutWords,
+		);
+		// The always-on filler cleanup caught "um" in the auto (default-accepted) set.
+		expect(dual.auto.counts.proposedCutWords).toBeGreaterThan(0);
 	});
 });

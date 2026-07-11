@@ -5,6 +5,7 @@
  * it sounds, plus the two span lists that make failures debuggable: what Dan
  * cut that we missed, and what Dan kept that we would have destroyed.
  */
+import type { DirectorOp } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { TruthCutSpan } from "./align";
 
@@ -167,6 +168,80 @@ export function scoreCutProposals({
 			boundaryErrors.length === 0
 				? null
 				: boundaryErrors.reduce((a, b) => a + b, 0) / boundaryErrors.length,
+	};
+}
+
+/**
+ * Two ways to read the same proposal set (R6/KTD4). `auto` is what a one-click
+ * apply would EXECUTE — only the default-accepted removals. `offered` is every
+ * cut/take_select row surfaced for review (default-accepted plus the opt-in
+ * rows). Scoring both separates the automatic path's honesty from the review
+ * burden and the recall ceiling.
+ */
+export type ProposalMode = "auto" | "offered";
+
+/** Cut/take_select ops as scorable spans. In `auto` mode the opt-in rows
+ * (`defaultAccept === false`) are dropped, since one-click apply skips them. */
+export function toProposedCutSpans(
+	ops: readonly DirectorOp[],
+	mode: ProposalMode,
+): ProposedCutSpan[] {
+	return ops
+		.filter(
+			(op) =>
+				(op.op === "cut" || op.op === "take_select") &&
+				(mode === "offered" || op.defaultAccept !== false),
+		)
+		.map((op) => ({
+			startSec: op.startSec,
+			endSec: op.endSec,
+			source: op.category ?? op.op,
+		}));
+}
+
+/** Count proposed cut rows by provenance (category, else op kind). */
+export function proposalsBySource(
+	ops: readonly DirectorOp[],
+	mode: ProposalMode,
+): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const p of toProposedCutSpans(ops, mode)) {
+		const key = p.source ?? "unknown";
+		out[key] = (out[key] ?? 0) + 1;
+	}
+	return out;
+}
+
+export interface DualScorecard {
+	auto: Scorecard;
+	offered: Scorecard;
+	autoBySource: Record<string, number>;
+	offeredBySource: Record<string, number>;
+}
+
+/** Score a proposal set both ways (auto ⊆ offered) plus the per-source tables. */
+export function scoreDual({
+	rawWords,
+	truthCutSpans,
+	operations,
+}: {
+	rawWords: TranscriptionWord[];
+	truthCutSpans: TruthCutSpan[];
+	operations: readonly DirectorOp[];
+}): DualScorecard {
+	return {
+		auto: scoreCutProposals({
+			rawWords,
+			truthCutSpans,
+			proposedSpans: toProposedCutSpans(operations, "auto"),
+		}),
+		offered: scoreCutProposals({
+			rawWords,
+			truthCutSpans,
+			proposedSpans: toProposedCutSpans(operations, "offered"),
+		}),
+		autoBySource: proposalsBySource(operations, "auto"),
+		offeredBySource: proposalsBySource(operations, "offered"),
 	};
 }
 

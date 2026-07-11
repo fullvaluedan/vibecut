@@ -104,12 +104,19 @@ export function resolveClaudeAuth({
  * pass. `binary` is injectable so a test can point it at a name that can't exist.
  */
 export function verifyClaudeCli(binary = "claude"): void {
-	const res = spawnSync(binary, ["--version"], { encoding: "utf8", shell: true });
-	const combined = `${res.stderr ?? ""}${res.stdout ?? ""}${res.error?.message ?? ""}`;
-	const missing =
-		(res.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" ||
-		/not recognized|not found|no such file|enoent/i.test(combined);
-	if (missing) throw new Error(CLI_MISSING_HELP);
+	// RESOLVE the binary on PATH — don't run `claude --version`, which BOOTS the
+	// CLI (project/MCP init) and can hang for many seconds inside a repo. `where`
+	// (Windows) / `command -v` (posix) just check PATH and return instantly.
+	const isWin = process.platform === "win32";
+	const res = isWin
+		? spawnSync("where", [binary], { encoding: "utf8", timeout: 5000 })
+		: spawnSync("command", ["-v", binary], {
+				encoding: "utf8",
+				shell: true,
+				timeout: 5000,
+			});
+	if (res.status === 0 && !res.error) return;
+	throw new Error(CLI_MISSING_HELP);
 }
 
 function hashKey(parts: {
