@@ -36,3 +36,30 @@ Detector-only baseline (previous measurement): recall 0.8%, essential lost 12.
 4. **Transcript upgrade in-app** (Groq path by default when key present) as the across-the-board multiplier.
 
 Reproduce: `cd apps/web && bun scripts/director-eval.ts --llm` (cached, free). Re-measure after any fix; the scorecard is the gate.
+
+---
+
+## ADDENDUM (same day): corrected against Dan's TRUE final
+
+Dan's actual final lives in `Videos/_Finals/0708 Google Omni.mp4`. Checking his correction ("I cut the Disney line entirely") exposed a **ground-truth defect, not a pipeline defect**: the aligner's substitution rule had no length parity, so a long deleted block faced by a short re-recorded replacement was labeled "kept". Fixed (SUBSTITUTION_MAX_RATIO=3, MAX_EXCESS=5, regression-tested), fixture rebuilt from the true final, re-scored with cached LLM responses (zero new tokens):
+
+| | AUTO | OFFERED |
+|---|---|---|
+| cut recall | 19.7% (289/1466) | 26.4% (387/1466) |
+| cut precision | **75.5%** (was 66.6) | **78.5%** (was 64.9) |
+| essential words lost | **94** (was 128) | **106** (was 173) |
+| mean boundary error | 3.48s | 3.06s |
+
+**Revised verdict.** Dan cuts 58.5% of raw words; the pipeline proposes barely a third of that volume:
+
+1. **UNDER-CUTTING is the dominant gap** — 1,079+ cut words missed. The draft is 3-4x too conservative for Dan's real editing ratio. Nothing in the LLM passes carries a compression contract ("this creator keeps ~42% of raw; drop tangents, restarts, weak takes entirely").
+2. **Boundary/word-surgery second** — ~3s edge error and 94-106 destroyed words (bar is 0) still disqualify one-click apply, but the distance shrank by a third once labels were fixed.
+3. **Take-selection was partly a label artifact**: the pipeline cutting BOTH Disney takes matched Dan's real decision. Genuine over-cuts of kept content remain (the 15:43 VTuber block) but are no longer the headline.
+
+**Meta-lesson:** the eval corrected itself on first contact with the true reference. Provenance rule: reference finals come from `Videos/_Finals/` only — which also holds finals for 0629, 0701, and 0709, i.e. three more fixtures ready to prepare.
+
+**Revised fix order for "get the draft closer to my final":**
+1. **Compression contract in the plan pass**: target keep-ratio learned from Dan's own fixtures (~42% here) plus section-level drop decisions; promptable now, measurable immediately against this scorecard.
+2. **Word-level take-surgery + boundary refinement**: drive essential-words-lost from ~100 to ~0 so an aggressive draft stays safe to apply.
+3. **Recall-expansion pass** for retakes and false starts at word granularity.
+4. **More fixtures from _Finals** so the brief and thresholds tune to Dan's style across videos, not one sample.
