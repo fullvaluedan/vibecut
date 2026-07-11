@@ -96,6 +96,25 @@ export function scoreCutProposals({
 	}
 	const proposedCut = rawWords.map((w) => isWordInSpans(w, proposedSpans));
 
+	// Attribution reconciliation: when a duplicated word is cut ("the the"),
+	// truth may label copy A while the proposal cuts copy B — identical text,
+	// equivalent edit. Without this, one edit scores as BOTH a false cut and
+	// a miss. Pair each would-be FP with a nearby (<=2 words) would-be FN of
+	// identical normalized text and count both as hits.
+	const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+	for (let i = 0; i < rawWords.length; i++) {
+		if (truthCut[i] || !proposedCut[i]) continue; // not an FP candidate
+		for (const j of [i - 1, i + 1, i - 2, i + 2]) {
+			if (j < 0 || j >= rawWords.length) continue;
+			if (!truthCut[j] || proposedCut[j]) continue; // not an FN candidate
+			if (norm(rawWords[i].text) !== norm(rawWords[j].text)) continue;
+			// Swap attribution: treat the proposal as having cut the truth copy.
+			proposedCut[j] = true;
+			proposedCut[i] = false;
+			break;
+		}
+	}
+
 	let tp = 0;
 	let fn = 0;
 	let fp = 0;

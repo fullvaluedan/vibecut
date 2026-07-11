@@ -12,3 +12,5 @@
 next-env.d.ts
 
 *.tsbuildinfo
+# Golden-footage eval fixtures (Dan's transcripts stay local)
+eval-fixtures/

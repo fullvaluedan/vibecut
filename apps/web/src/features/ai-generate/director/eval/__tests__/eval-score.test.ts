@@ -90,6 +90,34 @@ describe("scoreCutProposals", () => {
 		expect(sc.meanBoundaryErrorSec).toBeGreaterThan(0.04);
 	});
 
+	test("duplicate-word attribution swap is not penalized twice", () => {
+		// "the the": truth labeled the FIRST copy cut, the detector cut the
+		// SECOND — identical words, equivalent edit. Must score as a hit, not
+		// as one false cut plus one miss.
+		const dupRaw = words("verify the the logs");
+		const sc = scoreCutProposals({
+			rawWords: dupRaw,
+			truthCutSpans: [truthSpan(dupRaw, 1, 1)],
+			proposedSpans: [{ startSec: dupRaw[2].start, endSec: dupRaw[2].end }],
+		});
+		expect(sc.cutRecall).toBe(1);
+		expect(sc.essentialWordsLost).toBe(0);
+		expect(sc.missedCutWords).toBe(0);
+	});
+
+	test("attribution swap requires identical text — different words stay wrong", () => {
+		const otherRaw = words("verify some the logs");
+		const sc = scoreCutProposals({
+			rawWords: otherRaw,
+			truthCutSpans: [truthSpan(otherRaw, 1, 1)], // Dan cut "some"
+			proposedSpans: [
+				{ startSec: otherRaw[2].start, endSec: otherRaw[2].end }, // we cut "the"
+			],
+		});
+		expect(sc.essentialWordsLost).toBe(1);
+		expect(sc.missedCutWords).toBe(1);
+	});
+
 	test("no truth cuts + no proposals = clean sheet, not NaN", () => {
 		const sc = scoreCutProposals({
 			rawWords: raw,
