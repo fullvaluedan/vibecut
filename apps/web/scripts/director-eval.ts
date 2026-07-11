@@ -38,14 +38,13 @@ import { detectDuplicateWordCuts } from "@/features/ai-generate/director/duplica
 import { detectFillerCuts } from "@/features/ai-generate/director/filler-words";
 import { buildTakeClusters } from "@/features/ai-generate/director/take-clusters";
 import { detectRedundancyCuts } from "@/features/ai-generate/director/redundancy";
+import type { DirectorEvalFixture } from "@/features/ai-generate/director/eval/fixture-types";
 import type { TranscriptionWord } from "@/transcription/types";
 
-interface Fixture {
-	name: string;
-	rawWords: TranscriptionWord[];
-	finalWords: TranscriptionWord[];
-	rawSegments?: { text: string; start: number; end: number }[];
-}
+/** The eval consumes the shared fixture shape; the U3 audio fields (features,
+ * envelope, clipSpans, elements, assets) are present on regenerated fixtures and
+ * feed the `--llm` path (U5). The detector-only path needs only the transcripts. */
+type Fixture = DirectorEvalFixture;
 
 /** Derive sentence-ish segments from words when the fixture has none:
  * split on speech gaps > 0.6s or terminal punctuation. */
@@ -181,7 +180,7 @@ function main(): void {
 		for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".json"))) {
 			const parsed = JSON.parse(
 				fs.readFileSync(path.join(dir, file), "utf8"),
-			) as Fixture;
+			) as DirectorEvalFixture;
 			fixtures.push({ ...parsed, name: parsed.name ?? file });
 		}
 		if (fixtures.length === 0) {
