@@ -137,6 +137,39 @@ describe("alignTranscripts (ground truth from raw vs final)", () => {
 		expect(result.truthCutSpans.length).toBeGreaterThan(0);
 	});
 
+	test("a deleted block faced by a short replacement is a CUT, not a substitution", () => {
+		// The live Disney-cluster bug: Dan deleted a whole tangent and re-recorded
+		// a short replacement at the same spot. Gap symmetry alone called the
+		// deleted block a substitution ("kept"), erasing a real cut from the
+		// ground truth. Length parity must classify it as a deletion.
+		const tangent =
+			"and i say this as someone who has worked at walt disney studios " +
+			"and i say this as someone who works in the movie industry union " +
+			"it is just a shift in how media is being created these days honestly";
+		const raw = words(`the intro line stays ${tangent} and the outro also stays`);
+		const final = words(
+			"the intro line stays things are simply changing and the outro also stays",
+		);
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		const cutWords = result.rawKept.filter((k) => !k).length;
+		// The whole tangent (35 words) must be labeled cut, give or take the
+		// boundary-duplicate ambiguity; nothing close to zero.
+		expect(cutWords).toBeGreaterThanOrEqual(30);
+		expect(result.truthCutSpans.map((s) => s.text).join(" ")).toContain("disney");
+		// The short replacement is final-only, not proof the tangent survived.
+		expect(result.finalOnlyWords).toBeGreaterThanOrEqual(3);
+	});
+
+	test("short asymmetric disagreements stay substitutions", () => {
+		// "gonna" (1) vs "going to" (2) and small phrasing wobble must NOT be
+		// relabeled as cuts by the length-parity rule.
+		const raw = words("we are gonna configure the server for the deploy");
+		const final = words("we are going to configure the server for the deploy");
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		expect(result.truthCutSpans).toEqual([]);
+		expect(result.substitutionWords).toBeGreaterThan(0);
+	});
+
 	test("punctuation-only tokens never form cuts", () => {
 		const raw: TranscriptionWord[] = [
 			...words("this works"),

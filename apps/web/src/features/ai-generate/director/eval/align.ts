@@ -50,6 +50,15 @@ export interface AlignmentResult {
  * so a short reappearance stays a cut under the old deletion semantics (R3). */
 const MIN_MOVE_RUN_WORDS = 5;
 
+/** Length-parity bounds for the substitution rule: a raw gap counts as a
+ * substitution of the facing final gap only while it is at most this many
+ * times longer... */
+const SUBSTITUTION_MAX_RATIO = 3;
+/** ...or exceeds it by fewer than this many words (short asymmetric
+ * disagreements like "gonna" vs "going to" stay substitutions). Beyond both,
+ * the raw run is a DELETION with a small insertion facing it. */
+const SUBSTITUTION_MAX_EXCESS_WORDS = 5;
+
 function normalizeToken(text: string): string {
 	return text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
 }
@@ -263,10 +272,25 @@ export function alignTranscripts({
 			facingFinal++;
 			j++;
 		}
-		if (facingFinal > 0) {
+		// Substitution requires rough LENGTH PARITY. Transcriber disagreements
+		// are short and symmetric ("gonna" vs "going to"); a LONG raw gap faced
+		// by a short final gap is a DELETED block plus a small re-recorded
+		// replacement at the same spot (Dan's actual editing style) — calling
+		// that a substitution silently erases real cuts from the ground truth
+		// (found live: an entire deleted tangent labeled "kept" because its
+		// replacement take faced it across the gap).
+		const rawLen = i - runStart;
+		const isSubstitution =
+			facingFinal > 0 &&
+			(rawLen <= facingFinal * SUBSTITUTION_MAX_RATIO ||
+				rawLen - facingFinal < SUBSTITUTION_MAX_EXCESS_WORDS);
+		if (isSubstitution) {
 			// Substitution: the content survived, the transcriber disagreed.
-			substitutionWords += i - runStart;
+			substitutionWords += rawLen;
 		} else {
+			// Deletion (with or without a small insertion facing it). The facing
+			// final words, if any, are final-only insertions.
+			finalOnlyWords += facingFinal;
 			for (let k = runStart; k < i; k++) rawKept[k] = false;
 		}
 	}
