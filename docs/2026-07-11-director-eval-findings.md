@@ -63,3 +63,37 @@ Dan's actual final lives in `Videos/_Finals/0708 Google Omni.mp4`. Checking his 
 2. **Word-level take-surgery + boundary refinement**: drive essential-words-lost from ~100 to ~0 so an aggressive draft stays safe to apply.
 3. **Recall-expansion pass** for retakes and false starts at word granularity.
 4. **More fixtures from _Finals** so the brief and thresholds tune to Dan's style across videos, not one sample.
+
+## ADDENDUM 2 (2026-07-12): the 2x2 that gates the defaults (plan U5)
+
+Four fixtures now score in one `--llm` run — google-omni (removes 58.5%), hermes-cloud (39.4%), how-to-edit (79.6%), pokemon-tcg (32.5%) — spanning Dan's real editing range. Ran the 2x2 that matters: **keeper policy** (keep-last vs quality-scored, U2) x **compression target** (off vs each fixture's own truth ratio, U3), cached per combination (`--keeper quality`, `--compression`). The keeper A/B is a **noise-free deterministic comparison**: keeper policy only changes the deterministic merge, not the LLM plan, so `last` vs `quality` run against byte-identical cached plan responses.
+
+Aggregate across the four fixtures (`essLost` = total essential kept-words destroyed; bar is 0):
+
+| combo | AUTO recall | AUTO essLost | OFFERED recall | OFFERED prec | OFFERED essLost |
+|---|---|---|---|---|---|
+| last / off (today's default) | 34.5% | 774 | 41.0% | 72.7% | 1005 |
+| quality / off | 34.1% | **723** | 40.5% | 73.0% | **974** |
+| last / on | 37.4% | 918 | **44.6%** | 72.0% | 1148 |
+| quality / on | 37.5% | 890 | 44.6% | 72.1% | 1140 |
+
+google-omni alone (the origin fixture), OFFERED: recall 26.3% (off) -> **36.6%** (on); essLost 106 -> 155.
+
+**Adopted defaults (the measurement decides):**
+
+1. **Keeper policy stays `last` in-app.** Quality-scored is *weakly, consistently* better on the bar-zero metric (AUTO essLost 723 vs 774, -6.6%; never worse on any fixture — the gain lives entirely in hermes-cloud, 349 vs 383) but pays a <1.5pp recall dip and moves only ~8 offered words/video. Per KTD3 the scorecard must *clearly* overturn a live-tested default; a marginal, mixed result does not. `quality` stays available behind the option and the eval `--keeper` flag for stronger future evidence. **No in-app default change.**
+
+2. **Compression stays absent (off) in-app.** The contract does what it was built to do — OFFERED recall +3.6pp aggregate, **+10.3pp on google-omni** — but at the full truth ratio it also *raises* essential-words-lost (+143 offered, +144 AUTO), and the AUTO set (applied without review) is already far over bar at baseline. Unsafe to auto-apply at the measured ratio. Per R4 "conservative default in-app" = off; the contract is measured, promptable, and eval-wired, but a nonzero in-app default waits on the recall pass below. **No in-app default change.**
+
+3. **No row class promoted to auto-accept.** Essential-words-lost is 106-558 per fixture OFFERED across *every* combo (bar 20). The AUTO tier is already too aggressive to loosen; redundancy/context sub-0.7 gating stays opt-in. **No `defaultAccept` constant change.**
+
+Net: **U5 changes no in-app constant.** The gate's verdict is "keep today's conservative defaults" — the aggressive knobs (quality keeper, compression) are now *measured and available*, not *default*.
+
+**Success bars (R6): NOT met — stated plainly.**
+- `essential-words-lost < 20 / fixture OFFERED`: missed everywhere (106-558). 
+- `google-omni OFFERED recall >= 40% with precision >= 70%`: precision met (~77-78%); recall peaks at **36.6%** (last/on), short of 40%.
+
+**Next levers (why the bars miss, and what moves them):**
+1. **Essential-words-lost is span-EXTENT, not edge, dominated.** Mean boundary error is 3-9s, not sub-second — the LLM chooses cut *spans* much larger/different than Dan's, so U1's word-refinement (a sub-frame correction, active in every combo here and correct by construction) cannot move this aggregate. The lever is span granularity: word-level cut spans from the plan pass, or clamping cut extents to Dan-sized removals.
+2. **Recall needs a dedicated retake-hunt pass** (deferred follow-up #3). Compression trades essLost for recall; it cannot lift recall *without* the essLost cost. A word-granularity recall pass that surfaces retakes/false-starts as OFFERED (not AUTO) rows is the safe way to close the under-cutting gap.
+3. **how-to-edit is the outlier**: at an 79.6% truth removal ratio, compression *lowered* recall (28.0% -> 25.6%) — told to cut 80%, the LLM cut different spans than Dan. Extreme-compression footage needs the take/recall structure, not a bigger prompt number.
