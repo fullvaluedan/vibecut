@@ -282,6 +282,49 @@ describe("applyKeeperSwap (rebuild a group's cuts for a new keeper)", () => {
 		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L0" });
 		expect(swapped[0].defaultAccept).not.toBe(false); // accepted default preserved
 	});
+
+	test("KTD5: rebuilt cuts are word-refined off mid-word landings when words are passed", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [
+						member({ lineId: "L0", startSec: 0, endSec: 2 }),
+						member({ lineId: "L1", startSec: 3, endSec: 5.05 }), // end lands mid-word
+					],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		// A word "end" spans 5.0–5.4; the cut end at 5.05 is inside it, midpoint 5.2 kept
+		// → refine shrinks the edge back to the word start (5.0), sparing the word.
+		const words = [
+			{ text: "the", start: 4.5, end: 4.8 },
+			{ text: "end", start: 5.0, end: 5.4 },
+		];
+		const swapped = applyKeeperSwap({
+			operations: cuts,
+			group: groups[0],
+			newKeeperLineId: "L0",
+			words,
+		});
+		expect(swapped.map((c) => c.startSec)).toEqual([3]); // keeper L0 → cut L1
+		expect(swapped[0].endSec).toBe(5.0); // refined off the mid-word landing (was 5.05)
+	});
+
+	test("KTD5: no envelope/words is byte-identical to the pre-U2 raw-span swap", () => {
+		const { cuts, groups } = mapRedundancyGroups({
+			groups: [
+				group({
+					members: [member({ lineId: "L0", startSec: 0, endSec: 2 }), member({ lineId: "L1", startSec: 3, endSec: 5.05 })],
+					keeperLineId: "L1",
+					confidence: 0.9,
+				}),
+			],
+		});
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L0" });
+		expect(swapped[0].endSec).toBe(5.05); // untouched — no words to refine against
+	});
 });
 
 describe("cutMembersForKeeper (swap-to-alternate recompute)", () => {

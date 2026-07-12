@@ -60,7 +60,7 @@ import {
 	computeRepeatAdjacentPauseFloors,
 } from "./emphasis-pause";
 import { groupTranscriptByAsset } from "./source-map";
-import { buildTakeClusters } from "./take-clusters";
+import { buildTakeClusters, type KeeperPolicy } from "./take-clusters";
 import { detectRedundancyCuts } from "./redundancy";
 import { buildAssetCatalog } from "./asset-catalog";
 import { scoreImportance, selectProtectedSpans } from "./importance";
@@ -140,6 +140,9 @@ export interface BuildDirectorProposalsInput {
 	/** Total timeline duration in seconds. */
 	totalSec: number;
 	config: { vadEnabled: boolean; visionEnabled: boolean };
+	/** Take-cluster keeper policy (KTD3/U2). Defaults to keep-last; the eval flips it
+	 * to "quality" for the A/B scorecard. In-app default stays "last" until U5 adopts. */
+	keeperPolicy?: KeeperPolicy;
 	llm: DirectorLlmAdapter;
 	onProgress?: (detail: string) => void;
 	/** Emits the in-app toasts (vision degrade is handled by the plan adapter);
@@ -182,6 +185,7 @@ export async function buildDirectorProposals(
 		taste,
 		totalSec,
 		config,
+		keeperPolicy = "last",
 		llm,
 		onProgress,
 		onNotice,
@@ -298,7 +302,7 @@ export async function buildDirectorProposals(
 		segments,
 		elements,
 	});
-	const takeClusters = buildTakeClusters({ assetTranscripts, features });
+	const takeClusters = buildTakeClusters({ assetTranscripts, features, keeperPolicy });
 	// Keep-last: each cluster keeps its LATEST take and cuts the earlier near-
 	// identical ones within the recency window. `nearTies` is empty (the rare A/B
 	// "stitch" choice is the LLM planner's, not this deterministic step).

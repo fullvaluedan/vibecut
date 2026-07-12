@@ -378,6 +378,10 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 				operations: state.plan.operations,
 				group,
 				newKeeperLineId: keeperLineId,
+				// KTD5: word-refine the rebuilt cuts so a swapped keeper's edges land on
+				// word gaps like the main chain (the store has words but not the envelope,
+				// so energy-snap is skipped here — refinement still removes mid-word landings).
+				words: state.words,
 			});
 			// Surviving ops keep their decision; a rebuilt op (new id, no prior decision)
 			// falls back to its OWN accept default so a sub-threshold (accept-OFF) group

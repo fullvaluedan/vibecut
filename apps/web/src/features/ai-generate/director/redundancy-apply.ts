@@ -11,7 +11,9 @@
  */
 
 import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
-import { stableCutId } from "./cut-utils";
+import { stableCutId, type WordTiming } from "./cut-utils";
+import { snapRemovalOps } from "./snap-cut";
+import { refineCutWordBounds } from "./refine-cut-words";
 
 /**
  * Groups below this LLM confidence are dropped entirely (inclusive at the floor).
@@ -137,19 +139,31 @@ export function mapRedundancyGroups({
  * Drops every op tagged with this group's id and re-adds a cut over each new non-
  * keeper take, leaving every other op untouched; the result stays start-sorted for a
  * stable review order. Pure — the store calls it, then re-defaults the new ops to
- * accepted. (The rebuilt cuts use the takes' RAW line spans, so a swapped group is
- * not re-run through the energy/clip-edge snap — sub-frame at line boundaries.)
+ * accepted.
+ *
+ * KTD5 (U2): the rebuilt cuts are routed through the SAME energy-snap + word-boundary
+ * refine chain the originally-mapped redundancy cuts flow through, instead of shipping
+ * raw line spans. Pass `envelope` to energy-snap the edges and `words` to keep them off
+ * mid-word landings; both are optional — omit them and the behavior is byte-identical
+ * to the pre-U2 raw-span swap (snap needs a non-empty envelope; refine fails open with
+ * no words). This fixes the live inconsistency where a swapped group bypassed snapping.
  */
 export function applyKeeperSwap({
 	operations,
 	group,
 	newKeeperLineId,
 	acceptThreshold = DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD,
+	envelope,
+	words,
 }: {
 	operations: readonly DirectorOp[];
 	group: RedundancyReviewGroup;
 	newKeeperLineId: string;
 	acceptThreshold?: number;
+	/** RMS energy envelope for the edge snap; omit to skip energy-snapping. */
+	envelope?: readonly number[];
+	/** Transcript word timings for the mid-word refine; omit to fail open. */
+	words?: readonly WordTiming[];
 }): DirectorOp[] {
 	// Defensive: a keeper that isn't a member of the group would make
 	// cutMembersForKeeper cut EVERY take (total group loss). Treat an unknown
@@ -164,7 +178,7 @@ export function applyKeeperSwap({
 	// `mapRedundancyGroups`'s `group.confidence >= acceptThreshold`.
 	const defaultAccept = group.confidence >= acceptThreshold;
 	const others = operations.filter((op) => op.groupId !== group.groupId);
-	const rebuilt = cutMembersForKeeper({
+	const rawRebuilt = cutMembersForKeeper({
 		members: group.members,
 		keeperLineId: newKeeperLineId,
 	}).map((member) =>
@@ -176,6 +190,14 @@ export function applyKeeperSwap({
 			defaultAccept,
 		}),
 	);
+	// KTD5: run the rebuilt cuts through the energy-snap → word-refine chain (the same
+	// order the main pipeline uses) so a swapped group's edges are snapped + word-safe,
+	// not raw line spans. Both steps no-op without their input (envelope / words).
+	const snapped =
+		envelope && envelope.length > 0
+			? snapRemovalOps({ ops: rawRebuilt, envelope })
+			: rawRebuilt;
+	const rebuilt = refineCutWordBounds({ ops: snapped, words });
 	return [...others, ...rebuilt].sort((a, b) => a.startSec - b.startSec);
 }
 
