@@ -136,11 +136,14 @@ function runFixture(fixture: Fixture): {
 	substitutionWords: number;
 	finalOnlyWords: number;
 	movedWords: number;
+	keepRatio: number;
+	cutRatio: number;
 } {
 	const alignment = alignTranscripts({
 		rawWords: fixture.rawWords,
 		finalWords: fixture.finalWords,
 	});
+	const cutRatio = truthCutRatio(alignment.rawKept);
 	const proposals = detectorProposals(fixture);
 	const proposalsBySource: Record<string, number> = {};
 	for (const p of proposals) {
@@ -157,6 +160,8 @@ function runFixture(fixture: Fixture): {
 		substitutionWords: alignment.substitutionWords,
 		finalOnlyWords: alignment.finalOnlyWords,
 		movedWords: alignment.movedWords,
+		keepRatio: 1 - cutRatio,
+		cutRatio,
 	};
 }
 
@@ -426,6 +431,9 @@ async function main(): Promise<void> {
 			.map(([k, v]) => `${k}:${v}`)
 			.join("  ");
 		console.log(`proposals by source    ${sources || "(none)"}`);
+		console.log(
+			`keep ratio             ${(r.keepRatio * 100).toFixed(1)}% (Dan removed ${(r.cutRatio * 100).toFixed(1)}% of raw words)`,
+		);
 		if (r.substitutionWords > 0 || r.finalOnlyWords > 0 || r.movedWords > 0) {
 			console.log(
 				`transcript noise       ${r.substitutionWords} substituted, ${r.finalOnlyWords} final-only (ignored), ${r.movedWords} moved (reordered, not cut)`,

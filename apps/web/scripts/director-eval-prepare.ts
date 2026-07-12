@@ -34,6 +34,7 @@ import {
 	type DirectorEvalFixture,
 	type FixtureSegment,
 } from "@/features/ai-generate/director/eval/fixture-types";
+import { alignTranscripts } from "@/features/ai-generate/director/eval/align";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 /** Mono PCM sample rate for the feature envelope (matches the app's decode). */
@@ -356,6 +357,18 @@ async function main(): Promise<void> {
 		const sizeMb = (fs.statSync(outPath).size / 1_000_000).toFixed(1);
 		console.log(
 			`\nFixture written: ${outPath} (${rawWords.length} raw words / ${finalT.words.length} final words, ${sizeMb}MB)`,
+		);
+		// Ground-truth keep ratio: calibrates how aggressively Dan edits this footage.
+		const { rawKept } = alignTranscripts({
+			rawWords: fixture.rawWords,
+			finalWords: fixture.finalWords,
+		});
+		const cutCount = rawKept.filter((k) => !k).length;
+		const totalCount = rawKept.length;
+		const keepPct = ((1 - cutCount / totalCount) * 100).toFixed(1);
+		const cutPct = ((cutCount / totalCount) * 100).toFixed(1);
+		console.log(
+			`Keep ratio:      ${keepPct}% (Dan removed ${cutPct}% of raw words: ${cutCount}/${totalCount})`,
 		);
 		console.log(`Score it with:   bun scripts/director-eval.ts --llm`);
 	} finally {
