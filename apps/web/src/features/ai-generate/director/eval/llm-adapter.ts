@@ -242,6 +242,10 @@ export function createEvalLlmAdapter(
 					totalSec: input.totalSec,
 					taste: input.taste,
 					catalog: input.catalog,
+					// Compression contract (U3): forward the target so the prompt actually
+					// gains the block. The cache key already hashes the full input payload,
+					// so a target change forces a fresh live call (never a stale response).
+					compressionTarget: input.compressionTarget,
 					auth,
 				});
 				return { plan, usage: usage ?? undefined, degraded: false };

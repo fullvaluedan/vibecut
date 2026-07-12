@@ -104,6 +104,14 @@ export async function POST(req: NextRequest) {
 	}
 	const tasteNote = typeof taste === "string" ? taste : undefined;
 	const catalog = parseCatalog(body?.catalog);
+	// Compression target (U3/KTD4): an optional numeric; a non-number is silently
+	// dropped (field absent = today's behavior). Out-of-range values are clamped by
+	// the prompt builder, so only the finiteness gate lives here.
+	const compressionTargetRaw: unknown = body?.compressionTarget;
+	const compressionTarget =
+		typeof compressionTargetRaw === "number" && Number.isFinite(compressionTargetRaw)
+			? compressionTargetRaw
+			: undefined;
 
 	// `frames: <non-array>` is a malformed request; `frames` absent or `[]` is the
 	// text-only path. Only a populated, well-formed array engages vision.
@@ -130,6 +138,7 @@ export async function POST(req: NextRequest) {
 			totalSec,
 			taste: tasteNote,
 			catalog,
+			compressionTarget,
 			auth,
 		});
 		return NextResponse.json({ plan, usage, degraded: false });

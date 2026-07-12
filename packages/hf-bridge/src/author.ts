@@ -548,11 +548,19 @@ export function renderAssetCatalog(catalog: readonly DirectorAssetSummary[]): st
 	return `ASSET CATALOG (the source clips assembled into this timeline):\n${lines.join("\n")}`;
 }
 
+/** Clamp a compression target to the sane band (fraction of words to REMOVE). A
+ * value at/above 0.8 would license gutting the video; below 0 is meaningless. */
+export const MAX_COMPRESSION_TARGET = 0.8;
+export function clampCompressionTarget(target: number): number {
+	return Math.max(0, Math.min(MAX_COMPRESSION_TARGET, target));
+}
+
 export function buildDirectorPrompt({
 	segments,
 	totalSec,
 	taste,
 	catalog,
+	compressionTarget,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
@@ -560,6 +568,9 @@ export function buildDirectorPrompt({
 	taste?: string;
 	/** Per-clip summary block; rendered only for multi-clip input. */
 	catalog?: readonly DirectorAssetSummary[];
+	/** Fraction of words this creator typically REMOVES (0..0.8). When present, the
+	 * prompt gains an explicit compression contract; absent = byte-identical prompt. */
+	compressionTarget?: number;
 }): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
 	const hasImportance = segments.some((s) => s.importance !== undefined);
@@ -574,6 +585,15 @@ export function buildDirectorPrompt({
 	const keepRule = hasImportance
 		? `\n- Emit "keep" ops on the genuinely LOAD-BEARING spans — the thesis, the payoff, a landed joke, a surprising or pivotal line — ESPECIALLY ones the imp score underrates (a quiet but important moment imp can't detect). A "keep" op protects that span from removal; it never deletes anything.`
 		: "";
+	// Compression contract (U3/KTD4): when the caller supplies a measured removal
+	// ratio, license whole-tangent/section drops at that aggressiveness. Conditional
+	// and appended beside the taste note — absent field ⇒ byte-identical prompt.
+	const compressionBlock =
+		compressionTarget !== undefined && Number.isFinite(compressionTarget)
+			? `\nCOMPRESSION TARGET: This creator's finished cuts remove roughly ${Math.round(
+					clampCompressionTarget(compressionTarget) * 100,
+				)}% of the raw spoken words. Match that ruthlessness: drop WHOLE tangents, abandoned threads, and entire low-value sections that don't serve the core point — not just word-level trims. Aim near that removal ratio rather than a timid handful of cuts. The editor reviews every cut and restores anything you over-reached, so UNDER-cutting (leaving the video bloated) wastes their time more than over-cutting.\n`
+			: "";
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
@@ -589,7 +609,7 @@ Rules:
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
-${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
+${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}${compressionBlock}
 Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only)}, ...]}.`;
 }
 
@@ -668,15 +688,18 @@ export async function planDirector({
 	totalSec,
 	taste,
 	catalog,
+	compressionTarget,
 	auth,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
 	catalog?: readonly DirectorAssetSummary[];
+	/** Fraction of words to REMOVE (0..0.8); adds the compression contract (U3). */
+	compressionTarget?: number;
 	auth: ClaudeAuth;
 }): Promise<{ plan: DirectorPlan; usage: TokenUsage | null }> {
-	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog });
+	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog, compressionTarget });
 	const { raw, usage } = await planJson({ prompt, auth, schema: DIRECTOR_SCHEMA });
 	return { plan: sanitizeDirectorPlan(raw, totalSec), usage };
 }

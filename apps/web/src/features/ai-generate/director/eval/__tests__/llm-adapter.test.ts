@@ -71,6 +71,24 @@ describe("createEvalLlmAdapter", () => {
 		expect(calls.director).toBe(2); // different index → cache miss
 	});
 
+	test("a changed compressionTarget busts the plan cache AND is forwarded to the planner (U3)", async () => {
+		const seen: unknown[] = [];
+		const { planners, calls } = countingPlanners({
+			director: (async (arg: { compressionTarget?: unknown }) => {
+				calls.director++;
+				seen.push(arg.compressionTarget);
+				return { plan: { operations: [] }, usage: {} };
+			}) as unknown as EvalPlanners["director"],
+		});
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		await adapter.plan({ segments: [], totalSec: 5, compressionTarget: 0.4 });
+		await adapter.plan({ segments: [], totalSec: 5, compressionTarget: 0.4 }); // same → cache hit
+		await adapter.plan({ segments: [], totalSec: 5, compressionTarget: 0.6 }); // changed → miss
+		await adapter.plan({ segments: [], totalSec: 5 }); // absent → distinct key, miss
+		expect(calls.director).toBe(3); // 0.4 (miss), 0.4 (hit), 0.6 (miss), none (miss)
+		expect(seen).toEqual([0.4, 0.6, undefined]); // the target reaches the planner unchanged
+	});
+
 	test("watchdog rejects, naming the pass, when a pass never resolves", async () => {
 		const neverPlanners = countingPlanners({
 			redundancy: (() => new Promise(() => {})) as unknown as EvalPlanners["redundancy"],

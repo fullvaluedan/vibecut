@@ -100,6 +100,45 @@ describe("buildDirectorPrompt", () => {
 		// No clusters → no de-dup rule (and the prompt is otherwise unchanged).
 		expect(buildDirectorPrompt({ segments, totalSec: 12 })).not.toContain('Rows sharing a "grp" id');
 	});
+
+	test("adds the compression contract block ONLY when compressionTarget is present (U3)", () => {
+		const withTarget = buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: 0.585 });
+		expect(withTarget).toContain("COMPRESSION TARGET");
+		expect(withTarget).toContain("59%"); // round(0.585 * 100)
+		expect(buildDirectorPrompt({ segments, totalSec: 12 })).not.toContain("COMPRESSION TARGET");
+	});
+
+	test("absent compressionTarget is byte-identical to omitting the field entirely (U3 pin)", () => {
+		const omitted = buildDirectorPrompt({ segments, totalSec: 12 });
+		const explicitUndefined = buildDirectorPrompt({
+			segments,
+			totalSec: 12,
+			compressionTarget: undefined,
+		});
+		expect(explicitUndefined).toBe(omitted);
+	});
+
+	test("compressionTarget stacks with the taste note without splitting it (U3)", () => {
+		const both = buildDirectorPrompt({
+			segments,
+			totalSec: 12,
+			taste: "be conservative with tangent-cuts",
+			compressionTarget: 0.4,
+		});
+		expect(both).toContain("EDITOR TASTE");
+		expect(both).toContain("be conservative with tangent-cuts"); // pinned substring intact
+		expect(both).toContain("COMPRESSION TARGET");
+		expect(both).toContain("40%");
+	});
+
+	test("out-of-range compressionTarget is clamped into [0, 0.8] (U3)", () => {
+		expect(buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: 0.95 })).toContain(
+			"80%",
+		);
+		expect(buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: -0.3 })).toContain(
+			"0%",
+		);
+	});
 });
 
 describe("sanitizeDirectorPlan", () => {

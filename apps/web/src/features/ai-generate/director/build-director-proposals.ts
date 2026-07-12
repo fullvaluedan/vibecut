@@ -83,6 +83,10 @@ export interface DirectorPlanRequest {
 	taste?: string;
 	catalog?: DirectorAssetSummary[];
 	frames?: DirectorVisionFrame[];
+	/** Fraction of words to REMOVE (0..0.8); adds the compression contract (U3/KTD4).
+	 * Absent = today's timid default. The cache key must include this (see the eval
+	 * adapter) so an A/B run with a target doesn't read a no-target cached response. */
+	compressionTarget?: number;
 }
 export interface DirectorPlanResponse {
 	plan?: { operations?: DirectorOp[] };
@@ -143,6 +147,10 @@ export interface BuildDirectorProposalsInput {
 	/** Take-cluster keeper policy (KTD3/U2). Defaults to keep-last; the eval flips it
 	 * to "quality" for the A/B scorecard. In-app default stays "last" until U5 adopts. */
 	keeperPolicy?: KeeperPolicy;
+	/** Compression target (U3/KTD4): fraction of words to REMOVE (0..0.8). Passed to the
+	 * plan pass; absent = today's behavior. The eval computes it from the fixture's truth
+	 * ratio; the app passes nothing until U5 decides the in-app default. */
+	compressionTarget?: number;
 	llm: DirectorLlmAdapter;
 	onProgress?: (detail: string) => void;
 	/** Emits the in-app toasts (vision degrade is handled by the plan adapter);
@@ -186,6 +194,7 @@ export async function buildDirectorProposals(
 		totalSec,
 		config,
 		keeperPolicy = "last",
+		compressionTarget,
 		llm,
 		onProgress,
 		onNotice,
@@ -355,6 +364,9 @@ export async function buildDirectorProposals(
 		// single-recording request byte-identical to the pre-asset-context path.
 		...(catalog.length >= 2 ? { catalog } : {}),
 		...(frames.length > 0 ? { frames } : {}),
+		// Compression contract (U3): only sent when set, so a no-target run stays
+		// byte-identical to the pre-U3 request (and cache key).
+		...(compressionTarget !== undefined ? { compressionTarget } : {}),
 	});
 	const data = res;
 	// Tag the LLM ops "vision" when the visual pass actually ran (frames sent AND

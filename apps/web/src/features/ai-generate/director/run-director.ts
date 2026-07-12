@@ -118,10 +118,14 @@ export async function runDirector({
 	editor,
 	onProgress,
 	signal,
+	compressionTarget,
 }: {
 	editor: EditorCore;
 	onProgress?: (detail: string) => void;
 	signal?: AbortSignal;
+	/** Compression contract (U3/KTD4): fraction of words to REMOVE (0..0.8). Threaded
+	 * to the plan pass; sourced from the UI later — undefined = today's behavior. */
+	compressionTarget?: number;
 }): Promise<void> {
 	const abort = () => {
 		if (signal?.aborted) throw new Error("Cancelled");
@@ -303,6 +307,7 @@ export async function runDirector({
 			taste: taste || undefined,
 			totalSec,
 			config: { vadEnabled, visionEnabled },
+			compressionTarget,
 			llm,
 			onProgress,
 			// The pipeline's own review-time notices (the second-pass toast); the

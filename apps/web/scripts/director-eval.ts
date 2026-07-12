@@ -54,7 +54,7 @@ import {
 } from "@/features/ai-generate/director/eval/score";
 import { detectDuplicateWordCuts } from "@/features/ai-generate/director/duplicate-words";
 import { detectFillerCuts } from "@/features/ai-generate/director/filler-words";
-import { buildTakeClusters } from "@/features/ai-generate/director/take-clusters";
+import { buildTakeClusters, type KeeperPolicy } from "@/features/ai-generate/director/take-clusters";
 import { detectRedundancyCuts } from "@/features/ai-generate/director/redundancy";
 import { buildDirectorProposals } from "@/features/ai-generate/director/build-director-proposals";
 import {
@@ -185,6 +185,7 @@ function requireAudioFields(fixture: DirectorEvalFixture): void {
 function llmProposalInput(
 	fixture: DirectorEvalFixture,
 	adapter: ReturnType<typeof createEvalLlmAdapter>,
+	options: { keeperPolicy: KeeperPolicy; compressionTarget?: number },
 ) {
 	return {
 		words: fixture.rawWords as TranscriptionWord[],
@@ -200,8 +201,22 @@ function llmProposalInput(
 		taste: undefined,
 		totalSec: fixture.totalSec!,
 		config: { vadEnabled: false, visionEnabled: false },
+		// A/B knobs (U2/U3/U5): keeper policy + the compression target. Both flow into
+		// the shared module unchanged; compressionTarget also changes the plan cache key.
+		keeperPolicy: options.keeperPolicy,
+		...(options.compressionTarget !== undefined
+			? { compressionTarget: options.compressionTarget }
+			: {}),
 		llm: adapter,
 	};
+}
+
+/** The fraction of raw words Dan actually removed in the finished cut — the fixture's
+ * own truth ratio (KTD4). `rawKept[i]` is false for a cut word; this is cut/total. */
+function truthCutRatio(rawKept: readonly boolean[]): number {
+	if (rawKept.length === 0) return 0;
+	const cut = rawKept.filter((kept) => !kept).length;
+	return cut / rawKept.length;
 }
 
 const fmtSources = (bySource: Record<string, number>): string =>
@@ -257,11 +272,16 @@ async function runLlmMode({
 	runs,
 	authMode,
 	wantJson,
+	keeperPolicy,
+	compression,
 }: {
 	fixtures: Fixture[];
 	runs: number;
 	authMode: "claude-code" | "api-key";
 	wantJson: boolean;
+	keeperPolicy: KeeperPolicy;
+	/** When true, compute each fixture's compression target from its own truth ratio. */
+	compression: boolean;
 }): Promise<void> {
 	const auth = resolveClaudeAuth({
 		mode: authMode,
@@ -277,6 +297,13 @@ async function runLlmMode({
 			rawWords: fixture.rawWords as TranscriptionWord[],
 			finalWords: fixture.finalWords as TranscriptionWord[],
 		});
+		const cutRatio = truthCutRatio(alignment.rawKept);
+		const compressionTarget = compression ? cutRatio : undefined;
+		console.error(
+			`  [${fixture.name}] keep-ratio ${((1 - cutRatio) * 100).toFixed(1)}% ` +
+				`(removes ${(cutRatio * 100).toFixed(1)}%)  keeper=${keeperPolicy}  ` +
+				`compression=${compression ? `${(cutRatio * 100).toFixed(1)}%` : "off"}`,
+		);
 		const runResults: DualScorecard[] = [];
 		for (let runIndex = 0; runIndex < runs; runIndex++) {
 			if (runs > 1) {
@@ -284,7 +311,7 @@ async function runLlmMode({
 			}
 			const adapter = createEvalLlmAdapter({ auth, runIndex });
 			const { operations } = await buildDirectorProposals(
-				llmProposalInput(fixture, adapter),
+				llmProposalInput(fixture, adapter, { keeperPolicy, compressionTarget }),
 			);
 			runResults.push(
 				scoreDual({
@@ -346,8 +373,14 @@ async function main(): Promise<void> {
 	const runs = Math.max(1, Number(val("--runs", "1")) || 1);
 	const authMode: "claude-code" | "api-key" =
 		val("--auth", "claude-code") === "api-key" ? "api-key" : "claude-code";
+	// A/B knobs (U2/U3/U5): `--keeper quality` flips the take-keeper policy; `--compression`
+	// derives each fixture's target from its own truth ratio. Both cache independently.
+	const keeperPolicy: KeeperPolicy = val("--keeper", "last") === "quality" ? "quality" : "last";
+	const compression = has("--compression");
 	// Positional dir = first non-flag arg that isn't a flag's value (--runs 3 etc).
-	const flagValues = new Set([val("--runs", ""), val("--auth", "")].filter(Boolean));
+	const flagValues = new Set(
+		[val("--runs", ""), val("--auth", ""), val("--keeper", "")].filter(Boolean),
+	);
 	const dirArg = args.find((a) => !a.startsWith("--") && !flagValues.has(a));
 
 	const fixtures: Fixture[] = [];
@@ -376,7 +409,7 @@ async function main(): Promise<void> {
 	// FULL-pipeline mode (R1): the app's own module + live LLM passes. --selftest
 	// stays detector-only (no tokens), so it can run in CI without auth.
 	if (wantLlm && !selftest) {
-		await runLlmMode({ fixtures, runs, authMode, wantJson });
+		await runLlmMode({ fixtures, runs, authMode, wantJson, keeperPolicy, compression });
 		return;
 	}
 

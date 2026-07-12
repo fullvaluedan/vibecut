@@ -14,17 +14,19 @@ let planDirectorVisionImpl: () => Promise<unknown> = async () => ({
 	usage: null,
 	degraded: false,
 });
-// Which planner the route dispatched to + the catalog it received (reset per test).
+// Which planner the route dispatched to + the catalog / compressionTarget it received.
 let lastPlanner: "text" | "vision" | null = null;
 let lastCatalog: unknown = undefined;
+let lastCompressionTarget: unknown = "unset";
 
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
 mock.module("@framecut/hf-bridge", () => ({
-	planDirector: (arg: { catalog?: unknown }) => {
+	planDirector: (arg: { catalog?: unknown; compressionTarget?: unknown }) => {
 		lastPlanner = "text";
 		lastCatalog = arg?.catalog;
+		lastCompressionTarget = arg?.compressionTarget;
 		return planDirectorImpl();
 	},
 	planDirectorVision: (arg: { catalog?: unknown }) => {
@@ -113,6 +115,42 @@ describe("/api/director/plan", () => {
 		lastCatalog = "sentinel";
 		await POST(post({ segments: [{ startSec: 0, endSec: 5, text: "hi" }], totalSec: 5 }));
 		expect(lastCatalog).toBeUndefined();
+	});
+
+	test("parses and forwards a numeric compressionTarget to the planner (U3)", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		lastCompressionTarget = "unset";
+		await POST(
+			post({
+				segments: [{ startSec: 0, endSec: 5, text: "hi" }],
+				totalSec: 5,
+				compressionTarget: 0.585,
+			}),
+		);
+		expect(lastCompressionTarget).toBe(0.585);
+	});
+
+	test("drops a non-numeric compressionTarget silently (field absent, U3)", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		for (const bad of ["0.5", null, {}, Number.NaN]) {
+			lastCompressionTarget = "unset";
+			const res = await POST(
+				post({
+					segments: [{ startSec: 0, endSec: 5, text: "hi" }],
+					totalSec: 5,
+					compressionTarget: bad,
+				}),
+			);
+			expect(res.status).toBe(200); // never a 400 — just dropped
+			expect(lastCompressionTarget).toBeUndefined();
+		}
+	});
+
+	test("forwards no compressionTarget when none is sent (U3 byte-identical default)", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		lastCompressionTarget = "unset";
+		await POST(post({ segments: [{ startSec: 0, endSec: 5, text: "hi" }], totalSec: 5 }));
+		expect(lastCompressionTarget).toBeUndefined();
 	});
 
 	test("routes to the VISION planner when valid frames are present, passing degraded through", async () => {
