@@ -39,6 +39,7 @@ import { detectTinyClipCuts } from "./tiny-clip";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 import { detectVadDeadAirCuts } from "./vad-dead-air";
 import { snapRemovalOps } from "./snap-cut";
+import { refineCutWordBounds } from "./refine-cut-words";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
 import { justifyCuts } from "./justify-cuts";
 import { buildOpeningDebugReport } from "./director-debug";
@@ -596,13 +597,20 @@ export async function buildDirectorProposals(
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
 	const energySnapped = snapRemovalOps({ ops: withSecondPass, envelope });
+	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
+	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move
+	// any removal edge that lands inside a word onto its nearest gap — shrink to exclude
+	// the word, or swallow it whole when its midpoint is in the cut — so trim-vs-cut and
+	// justifyCuts below judge word-safe edges. Fail-open with no words. (KTD1: overwrites
+	// startSec/endSec in place — the apply path reads only those.)
+	const wordRefined = refineCutWordBounds({ ops: energySnapped, words });
 	// Trim-vs-cut (U4/KTD4): a removal whose edge lands within a few frames of a clip
 	// boundary is aligned to it so the removal TRIMS that clip edge (swallowing the
 	// 2-frame / 13-frame slivers a cut left) instead of fragmenting the clip; a removal
 	// with both edges mid-clip stays a ripple-cut. Reuses the clipSpans + fps above.
 	// (Adjacent same-source slices are then merged post-apply by the consolidation pass.)
 	const trimmed = resolveTrimVsCut({
-		ops: energySnapped,
+		ops: wordRefined,
 		clipStartsSec: clipSpans.map((c) => c.startSec),
 		clipEndsSec: clipSpans.map((c) => c.endSec),
 		toleranceSec: REMNANT_FRAMES_TOLERANCE / fpsFloat,
