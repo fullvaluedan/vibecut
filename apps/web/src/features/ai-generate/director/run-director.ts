@@ -62,6 +62,8 @@ import {
 	type DirectorRetakeResponse,
 	type DirectorStructuralRequest,
 	type DirectorStructuralResponse,
+	type DirectorVerifyRequest,
+	type DirectorVerifyResponse,
 } from "./build-director-proposals";
 
 declare global {
@@ -332,6 +334,26 @@ export async function runDirector({
 						});
 						if (!res.ok) throw new Error(`Director structural failed (${res.status})`);
 						return (await res.json()) as DirectorStructuralResponse;
+					},
+				}
+			: {}),
+		// Verify sub-pass (U3): OMITTED unless at least one recall pass is wired in
+		// (`directorRetake` or `directorStructural`), since with neither on there are
+		// never any recall candidates to judge, so the fetch would be dead weight. This
+		// round still gates on the SAME two flags the recall passes use; U5 makes it
+		// unconditional alongside them once the consolidation gates pass.
+		...(useAiSettingsStore.getState().directorRetake ||
+		useAiSettingsStore.getState().directorStructural
+			? {
+					async verify(input: DirectorVerifyRequest): Promise<DirectorVerifyResponse> {
+						const res = await fetch("/api/director/verify", {
+							method: "POST",
+							headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+							signal,
+							body: JSON.stringify(input),
+						});
+						if (!res.ok) throw new Error(`Director verify failed (${res.status})`);
+						return (await res.json()) as DirectorVerifyResponse;
 					},
 				}
 			: {}),

@@ -258,7 +258,8 @@ function DirectorRetakeSection() {
 					Adds a dedicated AI pass that hunts retakes, false starts, and flubs at
 					word level and offers them as unchecked review rows (never auto-cut).
 					Off by default: measured as roughly break-even on quality, it mostly
-					adds rows to review. Costs one extra AI call per Director run.
+					adds rows to review. Turning it on also runs a shared verification call
+					that double-checks each proposed row before it reaches your review list.
 				</p>
 			</SectionContent>
 		</Section>
@@ -282,7 +283,9 @@ function DirectorStructuralSection() {
 					video&apos;s throughline, and offers whole sections a ruthless editor
 					would drop (tangents, weak takes, over-explanation) as unchecked review
 					rows. RECOMMENDED if you cut a lot: it surfaces the structural cuts the
-					other passes cannot see. Costs one extra AI call per Director run.
+					other passes cannot see. Turning it on also runs a shared verification
+					call that double-checks each proposed row before it reaches your review
+					list.
 				</p>
 			</SectionContent>
 		</Section>

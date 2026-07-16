@@ -29,6 +29,7 @@ mock.module("@framecut/hf-bridge", () => ({
 	planDirectorVision: async () => ({ plan: { operations: [] }, usage: null, degraded: false }),
 	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
 	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
+	planVerify: async () => ({ plan: { verdicts: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");
