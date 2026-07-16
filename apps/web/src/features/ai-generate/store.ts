@@ -102,6 +102,15 @@ interface AiSettingsStore {
 	directorRetake: boolean;
 	setDirectorRetake: (enabled: boolean) => void;
 	/**
+	 * Opt-in (default off), U3: run the dedicated structural-drop pass during
+	 * Director analysis, surfacing whole-section drops (tangents, weak takes,
+	 * over-explanation) as OFFERED-only review rows (never auto-applied). No UI
+	 * toggle yet; default stays OFF until the U4 measurement verdict, matching the
+	 * retake precedent.
+	 */
+	directorStructural: boolean;
+	setDirectorStructural: (enabled: boolean) => void;
+	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -207,6 +216,9 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			directorRetake: false,
 			setDirectorRetake: (directorRetake) => set({ directorRetake }),
+
+			directorStructural: false,
+			setDirectorStructural: (directorStructural) => set({ directorStructural }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),

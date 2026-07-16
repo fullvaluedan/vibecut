@@ -34,13 +34,14 @@ mock.module("@framecut/hf-bridge", () => ({
 		lastCatalog = arg?.catalog;
 		return planDirectorVisionImpl();
 	},
-	// Inert here, present so the sibling redundancy / context / retake route tests'
-	// process-global mock.module doesn't leave those routes' `planRedundancy` /
-	// `planContext` / `planRetake` imports unsatisfied when the route tests run in
-	// one `bun test` dir.
+	// Inert here, present so the sibling redundancy / context / retake / structural
+	// route tests' process-global mock.module doesn't leave those routes'
+	// `planRedundancy` / `planContext` / `planRetake` / `planStructural` imports
+	// unsatisfied when the route tests run in one `bun test` dir.
 	planRedundancy: async () => ({ plan: { groups: [] }, usage: null }),
 	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
 	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
+	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");

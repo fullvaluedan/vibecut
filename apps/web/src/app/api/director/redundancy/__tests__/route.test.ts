@@ -32,6 +32,10 @@ mock.module("@framecut/hf-bridge", () => ({
 	// Inert here, present so the sibling retake route test's process-global
 	// mock.module doesn't leave the retake route's `planRetake` import unsatisfied.
 	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
+	// Inert here, present so the sibling structural route test's process-global
+	// mock.module doesn't leave the structural route's `planStructural` import
+	// unsatisfied.
+	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");

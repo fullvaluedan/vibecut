@@ -32,16 +32,19 @@ describe("mapStructuralDrops", () => {
 		).toHaveLength(0);
 	});
 
-	test("keeps candidates at/above the floor (0.5..1.0) and NEVER defaultAccept true", () => {
+	test("keeps candidates at/above the tuned 0.6 floor and NEVER defaultAccept true", () => {
+		// The structural floor is 0.6 (STRUCTURAL_CONFIDENCE_FLOOR), stricter than the
+		// sibling passes' 0.5: on the tuning fixture every wrongly-flagged kept word
+		// lived below 0.6 while 0.6+ drops had zero kept-word collateral.
 		const ops = mapStructuralDrops({
 			drops: [
-				drop({ startSec: 0, endSec: 1, confidence: 0.5 }), // floor is inclusive
-				drop({ startSec: 2, endSec: 3, confidence: 0.75 }),
+				drop({ startSec: 0, endSec: 1, confidence: 0.5 }), // below the structural floor
+				drop({ startSec: 2, endSec: 3, confidence: 0.6 }), // floor is inclusive
 				drop({ startSec: 4, endSec: 5, confidence: 1.0 }),
 			],
 			totalSec: TOTAL,
 		});
-		expect(ops).toHaveLength(3);
+		expect(ops).toHaveLength(2);
 		// OFFERED-only: every surviving op starts unchecked, whatever its confidence.
 		expect(ops.every((o) => o.defaultAccept === false)).toBe(true);
 		expect(ops.some((o) => o.defaultAccept === true)).toBe(false);

@@ -3,8 +3,8 @@
  * review layer (U2). Each above-floor structural drop becomes a flat `cut` op with
  * category `structural`, ALWAYS `defaultAccept: false` (OFFERED-only: the recall pass
  * never auto-removes newly-surfaced sections, per R2/R10). Below the confidence floor
- * the drop is dropped entirely. The floor is the same 0.5 the redundancy and retake
- * passes use.
+ * the drop is dropped entirely. The floor is the pass's own tuned
+ * STRUCTURAL_CONFIDENCE_FLOOR (0.6), stricter than the sibling passes' 0.5.
  *
  * The structural pass resolves LINE-ID ranges to SECONDS inside hf-bridge, so this
  * module receives seconds and stays free of the line-id contract (seconds in/out at
@@ -14,7 +14,17 @@
 
 import type { DirectorOp, StructuralDrop } from "@framecut/hf-bridge";
 import { stableCutId } from "./cut-utils";
-import { DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR } from "./redundancy-apply";
+
+/**
+ * The structural pass's own confidence floor, HIGHER than the 0.5 the redundancy and
+ * retake passes use. Tuned on the how-to-edit fixture (2026-07-16): the model's
+ * confidence is well calibrated for section drops, and every wrongly-flagged kept
+ * word lived in the [0.5, 0.6) band (485 truth-cut vs 267 kept words, 1.8:1), while
+ * drops at 0.6+ hit 322 truth-cut words with ZERO kept words. On small-kept-set
+ * footage each kept word wrongly flagged costs the match metric double, so the floor
+ * trades low-confidence recall for measured-perfect precision (R8's 3:1 gate).
+ */
+export const STRUCTURAL_CONFIDENCE_FLOOR = 0.6;
 
 /**
  * R5b runaway-drop guard: a SINGLE structural candidate whose span covers more than
@@ -38,7 +48,7 @@ export const MAX_STRUCTURAL_DROP_FRACTION = 0.35;
 export function mapStructuralDrops({
 	drops,
 	totalSec,
-	confidenceFloor = DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR,
+	confidenceFloor = STRUCTURAL_CONFIDENCE_FLOOR,
 	maxDropFraction = MAX_STRUCTURAL_DROP_FRACTION,
 }: {
 	drops: readonly StructuralDrop[];

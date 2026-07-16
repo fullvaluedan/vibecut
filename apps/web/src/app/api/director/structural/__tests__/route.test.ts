@@ -2,12 +2,14 @@ import { describe, expect, mock, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 // Stub the auth resolver and the planner so the route's guard / validate / error
-// logic is tested without a real LLM call. bun's mock.module is process-global, so
-// the hf-bridge stub must satisfy every director route's imports (plan / redundancy /
-// context) when they run together in one `bun test` dir, hence the inert siblings.
+// logic is tested without a real LLM call. Registered before importing the route.
+// (planStructural is a VALUE import in the route: the mock MUST export it or the
+// route fails to load.) bun's mock.module is process-global, so whichever mock is
+// active when the sibling director routes load must also satisfy THEIR imports,
+// hence the inert siblings, matching the plan/redundancy/context/retake route tests.
 let authImpl: () => unknown = () => null;
-let planContextImpl: () => Promise<unknown> = async () => ({
-	plan: { topic: "", flags: [] },
+let planStructuralImpl: () => Promise<unknown> = async () => ({
+	plan: { drops: [] },
 	usage: null,
 });
 let lastLines: unknown = undefined;
@@ -16,40 +18,40 @@ mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
 mock.module("@framecut/hf-bridge", () => ({
-	planContext: (arg: { lines?: unknown }) => {
+	planStructural: (arg: { lines?: unknown }) => {
 		lastLines = arg?.lines;
-		return planContextImpl();
+		return planStructuralImpl();
 	},
-	// Inert siblings so the plan/redundancy/retake/structural route imports stay
-	// satisfied under the shared process-global mock.
+	// Inert here, present so the sibling director route tests' process-global
+	// mock.module doesn't leave their planner imports unsatisfied.
 	planRedundancy: async () => ({ plan: { groups: [] }, usage: null }),
 	planDirector: async () => ({ plan: { operations: [] }, usage: null }),
 	planDirectorVision: async () => ({ plan: { operations: [] }, usage: null, degraded: false }),
+	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
 	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
-	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");
 
 function post(body?: unknown): NextRequest {
-	return new NextRequest("http://localhost/api/director/context", {
+	return new NextRequest("http://localhost/api/director/structural", {
 		method: "POST",
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 }
 
 const goodLines = [
-	{ lineId: "L0", startSec: 0, endSec: 2, text: "how to build a website" },
-	{ lineId: "L1", startSec: 3, endSec: 5, text: "wait let me redo that" },
+	{ lineId: "L0", startSec: 0, endSec: 2, text: "so here's the plan" },
+	{ lineId: "L1", startSec: 2, endSec: 5, text: "let's build it" },
 ];
 
-describe("/api/director/context", () => {
+describe("/api/director/structural", () => {
 	test("401 when AI auth is not configured (no upstream call)", async () => {
 		authImpl = () => null;
 		let planned = false;
-		planContextImpl = async () => {
+		planStructuralImpl = async () => {
 			planned = true;
-			return { plan: { topic: "", flags: [] }, usage: null };
+			return { plan: { drops: [] }, usage: null };
 		};
 		const res = await POST(post({ lines: goodLines }));
 		expect(res.status).toBe(401);
@@ -60,24 +62,28 @@ describe("/api/director/context", () => {
 		authImpl = () => ({ mode: "claude-code" });
 		expect((await POST(post({}))).status).toBe(400);
 		expect((await POST(post({ lines: "nope" }))).status).toBe(400);
-		expect((await POST(post({ lines: [] }))).status).toBe(400);
 	});
 
 	test("happy path returns the plan + usage and forwards parsed lines", async () => {
 		authImpl = () => ({ mode: "claude-code" });
 		lastLines = undefined;
-		planContextImpl = async () => ({
+		planStructuralImpl = async () => ({
 			plan: {
-				topic: "how to build a website",
-				flags: [{ lineId: "L1", startSec: 3, endSec: 5, text: "wait let me redo that", confidence: 0.8, reason: "meta aside" }],
+				drops: [
+					{
+						startSec: 0,
+						endSec: 2,
+						reason: "off-throughline tangent",
+						confidence: 0.8,
+					},
+				],
 			},
 			usage: { inputTokens: 7, outputTokens: 3 },
 		});
 		const res = await POST(post({ lines: goodLines, taste: "be conservative" }));
 		expect(res.status).toBe(200);
 		const json = await res.json();
-		expect(json.plan.topic).toBe("how to build a website");
-		expect(json.plan.flags).toHaveLength(1);
+		expect(json.plan.drops).toHaveLength(1);
 		expect(json.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
 		expect(Array.isArray(lastLines)).toBe(true);
 	});
@@ -89,8 +95,8 @@ describe("/api/director/context", () => {
 			post({
 				lines: [
 					{ lineId: "L0", startSec: 0, endSec: 2, text: "ok" },
-					{ lineId: "L1", startSec: "bad", endSec: 5, text: "dropped, non-numeric start" },
-					{ startSec: 6, endSec: 8, text: "dropped, no lineId" },
+					{ lineId: "L1", startSec: "bad", endSec: 4, text: "dropped: non-numeric start" },
+					{ startSec: 4, endSec: 6, text: "dropped: no lineId" },
 				],
 			}),
 		);
@@ -101,14 +107,27 @@ describe("/api/director/context", () => {
 		}
 	});
 
-	test("500 when the planner throws", async () => {
+	test("empty lines array is valid (fail-open, R4) and still calls the planner", async () => {
 		authImpl = () => ({ mode: "claude-code" });
-		planContextImpl = async () => {
+		let planned = false;
+		planStructuralImpl = async () => {
+			planned = true;
+			return { plan: { drops: [] }, usage: null };
+		};
+		const res = await POST(post({ lines: [] }));
+		expect(res.status).toBe(200);
+		expect(planned).toBe(true);
+	});
+
+	test("planner failure degrades to an empty plan without a 500 (R4 fail-open)", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		planStructuralImpl = async () => {
 			throw new Error("upstream boom");
 		};
 		const res = await POST(post({ lines: goodLines }));
-		expect(res.status).toBe(500);
+		expect(res.status).toBe(200);
 		const json = await res.json();
-		expect(json.error).toContain("Context planning failed");
+		expect(json.plan.drops).toEqual([]);
+		expect(json.degraded).toBe(true);
 	});
 });

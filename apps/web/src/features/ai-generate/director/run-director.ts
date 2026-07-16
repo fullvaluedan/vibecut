@@ -60,6 +60,8 @@ import {
 	type DirectorContextResponse,
 	type DirectorRetakeRequest,
 	type DirectorRetakeResponse,
+	type DirectorStructuralRequest,
+	type DirectorStructuralResponse,
 } from "./build-director-proposals";
 
 declare global {
@@ -309,6 +311,27 @@ export async function runDirector({
 						});
 						if (!res.ok) throw new Error(`Director retake failed (${res.status})`);
 						return (await res.json()) as DirectorRetakeResponse;
+					},
+				}
+			: {}),
+		// Structural-drop pass (U3): OMITTED unless the user has opted in
+		// (`directorStructural`, default OFF, matching the retake precedent). Omitting
+		// the method entirely (rather than gating inside it) makes
+		// `buildDirectorProposals`'s `if (llm.structural)` guard skip the pass for zero
+		// cost, matching the eval adapter's `enableStructural` convention.
+		...(useAiSettingsStore.getState().directorStructural
+			? {
+					async structural(
+						input: DirectorStructuralRequest,
+					): Promise<DirectorStructuralResponse> {
+						const res = await fetch("/api/director/structural", {
+							method: "POST",
+							headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+							signal,
+							body: JSON.stringify(input),
+						});
+						if (!res.ok) throw new Error(`Director structural failed (${res.status})`);
+						return (await res.json()) as DirectorStructuralResponse;
 					},
 				}
 			: {}),
