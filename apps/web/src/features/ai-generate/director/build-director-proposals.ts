@@ -662,7 +662,7 @@ export async function buildDirectorProposals(
 				taste: taste || undefined,
 			});
 			const cuts = Array.isArray(rData?.plan?.cuts) ? rData.plan.cuts : [];
-			retakeCuts = mapRetakeCuts(cuts);
+			retakeCuts = mapRetakeCuts({ cuts });
 		} catch {
 			// route error / degraded → no retake candidates, the run continues (R7)
 		}

@@ -306,7 +306,8 @@ async function runLlmMode({
 	keeperPolicy: KeeperPolicy;
 	/** When true, compute each fixture's compression target from its own truth ratio. */
 	compression: boolean;
-	/** U3 retake-hunt pass on (default) or off (`--no-retake`), for the A/B against baseline. */
+	/** U3 retake-hunt pass, opt-in via `--retake` (mirrors the in-app default OFF per the
+	 * round-3 verdict: match-neutral-at-best, R10 keeps it off by default). */
 	retake: boolean;
 	/** U2 clamp on (default) or off (`--no-clamp`, threshold → Infinity), for the U3-only combo. */
 	clamp: boolean;
@@ -419,10 +420,11 @@ async function main(): Promise<void> {
 	// derives each fixture's target from its own truth ratio. Both cache independently.
 	const keeperPolicy: KeeperPolicy = val("--keeper", "last") === "quality" ? "quality" : "last";
 	const compression = has("--compression");
-	// U3 A/B knobs (both default ON so the eval mirrors the app): `--no-retake` skips the
-	// retake-hunt pass (A/B against the cached baseline); `--no-clamp` disables U2's clamp
-	// (its oversized threshold → Infinity, every plan op passes through) for the U3-only combo.
-	const retake = !has("--no-retake");
+	// U3 A/B knobs (defaults mirror the app: retake OFF per the round-3 verdict, clamp ON):
+	// `--retake` enables the retake-hunt pass (`--no-retake` still honored for the off
+	// state); `--no-clamp` disables U2's clamp (its oversized threshold → Infinity, every
+	// plan op passes through) for the U3-only combo.
+	const retake = has("--retake") && !has("--no-retake");
 	const clamp = !has("--no-clamp");
 	// Positional dir = first non-flag arg that isn't a flag's value (--runs 3 etc).
 	const flagValues = new Set(

@@ -110,3 +110,45 @@ Round 3 (plan docs/plans/2026-07-16-001) measures what Dan actually asked for: "
 | pokemon-tcg | 81.5% | 91.6% | 89.8% | 270 | 265 | 1.4% |
 
 **Decision: GO (R4).** The gap is missed-cuts dominated on every fixture (FN 265-3002 vs FP 106-457), exactly the retake/repeat material the round's recall lever targets, and the recall ceilings (89.8-97.0%) show 0.90 reachable on 3 of 4 fixtures with both levers. Stated risks: how-to-edit (79.6% removal footage) sits at 36.2% and likely misses the 0.90 bar even with both levers (R8 needs 3 of 4); google-omni needs the retake hunt to catch most of its 1081 missed words. Label noise is small (raw within ~0.5pp of adjusted everywhere), so the adjusted gate number is honest.
+
+## ADDENDUM 3 (2026-07-16): round-3 verdict — span discipline shipped, retake hunt measured out, compression rehabilitated by the clamp
+
+Round 3 (plan docs/plans/2026-07-16-001) shipped U1 (kept-output match rate + ceilings, the gate above), U2 (clamp-cut-extent span discipline, default ON), U3 (retake-hunt LLM pass v1+v2), U4 (in-app wiring, default OFF). All numbers OFFERED, noise-adjusted match / recall / essLost / missed unless stated. Raw match stayed within 0.5pp of adjusted on every fixture and combo, so no fixture triggers the raw-gap guard.
+
+### The four-combo table
+
+| fixture | baseline | +U2 clamp (now default) | +U2+U3 retake v2 | +U2+compression (opt-in) |
+|---|---|---|---|---|
+| google-omni | 61.6 / 26.3 / 106 / 1081 | 61.6 / 26.3 / 106 / 1081 | 61.0 / 26.3 / 120 / 1081 | **63.0 / 35.7 / 142 / 942** |
+| hermes-cloud | 75.3 / 46.9 / 457 / 875 | 75.5 / 46.2 / 441 / 887 | 75.2 / 48.4 / 474 / 851 | 74.9 / 51.5 / 520 / 800 |
+| how-to-edit | 36.2 / 28.0 / 172 / 3002 | 36.4 / 28.2 / 167 / 2995 | not measured (see below) | 35.2 / 25.7 / 183 / 3098 |
+| pokemon-tcg | 81.5 / 62.7 / 270 / 265 | 82.2 / 62.5 / 252 / 266 | 82.2 / 63.5 / 257 / 259 | **82.8 / 64.5 / 247 / 252** |
+
+AUTO essential-words-lost (bar 20): baseline 94/383/116/181 -> +U2 71/344/111/136 -> +U2+compression 64/374/126/131. The clamp cut AUTO essLost 24-45% and made compression AUTO-SAFER than baseline on google (64 vs 71) and pokemon (131 vs 136). With retake on, AUTO is byte-identical to retake-off by construction (OFFERED-only rows folded after the second pass).
+
+### What the retake hunt taught us (U3, two live iterations)
+
+v1 was precise but under-fetched: on google-omni its 26 usable candidates hit 89.7% word precision, but every truth-cut word it found was already flagged by the plan/redundancy passes. New recall: zero. v2 added a handled-region mask ([HANDLED] lines), an exhaustive line-by-line sweep demand, and 6k chunking. Result: still zero new recall on google (26.3%, 1081 missed, identical), +1pp on pokemon, +2.2pp on hermes, with essLost up 5-33 words and match down 0.0-0.6 everywhere. how-to-edit's retake cell was deliberately not measured: three fixtures establish the pattern, it is the structural outlier where this lever class provably fails, and a mid-run timeout loses all chunk progress (cache writes only on completion).
+
+**Conclusion: the remaining missed words are NOT word-level retake material.** The existing plan+redundancy+repeat machinery already catches the findable flubs. What survives is Dan's editorial ruthlessness: whole-section drops, weak-take elimination, and re-records with different wording. A defect-hunting pass cannot find cuts that are not defects.
+
+### Adopted defaults (R10, the measurement decides)
+
+1. **U2 clamp: default ON** (shipped unconditional). Improves or holds every OFFERED metric, cuts AUTO essLost materially, never costs recall more than 1pp.
+2. **Retake pass: default OFF.** In-app behind the `directorRetake` flag (off), eval behind `--retake`. Match-neutral-at-best on 3 measured fixtures; it does surface genuine review rows with reasons, so it stays available, but R10 does not permit a default for a lever the scorecard cannot justify.
+3. **Compression: stays opt-in, recommendation upgraded.** With the clamp demoting its oversized spans, compression now RAISES match on google (+1.4) and pokemon (+0.6) while lifting recall +9.4pp/+2.0pp, and its old AUTO essLost cost is gone on those fixtures. It still hurts hermes match (-0.6) and how-to-edit (-1.2, recall down too, the round-2 finding again). Per-fixture, not universal: an in-app default stays off until the structural lever exists.
+4. Keeper stays `last`; no accept-gate constants moved.
+
+### Success bars (R8): NOT met — stated plainly
+
+- OFFERED adjusted match >= 0.90 on 3 of 4 fixtures: **MISSED everywhere.** Best cell is pokemon at 82.8 (compression), 7.2 points short; google 63.0; how-to-edit 36.4. 
+- AUTO essential-words-lost < 20 per fixture: **MISSED** (best 64-131 band), though improved 24-45% by the clamp. The remaining AUTO essLost floor is detector-sourced (pacing/repeat), not LLM spans: a different follow-up than span discipline.
+- OFFERED essLost and missed both materially down: essLost down on 3 of 4 (default config); missed down only marginally without compression.
+
+### Review-effort gap (what OFFERED-vs-AUTO means for Dan, default config)
+
+To move from the one-click AUTO draft to the OFFERED number, Dan accepts roughly this many additional true-cut words (and rejects this many wrongly-flagged kept words) per video: google 113 accept / 35 reject; hermes 213 / 97; how-to-edit 451 / 56; pokemon 128 / 116. The OFFERED match rate is a review-assisted ceiling, not the draft he opens.
+
+### The next lever (named, per R8)
+
+A **structural-drop pass**: section/line-granularity, OFFERED-only review rows proposing whole-tangent and weak-take drops (the compression contract's judgment, emitted through the OFFERED machinery instead of inflating plan-pass spans). Evidence: compression's +9.4pp recall on google shows the LLM CAN identify this material when licensed; the clamp + defaultAccept:false machinery shipped this round is exactly the safety envelope it needed. Secondary: attack the detector-sourced AUTO essLost floor (pacing spans overlapping kept words), and more fixtures from _Finals when a Groq key exists.

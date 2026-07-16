@@ -28,10 +28,13 @@ export const MIN_RETAKE_REMAINDER_SEC = 0.3;
  * with category `retake`. Never emits `take_select`/`keep`/`reorder`. Ids follow the
  * same `stableCutId` convention as the sibling detectors.
  */
-export function mapRetakeCuts(
-	cuts: readonly RetakeCut[],
-	confidenceFloor: number = DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR,
-): DirectorOp[] {
+export function mapRetakeCuts({
+	cuts,
+	confidenceFloor = DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR,
+}: {
+	cuts: readonly RetakeCut[];
+	confidenceFloor?: number;
+}): DirectorOp[] {
 	const ops: DirectorOp[] = [];
 	for (const cut of cuts) {
 		if (cut.confidence < confidenceFloor) continue; // below floor → drop

@@ -175,7 +175,7 @@ export function scoreCutProposals({
 	}
 
 	// Kept-class F1 with the empty-matrix guard (1.0, matching cutRecall/precision).
-	const keptF1 = (tpK: number, fpK: number, fnK: number): number => {
+	const keptF1 = ({ tpK, fpK, fnK }: { tpK: number; fpK: number; fnK: number }): number => {
 		const denom = 2 * tpK + fpK + fnK;
 		return denom === 0 ? 1 : (2 * tpK) / denom;
 	};
@@ -204,12 +204,12 @@ export function scoreCutProposals({
 		cutPrecision: proposedCutWords === 0 ? 1 : tp / proposedCutWords,
 		essentialWordsLost: fp,
 		missedCutWords: fn,
-		matchRate: keptF1(bothKeep, fn, fp),
-		matchRateAdjusted: keptF1(bothKeepAdj, missedAdj, lostAdj),
+		matchRate: keptF1({ tpK: bothKeep, fpK: fn, fnK: fp }),
+		matchRateAdjusted: keptF1({ tpK: bothKeepAdj, fpK: missedAdj, fnK: lostAdj }),
 		// FP zeroed: false-cuts (kept-FN) become kept-correct (span-discipline ceiling).
-		matchRateFpZeroed: keptF1(bothKeepAdj + lostAdj, missedAdj, 0),
+		matchRateFpZeroed: keptF1({ tpK: bothKeepAdj + lostAdj, fpK: missedAdj, fnK: 0 }),
 		// FN zeroed: missed-cuts (kept-FP) become cut-correct (recall ceiling).
-		matchRateFnZeroed: keptF1(bothKeepAdj, 0, lostAdj),
+		matchRateFnZeroed: keptF1({ tpK: bothKeepAdj, fpK: 0, fnK: lostAdj }),
 		counts: {
 			rawWords: rawWords.length,
 			truthCutWords,
