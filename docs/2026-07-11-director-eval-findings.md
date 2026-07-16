@@ -182,3 +182,27 @@ Max-assist sanity point (structural + retake, pokemon): 81.0, WORSE than structu
 ### Next lever (named)
 
 Boundary precision on interleaved footage (google/hermes): the structural pass finds the right sections but bleeds into adjacent kept lines. Candidate devices: a per-drop verify sub-pass (judge each proposed range against the throughline reason it claims), or line-level confidence from the model (score each line inside the range, trim tail lines below the floor). Secondary: the round-3 residuals (detector-sourced AUTO essLost floor; more fixtures when a Groq key exists).
+
+## ADDENDUM 5 (2026-07-16): round-5 verdict — the verify sub-pass ships, the consolidation does not (yet)
+
+Round 5 (plan docs/plans/2026-07-16-003) shipped the verify sub-pass end to end: one batched damage-review call over all recall-pass candidates (C-indexed keep/reject/tighten verdicts, tightens resolved per candidate through the reference contract, inside-only, fail-open at every layer, no LLM call when no candidates exist). It is wired into the eval and the app (active whenever a recall pass is on). The consolidation (both passes default-on, toggles deleted) was CONDITIONAL on measurement gates and they did not pass. Defaults stay off.
+
+### What the verifier proved it can do
+
+google-omni, isolated structural arm: the verifier read 7 candidates and rejected exactly ONE, a drop carrying ~46 wrongly-flagged kept words. Result: match 61.6 to 63.8 (google's best number in any round, beating even compression+clamp), essential-words-lost BELOW the no-pass baseline (105 vs 106), recall untouched. R6 ratio effectively infinite. Verify's worst case is keep-everything, a no-op by construction: it never regressed any number in any run.
+
+### Why the gates still failed
+
+1. **hermes: judgment saturation, not mechanics.** Two prompt generations (v2 added per-line interior rendering and an explicit edge-bleed tighten bias after v1 rubber-stamped) both returned keep-14 on hermes' structural candidates. A probe showed 73 of the 103 bleeding kept words are WHOLE kept lines inside the drops, perfectly expressible as line tightens; the model simply judges them as part of the droppable sections. Same wall the retake pass hit on hermes in round 3: Dan's hermes keeps are editorially idiosyncratic relative to the transcript, and transcript-only judgment saturates there.
+2. **Sampling variance confounds single-run gates.** The full-combo arms re-rolled the structural pass (retake rows change its handled-mask, busting its cache) and the fresh samples swung wildly: google's structural response went from 5 good drops (63.8 match) to 2 poor ones (58.8) across two draws of the same config family; hermes drew 31 rows instead of 13. At gate granularity (3:1 ratios, 0.6-point regressions) single-run measurement is noise-dominated. The round-2 caveat ("--runs 3 should precede any threshold tuning") is now the binding constraint.
+3. Also caught and fixed in passing: the eval cache keyed only on pass INPUT, so a prompt wording change silently replayed stale verdicts; VERIFY_PROMPT_VERSION now rides the payload.
+
+### Adopted state
+
+1. **Verify ships as built, active whenever a recall pass is enabled** (it can only remove or shrink review rows; measured strictly non-harmful).
+2. **directorRetake / directorStructural stay opt-in** (Settings toggles remain). The consolidation waits.
+3. Eval flags: --retake, --structural, --no-verify, --compression, --keeper.
+
+### The next lever (named)
+
+Variance-aware gating: aggregate the gate metrics over --runs 3 (the runner already supports per-run cache indexing) so pass/fail reflects the distribution, not one draw. Secondary: hermes-class footage (interleaved editorial keeps) is beyond transcript-only judgment; the honest levers there are Dan's own review (the rows exist, with reasons) or vision/audio signals. The 0.90 bar stands; best measured cells today: google 63.8, hermes 75.5, how-to-edit 38.1, pokemon 82.9.
