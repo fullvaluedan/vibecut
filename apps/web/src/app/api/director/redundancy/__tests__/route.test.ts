@@ -29,6 +29,9 @@ mock.module("@framecut/hf-bridge", () => ({
 	// Inert here, present so the sibling context route test's process-global
 	// mock.module doesn't leave the context route's `planContext` import unsatisfied.
 	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
+	// Inert here, present so the sibling retake route test's process-global
+	// mock.module doesn't leave the retake route's `planRetake` import unsatisfied.
+	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");

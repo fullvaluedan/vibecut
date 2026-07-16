@@ -93,6 +93,15 @@ interface AiSettingsStore {
 	directorVadGatedTranscriptionEnabled: boolean;
 	setDirectorVadGatedTranscriptionEnabled: (enabled: boolean) => void;
 	/**
+	 * Opt-in (default off), U4: run the dedicated retake-hunt pass during Director
+	 * analysis, surfacing word-level retakes/false-starts/flubs as OFFERED-only
+	 * review rows (never auto-applied). Default OFF per the U5 measurement verdict
+	 * (match-neutral-at-best) and R10 (nothing new auto-applies, no default loosens
+	 * without a clear scorecard justification) — available, not on by default.
+	 */
+	directorRetake: boolean;
+	setDirectorRetake: (enabled: boolean) => void;
+	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -195,6 +204,9 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			setDirectorVadGatedTranscriptionEnabled: (
 				directorVadGatedTranscriptionEnabled,
 			) => set({ directorVadGatedTranscriptionEnabled }),
+
+			directorRetake: false,
+			setDirectorRetake: (directorRetake) => set({ directorRetake }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),
