@@ -209,4 +209,30 @@ describe("alignTranscripts (ground truth from raw vs final)", () => {
 			expect(span.endIndex).toBeLessThan(insertStart + 8);
 		}
 	});
+
+	test("substitutionSpans expose the mis-transcribed run indices", () => {
+		// "gonna" (raw idx 2) vs "going to" is a substitution, not a cut.
+		const raw = words("we are gonna configure the server");
+		const final = words("we are going to configure the server");
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		expect(result.substitutionSpans).toHaveLength(1);
+		expect(result.substitutionSpans[0].startIndex).toBe(2);
+		expect(result.substitutionSpans[0].endIndex).toBe(2);
+		expect(result.substitutionSpans[0].text).toBe("gonna");
+		// The spans account for exactly the substitutionWords count.
+		const spanWords = result.substitutionSpans.reduce(
+			(n, s) => n + (s.endIndex - s.startIndex + 1),
+			0,
+		);
+		expect(spanWords).toBe(result.substitutionWords);
+	});
+
+	test("substitutionSpans is empty when there are no substitutions", () => {
+		// A deleted filler is a cut (empty facing gap), never a substitution.
+		const raw = words("and then um you click the deploy button");
+		const final = words("and then you click the deploy button");
+		const result = alignTranscripts({ rawWords: raw, finalWords: final });
+		expect(result.substitutionSpans).toEqual([]);
+		expect(result.substitutionWords).toBe(0);
+	});
 });

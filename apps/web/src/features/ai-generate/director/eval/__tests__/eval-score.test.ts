@@ -149,6 +149,121 @@ describe("scoreCutProposals", () => {
 	});
 });
 
+describe("kept-output match rate (R1/R2/R3)", () => {
+	// 10 distinct words so nothing triggers the duplicate-attribution swap.
+	const raw = words(
+		"alpha bravo charlie delta echo foxtrot golf hotel india juliet",
+	);
+
+	test("hand-computed kept-F1 on an FP/FN mix", () => {
+		// Truth cut = {3,4,5}. Proposal cuts {4,5,6,7} (midpoint rule):
+		//   bothKeep=5 (0,1,2,8,9), missedCut(fn)=1 ({3}), essentialLost(fp)=2 ({6,7}).
+		const truth = [truthSpan(raw, 3, 5)];
+		const sc = scoreCutProposals({
+			rawWords: raw,
+			truthCutSpans: truth,
+			proposedSpans: [{ startSec: raw[4].start, endSec: raw[7].end }],
+		});
+		expect(sc.essentialWordsLost).toBe(2);
+		expect(sc.missedCutWords).toBe(1);
+		// kept-F1 = 2*bothKeep / (2*bothKeep + fn + fp) = 10 / 13.
+		expect(sc.matchRate).toBeCloseTo(10 / 13, 6);
+		// No noise excluded → adjusted equals raw.
+		expect(sc.matchRateAdjusted).toBeCloseTo(10 / 13, 6);
+		// FP zeroed (essential-lost → kept-correct): 2*(5+2)/(2*7 + 1 + 0) = 14/15.
+		expect(sc.matchRateFpZeroed).toBeCloseTo(14 / 15, 6);
+		// FN zeroed (missed-cut → cut-correct): 2*5/(2*5 + 0 + 2) = 10/12.
+		expect(sc.matchRateFnZeroed).toBeCloseTo(10 / 12, 6);
+	});
+
+	test("perfect proposal scores 1.0 raw and adjusted", () => {
+		const pRaw = words("intro line here um wait no the real content follows");
+		const truth = [truthSpan(pRaw, 3, 5)];
+		const sc = scoreCutProposals({
+			rawWords: pRaw,
+			truthCutSpans: truth,
+			proposedSpans: [{ startSec: pRaw[3].start, endSec: pRaw[5].end }],
+		});
+		expect(sc.matchRate).toBe(1);
+		expect(sc.matchRateAdjusted).toBe(1);
+		expect(sc.matchRateFpZeroed).toBe(1);
+		expect(sc.matchRateFnZeroed).toBe(1);
+	});
+
+	test("noise-adjusted excludes substitution/moved words; raw does not", () => {
+		// Truth cut = {3,4}. Word 6 (golf) is a kept substitution word. Proposal
+		// correctly cuts {3,4} but wrongly cuts word 6 → one essential-lost.
+		const truth = [truthSpan(raw, 3, 4)];
+		const noiseSpans = [truthSpan(raw, 6, 6)];
+		const sc = scoreCutProposals({
+			rawWords: raw,
+			truthCutSpans: truth,
+			proposedSpans: [
+				{ startSec: raw[3].start, endSec: raw[4].end },
+				{ startSec: raw[6].start, endSec: raw[6].end },
+			],
+			noiseSpans,
+		});
+		// Raw still penalizes the wrongly-cut noise word.
+		expect(sc.essentialWordsLost).toBe(1);
+		expect(sc.matchRate).toBeCloseTo(14 / 15, 6); // 2*7/(2*7 + 0 + 1)
+		// Adjusted drops word 6 from the matrix → the only error vanishes.
+		expect(sc.matchRateAdjusted).toBe(1);
+		expect(sc.matchRateAdjusted).toBeGreaterThan(sc.matchRate);
+	});
+
+	test("zero proposals yields a defined match rate (no NaN)", () => {
+		const pRaw = words("intro line here um wait no the real content follows");
+		const truth = [truthSpan(pRaw, 3, 5)]; // 3 truth-cut words survive
+		const sc = scoreCutProposals({
+			rawWords: pRaw,
+			truthCutSpans: truth,
+			proposedSpans: [],
+		});
+		expect(Number.isNaN(sc.matchRate)).toBe(false);
+		// bothKeep=7, missedCut(fn)=3, essentialLost(fp)=0 → 14 / 17.
+		expect(sc.matchRate).toBeCloseTo(14 / 17, 6);
+	});
+
+	test("all-cut proposals yields a defined match rate (no NaN)", () => {
+		const pRaw = words("intro line here um wait no the real content follows");
+		const truth = [truthSpan(pRaw, 3, 5)];
+		const sc = scoreCutProposals({
+			rawWords: pRaw,
+			truthCutSpans: truth,
+			proposedSpans: [{ startSec: pRaw[0].start, endSec: pRaw[9].end }],
+		});
+		expect(Number.isNaN(sc.matchRate)).toBe(false);
+		// bothKeep=0, essentialLost=7 → 2*0/(0+0+7) = 0.
+		expect(sc.matchRate).toBe(0);
+	});
+
+	test("empty matrix guards to 1.0, never NaN", () => {
+		const sc = scoreCutProposals({
+			rawWords: [],
+			truthCutSpans: [],
+			proposedSpans: [],
+		});
+		expect(sc.matchRate).toBe(1);
+		expect(sc.matchRateAdjusted).toBe(1);
+		expect(sc.matchRateFpZeroed).toBe(1);
+		expect(sc.matchRateFnZeroed).toBe(1);
+	});
+
+	test("formatScorecard prints the kept-output match line", () => {
+		const truth = [truthSpan(raw, 3, 5)];
+		const sc = scoreCutProposals({
+			rawWords: raw,
+			truthCutSpans: truth,
+			proposedSpans: [{ startSec: raw[4].start, endSec: raw[7].end }],
+		});
+		const text = formatScorecard("fixture-a", sc);
+		expect(text).toContain("kept-output match");
+		expect(text).toContain("raw /");
+		expect(text).toContain("span-discipline");
+	});
+});
+
 describe("dual proposal sets (auto vs offered, R6/KTD4)", () => {
 	const raw = words("intro line here um wait no the real content follows");
 	const truth = [truthSpan(raw, 3, 5)];

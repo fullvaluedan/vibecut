@@ -33,6 +33,11 @@ export interface AlignmentResult {
 	/** Raw words judged mis-transcribed (substitution) — kept, but counted so
 	 * a noisy transcript pair is visible in the report. */
 	substitutionWords: number;
+	/** Raw index runs classified as substitution (an unmatched raw run facing a
+	 * non-empty final gap under the length-parity rule): the per-word exposure
+	 * of `substitutionWords`, so the scorer can exclude these words from the
+	 * noise-adjusted match rate (mirrors `movedSpans`). */
+	substitutionSpans: TruthCutSpan[];
 	/** Final-side words with no raw counterpart (added VO/b-roll audio) —
 	 * ignored for labels but reported. */
 	finalOnlyWords: number;
@@ -244,6 +249,7 @@ export function alignTranscripts({
 	// substitution (misheard, KEPT).
 	const rawKept = new Array<boolean>(rawWords.length).fill(true);
 	let substitutionWords = 0;
+	const substitutionSpans: TruthCutSpan[] = [];
 	let finalOnlyWords = 0;
 	let i = 0;
 	let j = 0;
@@ -287,6 +293,16 @@ export function alignTranscripts({
 		if (isSubstitution) {
 			// Substitution: the content survived, the transcriber disagreed.
 			substitutionWords += rawLen;
+			substitutionSpans.push({
+				startIndex: runStart,
+				endIndex: i - 1,
+				startSec: rawWords[runStart].start,
+				endSec: rawWords[i - 1].end,
+				text: rawWords
+					.slice(runStart, i)
+					.map((w) => w.text)
+					.join(" "),
+			});
 		} else {
 			// Deletion (with or without a small insertion facing it). The facing
 			// final words, if any, are final-only insertions.
@@ -386,6 +402,7 @@ export function alignTranscripts({
 		rawKept,
 		truthCutSpans,
 		substitutionWords,
+		substitutionSpans,
 		finalOnlyWords,
 		movedWords,
 		movedSpans,

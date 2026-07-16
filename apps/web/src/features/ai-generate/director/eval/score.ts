@@ -33,6 +33,23 @@ export interface Scorecard {
 	essentialWordsLost: number;
 	/** Words Dan cut that we failed to propose — surviving repeats/mistakes. */
 	missedCutWords: number;
+	/** Kept-output match rate: F1 of the KEPT class over per-raw-word masks
+	 * (truth-kept vs draft-kept). How much of Dan's final edit the draft
+	 * reproduces. Kept-class TP = words both keep, kept-FP = missed-cut words
+	 * (truth cut, draft keeps), kept-FN = essential words lost (truth keeps,
+	 * draft cuts). An empty matrix guards to 1.0 (nothing to disagree on),
+	 * matching cutRecall/cutPrecision; never NaN. */
+	matchRate: number;
+	/** `matchRate` with substitution/moved (label-noise) words excluded from the
+	 * matrix entirely (the ceiling that stays meaningful when re-recorded
+	 * wording makes the raw number unreachable). */
+	matchRateAdjusted: number;
+	/** Adjusted match rate recomputed with every false-cut (essential words lost)
+	 * treated as kept-correct: the span-discipline ceiling. */
+	matchRateFpZeroed: number;
+	/** Adjusted match rate recomputed with every missed-cut treated as
+	 * cut-correct: the recall ceiling. */
+	matchRateFnZeroed: number;
 	counts: {
 		rawWords: number;
 		truthCutWords: number;
@@ -86,10 +103,14 @@ export function scoreCutProposals({
 	rawWords,
 	truthCutSpans,
 	proposedSpans,
+	noiseSpans,
 }: {
 	rawWords: TranscriptionWord[];
 	truthCutSpans: TruthCutSpan[];
 	proposedSpans: ProposedCutSpan[];
+	/** Raw index runs excluded from the noise-adjusted match rate (substitution +
+	 * moved words). Optional: absent means adjusted equals raw. */
+	noiseSpans?: TruthCutSpan[];
 }): Scorecard {
 	const truthCut = new Array<boolean>(rawWords.length).fill(false);
 	for (const span of truthCutSpans) {
@@ -116,21 +137,48 @@ export function scoreCutProposals({
 		}
 	}
 
+	// Words excluded from the noise-adjusted kept-F1 (substitution + moved runs).
+	const excluded = new Array<boolean>(rawWords.length).fill(false);
+	for (const span of noiseSpans ?? []) {
+		for (let i = span.startIndex; i <= span.endIndex; i++) {
+			if (i >= 0 && i < rawWords.length) excluded[i] = true;
+		}
+	}
+
 	let tp = 0;
 	let fn = 0;
 	let fp = 0;
+	// Kept-class matrix: bothKeep = kept-TP; fn (missed cut) = kept-FP; fp
+	// (essential lost) = kept-FN. Raw variant reuses fn/fp; the *Adj variants
+	// drop the excluded (noise) words. Words both cut are kept-TN, uncounted.
+	let bothKeep = 0;
+	let bothKeepAdj = 0;
+	let missedAdj = 0;
+	let lostAdj = 0;
 	const missedFlags = new Array<boolean>(rawWords.length).fill(false);
 	const falseFlags = new Array<boolean>(rawWords.length).fill(false);
 	for (let i = 0; i < rawWords.length; i++) {
+		const included = !excluded[i];
 		if (truthCut[i] && proposedCut[i]) tp++;
 		else if (truthCut[i] && !proposedCut[i]) {
 			fn++;
 			missedFlags[i] = true;
+			if (included) missedAdj++;
 		} else if (!truthCut[i] && proposedCut[i]) {
 			fp++;
 			falseFlags[i] = true;
+			if (included) lostAdj++;
+		} else {
+			bothKeep++;
+			if (included) bothKeepAdj++;
 		}
 	}
+
+	// Kept-class F1 with the empty-matrix guard (1.0, matching cutRecall/precision).
+	const keptF1 = (tpK: number, fpK: number, fnK: number): number => {
+		const denom = 2 * tpK + fpK + fnK;
+		return denom === 0 ? 1 : (2 * tpK) / denom;
+	};
 
 	// Boundary error over truth spans we engaged at all: distance between the
 	// truth span's edges and the nearest proposed span's matching edges.
@@ -156,6 +204,12 @@ export function scoreCutProposals({
 		cutPrecision: proposedCutWords === 0 ? 1 : tp / proposedCutWords,
 		essentialWordsLost: fp,
 		missedCutWords: fn,
+		matchRate: keptF1(bothKeep, fn, fp),
+		matchRateAdjusted: keptF1(bothKeepAdj, missedAdj, lostAdj),
+		// FP zeroed: false-cuts (kept-FN) become kept-correct (span-discipline ceiling).
+		matchRateFpZeroed: keptF1(bothKeepAdj + lostAdj, missedAdj, 0),
+		// FN zeroed: missed-cuts (kept-FP) become cut-correct (recall ceiling).
+		matchRateFnZeroed: keptF1(bothKeepAdj, 0, lostAdj),
 		counts: {
 			rawWords: rawWords.length,
 			truthCutWords,
@@ -224,21 +278,26 @@ export function scoreDual({
 	rawWords,
 	truthCutSpans,
 	operations,
+	noiseSpans,
 }: {
 	rawWords: TranscriptionWord[];
 	truthCutSpans: TruthCutSpan[];
 	operations: readonly DirectorOp[];
+	/** Substitution + moved runs excluded from the noise-adjusted match rate. */
+	noiseSpans?: TruthCutSpan[];
 }): DualScorecard {
 	return {
 		auto: scoreCutProposals({
 			rawWords,
 			truthCutSpans,
 			proposedSpans: toProposedCutSpans(operations, "auto"),
+			noiseSpans,
 		}),
 		offered: scoreCutProposals({
 			rawWords,
 			truthCutSpans,
 			proposedSpans: toProposedCutSpans(operations, "offered"),
+			noiseSpans,
 		}),
 		autoBySource: proposalsBySource(operations, "auto"),
 		offeredBySource: proposalsBySource(operations, "offered"),
@@ -257,6 +316,7 @@ export function formatScorecard(name: string, sc: Scorecard): string {
 		`=== ${name} ===`,
 		`cut recall     ${pct(sc.cutRecall)}  (caught ${sc.counts.truePositives}/${sc.counts.truthCutWords} words Dan cut)`,
 		`cut precision  ${pct(sc.cutPrecision)}`,
+		`kept-output match     ${pct(sc.matchRate)} raw / ${pct(sc.matchRateAdjusted)} adj  (ceilings: span-discipline ${pct(sc.matchRateFpZeroed)}, recall ${pct(sc.matchRateFnZeroed)})`,
 		`ESSENTIAL WORDS LOST  ${sc.essentialWordsLost}  (kept words our cuts would destroy — bar is 0)`,
 		`missed cut words      ${sc.missedCutWords}  (mistakes that would survive)`,
 		sc.meanBoundaryErrorSec === null

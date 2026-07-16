@@ -97,3 +97,16 @@ Net: **U5 changes no in-app constant.** The gate's verdict is "keep today's cons
 1. **Essential-words-lost is span-EXTENT, not edge, dominated.** Mean boundary error is 3-9s, not sub-second — the LLM chooses cut *spans* much larger/different than Dan's, so U1's word-refinement (a sub-frame correction, active in every combo here and correct by construction) cannot move this aggregate. The lever is span granularity: word-level cut spans from the plan pass, or clamping cut extents to Dan-sized removals.
 2. **Recall needs a dedicated retake-hunt pass** (deferred follow-up #3). Compression trades essLost for recall; it cannot lift recall *without* the essLost cost. A word-granularity recall pass that surfaces retakes/false-starts as OFFERED (not AUTO) rows is the safe way to close the under-cutting gap.
 3. **how-to-edit is the outlier**: at an 79.6% truth removal ratio, compression *lowered* recall (28.0% -> 25.6%) — told to cut 80%, the LLM cut different spans than Dan. Extreme-compression footage needs the take/recall structure, not a bigger prompt number.
+
+## ROUND-3 GATE (2026-07-16): kept-output match rate baseline, decision GO
+
+Round 3 (plan docs/plans/2026-07-16-001) measures what Dan actually asked for: "the draft should match ~90% of my final edit." New metric: kept-output match rate (F1 over per-word kept masks, raw + noise-adjusted), with counterfactual ceilings (FP zeroed = span-discipline lever alone; FN zeroed = recall lever alone). Baseline from cached responses, OFFERED, noise-adjusted:
+
+| fixture | match (adj) | span-discipline ceiling | recall ceiling | essLost | missed words | noise share |
+|---|---|---|---|---|---|---|
+| google-omni | 61.6% | 64.2% | 97.0% | 106 | 1081 | 2.8% |
+| hermes-cloud | 75.3% | 84.9% | 90.0% | 457 | 875 | 1.8% |
+| how-to-edit | 36.2% | 41.6% | 91.4% | 172 | 3002 | 0.1% |
+| pokemon-tcg | 81.5% | 91.6% | 89.8% | 270 | 265 | 1.4% |
+
+**Decision: GO (R4).** The gap is missed-cuts dominated on every fixture (FN 265-3002 vs FP 106-457), exactly the retake/repeat material the round's recall lever targets, and the recall ceilings (89.8-97.0%) show 0.90 reachable on 3 of 4 fixtures with both levers. Stated risks: how-to-edit (79.6% removal footage) sits at 36.2% and likely misses the 0.90 bar even with both levers (R8 needs 3 of 4); google-omni needs the retake hunt to catch most of its 1081 missed words. Label noise is small (raw within ~0.5pp of adjusted everywhere), so the adjusted gate number is honest.

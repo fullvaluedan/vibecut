@@ -155,6 +155,7 @@ function runFixture(fixture: Fixture): {
 			rawWords: fixture.rawWords,
 			truthCutSpans: alignment.truthCutSpans,
 			proposedSpans: proposals,
+			noiseSpans: [...alignment.substitutionSpans, ...alignment.movedSpans],
 		}),
 		proposalsBySource,
 		substitutionWords: alignment.substitutionWords,
@@ -240,7 +241,7 @@ function meanSpread(xs: number[]): { mean: number; spread: number } {
 function printLlmFixture(
 	name: string,
 	runs: DualScorecard[],
-	movedWords: number,
+	noise: { movedWords: number; substitutionWords: number; rawWordCount: number },
 ): void {
 	const first = runs[0];
 	console.log(formatScorecard(`${name} — AUTO (one-click apply)`, first.auto));
@@ -248,8 +249,16 @@ function printLlmFixture(
 	console.log("");
 	console.log(formatScorecard(`${name} — OFFERED (all review rows)`, first.offered));
 	console.log(`proposals by source    ${fmtSources(first.offeredBySource)}`);
-	if (movedWords > 0) {
-		console.log(`moved (reordered)      ${movedWords} words (excluded from truth cuts)`);
+	// Noise share: the label-noise words the adjusted match rate excludes, so the
+	// raw-vs-adjusted gap is legible next to the headline number.
+	const noiseWords = noise.substitutionWords + noise.movedWords;
+	const noisePct =
+		noise.rawWordCount > 0 ? (noiseWords / noise.rawWordCount) * 100 : 0;
+	console.log(
+		`noise share            ${noiseWords} words (${noisePct.toFixed(1)}% of raw): ${noise.substitutionWords} substitution + ${noise.movedWords} moved`,
+	);
+	if (noise.movedWords > 0) {
+		console.log(`moved (reordered)      ${noise.movedWords} words (excluded from truth cuts)`);
 	}
 	if (runs.length > 1) {
 		const pctMS = (xs: number[]) => {
@@ -323,6 +332,10 @@ async function runLlmMode({
 					rawWords: fixture.rawWords as TranscriptionWord[],
 					truthCutSpans: alignment.truthCutSpans,
 					operations,
+					noiseSpans: [
+						...alignment.substitutionSpans,
+						...alignment.movedSpans,
+					],
 				}),
 			);
 		}
@@ -335,7 +348,11 @@ async function runLlmMode({
 				runs: runResults,
 			});
 		} else {
-			printLlmFixture(fixture.name, runResults, alignment.movedWords);
+			printLlmFixture(fixture.name, runResults, {
+				movedWords: alignment.movedWords,
+				substitutionWords: alignment.substitutionWords,
+				rawWordCount: fixture.rawWords.length,
+			});
 		}
 	}
 	if (wantJson) console.log(JSON.stringify(jsonOut, null, 2));
