@@ -297,6 +297,7 @@ async function runLlmMode({
 	keeperPolicy,
 	compression,
 	retake,
+	structural,
 	clamp,
 }: {
 	fixtures: Fixture[];
@@ -309,6 +310,10 @@ async function runLlmMode({
 	/** U3 retake-hunt pass, opt-in via `--retake` (mirrors the in-app default OFF per the
 	 * round-3 verdict: match-neutral-at-best, R10 keeps it off by default). */
 	retake: boolean;
+	/** U2 structural-drop pass, opt-in via `--structural` (default OFF, mirroring the app).
+	 * When on, the pass's removalHint is derived from each fixture's own truth ratio so the
+	 * lever is measured (KTD4). */
+	structural: boolean;
 	/** U2 clamp on (default) or off (`--no-clamp`, threshold → Infinity), for the U3-only combo. */
 	clamp: boolean;
 }): Promise<void> {
@@ -328,18 +333,32 @@ async function runLlmMode({
 		});
 		const cutRatio = truthCutRatio(alignment.rawKept);
 		const compressionTarget = compression ? cutRatio : undefined;
+		// Structural removal-share hint (U2/KTD4): when `--structural` is on, derive the
+		// creator's removal share from the fixture's own truth ratio and feed it to the
+		// structural pass (the SAME sentence the in-app path builds from compressionTarget)
+		// so the removalHint lever is exercised without enabling the compression contract.
+		const structuralRemovalHint = structural
+			? `This creator removes roughly ${Math.round(cutRatio * 100)}% of raw words in the finished cut`
+			: undefined;
 		console.error(
 			`  [${fixture.name}] keep-ratio ${((1 - cutRatio) * 100).toFixed(1)}% ` +
 				`(removes ${(cutRatio * 100).toFixed(1)}%)  keeper=${keeperPolicy}  ` +
 				`compression=${compression ? `${(cutRatio * 100).toFixed(1)}%` : "off"}  ` +
-				`retake=${retake ? "on" : "off"}  clamp=${clamp ? "on" : "off"}`,
+				`retake=${retake ? "on" : "off"}  structural=${structural ? "on" : "off"}  ` +
+				`clamp=${clamp ? "on" : "off"}`,
 		);
 		const runResults: DualScorecard[] = [];
 		for (let runIndex = 0; runIndex < runs; runIndex++) {
 			if (runs > 1) {
 				console.error(`  [${fixture.name}] live run ${runIndex + 1}/${runs}...`);
 			}
-			const adapter = createEvalLlmAdapter({ auth, runIndex, enableRetake: retake });
+			const adapter = createEvalLlmAdapter({
+				auth,
+				runIndex,
+				enableRetake: retake,
+				enableStructural: structural,
+				structuralRemovalHint,
+			});
 			const { operations } = await buildDirectorProposals(
 				llmProposalInput(fixture, adapter, {
 					keeperPolicy,
@@ -425,6 +444,8 @@ async function main(): Promise<void> {
 	// state); `--no-clamp` disables U2's clamp (its oversized threshold → Infinity, every
 	// plan op passes through) for the U3-only combo.
 	const retake = has("--retake") && !has("--no-retake");
+	// U2 structural-drop pass, opt-in via `--structural` (default OFF, mirroring the app).
+	const structural = has("--structural");
 	const clamp = !has("--no-clamp");
 	// Positional dir = first non-flag arg that isn't a flag's value (--runs 3 etc).
 	const flagValues = new Set(
@@ -466,6 +487,7 @@ async function main(): Promise<void> {
 			keeperPolicy,
 			compression,
 			retake,
+			structural,
 			clamp,
 		});
 		return;

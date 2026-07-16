@@ -23,6 +23,7 @@ import type {
 	RedundancyLine,
 	RetakeCut,
 	RetakeWord,
+	StructuralDrop,
 } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "./types";
@@ -55,6 +56,7 @@ import {
 	type RedundancyReviewGroup,
 } from "./redundancy-apply";
 import { mapRetakeCuts, trimRetakeCuts } from "./retake-apply";
+import { mapStructuralDrops } from "./structural-apply";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
@@ -127,6 +129,23 @@ export interface DirectorRetakeRequest {
 export interface DirectorRetakeResponse {
 	plan?: { cuts?: RetakeCut[] };
 }
+export interface DirectorStructuralRequest {
+	/** The numbered-transcript catalog (the same RedundancyLine catalog redundancy and
+	 * context consume). The structural pass reads the FULL catalog in one call. */
+	lines: RedundancyLine[];
+	/** Removal spans the pipeline already proposes (cut/take_select), retake rows
+	 * INCLUDED. The prompt marks lines these substantially cover [HANDLED] so the pass
+	 * hunts the remaining structural gap instead of re-finding flagged material. Rides
+	 * the adapter payload, so the eval cache busts automatically when the mask changes. */
+	handledSpans?: { startSec: number; endSec: number }[];
+	/** One-line removal-share hint (e.g. "This creator removes roughly 59% of raw
+	 * words"); absent = the prompt's generic large-share wording. */
+	removalHint?: string;
+	taste?: string;
+}
+export interface DirectorStructuralResponse {
+	plan?: { drops?: StructuralDrop[] };
+}
 
 /**
  * The three planning passes as an injectable seam. `plan` MUST throw on failure
@@ -145,6 +164,13 @@ export interface DirectorLlmAdapter {
 	 * zero retake candidates, the run continues).
 	 */
 	retake?(input: DirectorRetakeRequest): Promise<DirectorRetakeResponse>;
+	/**
+	 * Dedicated structural-drop pass (U2). OPTIONAL so this unit typechecks with adapters
+	 * that predate it. Like `redundancy`/`context`/`retake` it may throw or degrade; the
+	 * pipeline guards it (absent method or thrown result = zero structural candidates, the
+	 * run continues).
+	 */
+	structural?(input: DirectorStructuralRequest): Promise<DirectorStructuralResponse>;
 }
 
 export interface BuildDirectorProposalsInput {
@@ -722,10 +748,70 @@ export async function buildDirectorProposals(
 					keepers: allKeepers,
 				}).filter((op) => op.op !== "keep")
 			: afterSecondPass;
+	// Dedicated structural-drop pass (U2/R6): read the FULL redundancy catalog, infer the
+	// throughline, and propose whole SECTIONS a ruthless editor drops (off-throughline
+	// tangents, weak/superseded takes, over-explanation, re-recorded material) as OFFERED-
+	// only rows (category `structural`, never auto-applied). Runs SERIALIZED after the
+	// retake fold so its [HANDLED] mask sees the POST-RETAKE surviving removals (retake
+	// rows included) and targets the remaining structural gap. The removal-share hint rides
+	// the existing `compressionTarget` input when set (no new input). GUARDED and OPTIONAL:
+	// an absent method (adapters predating U2) or a thrown/degraded result contributes zero
+	// candidates and the run continues (R4).
+	let structuralDrops: DirectorOp[] = [];
+	if (llm.structural) {
+		onProgress?.("Hunting whole-section drops...");
+		try {
+			const sData = await llm.structural({
+				lines: redundancyLines,
+				handledSpans: withSecondPass
+					.filter((op) => op.op === "cut" || op.op === "take_select")
+					.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
+				...(compressionTarget !== undefined && Number.isFinite(compressionTarget)
+					? {
+							removalHint: `This creator removes roughly ${Math.round(compressionTarget * 100)}% of raw words in the finished cut`,
+						}
+					: {}),
+				taste: taste || undefined,
+			});
+			const drops = Array.isArray(sData?.plan?.drops) ? sData.plan.drops : [];
+			structuralDrops = mapStructuralDrops({ drops, totalSec });
+		} catch {
+			// route error / degraded → no structural candidates, the run continues (R4)
+		}
+		abort();
+	}
+	// Fold the OFFERED-only structural drops in AFTER the retake fold. Candidates are
+	// TRIMMED first (trimRetakeCuts with the `structural` id namespace, so a structural
+	// piece and a retake piece trimming to the identical span never mint the same id;
+	// review decisions key on op.id): the portions overlapping the post-retake surviving
+	// removals (retake rows included) or take-removing keeper spans are subtracted so the
+	// new-material remainders survive as their own rows; merge rule 2 would otherwise drop a
+	// candidate WHOLE on any brush with an existing cut. Rows stay OFFERED
+	// (defaultAccept:false); with no candidates `withStructural` IS `withSecondPass`, so the
+	// op list is byte-identical to the structural-less pipeline.
+	const structuralTrimmed =
+		structuralDrops.length > 0
+			? trimRetakeCuts({
+					ops: structuralDrops,
+					blockers: withSecondPass.filter(
+						(op) => op.op === "cut" || op.op === "take_select",
+					),
+					keepers: allKeepers,
+					idNamespace: "structural",
+				})
+			: [];
+	const withStructural =
+		structuralTrimmed.length > 0
+			? mergeDetectedCuts({
+					planOps: withSecondPass,
+					extraOps: structuralTrimmed,
+					keepers: allKeepers,
+				}).filter((op) => op.op !== "keep")
+			: withSecondPass;
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
-	const energySnapped = snapRemovalOps({ ops: withSecondPass, envelope });
+	const energySnapped = snapRemovalOps({ ops: withStructural, envelope });
 	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
 	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move
 	// any removal edge that lands inside a word onto its nearest gap — shrink to exclude

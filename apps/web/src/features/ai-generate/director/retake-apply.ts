@@ -71,11 +71,18 @@ export function trimRetakeCuts({
 	blockers,
 	keepers = [],
 	minRemainderSec = MIN_RETAKE_REMAINDER_SEC,
+	idNamespace = "retake",
 }: {
 	ops: readonly DirectorOp[];
 	blockers: readonly KeeperSpan[];
 	keepers?: readonly KeeperSpan[];
 	minRemainderSec?: number;
+	/** Prefix for a SPLIT piece's minted id (default `retake`; the structural pass passes
+	 * `structural`). A structural piece and a retake piece trimming to the identical span
+	 * must never mint the same id (review decisions key on op.id, so a collision would let
+	 * one pass's accept/reject silently drive the other's row). A WHOLE (untrimmed) op keeps
+	 * its already-namespaced caller id, so only split pieces read this. */
+	idNamespace?: string;
 }): DirectorOp[] {
 	const blockerHoles = blockers
 		.map((s) => ({ startSec: s.startSec, endSec: s.endSec }))
@@ -109,7 +116,7 @@ export function trimRetakeCuts({
 				...op,
 				id: whole
 					? op.id
-					: `retake-${stableCutId(`${piece.startSec.toFixed(3)}:${piece.endSec.toFixed(3)}`)}`,
+					: `${idNamespace}-${stableCutId(`${piece.startSec.toFixed(3)}:${piece.endSec.toFixed(3)}`)}`,
 				startSec: piece.startSec,
 				endSec: piece.endSec,
 			});

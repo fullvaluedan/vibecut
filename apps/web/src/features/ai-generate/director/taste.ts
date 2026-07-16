@@ -48,6 +48,7 @@ const CATEGORIES: readonly DirectorOpCategory[] = [
 	"redundancy",
 	"context",
 	"retake",
+	"structural",
 ];
 const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	duplicate: "duplicate-word cuts",
@@ -63,6 +64,7 @@ const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
 	redundancy: "redundancy cuts",
 	context: "out-of-context cuts",
 	retake: "retake cuts",
+	structural: "structural section drops",
 };
 
 /**

@@ -23,9 +23,9 @@ afterEach(() => {
 /** Stub planners that count invocations; only the ones a test needs are real. */
 function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 	planners: EvalPlanners;
-	calls: { director: number; redundancy: number; context: number; retake: number };
+	calls: { director: number; redundancy: number; context: number; retake: number; structural: number };
 } {
-	const calls = { director: 0, redundancy: 0, context: 0, retake: 0 };
+	const calls = { director: 0, redundancy: 0, context: 0, retake: 0, structural: 0 };
 	const planners = {
 		director: async () => {
 			calls.director++;
@@ -43,6 +43,10 @@ function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 		retake: async () => {
 			calls.retake++;
 			return { plan: { cuts: [] }, usage: {} };
+		},
+		structural: async () => {
+			calls.structural++;
+			return { plan: { drops: [] }, usage: {} };
 		},
 		...overrides,
 	} as unknown as EvalPlanners;
@@ -157,6 +161,71 @@ describe("createEvalLlmAdapter", () => {
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: false });
 		expect(typeof on.retake).toBe("function");
 		expect(off.retake).toBeUndefined();
+	});
+
+	test("structural caches by payload hash and replays without re-calling the planner (U2)", async () => {
+		const { planners, calls } = countingPlanners();
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const payload = { lines: [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }] };
+
+		const first = await adapter.structural!(payload);
+		expect(first.plan?.drops).toEqual([]);
+		expect(calls.structural).toBe(1);
+		expect(fs.readdirSync(cacheDir).some((f) => f.startsWith("structural-"))).toBe(true);
+
+		// Identical payload → served from cache, planner NOT invoked again.
+		await adapter.structural!(payload);
+		expect(calls.structural).toBe(1);
+	});
+
+	test("a changed handledSpans busts the structural cache and is forwarded (KTD7)", async () => {
+		const seen: unknown[] = [];
+		const { planners, calls } = countingPlanners({
+			structural: (async (arg: { handledSpans?: unknown }) => {
+				calls.structural++;
+				seen.push(arg.handledSpans);
+				return { plan: { drops: [] }, usage: {} };
+			}) as unknown as EvalPlanners["structural"],
+		});
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const lines = [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }];
+		const spans = [{ startSec: 0, endSec: 1 }];
+		await adapter.structural!({ lines, handledSpans: spans });
+		await adapter.structural!({ lines, handledSpans: spans }); // same → cache hit
+		await adapter.structural!({ lines, handledSpans: [{ startSec: 0, endSec: 2 }] }); // changed → miss
+		await adapter.structural!({ lines }); // absent → distinct key, miss
+		expect(calls.structural).toBe(3);
+		expect(seen).toEqual([spans, [{ startSec: 0, endSec: 2 }], undefined]); // forwarded unchanged
+	});
+
+	test("structuralRemovalHint overrides the request hint AND busts the cache (eval --structural)", async () => {
+		const seen: unknown[] = [];
+		const { planners, calls } = countingPlanners({
+			structural: (async (arg: { removalHint?: unknown }) => {
+				calls.structural++;
+				seen.push(arg.removalHint);
+				return { plan: { drops: [] }, usage: {} };
+			}) as unknown as EvalPlanners["structural"],
+		});
+		const adapter = createEvalLlmAdapter({
+			auth: AUTH,
+			cacheDir,
+			planners,
+			structuralRemovalHint: "This creator removes roughly 80% of raw words in the finished cut",
+		});
+		const lines = [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }];
+		// The request carries a DIFFERENT hint; the runner-supplied one wins.
+		await adapter.structural!({ lines, removalHint: "ignored request hint" });
+		expect(calls.structural).toBe(1);
+		expect(seen[0]).toBe("This creator removes roughly 80% of raw words in the finished cut");
+	});
+
+	test("enableStructural false OMITS the structural method (eval --structural off)", () => {
+		const { planners } = countingPlanners();
+		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: false });
+		expect(typeof on.structural).toBe("function");
+		expect(off.structural).toBeUndefined();
 	});
 });
 

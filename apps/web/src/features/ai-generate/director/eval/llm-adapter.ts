@@ -26,6 +26,7 @@ import {
 	planDirectorVision,
 	planRedundancy,
 	planRetake,
+	planStructural,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
 import type {
@@ -38,6 +39,8 @@ import type {
 	DirectorRedundancyResponse,
 	DirectorRetakeRequest,
 	DirectorRetakeResponse,
+	DirectorStructuralRequest,
+	DirectorStructuralResponse,
 } from "../build-director-proposals";
 
 /** Default per-pass watchdog: 10 minutes. Override with EVAL_LLM_TIMEOUT_MS. */
@@ -54,6 +57,7 @@ export interface EvalPlanners {
 	redundancy: typeof planRedundancy;
 	context: typeof planContext;
 	retake: typeof planRetake;
+	structural: typeof planStructural;
 }
 
 const DEFAULT_PLANNERS: EvalPlanners = {
@@ -62,6 +66,7 @@ const DEFAULT_PLANNERS: EvalPlanners = {
 	redundancy: planRedundancy,
 	context: planContext,
 	retake: planRetake,
+	structural: planStructural,
 };
 
 export interface EvalLlmAdapterOptions {
@@ -86,6 +91,16 @@ export interface EvalLlmAdapterOptions {
 	 * default from the round-3 verdict). False OMITS the method so `buildDirectorProposals`'s
 	 * `if (llm.retake)` guard skips the pass entirely. */
 	enableRetake?: boolean;
+	/** Whether the returned adapter exposes the structural-drop pass (U2). The runner passes
+	 * this from its `--structural` flag (default OFF, mirroring the in-app default). False
+	 * OMITS the method so `buildDirectorProposals`'s `if (llm.structural)` guard skips it. */
+	enableStructural?: boolean;
+	/** Removal-share hint for the STRUCTURAL pass, derived by the runner from the fixture's
+	 * truth ratio when `--structural` is on. When set it OVERRIDES the (compressionTarget-
+	 * derived) hint `buildDirectorProposals` passes, so the structural lever is measured with
+	 * the creator's real removal share WITHOUT also enabling the compression contract. Folded
+	 * into the request before the cache key, so a hint change busts the cache. */
+	structuralRemovalHint?: string;
 }
 
 /** Resolve the CLI `--auth` choice into a hf-bridge `ClaudeAuth`. */
@@ -209,6 +224,8 @@ export function createEvalLlmAdapter(
 		signal,
 		planners = DEFAULT_PLANNERS,
 		enableRetake = true,
+		enableStructural = true,
+		structuralRemovalHint,
 	} = options;
 
 	async function cachedCall<T>(
@@ -302,6 +319,37 @@ export function createEvalLlmAdapter(
 								handledSpans: input.handledSpans,
 								removalHint: input.removalHint,
 								taste: input.taste,
+								auth,
+							});
+							return { plan, usage };
+						});
+					},
+				}
+			: {}),
+		// The structural-drop pass (U2): OMITTED when `enableStructural` is false so the
+		// pipeline's `if (llm.structural)` guard skips it (the eval's `--structural` off
+		// state). Cached by payload hash + watchdog-bounded like the other passes.
+		...(enableStructural
+			? {
+					async structural(
+						input: DirectorStructuralRequest,
+					): Promise<DirectorStructuralResponse> {
+						// The runner's truth-ratio hint (when set) overrides the request's
+						// removalHint so `--structural` measures the lever with the creator's real
+						// removal share without also enabling the compression contract. Folded in
+						// BEFORE the cache key, so a hint change busts the cache (KTD7).
+						const effective: DirectorStructuralRequest =
+							structuralRemovalHint !== undefined
+								? { ...input, removalHint: structuralRemovalHint }
+								: input;
+						return cachedCall("structural", effective, async () => {
+							// lines + handledSpans + removalHint ride the payload, so the cache
+							// key busts automatically when the mask or hint changes (KTD7).
+							const { plan, usage } = await planners.structural({
+								lines: effective.lines,
+								handledSpans: effective.handledSpans,
+								removalHint: effective.removalHint,
+								taste: effective.taste,
 								auth,
 							});
 							return { plan, usage };

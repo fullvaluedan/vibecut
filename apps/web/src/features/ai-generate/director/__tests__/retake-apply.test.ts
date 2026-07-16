@@ -5,7 +5,7 @@ import {
 	trimRetakeCuts,
 } from "../retake-apply";
 import { DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR } from "../redundancy-apply";
-import type { RetakeCut } from "@framecut/hf-bridge";
+import type { DirectorOp, RetakeCut } from "@framecut/hf-bridge";
 
 const cut = ({
 	startSec,
@@ -131,5 +131,38 @@ describe("trimRetakeCuts", () => {
 			[6, 9],
 			[10, 12],
 		]);
+	});
+
+	test("split pieces from the retake vs structural id namespaces trimming to the SAME span mint DIFFERENT ids", () => {
+		// A structural piece and a retake piece can trim to the identical remainder span.
+		// Review decisions key on op.id, so the two OFFERED passes MUST NOT mint the same id
+		// or one pass's accept/reject would silently drive the other's row. The id namespace
+		// (default `retake`; `structural` for the structural pass) keeps them distinct.
+		const spanOp = (id: string): DirectorOp => ({
+			id,
+			op: "cut",
+			startSec: 0,
+			endSec: 10,
+			reason: "x",
+			confidence: 0.9,
+			category: "retake",
+			defaultAccept: false,
+		});
+		const blockers = [{ startSec: 4, endSec: 10 }]; // → single split piece [0,4]
+		const retakePiece = trimRetakeCuts({ ops: [spanOp("retake-orig")], blockers });
+		const structuralPiece = trimRetakeCuts({
+			ops: [spanOp("structural-orig")],
+			blockers,
+			idNamespace: "structural",
+		});
+		expect(retakePiece).toHaveLength(1);
+		expect(structuralPiece).toHaveLength(1);
+		// Identical trimmed span…
+		expect([retakePiece[0].startSec, retakePiece[0].endSec]).toEqual([0, 4]);
+		expect([structuralPiece[0].startSec, structuralPiece[0].endSec]).toEqual([0, 4]);
+		// …but the namespaced ids never collide.
+		expect(retakePiece[0].id).toMatch(/^retake-/);
+		expect(structuralPiece[0].id).toMatch(/^structural-/);
+		expect(retakePiece[0].id).not.toBe(structuralPiece[0].id);
 	});
 });

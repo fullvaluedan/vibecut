@@ -4,7 +4,7 @@ import {
 	type DirectorLlmAdapter,
 	type DirectorRetakeRequest,
 } from "../build-director-proposals";
-import type { DirectorOp, RetakeCut } from "@framecut/hf-bridge";
+import type { DirectorOp, RetakeCut, StructuralDrop } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "../types";
 import type { TranscriptSegment } from "../build-signal-table";
@@ -340,5 +340,93 @@ describe("buildDirectorProposals + retake pass (U3)", () => {
 			}),
 		});
 		expect(seen?.removalHint).toContain("55%");
+	});
+});
+
+/**
+ * U2 structural-drop wiring (R2/R4/R5/R10). The pass is OPTIONAL on the adapter,
+ * OFFERED-only, and folded through the same trim + mergeDetectedCuts flow as the retake
+ * pass (after it), with the `structural` id namespace so pieces never collide.
+ */
+describe("buildDirectorProposals + structural pass (U2)", () => {
+	const SENTENCE =
+		"so um lets deploy the the project and now we verify the logs together carefully";
+	const structuralStub = (drops: StructuralDrop[]) => ({
+		async structural() {
+			return { plan: { drops } };
+		},
+	});
+
+	test("an adapter WITHOUT structural matches one whose structural returns no drops (byte-identical)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const noStructural = await buildDirectorProposals({ ...input, llm: stubLlm() });
+		const emptyStructural = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(structuralStub([])),
+		});
+		// The guarded pass contributes nothing when it returns no drops, so the op list is
+		// byte-identical to the structural-method-absent pipeline.
+		expect(emptyStructural.operations).toEqual(noStructural.operations);
+	});
+
+	test("a structural candidate in a clean region survives as an OFFERED (unchecked) row with category structural", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const clean: StructuralDrop = {
+			startSec: 3.0,
+			endSec: 3.5,
+			reason: "off-throughline tangent",
+			confidence: 0.9,
+		};
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(structuralStub([clean])),
+		});
+		const structuralOps = result.operations.filter((o) => o.category === "structural");
+		expect(structuralOps.length).toBeGreaterThan(0);
+		// OFFERED-only: never auto-applied.
+		expect(structuralOps.every((o) => o.defaultAccept === false)).toBe(true);
+	});
+
+	test("the structural pass receives the POST-RETAKE removals as handledSpans", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const retakeCut: RetakeCut = { startSec: 3.0, endSec: 3.5, reason: "flub", confidence: 0.9 };
+		let seen: { handledSpans?: { startSec: number; endSec: number }[] } | undefined;
+		await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async retake() {
+					return { plan: { cuts: [retakeCut] } };
+				},
+				async structural(req) {
+					seen = req;
+					return { plan: { drops: [] } };
+				},
+			}),
+		});
+		expect(seen).toBeDefined();
+		expect(Array.isArray(seen!.handledSpans)).toBe(true);
+		// The retake cut is an OFFERED removal folded before the structural mask, so its span
+		// is a handled span the structural pass is told not to re-propose.
+		expect(
+			seen!.handledSpans!.some((s) => s.startSec < 3.5 && 3.0 < s.endSec),
+		).toBe(true);
+	});
+
+	test("a thrown structural planner leaves the run intact (fail-open)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const baseline = await buildDirectorProposals({ ...input, llm: stubLlm() });
+		const thrown = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async structural() {
+					throw new Error("route 500");
+				},
+			}),
+		});
+		expect(thrown.operations).toEqual(baseline.operations);
 	});
 });
