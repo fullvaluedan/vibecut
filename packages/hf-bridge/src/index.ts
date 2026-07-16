@@ -92,6 +92,14 @@ export {
 	type StructuralHandledSpan,
 } from "./llm-structural";
 export {
+	planVerify,
+	buildVerifyPrompt,
+	sanitizeVerifyPlan,
+	type VerifyCandidate,
+	type VerifyVerdict,
+	type VerifyPlan,
+} from "./llm-verify";
+export {
 	resolveReferencedOps,
 	sanitizeReferencedPlan,
 	type ReferenceLine,
