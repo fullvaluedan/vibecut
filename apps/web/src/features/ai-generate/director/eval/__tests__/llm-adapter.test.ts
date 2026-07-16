@@ -131,6 +131,26 @@ describe("createEvalLlmAdapter", () => {
 		expect(calls.retake).toBe(1);
 	});
 
+	test("a changed handledSpans busts the retake cache and is forwarded (KTD7)", async () => {
+		const seen: unknown[] = [];
+		const { planners, calls } = countingPlanners({
+			retake: (async (arg: { handledSpans?: unknown }) => {
+				calls.retake++;
+				seen.push(arg.handledSpans);
+				return { plan: { cuts: [] }, usage: {} };
+			}) as unknown as EvalPlanners["retake"],
+		});
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const words = [{ text: "a", startSec: 0, endSec: 0.4 }];
+		const spans = [{ startSec: 0, endSec: 1 }];
+		await adapter.retake!({ words, handledSpans: spans });
+		await adapter.retake!({ words, handledSpans: spans }); // same → cache hit
+		await adapter.retake!({ words, handledSpans: [{ startSec: 0, endSec: 2 }] }); // changed → miss
+		await adapter.retake!({ words }); // absent → distinct key, miss
+		expect(calls.retake).toBe(3);
+		expect(seen).toEqual([spans, [{ startSec: 0, endSec: 2 }], undefined]); // forwarded unchanged
+	});
+
 	test("enableRetake false OMITS the retake method (eval --no-retake)", () => {
 		const { planners } = countingPlanners();
 		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });

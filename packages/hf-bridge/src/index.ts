@@ -70,11 +70,15 @@ export {
 	renderRetakeCatalog,
 	sanitizeRetakePlan,
 	groupWordsIntoLines,
+	markHandledLines,
 	mergeRetakeCuts,
+	RETAKE_MAX_CHARS,
+	HANDLED_LINE_COVER_FRACTION,
 	type RetakeWord,
 	type RetakeLine,
 	type RetakeCut,
 	type RetakePlan,
+	type RetakeHandledSpan,
 } from "./llm-retake";
 export {
 	resolveReferencedOps,

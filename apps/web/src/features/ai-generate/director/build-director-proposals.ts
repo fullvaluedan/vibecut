@@ -54,7 +54,7 @@ import {
 	shouldRunLexicalRepeatDetectors,
 	type RedundancyReviewGroup,
 } from "./redundancy-apply";
-import { mapRetakeCuts } from "./retake-apply";
+import { mapRetakeCuts, trimRetakeCuts } from "./retake-apply";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
@@ -114,6 +114,14 @@ export interface DirectorContextResponse {
 export interface DirectorRetakeRequest {
 	/** Full transcript words with timing (the word-index span the pass resolves). */
 	words: RetakeWord[];
+	/** Removal spans the pipeline already proposes (cut/take_select). The prompt marks
+	 * lines these substantially cover [HANDLED] so the pass hunts the remaining gap
+	 * instead of re-finding flagged material. Rides the adapter payload, so the eval
+	 * cache busts automatically when the mask changes (KTD7). */
+	handledSpans?: { startSec: number; endSec: number }[];
+	/** One-line removal-share hint (e.g. "this creator removes roughly 59% of raw
+	 * words"); absent = the prompt's generic exhaustive wording. */
+	removalHint?: string;
 	taste?: string;
 }
 export interface DirectorRetakeResponse {
@@ -498,28 +506,6 @@ export async function buildDirectorProposals(
 	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5), kept for intent
 	abort();
 
-	// Dedicated retake-hunt pass (U3/R6): hunt retakes, false starts, and flubs at WORD
-	// granularity and surface them as OFFERED-only rows (category `retake`, never auto-
-	// applied). Runs SERIALIZED after the redundancy/context Promise.all (not joined into
-	// it): concurrent claude-code spawns have a stall history, so a fourth pass waits its
-	// turn. GUARDED and OPTIONAL: an absent method (adapters predating U4) or a thrown /
-	// degraded result contributes zero candidates and the run continues (R7 fail-open).
-	let retakeCuts: DirectorOp[] = [];
-	if (llm.retake) {
-		onProgress?.("Hunting retakes and false starts...");
-		try {
-			const rData = await llm.retake({
-				words: words.map((w) => ({ text: w.text, startSec: w.start, endSec: w.end })),
-				taste: taste || undefined,
-			});
-			const cuts = Array.isArray(rData?.plan?.cuts) ? rData.plan.cuts : [];
-			retakeCuts = mapRetakeCuts(cuts);
-		} catch {
-			// route error / degraded → no retake candidates, the run continues (R7)
-		}
-		abort();
-	}
-
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
 	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
 	// detectors run ADDITIVELY alongside the LLM pass (U5/R5): when the LLM pass ran
@@ -650,19 +636,38 @@ export async function buildDirectorProposals(
 					keepers: [...llmKeepSpans, ...emphasisPauseKeepers],
 				}).filter((op) => op.op !== "keep")
 			: baseMerged;
-	// Fold the OFFERED-only retake cuts (U3/R6) into the merged ops. Routed through the
-	// SAME mergeDetectedCuts flow as the other detectors so the two safety rules apply:
-	// a retake overlapping a surviving removal is dropped (never double-cuts existing
-	// removals), and a retake covering a protected keeper span is dropped (rule 1). They
-	// are OFFERED (defaultAccept:false) so they never auto-apply; empty = byte-identical.
-	const withRetake =
-		retakeCuts.length > 0
-			? mergeDetectedCuts({
-					planOps: mergedOps,
-					extraOps: retakeCuts,
-					keepers: allKeepers,
-				}).filter((op) => op.op !== "keep")
-			: mergedOps;
+	// Dedicated retake-hunt pass (U3/R6): hunt retakes, false starts, and flubs at WORD
+	// granularity and surface them as OFFERED-only rows (category `retake`, never auto-
+	// applied). Runs SERIALIZED after every other LLM pass (concurrent claude-code
+	// spawns have a stall history) and AFTER `mergedOps` forms, so the pipeline's
+	// already-proposed removals feed the prompt's [HANDLED] mask: lines other passes
+	// already cover are marked and the hunt targets the measured remaining gap. The
+	// removal-share hint rides the existing `compressionTarget` input when set (no new
+	// input). GUARDED and OPTIONAL: an absent method (adapters predating U4) or a
+	// thrown / degraded result contributes zero candidates and the run continues (R7).
+	let retakeCuts: DirectorOp[] = [];
+	if (llm.retake) {
+		onProgress?.("Hunting retakes and false starts...");
+		try {
+			const rData = await llm.retake({
+				words: words.map((w) => ({ text: w.text, startSec: w.start, endSec: w.end })),
+				handledSpans: mergedOps
+					.filter((op) => op.op === "cut" || op.op === "take_select")
+					.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
+				...(compressionTarget !== undefined && Number.isFinite(compressionTarget)
+					? {
+							removalHint: `This creator removes roughly ${Math.round(compressionTarget * 100)}% of raw words in the finished cut`,
+						}
+					: {}),
+				taste: taste || undefined,
+			});
+			const cuts = Array.isArray(rData?.plan?.cuts) ? rData.plan.cuts : [];
+			retakeCuts = mapRetakeCuts(cuts);
+		} catch {
+			// route error / degraded → no retake candidates, the run continues (R7)
+		}
+		abort();
+	}
 	// Virtual second pass (2P-U3): re-analyze the Director's OWN compressed output.
 	// Compression reveals adjacency: two verbatim takes >60s apart only become close
 	// enough to match once the material between them is cut, so apply the default-
@@ -671,9 +676,11 @@ export async function buildDirectorProposals(
 	// Deterministic + transcript-only (no re-transcription, no LLM re-runs), capped at
 	// 3 passes, folded into the SAME review and undo. Pure: it computes ops only, the
 	// same keepers protect each pass, and the extra ops flow through the SAME snap/
-	// coalesce chain below as the pass-1 cuts.
+	// coalesce chain below as the pass-1 cuts. Runs BEFORE the retake fold: retake rows
+	// are OFFERED-only and must not perturb the virtual compression the second pass
+	// simulates (they are not applied in the one-click reality it models).
 	const secondPass = runSecondPass({
-		ops: withRetake,
+		ops: mergedOps,
 		words,
 		segments,
 		keepers: allKeepers,
@@ -686,9 +693,35 @@ export async function buildDirectorProposals(
 			message: `Director second pass: found ${secondPass.extraOps.length} more cut${secondPass.extraOps.length === 1 ? "" : "s"} the compression revealed (${extraPasses} extra pass${extraPasses === 1 ? "" : "es"}).`,
 		});
 	}
-	const withSecondPass = [...withRetake, ...secondPass.extraOps].sort(
+	const afterSecondPass = [...mergedOps, ...secondPass.extraOps].sort(
 		(a, b) => a.startSec - b.startSec,
 	);
+	// Fold the OFFERED-only retake cuts (U3/R6) in AFTER the second pass. Candidates
+	// are TRIMMED first (trimRetakeCuts): the portions overlapping surviving removals
+	// (including second-pass cuts) or take-removing keeper spans are subtracted so the
+	// new-material remainders survive as their own rows; merge rule 2 would otherwise
+	// drop a candidate WHOLE on any brush with an existing cut, which discarded the
+	// recall this pass exists to add. Keeper words are never take-removed (rule 1
+	// cover-fraction semantics). Rows stay OFFERED (defaultAccept:false); with no
+	// candidates the op list is byte-identical to the retake-less pipeline.
+	const retakeTrimmed =
+		retakeCuts.length > 0
+			? trimRetakeCuts({
+					ops: retakeCuts,
+					blockers: afterSecondPass.filter(
+						(op) => op.op === "cut" || op.op === "take_select",
+					),
+					keepers: allKeepers,
+				})
+			: [];
+	const withSecondPass =
+		retakeTrimmed.length > 0
+			? mergeDetectedCuts({
+					planOps: afterSecondPass,
+					extraOps: retakeTrimmed,
+					keepers: allKeepers,
+				}).filter((op) => op.op !== "keep")
+			: afterSecondPass;
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.

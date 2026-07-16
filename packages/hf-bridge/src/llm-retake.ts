@@ -48,6 +48,16 @@ export interface RetakeLine {
 	text: string;
 	startSec: number;
 	endSec: number;
+	/** True when the pipeline's existing removals substantially cover this line; the
+	 * catalog renders it [HANDLED] so the model hunts the UNHANDLED gap instead of
+	 * re-finding material other passes already flagged. Set by `markHandledLines`. */
+	handled?: boolean;
+}
+
+/** A timeline span the pipeline already removes (cut/take_select), in seconds. */
+export interface RetakeHandledSpan {
+	startSec: number;
+	endSec: number;
 }
 
 /** One resolved retake cut in TIMELINE seconds (word indices already resolved). */
@@ -93,13 +103,63 @@ const RETAKE_TICKS_PER_SECOND = 120_000;
 const RETAKE_LINE_GAP_SEC = 0.6;
 
 /**
- * Chunking budget (R6): a transcript whose line text exceeds this is split into
- * overlapping windows so a long recording never overflows the prompt and silently
- * loses its tail. Matches the redundancy pass's budget; the overlap keeps a retake
- * that straddles a window boundary visible in one window.
+ * Chunking budget (R6). Deliberately SMALLER than the redundancy pass's 12k: live
+ * measurement showed one big window under-fetches (a single modest batch of finds
+ * regardless of transcript size), so a long recording splits into a few windows
+ * (2-4 on a 20-30 minute transcript), each swept exhaustively on its own. The
+ * overlap keeps a retake that straddles a window boundary visible in one window;
+ * word indices stay GLOBAL across windows (lines are sliced, never renumbered).
  */
-const RETAKE_MAX_CHARS = 12_000;
+export const RETAKE_MAX_CHARS = 6_000;
 const RETAKE_OVERLAP_LINES = 4;
+
+/** A line is [HANDLED] when at least this fraction of its duration is already
+ * covered by the pipeline's existing removal spans. */
+export const HANDLED_LINE_COVER_FRACTION = 0.8;
+
+/**
+ * Flag the lines whose duration is substantially covered by `handledSpans` (the
+ * pipeline's already-proposed removals). The catalog renders them [HANDLED] and the
+ * prompt tells the model not to re-propose that material, pointing the pass at the
+ * measured gap (the flubs no other pass caught) instead of re-finding easy ones.
+ * Overlapping spans are unioned first so they never double-count coverage. Pure.
+ */
+export function markHandledLines({
+	lines,
+	handledSpans,
+	coverFraction = HANDLED_LINE_COVER_FRACTION,
+}: {
+	lines: readonly RetakeLine[];
+	handledSpans: readonly RetakeHandledSpan[];
+	coverFraction?: number;
+}): RetakeLine[] {
+	const sorted = handledSpans
+		.filter((s) => s.endSec > s.startSec)
+		.slice()
+		.sort((a, b) => a.startSec - b.startSec);
+	if (sorted.length === 0) return [...lines];
+	const union: RetakeHandledSpan[] = [];
+	for (const s of sorted) {
+		const last = union[union.length - 1];
+		if (last && s.startSec <= last.endSec) {
+			if (s.endSec > last.endSec) last.endSec = s.endSec;
+		} else {
+			union.push({ startSec: s.startSec, endSec: s.endSec });
+		}
+	}
+	return lines.map((line) => {
+		const len = line.endSec - line.startSec;
+		if (len <= 0) return line;
+		let covered = 0;
+		for (const s of union) {
+			covered += Math.max(
+				0,
+				Math.min(line.endSec, s.endSec) - Math.max(line.startSec, s.startSec),
+			);
+		}
+		return covered / len >= coverFraction ? { ...line, handled: true } : line;
+	});
+}
 
 /**
  * Group the timed words into sentence-ish lines, recording each line's GLOBAL word
@@ -136,13 +196,15 @@ export function groupWordsIntoLines(words: readonly RetakeWord[]): RetakeLine[] 
 }
 
 /** Render the lines in time order, each tagged with its GLOBAL word-index range so
- * the model can emit a startWord/endWord span. No `undefined`/`NaN` can leak (the
- * indices are integers, timings are numbers, text falls back to "-"). */
+ * the model can emit a startWord/endWord span, plus a [HANDLED] marker on lines the
+ * pipeline already covers (absent flag = byte-identical line). No `undefined`/`NaN`
+ * can leak (the indices are integers, timings are numbers, text falls back to "-"). */
 export function renderRetakeCatalog(lines: readonly RetakeLine[]): string {
 	return lines
 		.map((line) => {
 			const text = line.text.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
-			return `[${line.lineId} w${line.startWord}-${line.endWord}] (${line.startSec.toFixed(1)}-${line.endSec.toFixed(1)}) "${text}"`;
+			const handled = line.handled ? " [HANDLED]" : "";
+			return `[${line.lineId} w${line.startWord}-${line.endWord}]${handled} (${line.startSec.toFixed(1)}-${line.endSec.toFixed(1)}) "${text}"`;
 		})
 		.join("\n");
 }
@@ -150,28 +212,49 @@ export function renderRetakeCatalog(lines: readonly RetakeLine[]): string {
 export function buildRetakePrompt({
 	lines,
 	taste,
+	handledSpans,
+	removalHint,
 }: {
 	lines: readonly RetakeLine[];
 	taste?: string;
+	/** The pipeline's already-proposed removal spans. Lines substantially covered are
+	 * rendered [HANDLED] and the model is told to hunt the UNHANDLED material instead.
+	 * Absent/empty = byte-identical prompt (no marker, no instruction block). */
+	handledSpans?: readonly RetakeHandledSpan[];
+	/** One-line removal-share hint (e.g. "this creator removes roughly half of raw
+	 * words"). Absent = the generic exhaustive wording. */
+	removalHint?: string;
 }): string {
+	const hasHandled = handledSpans !== undefined && handledSpans.length > 0;
+	const marked = hasHandled ? markHandledLines({ lines, handledSpans }) : lines;
+	const handledBlock = hasHandled
+		? `
+Lines tagged [HANDLED] are already substantially flagged by the other editing passes - that material is handled; DO NOT re-propose it. Spend your effort on the UNHANDLED material: the retakes, false starts, and flubs hiding in the untagged lines are exactly what every other pass missed.
+`
+		: "";
+	const removalSentence =
+		removalHint ??
+		"This creator, like most talking-head creators, removes a large share of the raw footage before publishing";
 	return `You are an expert video EDITOR hunting RETAKES, FALSE STARTS, and FLUBBED takes in a talking-head recording's transcript. Below is every spoken line IN ORDER. Each line is tagged like [L12 w340-352]: L12 is the line number, and w340-352 gives the GLOBAL word index of its FIRST word (340) and its LAST word (352). Every word in the line is numbered sequentially from that first index, so the third word of [L12 w340-352] is global index 342. These GLOBAL word indices are absolute and never restart, even when you only see part of the transcript.
 
-Your job: find every RETAKE, FALSE START, and FLUB, and cut ONLY the flubbed words while keeping the clean final delivery:
+Your job: sweep the WHOLE transcript LINE BY LINE, top to bottom, and find EVERY retake, false start, flubbed take, abandoned thought, and superseded delivery - not a sample, not the obvious highlights, ALL of them. Cut ONLY the flubbed words and keep the clean final delivery:
 - A FALSE START: the speaker begins a sentence, abandons it, and restarts ("so the- so the trick is..."). Cut the abandoned attempt, keep the restart.
-- A RETAKE: the speaker delivers a line, then immediately says it again cleaner. Cut the SUPERSEDED earlier take, keep the clean final one.
+- A RETAKE: the speaker delivers a line, then says it again cleaner (immediately or later). Cut the SUPERSEDED earlier take, keep the clean final one.
 - A FLUB / stumble: a garbled or stumbled run of words the speaker corrects mid-thought. Cut the stumble, keep the correction.
-
+- An ABANDONED THOUGHT: the speaker starts down a thread and drops it without payoff. Cut the abandoned thread.
+${handledBlock}
 Emit each cut as a WORD-EXTENT span: "startWord" and "endWord" are GLOBAL word indices (inclusive) covering EXACTLY the flubbed words to REMOVE - the abandoned attempt, the stumble, or the superseded earlier take. Never include the clean words the audience should hear.
 
-Aim for RECALL. This is the recall pass: surface every plausible retake or false-start for review. The editor reviews every candidate before anything is removed, and these rows start UNCHECKED, so a borderline candidate costs nothing:
+Aim for EXHAUSTIVE RECALL. ${removalSentence} - a large share of what gets removed is exactly this retake/false-start material, so expect MANY finds spread across the whole recording. Over-proposing is SAFE: every candidate is a review-only row shown UNCHECKED for the editor to opt into (never auto-applied), and downstream dedupe drops any candidate that duplicates a cut another pass already made. A borderline or redundant candidate costs nothing; a missed flub ships in the final video:
 - Flag a plausible flub even when you are only moderately sure, and lower its confidence instead of dropping it.
+- Do NOT stop after the first few finds - keep sweeping to the LAST line.
 - LEAVE intentional repetition alone: a deliberate callback, an "as I said earlier" recap, or repetition for emphasis is NOT a retake. Never flag those.
 - Do NOT cut a clean take. When two deliveries are equally clean, cut the EARLIER one and keep the later.
 
 confidence is 0..1 - set it HONESTLY: high for an obvious abandoned false start, lower for a judgment call. The lower-confidence rows are exactly the ones the editor wants to see and decide on.
 
 TRANSCRIPT:
-${renderRetakeCatalog(lines)}
+${renderRetakeCatalog(marked)}
 ${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
 Respond with ONLY JSON: {"operations":[{"startWord":340,"endWord":344,"reason":"abandoned false start before the clean restart","confidence":0.0-1.0}, ...]} - each startWord and endWord a GLOBAL word index from the tags above.`;
 }
@@ -235,10 +318,16 @@ function addUsage(a: TokenUsage | null, b: TokenUsage | null): TokenUsage | null
 export async function planRetake({
 	words,
 	taste,
+	handledSpans,
+	removalHint,
 	auth,
 }: {
 	words: readonly RetakeWord[];
 	taste?: string;
+	/** The pipeline's already-proposed removal spans ([HANDLED] mask; see the prompt). */
+	handledSpans?: readonly RetakeHandledSpan[];
+	/** One-line removal-share hint; absent = the generic exhaustive wording. */
+	removalHint?: string;
 	auth: ClaudeAuth;
 }): Promise<{ plan: RetakePlan; usage: TokenUsage | null }> {
 	// R7: no word timings → no candidates, and the LLM is never invoked (guard first).
@@ -247,7 +336,7 @@ export async function planRetake({
 	if (lines.length === 0) return { plan: { cuts: [] }, usage: null };
 
 	if (!transcriptExceedsBudget({ lines, maxChars: RETAKE_MAX_CHARS })) {
-		const prompt = buildRetakePrompt({ lines, taste });
+		const prompt = buildRetakePrompt({ lines, taste, handledSpans, removalHint });
 		const { raw, usage } = await planJson({ prompt, auth, schema: RETAKE_SCHEMA });
 		return { plan: sanitizeRetakePlan(raw, words), usage };
 	}
@@ -260,7 +349,7 @@ export async function planRetake({
 	const allCuts: RetakeCut[] = [];
 	let usage: TokenUsage | null = null;
 	for (const window of windows) {
-		const prompt = buildRetakePrompt({ lines: window, taste });
+		const prompt = buildRetakePrompt({ lines: window, taste, handledSpans, removalHint });
 		const { raw, usage: u } = await planJson({ prompt, auth, schema: RETAKE_SCHEMA });
 		// Sanitize against the FULL word set so every GLOBAL index resolves even though
 		// the window only showed a slice of the lines (words are never renumbered).

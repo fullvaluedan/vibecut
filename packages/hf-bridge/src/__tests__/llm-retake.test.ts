@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildRetakePrompt,
 	groupWordsIntoLines,
+	HANDLED_LINE_COVER_FRACTION,
+	markHandledLines,
 	mergeRetakeCuts,
 	planRetake,
 	renderRetakeCatalog,
+	RETAKE_MAX_CHARS,
 	sanitizeRetakePlan,
 	type RetakeWord,
 } from "../llm-retake";
@@ -83,9 +86,121 @@ describe("buildRetakePrompt (load-bearing substrings)", () => {
 		expect(out).not.toContain("NaN");
 		expect(out).toContain('"-"'); // empty text falls back to "-"
 	});
+
+	test("demands an EXHAUSTIVE whole-transcript sweep, not a sample", () => {
+		expect(prompt).toContain("EXHAUSTIVE RECALL");
+		expect(prompt).toContain("LINE BY LINE");
+		expect(prompt).toContain("EVERY retake");
+		expect(prompt).toContain("abandoned thought");
+		expect(prompt).toContain("superseded delivery");
+		expect(prompt).toContain("not a sample");
+		expect(prompt).toContain("keep sweeping to the LAST line");
+	});
+
+	test("states over-proposing is safe (review-only, never auto-applied, deduped)", () => {
+		expect(prompt).toContain("Over-proposing is SAFE");
+		expect(prompt).toContain("never auto-applied");
+		expect(prompt).toContain("dedupe");
+	});
+});
+
+describe("buildRetakePrompt removal hint", () => {
+	const lines = groupWordsIntoLines(mkWords("one two. three four five."));
+
+	test("a provided removalHint appears verbatim, replacing the generic wording", () => {
+		const hint = "this creator removes roughly half of raw words";
+		const prompt = buildRetakePrompt({ lines, removalHint: hint });
+		expect(prompt).toContain(hint);
+		expect(prompt).not.toContain("like most talking-head creators");
+	});
+
+	test("absent removalHint keeps the generic large-share wording", () => {
+		const prompt = buildRetakePrompt({ lines });
+		expect(prompt).toContain("removes a large share of the raw footage");
+	});
+});
+
+describe("buildRetakePrompt handled-region mask", () => {
+	// line0 = words 0-1 spanning [0, 0.58]; line1 = words 2-4 spanning [0.6, 1.48].
+	const lines = groupWordsIntoLines(mkWords("one two. three four five."));
+
+	test("lines substantially covered by handledSpans are tagged [HANDLED]", () => {
+		const prompt = buildRetakePrompt({
+			lines,
+			handledSpans: [{ startSec: 0, endSec: 0.58 }], // covers line0 fully
+		});
+		expect(prompt).toContain("[L0 w0-1] [HANDLED]");
+		expect(prompt).not.toContain("[L1 w2-4] [HANDLED]"); // uncovered line stays untagged
+	});
+
+	test("the mask instruction demands hunting the UNHANDLED material", () => {
+		const prompt = buildRetakePrompt({
+			lines,
+			handledSpans: [{ startSec: 0, endSec: 0.58 }],
+		});
+		expect(prompt).toContain("DO NOT re-propose");
+		expect(prompt).toContain("UNHANDLED");
+	});
+
+	test("absent/empty handledSpans yields a byte-identical prompt (no marker, no block)", () => {
+		const bare = buildRetakePrompt({ lines });
+		expect(buildRetakePrompt({ lines, handledSpans: [] })).toBe(bare);
+		expect(buildRetakePrompt({ lines, handledSpans: undefined, removalHint: undefined })).toBe(
+			bare,
+		);
+		expect(bare).not.toContain("[HANDLED]");
+	});
+});
+
+describe("markHandledLines", () => {
+	const line = (startSec: number, endSec: number, i = 0) => ({
+		lineId: `L${i}`,
+		startWord: i,
+		endWord: i,
+		text: "x",
+		startSec,
+		endSec,
+	});
+
+	test("full coverage marks the line; partial coverage below the fraction does not", () => {
+		expect(HANDLED_LINE_COVER_FRACTION).toBe(0.8);
+		const [full] = markHandledLines({
+			lines: [line(0, 1)],
+			handledSpans: [{ startSec: 0, endSec: 1 }],
+		});
+		expect(full.handled).toBe(true);
+		const [half] = markHandledLines({
+			lines: [line(0, 1)],
+			handledSpans: [{ startSec: 0, endSec: 0.5 }], // 50% < 80%
+		});
+		expect(half.handled).toBeUndefined();
+	});
+
+	test("overlapping spans are unioned, never double-counted", () => {
+		// Two spans sum to 1.0s of raw overlap but union to only 0.5s of the 1s line.
+		const [out] = markHandledLines({
+			lines: [line(0, 1)],
+			handledSpans: [
+				{ startSec: 0, endSec: 0.5 },
+				{ startSec: 0.1, endSec: 0.5 },
+			],
+		});
+		expect(out.handled).toBeUndefined();
+	});
+
+	test("empty spans return the lines unmarked", () => {
+		const [out] = markHandledLines({ lines: [line(0, 1)], handledSpans: [] });
+		expect(out.handled).toBeUndefined();
+	});
 });
 
 describe("chunking preserves GLOBAL word indices", () => {
+	test("the chunk budget is the smaller exhaustive-sweep size (6k, not redundancy's 12k)", () => {
+		// Pins the under-fetch fix: a long transcript splits into a few windows, each
+		// swept exhaustively, instead of one over-stuffed prompt.
+		expect(RETAKE_MAX_CHARS).toBe(6_000);
+	});
+
 	test("a late window still renders its lines' original (non-zero) word anchors", () => {
 		// 40 single-word sentences → 40 one-word lines, global word indices 0..39.
 		const words = mkWords(
@@ -161,7 +276,7 @@ describe("mergeRetakeCuts (windowed dedupe)", () => {
 });
 
 describe("planRetake fail-open (R7)", () => {
-	// A custom endpoint that would REJECT fast if dispatched — proves the empty-words
+	// A custom endpoint that would REJECT fast if dispatched - proves the empty-words
 	// guard returns BEFORE any LLM call (a live call would fetch this dead host).
 	const NO_CALL_AUTH: ClaudeAuth = {
 		mode: "custom",

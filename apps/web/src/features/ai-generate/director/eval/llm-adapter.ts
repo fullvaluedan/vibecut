@@ -294,8 +294,12 @@ export function createEvalLlmAdapter(
 						input: DirectorRetakeRequest,
 					): Promise<DirectorRetakeResponse> {
 						return cachedCall("retake", input, async () => {
+							// handledSpans + removalHint ride the payload, so the cache
+							// key busts automatically when the mask or hint changes (KTD7).
 							const { plan, usage } = await planners.retake({
 								words: input.words,
+								handledSpans: input.handledSpans,
+								removalHint: input.removalHint,
 								taste: input.taste,
 								auth,
 							});

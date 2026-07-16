@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildDirectorProposals,
 	type DirectorLlmAdapter,
+	type DirectorRetakeRequest,
 } from "../build-director-proposals";
 import type { DirectorOp, RetakeCut } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
@@ -298,5 +299,46 @@ describe("buildDirectorProposals + retake pass (U3)", () => {
 		expect(retakeOps.length).toBeGreaterThan(0);
 		// OFFERED-only: never auto-applied.
 		expect(retakeOps.every((o) => o.defaultAccept === false)).toBe(true);
+	});
+
+	test("the retake pass receives the pipeline's removals as handledSpans", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		let seen: DirectorRetakeRequest | undefined;
+		await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async retake(req) {
+					seen = req;
+					return { plan: { cuts: [] } };
+				},
+			}),
+		});
+		expect(seen).toBeDefined();
+		expect(seen!.words).toHaveLength(words.length);
+		// The doubled "the the" (plus filler) guarantees at least one existing removal,
+		// and every handled span is a real, positive-length removal span.
+		expect(Array.isArray(seen!.handledSpans)).toBe(true);
+		expect(seen!.handledSpans!.length).toBeGreaterThan(0);
+		expect(seen!.handledSpans!.every((s) => s.endSec > s.startSec)).toBe(true);
+		// No compressionTarget → no removal hint (generic exhaustive wording).
+		expect(seen!.removalHint).toBeUndefined();
+	});
+
+	test("compressionTarget (existing input) derives the removalHint percentage", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		let seen: DirectorRetakeRequest | undefined;
+		await buildDirectorProposals({
+			...input,
+			compressionTarget: 0.55,
+			llm: stubLlm({
+				async retake(req) {
+					seen = req;
+					return { plan: { cuts: [] } };
+				},
+			}),
+		});
+		expect(seen?.removalHint).toContain("55%");
 	});
 });

@@ -41,7 +41,7 @@ export interface KeeperSpan {
  * filler/dead-air/pacing word) and is left to do its job — protecting the take as a
  * whole must not suppress cleaning it up.
  */
-const KEEPER_COVER_FRACTION = 0.5;
+export const KEEPER_COVER_FRACTION = 0.5;
 
 const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
