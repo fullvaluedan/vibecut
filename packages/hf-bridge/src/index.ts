@@ -82,6 +82,16 @@ export {
 	type RetakeHandledSpan,
 } from "./llm-retake";
 export {
+	planStructural,
+	buildStructuralPrompt,
+	renderStructuralCatalog,
+	sanitizeStructuralPlan,
+	markHandledStructuralLines,
+	type StructuralDrop,
+	type StructuralPlan,
+	type StructuralHandledSpan,
+} from "./llm-structural";
+export {
 	resolveReferencedOps,
 	sanitizeReferencedPlan,
 	type ReferenceLine,
