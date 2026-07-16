@@ -65,6 +65,18 @@ export {
 	type ContextPlan,
 } from "./llm-context";
 export {
+	planRetake,
+	buildRetakePrompt,
+	renderRetakeCatalog,
+	sanitizeRetakePlan,
+	groupWordsIntoLines,
+	mergeRetakeCuts,
+	type RetakeWord,
+	type RetakeLine,
+	type RetakeCut,
+	type RetakePlan,
+} from "./llm-retake";
+export {
 	resolveReferencedOps,
 	sanitizeReferencedPlan,
 	type ReferenceLine,

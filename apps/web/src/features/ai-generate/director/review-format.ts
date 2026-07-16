@@ -58,6 +58,7 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	noise: "Noise",
 	redundancy: "Repeat",
 	context: "Out of context",
+	retake: "Retake",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -91,6 +92,9 @@ export function describeReviewOp({
 		} else if (op.category === "context") {
 			// An out-of-context flag: rejecting it keeps the content in the video.
 			rejectedHint = "Keeping this content";
+		} else if (op.category === "retake") {
+			// A retake/false-start cut: rejecting it keeps the flubbed take in the cut.
+			rejectedHint = "Keeping this take";
 		}
 	}
 

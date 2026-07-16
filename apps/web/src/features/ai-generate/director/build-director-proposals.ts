@@ -21,6 +21,8 @@ import type {
 	DirectorVisionFrame,
 	RedundancyGroup,
 	RedundancyLine,
+	RetakeCut,
+	RetakeWord,
 } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "./types";
@@ -52,6 +54,7 @@ import {
 	shouldRunLexicalRepeatDetectors,
 	type RedundancyReviewGroup,
 } from "./redundancy-apply";
+import { mapRetakeCuts } from "./retake-apply";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
@@ -108,6 +111,14 @@ export interface DirectorContextRequest {
 export interface DirectorContextResponse {
 	plan?: { flags?: ContextFlag[] };
 }
+export interface DirectorRetakeRequest {
+	/** Full transcript words with timing (the word-index span the pass resolves). */
+	words: RetakeWord[];
+	taste?: string;
+}
+export interface DirectorRetakeResponse {
+	plan?: { cuts?: RetakeCut[] };
+}
 
 /**
  * The three planning passes as an injectable seam. `plan` MUST throw on failure
@@ -119,6 +130,13 @@ export interface DirectorLlmAdapter {
 	plan(input: DirectorPlanRequest): Promise<DirectorPlanResponse>;
 	redundancy(input: DirectorRedundancyRequest): Promise<DirectorRedundancyResponse>;
 	context(input: DirectorContextRequest): Promise<DirectorContextResponse>;
+	/**
+	 * Dedicated retake-hunt pass (U3). OPTIONAL so this unit typechecks with adapters
+	 * that predate it (e.g. run-director wires it in U4). Like `redundancy`/`context`
+	 * it may throw or degrade; the pipeline guards it (absent method or thrown result =
+	 * zero retake candidates, the run continues).
+	 */
+	retake?(input: DirectorRetakeRequest): Promise<DirectorRetakeResponse>;
 }
 
 export interface BuildDirectorProposalsInput {
@@ -152,6 +170,10 @@ export interface BuildDirectorProposalsInput {
 	 * plan pass; absent = today's behavior. The eval computes it from the fixture's truth
 	 * ratio; the app passes nothing until U5 decides the in-app default. */
 	compressionTarget?: number;
+	/** Override the clamp-cut-extent oversized-span trigger (U2). Absent = the tuned
+	 * default; the eval passes `Infinity` for its `--no-clamp` A/B (every plan op passes
+	 * through untouched), never loosened in-app. */
+	clampOversizedSpanSec?: number;
 	llm: DirectorLlmAdapter;
 	onProgress?: (detail: string) => void;
 	/** Emits the in-app toasts (vision degrade is handled by the plan adapter);
@@ -196,6 +218,7 @@ export async function buildDirectorProposals(
 		config,
 		keeperPolicy = "last",
 		compressionTarget,
+		clampOversizedSpanSec,
 		llm,
 		onProgress,
 		onNotice,
@@ -395,6 +418,11 @@ export async function buildDirectorProposals(
 		ops: mappedPlanOps,
 		words,
 		evidence: clampEvidence,
+		// Eval `--no-clamp` threads Infinity here so every plan op passes through
+		// byte-identical (a pass-through disable for the U3-only A/B). Absent in-app.
+		...(clampOversizedSpanSec !== undefined
+			? { oversizedSpanSec: clampOversizedSpanSec }
+			: {}),
 	});
 	// The LLM's keep ops (U4) mark load-bearing spans the imp score may underrate;
 	// they protect (never remove), so fold them into the keeper set alongside the
@@ -469,6 +497,28 @@ export async function buildDirectorProposals(
 	await Promise.all([redundancyPass(), contextPass()]);
 	shouldRunLexicalRepeatDetectors(); // always run now (U5/R5), kept for intent
 	abort();
+
+	// Dedicated retake-hunt pass (U3/R6): hunt retakes, false starts, and flubs at WORD
+	// granularity and surface them as OFFERED-only rows (category `retake`, never auto-
+	// applied). Runs SERIALIZED after the redundancy/context Promise.all (not joined into
+	// it): concurrent claude-code spawns have a stall history, so a fourth pass waits its
+	// turn. GUARDED and OPTIONAL: an absent method (adapters predating U4) or a thrown /
+	// degraded result contributes zero candidates and the run continues (R7 fail-open).
+	let retakeCuts: DirectorOp[] = [];
+	if (llm.retake) {
+		onProgress?.("Hunting retakes and false starts...");
+		try {
+			const rData = await llm.retake({
+				words: words.map((w) => ({ text: w.text, startSec: w.start, endSec: w.end })),
+				taste: taste || undefined,
+			});
+			const cuts = Array.isArray(rData?.plan?.cuts) ? rData.plan.cuts : [];
+			retakeCuts = mapRetakeCuts(cuts);
+		} catch {
+			// route error / degraded → no retake candidates, the run continues (R7)
+		}
+		abort();
+	}
 
 	// Fold the always-on cleanup + the lexical repeat detectors into the LLM plan,
 	// protecting take-cluster keepers + the importance floor + LLM keeps. The repeat
@@ -600,6 +650,19 @@ export async function buildDirectorProposals(
 					keepers: [...llmKeepSpans, ...emphasisPauseKeepers],
 				}).filter((op) => op.op !== "keep")
 			: baseMerged;
+	// Fold the OFFERED-only retake cuts (U3/R6) into the merged ops. Routed through the
+	// SAME mergeDetectedCuts flow as the other detectors so the two safety rules apply:
+	// a retake overlapping a surviving removal is dropped (never double-cuts existing
+	// removals), and a retake covering a protected keeper span is dropped (rule 1). They
+	// are OFFERED (defaultAccept:false) so they never auto-apply; empty = byte-identical.
+	const withRetake =
+		retakeCuts.length > 0
+			? mergeDetectedCuts({
+					planOps: mergedOps,
+					extraOps: retakeCuts,
+					keepers: allKeepers,
+				}).filter((op) => op.op !== "keep")
+			: mergedOps;
 	// Virtual second pass (2P-U3): re-analyze the Director's OWN compressed output.
 	// Compression reveals adjacency: two verbatim takes >60s apart only become close
 	// enough to match once the material between them is cut, so apply the default-
@@ -610,7 +673,7 @@ export async function buildDirectorProposals(
 	// same keepers protect each pass, and the extra ops flow through the SAME snap/
 	// coalesce chain below as the pass-1 cuts.
 	const secondPass = runSecondPass({
-		ops: mergedOps,
+		ops: withRetake,
 		words,
 		segments,
 		keepers: allKeepers,
@@ -623,7 +686,7 @@ export async function buildDirectorProposals(
 			message: `Director second pass: found ${secondPass.extraOps.length} more cut${secondPass.extraOps.length === 1 ? "" : "s"} the compression revealed (${extraPasses} extra pass${extraPasses === 1 ? "" : "es"}).`,
 		});
 	}
-	const withSecondPass = [...mergedOps, ...secondPass.extraOps].sort(
+	const withSecondPass = [...withRetake, ...secondPass.extraOps].sort(
 		(a, b) => a.startSec - b.startSec,
 	);
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal

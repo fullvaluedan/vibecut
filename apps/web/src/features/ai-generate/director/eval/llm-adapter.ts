@@ -25,6 +25,7 @@ import {
 	planDirector,
 	planDirectorVision,
 	planRedundancy,
+	planRetake,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
 import type {
@@ -35,6 +36,8 @@ import type {
 	DirectorPlanResponse,
 	DirectorRedundancyRequest,
 	DirectorRedundancyResponse,
+	DirectorRetakeRequest,
+	DirectorRetakeResponse,
 } from "../build-director-proposals";
 
 /** Default per-pass watchdog: 10 minutes. Override with EVAL_LLM_TIMEOUT_MS. */
@@ -43,13 +46,14 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 const CLI_MISSING_HELP =
 	"The Claude CLI isn't available on this machine. Install it (npm i -g @anthropic-ai/claude-code) and sign in (`claude setup-token`), or re-run with `--auth api-key` and set ANTHROPIC_API_KEY.";
 
-/** The four hf-bridge planner entry points, injectable so tests can stub them
+/** The hf-bridge planner entry points, injectable so tests can stub them
  * without spawning the real CLI. */
 export interface EvalPlanners {
 	director: typeof planDirector;
 	vision: typeof planDirectorVision;
 	redundancy: typeof planRedundancy;
 	context: typeof planContext;
+	retake: typeof planRetake;
 }
 
 const DEFAULT_PLANNERS: EvalPlanners = {
@@ -57,6 +61,7 @@ const DEFAULT_PLANNERS: EvalPlanners = {
 	vision: planDirectorVision,
 	redundancy: planRedundancy,
 	context: planContext,
+	retake: planRetake,
 };
 
 export interface EvalLlmAdapterOptions {
@@ -76,6 +81,10 @@ export interface EvalLlmAdapterOptions {
 	signal?: AbortSignal;
 	/** Injectable planners (tests). Defaults to the real hf-bridge ones. */
 	planners?: EvalPlanners;
+	/** Whether the returned adapter exposes the retake pass (U3). Default true; the eval's
+	 * `--no-retake` A/B passes false, which OMITS the method so `buildDirectorProposals`'s
+	 * `if (llm.retake)` guard skips the pass (the app default keeps it on). */
+	enableRetake?: boolean;
 }
 
 /** Resolve the CLI `--auth` choice into a hf-bridge `ClaudeAuth`. */
@@ -198,6 +207,7 @@ export function createEvalLlmAdapter(
 		attempts = 2,
 		signal,
 		planners = DEFAULT_PLANNERS,
+		enableRetake = true,
 	} = options;
 
 	async function cachedCall<T>(
@@ -275,5 +285,24 @@ export function createEvalLlmAdapter(
 				return { plan, usage };
 			});
 		},
+		// The retake pass (U3): OMITTED when `enableRetake` is false so the pipeline's
+		// `if (llm.retake)` guard skips it (the eval's `--no-retake` A/B). Cached by
+		// payload hash + watchdog-bounded like the other passes (cachedCall).
+		...(enableRetake
+			? {
+					async retake(
+						input: DirectorRetakeRequest,
+					): Promise<DirectorRetakeResponse> {
+						return cachedCall("retake", input, async () => {
+							const { plan, usage } = await planners.retake({
+								words: input.words,
+								taste: input.taste,
+								auth,
+							});
+							return { plan, usage };
+						});
+					},
+				}
+			: {}),
 	};
 }

@@ -3,7 +3,7 @@ import {
 	buildDirectorProposals,
 	type DirectorLlmAdapter,
 } from "../build-director-proposals";
-import type { DirectorOp } from "@framecut/hf-bridge";
+import type { DirectorOp, RetakeCut } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "../types";
 import type { TranscriptSegment } from "../build-signal-table";
@@ -193,5 +193,110 @@ describe("buildDirectorProposals (pure pipeline extraction)", () => {
 			llm: stubLlm(),
 		});
 		expect(Array.isArray(result.operations)).toBe(true);
+	});
+});
+
+/**
+ * U3 retake-hunt wiring (R6/R10). The pass is OPTIONAL on the adapter, OFFERED-only,
+ * and folded through the same mergeDetectedCuts flow as the other detectors.
+ */
+describe("buildDirectorProposals + retake pass (U3)", () => {
+	const SENTENCE =
+		"so um lets deploy the the project and now we verify the logs together carefully";
+	const retakeStub = (cuts: RetakeCut[]) => ({
+		async retake() {
+			return { plan: { cuts } };
+		},
+	});
+
+	test("an adapter WITHOUT retake matches one whose retake returns no cuts (unchanged)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const noRetake = await buildDirectorProposals({ ...input, llm: stubLlm() });
+		const emptyRetake = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(retakeStub([])),
+		});
+		// The guarded pass contributes nothing when it returns no cuts, so the op list is
+		// byte-identical to the pre-U3 (retake-method-absent) pipeline.
+		expect(emptyRetake.operations).toEqual(noRetake.operations);
+	});
+
+	test("a retake candidate covering a protected keeper span is dropped by merge rule 1", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		// [3.0,3.5] is a clean region (no filler/duplicate detector cut lands there).
+		const keep: DirectorOp = {
+			id: "keep-1",
+			op: "keep",
+			startSec: 3.0,
+			endSec: 3.5,
+			reason: "load-bearing",
+			confidence: 0.9,
+		};
+		const overKeeper: RetakeCut = { startSec: 3.0, endSec: 3.5, reason: "flub", confidence: 0.9 };
+
+		const suppressed = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async plan() {
+					return { plan: { operations: [keep] } };
+				},
+				...retakeStub([overKeeper]),
+			}),
+		});
+		// Suppression is visible + counted, not silent: the retake row is gone.
+		expect(suppressed.operations.some((o) => o.category === "retake")).toBe(false);
+
+		// Control: the SAME retake, with no keeper protecting it, survives — proving the
+		// keeper (not some other layer) is what dropped it.
+		const survives = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(retakeStub([overKeeper])),
+		});
+		expect(survives.operations.some((o) => o.category === "retake")).toBe(true);
+	});
+
+	test("a retake overlapping an existing plan removal merges without double-cutting", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const planCut: DirectorOp = {
+			id: "plan-cut",
+			op: "cut",
+			startSec: 3.0,
+			endSec: 3.5,
+			reason: "tangent",
+			confidence: 0.9,
+		};
+		const inside: RetakeCut = { startSec: 3.1, endSec: 3.4, reason: "flub", confidence: 0.9 };
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async plan() {
+					return { plan: { operations: [planCut] } };
+				},
+				...retakeStub([inside]),
+			}),
+		});
+		// The retake fell inside the plan removal → deduped away, never a second cut.
+		expect(result.operations.some((o) => o.category === "retake")).toBe(false);
+		// The plan removal itself still covers that region.
+		expect(
+			result.operations.some((o) => o.startSec < 3.5 && 3.0 < o.endSec),
+		).toBe(true);
+	});
+
+	test("a retake in a clean region survives as an OFFERED (unchecked) row", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const clean: RetakeCut = { startSec: 3.0, endSec: 3.5, reason: "false start", confidence: 0.9 };
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(retakeStub([clean])),
+		});
+		const retakeOps = result.operations.filter((o) => o.category === "retake");
+		expect(retakeOps.length).toBeGreaterThan(0);
+		// OFFERED-only: never auto-applied.
+		expect(retakeOps.every((o) => o.defaultAccept === false)).toBe(true);
 	});
 });

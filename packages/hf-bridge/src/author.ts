@@ -397,7 +397,8 @@ export type DirectorOpCategory =
 	| "deadair"
 	| "noise"
 	| "redundancy"
-	| "context";
+	| "context"
+	| "retake";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {

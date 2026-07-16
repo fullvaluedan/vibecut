@@ -191,7 +191,12 @@ function requireAudioFields(fixture: DirectorEvalFixture): void {
 function llmProposalInput(
 	fixture: DirectorEvalFixture,
 	adapter: ReturnType<typeof createEvalLlmAdapter>,
-	options: { keeperPolicy: KeeperPolicy; compressionTarget?: number },
+	options: {
+		keeperPolicy: KeeperPolicy;
+		compressionTarget?: number;
+		/** `--no-clamp` sets this to Infinity so U2's clamp passes every plan op through. */
+		clampOversizedSpanSec?: number;
+	},
 ) {
 	return {
 		words: fixture.rawWords as TranscriptionWord[],
@@ -212,6 +217,9 @@ function llmProposalInput(
 		keeperPolicy: options.keeperPolicy,
 		...(options.compressionTarget !== undefined
 			? { compressionTarget: options.compressionTarget }
+			: {}),
+		...(options.clampOversizedSpanSec !== undefined
+			? { clampOversizedSpanSec: options.clampOversizedSpanSec }
 			: {}),
 		llm: adapter,
 	};
@@ -288,6 +296,8 @@ async function runLlmMode({
 	wantJson,
 	keeperPolicy,
 	compression,
+	retake,
+	clamp,
 }: {
 	fixtures: Fixture[];
 	runs: number;
@@ -296,6 +306,10 @@ async function runLlmMode({
 	keeperPolicy: KeeperPolicy;
 	/** When true, compute each fixture's compression target from its own truth ratio. */
 	compression: boolean;
+	/** U3 retake-hunt pass on (default) or off (`--no-retake`), for the A/B against baseline. */
+	retake: boolean;
+	/** U2 clamp on (default) or off (`--no-clamp`, threshold → Infinity), for the U3-only combo. */
+	clamp: boolean;
 }): Promise<void> {
 	const auth = resolveClaudeAuth({
 		mode: authMode,
@@ -316,16 +330,22 @@ async function runLlmMode({
 		console.error(
 			`  [${fixture.name}] keep-ratio ${((1 - cutRatio) * 100).toFixed(1)}% ` +
 				`(removes ${(cutRatio * 100).toFixed(1)}%)  keeper=${keeperPolicy}  ` +
-				`compression=${compression ? `${(cutRatio * 100).toFixed(1)}%` : "off"}`,
+				`compression=${compression ? `${(cutRatio * 100).toFixed(1)}%` : "off"}  ` +
+				`retake=${retake ? "on" : "off"}  clamp=${clamp ? "on" : "off"}`,
 		);
 		const runResults: DualScorecard[] = [];
 		for (let runIndex = 0; runIndex < runs; runIndex++) {
 			if (runs > 1) {
 				console.error(`  [${fixture.name}] live run ${runIndex + 1}/${runs}...`);
 			}
-			const adapter = createEvalLlmAdapter({ auth, runIndex });
+			const adapter = createEvalLlmAdapter({ auth, runIndex, enableRetake: retake });
 			const { operations } = await buildDirectorProposals(
-				llmProposalInput(fixture, adapter, { keeperPolicy, compressionTarget }),
+				llmProposalInput(fixture, adapter, {
+					keeperPolicy,
+					compressionTarget,
+					// `--no-clamp`: threshold → Infinity so every plan op passes U2 untouched.
+					...(clamp ? {} : { clampOversizedSpanSec: Infinity }),
+				}),
 			);
 			runResults.push(
 				scoreDual({
@@ -399,6 +419,11 @@ async function main(): Promise<void> {
 	// derives each fixture's target from its own truth ratio. Both cache independently.
 	const keeperPolicy: KeeperPolicy = val("--keeper", "last") === "quality" ? "quality" : "last";
 	const compression = has("--compression");
+	// U3 A/B knobs (both default ON so the eval mirrors the app): `--no-retake` skips the
+	// retake-hunt pass (A/B against the cached baseline); `--no-clamp` disables U2's clamp
+	// (its oversized threshold → Infinity, every plan op passes through) for the U3-only combo.
+	const retake = !has("--no-retake");
+	const clamp = !has("--no-clamp");
 	// Positional dir = first non-flag arg that isn't a flag's value (--runs 3 etc).
 	const flagValues = new Set(
 		[val("--runs", ""), val("--auth", ""), val("--keeper", "")].filter(Boolean),
@@ -431,7 +456,16 @@ async function main(): Promise<void> {
 	// FULL-pipeline mode (R1): the app's own module + live LLM passes. --selftest
 	// stays detector-only (no tokens), so it can run in CI without auth.
 	if (wantLlm && !selftest) {
-		await runLlmMode({ fixtures, runs, authMode, wantJson, keeperPolicy, compression });
+		await runLlmMode({
+			fixtures,
+			runs,
+			authMode,
+			wantJson,
+			keeperPolicy,
+			compression,
+			retake,
+			clamp,
+		});
 		return;
 	}
 

@@ -23,9 +23,9 @@ afterEach(() => {
 /** Stub planners that count invocations; only the ones a test needs are real. */
 function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 	planners: EvalPlanners;
-	calls: { director: number; redundancy: number; context: number };
+	calls: { director: number; redundancy: number; context: number; retake: number };
 } {
-	const calls = { director: 0, redundancy: 0, context: 0 };
+	const calls = { director: 0, redundancy: 0, context: 0, retake: 0 };
 	const planners = {
 		director: async () => {
 			calls.director++;
@@ -39,6 +39,10 @@ function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 		context: async () => {
 			calls.context++;
 			return { plan: { flags: [] }, usage: {} };
+		},
+		retake: async () => {
+			calls.retake++;
+			return { plan: { cuts: [] }, usage: {} };
 		},
 		...overrides,
 	} as unknown as EvalPlanners;
@@ -110,6 +114,29 @@ describe("createEvalLlmAdapter", () => {
 		await adapter.context({ lines: [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }] });
 		expect(calls.redundancy).toBe(1);
 		expect(calls.context).toBe(1);
+	});
+
+	test("retake caches by payload hash and replays without re-calling the planner (U3)", async () => {
+		const { planners, calls } = countingPlanners();
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const payload = { words: [{ text: "a", startSec: 0, endSec: 0.4 }] };
+
+		const first = await adapter.retake!(payload);
+		expect(first.plan?.cuts).toEqual([]);
+		expect(calls.retake).toBe(1);
+		expect(fs.readdirSync(cacheDir).some((f) => f.startsWith("retake-"))).toBe(true);
+
+		// Identical payload → served from cache, planner NOT invoked again.
+		await adapter.retake!(payload);
+		expect(calls.retake).toBe(1);
+	});
+
+	test("enableRetake false OMITS the retake method (eval --no-retake)", () => {
+		const { planners } = countingPlanners();
+		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: false });
+		expect(typeof on.retake).toBe("function");
+		expect(off.retake).toBeUndefined();
 	});
 });
 
