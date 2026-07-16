@@ -240,13 +240,13 @@ export async function runDirector({
 		durationSec: a.duration ?? 0,
 	}));
 
-	// LLM adapter seam (KTD2): wraps the route fetches, unchanged — same auth
+	// LLM adapter seam (KTD2): wraps the route fetches, unchanged, same auth
 	// headers, same abort signal. `plan` throws on failure (the Director aborts, as
 	// it always has); `redundancy`/`context` throw on a route error and the pure
 	// pipeline falls back. The vision degrade/cost toast lives here because it
 	// depends on `formatVisionNotice` + `toast` (browser-only), keeping the pure
 	// pipeline free of the media/UI layer. `retake` (U4) is a fourth, OPTIONAL fetch,
-	// present only when the user has opted in — see the method below.
+	// present only when the user has opted in; see the method below.
 	const llm: DirectorLlmAdapter = {
 		async plan(planInput) {
 			const res = await fetch("/api/director/plan", {
@@ -294,7 +294,7 @@ export async function runDirector({
 			return (await res.json()) as DirectorContextResponse;
 		},
 		// Retake-hunt pass (U4): OMITTED unless the user has opted in (`directorRetake`,
-		// default OFF per the U5 verdict — match-neutral-at-best, so it ships available
+		// default OFF per the U5 verdict: match-neutral-at-best, so it ships available
 		// but not on by default, R10). Omitting the method entirely (rather than gating
 		// inside it) makes `buildDirectorProposals`'s `if (llm.retake)` guard skip the
 		// pass for zero cost, matching the eval adapter's `enableRetake` convention.

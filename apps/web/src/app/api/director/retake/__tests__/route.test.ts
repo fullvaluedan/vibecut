@@ -3,9 +3,9 @@ import { NextRequest } from "next/server";
 
 // Stub the auth resolver and the planner so the route's guard / validate / error
 // logic is tested without a real LLM call. Registered before importing the route.
-// (planRetake is a VALUE import in the route — the mock MUST export it or the
+// (planRetake is a VALUE import in the route: the mock MUST export it or the
 // route fails to load.) bun's mock.module is process-global, so whichever mock is
-// active when the sibling director routes load must also satisfy THEIR imports —
+// active when the sibling director routes load must also satisfy THEIR imports,
 // hence the inert siblings, matching the redundancy/context/plan route tests.
 let authImpl: () => unknown = () => null;
 let planRetakeImpl: () => Promise<unknown> = async () => ({
@@ -95,7 +95,7 @@ describe("/api/director/retake", () => {
 			post({
 				words: [
 					{ text: "ok", startSec: 0, endSec: 0.2 },
-					{ text: "dropped — non-numeric start", startSec: "bad", endSec: 0.4 },
+					{ text: "dropped: non-numeric start", startSec: "bad", endSec: 0.4 },
 					{ startSec: 0.4, endSec: 0.6 },
 				],
 			}),

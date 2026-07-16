@@ -81,9 +81,10 @@ export interface EvalLlmAdapterOptions {
 	signal?: AbortSignal;
 	/** Injectable planners (tests). Defaults to the real hf-bridge ones. */
 	planners?: EvalPlanners;
-	/** Whether the returned adapter exposes the retake pass (U3). Default true; the eval's
-	 * `--no-retake` A/B passes false, which OMITS the method so `buildDirectorProposals`'s
-	 * `if (llm.retake)` guard skips the pass (the app default keeps it on). */
+	/** Whether the returned adapter exposes the retake pass (U3). The runner passes this
+	 * from its `--retake` flag (default OFF, mirroring the in-app `directorRetake: false`
+	 * default from the round-3 verdict). False OMITS the method so `buildDirectorProposals`'s
+	 * `if (llm.retake)` guard skips the pass entirely. */
 	enableRetake?: boolean;
 }
 

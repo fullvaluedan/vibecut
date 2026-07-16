@@ -249,7 +249,7 @@ describe("buildDirectorProposals + retake pass (U3)", () => {
 		// Suppression is visible + counted, not silent: the retake row is gone.
 		expect(suppressed.operations.some((o) => o.category === "retake")).toBe(false);
 
-		// Control: the SAME retake, with no keeper protecting it, survives — proving the
+		// Control: the SAME retake, with no keeper protecting it, survives, proving the
 		// keeper (not some other layer) is what dropped it.
 		const survives = await buildDirectorProposals({
 			...input,

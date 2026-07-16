@@ -21,6 +21,7 @@ export {
 	planMultimodal,
 	planDirector,
 	planDirectorVision,
+	stableOpId,
 	buildDirectorVisionPrompt,
 	buildDirectorVisionBlocks,
 	MAX_MULTIMODAL_IMAGES,

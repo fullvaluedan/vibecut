@@ -202,7 +202,9 @@ export function groupWordsIntoLines(words: readonly RetakeWord[]): RetakeLine[] 
 export function renderRetakeCatalog(lines: readonly RetakeLine[]): string {
 	return lines
 		.map((line) => {
-			const text = line.text.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
+			// Full text, never truncated: the tag advertises the line's whole global
+			// word range, so hiding words would invite blind (hallucinated) indices.
+			const text = line.text.trim().replace(/\s+/g, " ") || "-";
 			const handled = line.handled ? " [HANDLED]" : "";
 			return `[${line.lineId} w${line.startWord}-${line.endWord}]${handled} (${line.startSec.toFixed(1)}-${line.endSec.toFixed(1)}) "${text}"`;
 		})
@@ -290,12 +292,32 @@ export function sanitizeRetakePlan(
 }
 
 /**
- * Merge retake cuts gathered across chunk windows into one list (R6). The overlap
- * re-surfaces a straddling cut in two windows, so dedupe by span key. Pure →
+ * Merge retake cuts gathered across chunk windows into one list (R6). The window
+ * overlap re-surfaces a straddling cut in both windows, and two separate calls
+ * rarely resolve identical boundaries, so exact-key dedupe is not enough: after
+ * the key dedupe, OVERLAPPING cuts are unioned into one (span = union, confidence
+ * = max, reason = the higher-confidence cut's). One review row per flub. Pure,
  * unit-tested.
  */
 export function mergeRetakeCuts(cuts: readonly RetakeCut[]): RetakeCut[] {
-	return dedupeByKey(cuts, (c) => `${c.startSec.toFixed(3)}:${c.endSec.toFixed(3)}`);
+	const unique = dedupeByKey(cuts, (c) => `${c.startSec.toFixed(3)}:${c.endSec.toFixed(3)}`);
+	const sorted = [...unique].sort((a, b) => a.startSec - b.startSec);
+	const out: RetakeCut[] = [];
+	for (const cut of sorted) {
+		const last = out[out.length - 1];
+		if (last && cut.startSec < last.endSec) {
+			const stronger = cut.confidence > last.confidence ? cut : last;
+			out[out.length - 1] = {
+				startSec: last.startSec,
+				endSec: Math.max(last.endSec, cut.endSec),
+				reason: stronger.reason,
+				confidence: stronger.confidence,
+			};
+			continue;
+		}
+		out.push(cut);
+	}
+	return out;
 }
 
 function addUsage(a: TokenUsage | null, b: TokenUsage | null): TokenUsage | null {

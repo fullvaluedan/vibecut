@@ -1,12 +1,12 @@
 /**
  * Span discipline for the LLM PLAN pass (U2, R5/KTD4). The plan pass reasons at the
  * segment level and routinely emits a single "cut" spanning 20-300s that engulfs kept
- * dialog — the measured essential-words-lost driver. `refineCutWordBounds` fixes the
+ * dialog, the measured essential-words-lost driver. `refineCutWordBounds` fixes the
  * EDGES of a removal but cannot shrink an oversized span's EXTENT; this pass does.
  *
  * Runs on the plan-pass ops ONLY, immediately after `planOps` forms and BEFORE
  * `mergeDetectedCuts` (KTD4). Selection is by ARRAY MEMBERSHIP (the caller hands us
- * only the plan-pass ops), never by category — a vision-tagged plan op is disciplined
+ * only the plan-pass ops), never by category: a vision-tagged plan op is disciplined
  * exactly like an untagged one. The deterministic detector arrays are never passed in.
  *
  * Per plan REMOVAL op (`cut`/`take_select`) LONGER than OVERSIZED_SPAN_SEC:
@@ -24,12 +24,12 @@
  * `keep`/`reorder`; ops at/below the threshold pass through BYTE-IDENTICAL; a shrink
  * that collapses to zero span drops the op. Fail-open: with no words (a degraded,
  * word-timing-less transcript) the evidence detectors produced nothing meaningful and
- * word-safety can't be reasoned about, so every op passes through unchanged — mirrors
+ * word-safety can't be reasoned about, so every op passes through unchanged, which mirrors
  * `refineCutWordBounds`/`justifyCuts`. Pure + wasm-free; seconds in, seconds out. Only
  * `startSec`/`endSec` matter downstream (KTD1), so split ops get fresh stable ids.
  */
 
-import type { DirectorOp } from "@framecut/hf-bridge";
+import { stableOpId, type DirectorOp } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
 
 /**
@@ -38,7 +38,7 @@ import type { WordTiming } from "./cut-utils";
  * shorter cuts are edge-refined downstream and left alone here. 20s clears a normal
  * multi-sentence removal while catching the 20-300s span-engulfers. Below 20s the
  * AUTO-match dip from demoting legitimate mid-length cuts grew; at 30s the second-pass
- * interaction regressed pokemon-tcg OFFERED match — 20s was the measured sweet spot.
+ * interaction regressed pokemon-tcg OFFERED match; 20s was the measured sweet spot.
  */
 export const OVERSIZED_SPAN_SEC = 20;
 
@@ -63,26 +63,6 @@ export interface EvidenceSpan {
 
 const isRemoval = (op: DirectorOp): boolean =>
 	op.op === "cut" || op.op === "take_select";
-
-/**
- * djb2 over the op's identity fields → `op_<base36>`, matching `stableOpId` in
- * `packages/hf-bridge/src/author.ts` so a split op's id stays in the plan-op namespace
- * and is stable across re-planning. Only start/end matter downstream (KTD1); the id is
- * regenerated so two disjoint shrunk ops never collide on the parent's id.
- */
-function stablePlanOpId(op: {
-	op: string;
-	startSec: number;
-	endSec: number;
-	targetStartSec?: number;
-}): string {
-	const key = `${op.op}|${op.startSec}|${op.endSec}|${op.targetStartSec ?? ""}`;
-	let h = 5381;
-	for (let i = 0; i < key.length; i++) {
-		h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
-	}
-	return `op_${h.toString(36)}`;
-}
 
 /** Sort spans by start and merge overlapping OR touching ones into disjoint runs. */
 function unionRuns(runs: EvidenceSpan[]): EvidenceSpan[] {
@@ -172,7 +152,10 @@ export function clampCutExtent({
 				...op,
 				startSec: r.startSec,
 				endSec: r.endSec,
-				id: stablePlanOpId({
+				// The shared hf-bridge hash keeps split-op ids in the plan-op namespace
+				// (stable across re-planning); regenerated so two disjoint shrunk ops
+				// never collide on the parent's id. Only start/end matter downstream (KTD1).
+				id: stableOpId({
 					op: op.op,
 					startSec: r.startSec,
 					endSec: r.endSec,

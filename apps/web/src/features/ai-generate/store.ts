@@ -97,7 +97,7 @@ interface AiSettingsStore {
 	 * analysis, surfacing word-level retakes/false-starts/flubs as OFFERED-only
 	 * review rows (never auto-applied). Default OFF per the U5 measurement verdict
 	 * (match-neutral-at-best) and R10 (nothing new auto-applies, no default loosens
-	 * without a clear scorecard justification) — available, not on by default.
+	 * without a clear scorecard justification); available, not on by default.
 	 */
 	directorRetake: boolean;
 	setDirectorRetake: (enabled: boolean) => void;

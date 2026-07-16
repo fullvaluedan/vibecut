@@ -489,8 +489,10 @@ const DIRECTOR_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
-/** Deterministic id for an op (djb2 over its identity fields) so re-planning the same output is stable. */
-function stableOpId(op: {
+/** Deterministic id for an op (djb2 over its identity fields) so re-planning the same
+ * output is stable. Exported so downstream span surgery (clamp-cut-extent) can mint
+ * split-op ids in the same namespace instead of copying the hash. */
+export function stableOpId(op: {
 	op: string;
 	startSec: number;
 	endSec: number;

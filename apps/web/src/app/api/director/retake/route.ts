@@ -56,7 +56,7 @@ function parseHandledSpans(raw: unknown): RetakeHandledSpan[] | undefined {
  * (OFFERED-only retake/false-start cuts) + token usage out. Mirrors the Director
  * redundancy route in shape. The pass is fail-open end to end (R7): a planner
  * throw is caught here and reported as a degraded, empty plan rather than a 500,
- * so a flaky retake call never aborts the Director run — the client-side adapter
+ * so a flaky retake call never aborts the Director run; the client-side adapter
  * just receives zero candidates and the pipeline proceeds without them.
  */
 export async function POST(req: NextRequest) {

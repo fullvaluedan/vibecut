@@ -13,7 +13,7 @@
  */
 
 import type { DirectorOp, RetakeCut } from "@framecut/hf-bridge";
-import { KEEPER_COVER_FRACTION, stableCutId, type KeeperSpan } from "./cut-utils";
+import { removalCoversKeeper, stableCutId, type KeeperSpan } from "./cut-utils";
 import { DEFAULT_REDUNDANCY_CONFIDENCE_FLOOR } from "./redundancy-apply";
 
 /**
@@ -83,12 +83,12 @@ export function trimRetakeCuts({
 	const out: DirectorOp[] = [];
 	for (const op of ops) {
 		// A keeper is a hole only when this candidate covers enough of it to remove
-		// the take (merge rule 1 semantics); micro-trims inside keepers stay allowed.
-		const keeperHoles = keepers.filter((k) => {
-			const overlap = Math.min(op.endSec, k.endSec) - Math.max(op.startSec, k.startSec);
-			const keeperLen = k.endSec - k.startSec;
-			return keeperLen > 0 && overlap / keeperLen >= KEEPER_COVER_FRACTION;
-		});
+		// the take: the SAME removalCoversKeeper rule merge rule 1 uses, called per
+		// keeper, so the two paths can never drift. Micro-trims inside keepers stay
+		// allowed exactly as they are for every other detector.
+		const keeperHoles = keepers.filter((k) =>
+			removalCoversKeeper({ op, keepers: [k] }),
+		);
 		const holes = [...blockerHoles, ...keeperHoles]
 			.map((s) => ({ startSec: s.startSec, endSec: s.endSec }))
 			.sort((a, b) => a.startSec - b.startSec);

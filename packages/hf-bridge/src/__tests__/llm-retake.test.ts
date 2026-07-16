@@ -273,6 +273,30 @@ describe("mergeRetakeCuts (windowed dedupe)", () => {
 			[3, 4],
 		]);
 	});
+
+	test("OVERLAPPING near-duplicates from two windows union into one row", () => {
+		// Two calls resolve slightly different boundaries for the same flub: one row,
+		// span = union, confidence = max, reason from the stronger cut.
+		const merged = mergeRetakeCuts([
+			{ startSec: 10, endSec: 15, reason: "weak", confidence: 0.6 },
+			{ startSec: 12, endSec: 18, reason: "strong", confidence: 0.9 },
+			{ startSec: 30, endSec: 31, reason: "separate", confidence: 0.7 },
+		]);
+		expect(merged.map((c) => [c.startSec, c.endSec])).toEqual([
+			[10, 18],
+			[30, 31],
+		]);
+		expect(merged[0].confidence).toBe(0.9);
+		expect(merged[0].reason).toBe("strong");
+	});
+
+	test("catalog lines render FULL text (no truncation hiding advertised indices)", () => {
+		const longText = Array.from({ length: 90 }, (_, i) => `word${i}`).join(" ");
+		const lines = groupWordsIntoLines(mkWords(longText));
+		const rendered = renderRetakeCatalog(lines);
+		// Every word the tags advertise is visible to the model.
+		expect(rendered).toContain("word89");
+	});
 });
 
 describe("planRetake fail-open (R7)", () => {
