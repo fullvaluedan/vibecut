@@ -8,7 +8,7 @@ import {
 	verifyClaudeCli,
 	type EvalPlanners,
 } from "../llm-adapter";
-import type { ClaudeAuth } from "@framecut/hf-bridge";
+import type { ClaudeAuth, VerifyCandidate } from "@framecut/hf-bridge";
 
 const AUTH: ClaudeAuth = { mode: "claude-code" };
 
@@ -23,9 +23,9 @@ afterEach(() => {
 /** Stub planners that count invocations; only the ones a test needs are real. */
 function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 	planners: EvalPlanners;
-	calls: { director: number; redundancy: number; context: number; retake: number; structural: number };
+	calls: { director: number; redundancy: number; context: number; retake: number; structural: number; verify: number };
 } {
-	const calls = { director: 0, redundancy: 0, context: 0, retake: 0, structural: 0 };
+	const calls = { director: 0, redundancy: 0, context: 0, retake: 0, structural: 0, verify: 0 };
 	const planners = {
 		director: async () => {
 			calls.director++;
@@ -47,6 +47,10 @@ function countingPlanners(overrides: Partial<EvalPlanners> = {}): {
 		structural: async () => {
 			calls.structural++;
 			return { plan: { drops: [] }, usage: {} };
+		},
+		verify: async () => {
+			calls.verify++;
+			return { plan: { verdicts: [] }, usage: {} };
 		},
 		...overrides,
 	} as unknown as EvalPlanners;
@@ -231,6 +235,78 @@ describe("createEvalLlmAdapter", () => {
 		expect(typeof on.structural).toBe("function");
 		expect(byDefault.structural).toBeUndefined();
 		expect(off.structural).toBeUndefined();
+	});
+
+	const mkCandidate = (
+		over: Partial<VerifyCandidate> = {},
+	): VerifyCandidate => ({
+		category: "retake",
+		startSec: 0,
+		endSec: 1,
+		reason: "flub",
+		confidence: 0.7,
+		coveredText: "a",
+		startWord: 0,
+		endWord: 0,
+		...over,
+	});
+
+	test("verify caches by payload hash and replays without re-calling the planner (U2)", async () => {
+		const { planners, calls } = countingPlanners();
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: true });
+		const payload = {
+			candidates: [mkCandidate()],
+			lines: [],
+			words: [{ text: "a", startSec: 0, endSec: 0.4 }],
+		};
+
+		const first = await adapter.verify!(payload);
+		expect(first.plan?.verdicts).toEqual([]);
+		expect(calls.verify).toBe(1);
+		expect(fs.readdirSync(cacheDir).some((f) => f.startsWith("verify-"))).toBe(true);
+
+		// Identical payload → served from cache, planner NOT invoked again.
+		await adapter.verify!(payload);
+		expect(calls.verify).toBe(1);
+	});
+
+	test("a changed candidate list busts the verify cache and is forwarded", async () => {
+		const seen: unknown[] = [];
+		const { planners, calls } = countingPlanners({
+			verify: (async (arg: { candidates?: unknown }) => {
+				calls.verify++;
+				seen.push(arg.candidates);
+				return { plan: { verdicts: [] }, usage: {} };
+			}) as unknown as EvalPlanners["verify"],
+		});
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: true });
+		const lines: never[] = [];
+		const words = [{ text: "a", startSec: 0, endSec: 0.4 }];
+		const c1: VerifyCandidate[] = [mkCandidate()];
+		const c2: VerifyCandidate[] = [
+			mkCandidate({
+				category: "structural",
+				startWord: undefined,
+				endWord: undefined,
+				startLineId: "L0",
+				endLineId: "L0",
+			}),
+		];
+		await adapter.verify!({ candidates: c1, lines, words });
+		await adapter.verify!({ candidates: c1, lines, words }); // same → cache hit
+		await adapter.verify!({ candidates: c2, lines, words }); // changed → miss
+		expect(calls.verify).toBe(2);
+		expect(seen).toEqual([c1, c2]); // forwarded unchanged
+	});
+
+	test("verify is OMITTED by default and with enableVerify false (off mirrors the app)", () => {
+		const { planners } = countingPlanners();
+		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: true });
+		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: false });
+		expect(typeof on.verify).toBe("function");
+		expect(byDefault.verify).toBeUndefined();
+		expect(off.verify).toBeUndefined();
 	});
 });
 

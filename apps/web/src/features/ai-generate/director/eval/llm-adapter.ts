@@ -27,6 +27,7 @@ import {
 	planRedundancy,
 	planRetake,
 	planStructural,
+	planVerify,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
 import type {
@@ -41,6 +42,8 @@ import type {
 	DirectorRetakeResponse,
 	DirectorStructuralRequest,
 	DirectorStructuralResponse,
+	DirectorVerifyRequest,
+	DirectorVerifyResponse,
 } from "../build-director-proposals";
 
 /** Default per-pass watchdog: 10 minutes. Override with EVAL_LLM_TIMEOUT_MS. */
@@ -58,6 +61,7 @@ export interface EvalPlanners {
 	context: typeof planContext;
 	retake: typeof planRetake;
 	structural: typeof planStructural;
+	verify: typeof planVerify;
 }
 
 const DEFAULT_PLANNERS: EvalPlanners = {
@@ -67,6 +71,7 @@ const DEFAULT_PLANNERS: EvalPlanners = {
 	context: planContext,
 	retake: planRetake,
 	structural: planStructural,
+	verify: planVerify,
 };
 
 export interface EvalLlmAdapterOptions {
@@ -95,6 +100,10 @@ export interface EvalLlmAdapterOptions {
 	 * this from its `--structural` flag (default OFF, mirroring the in-app default). False
 	 * OMITS the method so `buildDirectorProposals`'s `if (llm.structural)` guard skips it. */
 	enableStructural?: boolean;
+	/** Whether the returned adapter exposes the verify sub-pass (U2). The runner passes this
+	 * from its verify enablement (default OFF, matching the recall passes and this doc). False
+	 * OMITS the method so `buildDirectorProposals`'s `if (llm.verify)` guard skips it. */
+	enableVerify?: boolean;
 	/** Removal-share hint for the STRUCTURAL pass, derived by the runner from the fixture's
 	 * truth ratio when `--structural` is on. When set it OVERRIDES the (compressionTarget-
 	 * derived) hint `buildDirectorProposals` passes, so the structural lever is measured with
@@ -227,6 +236,9 @@ export function createEvalLlmAdapter(
 		// above; the runner always passes explicit values from its flags.
 		enableRetake = false,
 		enableStructural = false,
+		// Verify defaults OFF too, matching its JSDoc above; the runner passes an explicit
+		// value (verify on whenever a recall pass is on).
+		enableVerify = false,
 		structuralRemovalHint,
 	} = options;
 
@@ -355,6 +367,28 @@ export function createEvalLlmAdapter(
 								auth,
 							});
 							return { plan, usage };
+						});
+					},
+				}
+			: {}),
+		// The verify sub-pass (U2): OMITTED when `enableVerify` is false so the pipeline's
+		// `if (llm.verify)` guard skips it. Cached by payload hash + watchdog-bounded like
+		// the other passes; the candidate list rides the payload, so the cache busts when
+		// the candidate set changes (KTD2).
+		...(enableVerify
+			? {
+					async verify(
+						input: DirectorVerifyRequest,
+					): Promise<DirectorVerifyResponse> {
+						return cachedCall("verify", input, async () => {
+							const { plan } = await planners.verify({
+								candidates: input.candidates,
+								lines: input.lines,
+								words: input.words,
+								taste: input.taste,
+								auth,
+							});
+							return { plan };
 						});
 					},
 				}

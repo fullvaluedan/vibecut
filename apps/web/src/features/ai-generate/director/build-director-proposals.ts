@@ -24,6 +24,8 @@ import type {
 	RetakeCut,
 	RetakeWord,
 	StructuralDrop,
+	VerifyCandidate,
+	VerifyVerdict,
 } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "./types";
@@ -57,6 +59,7 @@ import {
 } from "./redundancy-apply";
 import { mapRetakeCuts, trimRetakeCuts } from "./retake-apply";
 import { mapStructuralDrops } from "./structural-apply";
+import { applyVerifyVerdicts, collectVerifyCandidates } from "./verify-apply";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
@@ -152,6 +155,21 @@ export interface DirectorStructuralRequest {
 export interface DirectorStructuralResponse {
 	plan?: { drops?: StructuralDrop[] };
 }
+export interface DirectorVerifyRequest {
+	/** The recall candidates to judge (category `retake`/`structural`), C-indexed by the
+	 * order of this array, and verdicts key back by that index. */
+	candidates: VerifyCandidate[];
+	/** The numbered-transcript catalog (context + the structural tighten resolution). */
+	lines: RedundancyLine[];
+	/** Full transcript words (the retake tighten resolution + the global word-index
+	 * anchors the candidates carry). Both catalogs ride the payload so the eval cache
+	 * busts when the candidate set changes (R2/KTD2). */
+	words: RetakeWord[];
+	taste?: string;
+}
+export interface DirectorVerifyResponse {
+	plan?: { verdicts?: VerifyVerdict[] };
+}
 
 /**
  * The three planning passes as an injectable seam. `plan` MUST throw on failure
@@ -177,6 +195,13 @@ export interface DirectorLlmAdapter {
 	 * run continues).
 	 */
 	structural?(input: DirectorStructuralRequest): Promise<DirectorStructuralResponse>;
+	/**
+	 * Verify sub-pass (U2). OPTIONAL so this unit typechecks with adapters that predate it.
+	 * Judges the recall candidates for damage/bleed after the recall fold. Like the recall
+	 * passes it may throw or degrade; the pipeline guards it (absent method or thrown result
+	 * = every candidate passes through unverified and the run continues, R4).
+	 */
+	verify?(input: DirectorVerifyRequest): Promise<DirectorVerifyResponse>;
 }
 
 export interface BuildDirectorProposalsInput {
@@ -810,10 +835,54 @@ export async function buildDirectorProposals(
 					keepers: allKeepers,
 				}).filter((op) => op.op !== "keep")
 			: withSecondPass;
+	// Verify sub-pass (U2/R3/R4): the precision counterweight to the recall passes.
+	// Immediately after the recall fold and BEFORE the snap/refine/trim/justify chain,
+	// collect every recall candidate (category retake|structural) from the post-fold op
+	// list and hand them to ONE batched verify call: reject removes a damaging row, tighten
+	// shrinks a bleeding one to its resolved inner span, keep / no-verdict passes through.
+	// GUARDED and OPTIONAL like the recall passes: an absent method, a thrown/degraded
+	// result, or ZERO candidates leaves every candidate untouched and the run continues (R4).
+	// Zero candidates NEVER calls the LLM, so a recall-less run is byte-identical to the
+	// pre-verify pipeline (`verified` IS `withStructural`).
+	let verified = withStructural;
+	if (llm.verify) {
+		const verifyWords: RetakeWord[] = words.map((w) => ({
+			text: w.text,
+			startSec: w.start,
+			endSec: w.end,
+		}));
+		const verifyCandidates = collectVerifyCandidates({
+			ops: withStructural,
+			words: verifyWords,
+			lines: redundancyLines,
+		});
+		if (verifyCandidates.length > 0) {
+			onProgress?.("Verifying proposed cuts...");
+			try {
+				const vData = await llm.verify({
+					candidates: verifyCandidates,
+					lines: redundancyLines,
+					words: verifyWords,
+					taste: taste || undefined,
+				});
+				const verdicts = Array.isArray(vData?.plan?.verdicts)
+					? vData.plan.verdicts
+					: [];
+				verified = applyVerifyVerdicts({
+					ops: withStructural,
+					candidates: verifyCandidates,
+					verdicts,
+				});
+			} catch {
+				// route error / degraded → every candidate passes through unverified (R4)
+			}
+			abort();
+		}
+	}
 	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
 	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
 	// guard's envelope; reorder ops are left untouched.
-	const energySnapped = snapRemovalOps({ ops: withStructural, envelope });
+	const energySnapped = snapRemovalOps({ ops: verified, envelope });
 	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
 	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move
 	// any removal edge that lands inside a word onto its nearest gap — shrink to exclude

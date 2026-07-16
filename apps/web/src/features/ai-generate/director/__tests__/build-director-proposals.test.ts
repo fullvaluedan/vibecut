@@ -3,6 +3,7 @@ import {
 	buildDirectorProposals,
 	type DirectorLlmAdapter,
 	type DirectorRetakeRequest,
+	type DirectorVerifyRequest,
 } from "../build-director-proposals";
 import type { DirectorOp, RetakeCut, StructuralDrop } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
@@ -428,5 +429,119 @@ describe("buildDirectorProposals + structural pass (U2)", () => {
 			}),
 		});
 		expect(thrown.operations).toEqual(baseline.operations);
+	});
+});
+
+/**
+ * U2 verify sub-pass wiring (R3/R4). The pass is OPTIONAL on the adapter and runs
+ * immediately after the recall fold: reject removes a candidate row, keep/no-verdict
+ * pass through. It fires ONLY when recall candidates exist (zero → no call), and any
+ * failure (absent method, thrown, degraded) leaves every candidate untouched.
+ */
+describe("buildDirectorProposals + verify pass (U2)", () => {
+	const SENTENCE =
+		"so um lets deploy the the project and now we verify the logs together carefully";
+	const cleanStructural: StructuralDrop = {
+		startSec: 3.0,
+		endSec: 3.5,
+		reason: "off-throughline tangent",
+		confidence: 0.9,
+	};
+	// A structural drop in a clean region survives the fold as one OFFERED row, so the
+	// verify pass has exactly one candidate to judge.
+	const structuralStub = (drops: StructuralDrop[]) => ({
+		async structural() {
+			return { plan: { drops } };
+		},
+	});
+
+	test("an adapter WITHOUT verify matches one whose verify returns no verdicts (byte-identical)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const noVerify = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(structuralStub([cleanStructural])),
+		});
+		const emptyVerify = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...structuralStub([cleanStructural]),
+				async verify() {
+					return { plan: { verdicts: [] } };
+				},
+			}),
+		});
+		// Empty verdicts = every candidate kept, so the op list is byte-identical to the
+		// verify-method-absent pipeline.
+		expect(emptyVerify.operations).toEqual(noVerify.operations);
+	});
+
+	test("a thrown verify pass leaves every candidate untouched (fail-open pin)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		const noVerify = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(structuralStub([cleanStructural])),
+		});
+		const thrownVerify = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...structuralStub([cleanStructural]),
+				async verify() {
+					throw new Error("route 500");
+				},
+			}),
+		});
+		expect(thrownVerify.operations).toEqual(noVerify.operations);
+	});
+
+	test("zero recall candidates → the verify pass is NEVER invoked (call-count pin)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		let verifyCalls = 0;
+		// No retake/structural stub → the always-on detectors produce only non-candidate
+		// categories (duplicate/filler/...), so there is nothing for verify to judge.
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async verify() {
+					verifyCalls++;
+					return { plan: { verdicts: [] } };
+				},
+			}),
+		});
+		expect(verifyCalls).toBe(0);
+		expect(Array.isArray(result.operations)).toBe(true);
+	});
+
+	test("a reject verdict removes a structural row end-to-end through the pipeline", async () => {
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		// Control: with no verify, the structural candidate survives to the final ops.
+		const kept = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(structuralStub([cleanStructural])),
+		});
+		expect(kept.operations.some((o) => o.category === "structural")).toBe(true);
+
+		// Reject every candidate the verify pass is handed → the structural row is gone
+		// from the final ops (removed before the snap/refine/trim/justify chain).
+		const rejected = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...structuralStub([cleanStructural]),
+				async verify(req: DirectorVerifyRequest) {
+					return {
+						plan: {
+							verdicts: req.candidates.map((_, i) => ({
+								index: i,
+								verdict: "reject" as const,
+							})),
+						},
+					};
+				},
+			}),
+		});
+		expect(rejected.operations.some((o) => o.category === "structural")).toBe(false);
 	});
 });

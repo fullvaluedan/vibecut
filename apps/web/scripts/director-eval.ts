@@ -301,6 +301,7 @@ async function runLlmMode({
 	compression,
 	retake,
 	structural,
+	verify,
 	clamp,
 }: {
 	fixtures: Fixture[];
@@ -317,6 +318,9 @@ async function runLlmMode({
 	 * When on, the pass's removalHint is derived from each fixture's own truth ratio so the
 	 * lever is measured (KTD4). */
 	structural: boolean;
+	/** U2 verify sub-pass. Follows the recall passes (on whenever retake OR structural is on)
+	 * with a `--no-verify` override; it fires exactly when recall candidates exist (R5). */
+	verify: boolean;
 	/** U2 clamp on (default) or off (`--no-clamp`, threshold → Infinity), for the U3-only combo. */
 	clamp: boolean;
 }): Promise<void> {
@@ -346,7 +350,7 @@ async function runLlmMode({
 				`(removes ${(cutRatio * 100).toFixed(1)}%)  keeper=${keeperPolicy}  ` +
 				`compression=${compression ? `${(cutRatio * 100).toFixed(1)}%` : "off"}  ` +
 				`retake=${retake ? "on" : "off"}  structural=${structural ? "on" : "off"}  ` +
-				`clamp=${clamp ? "on" : "off"}`,
+				`verify=${verify ? "on" : "off"}  clamp=${clamp ? "on" : "off"}`,
 		);
 		const runResults: DualScorecard[] = [];
 		for (let runIndex = 0; runIndex < runs; runIndex++) {
@@ -358,6 +362,7 @@ async function runLlmMode({
 				runIndex,
 				enableRetake: retake,
 				enableStructural: structural,
+				enableVerify: verify,
 				structuralRemovalHint,
 			});
 			const { operations } = await buildDirectorProposals(
@@ -447,6 +452,9 @@ async function main(): Promise<void> {
 	const retake = has("--retake") && !has("--no-retake");
 	// U2 structural-drop pass, opt-in via `--structural` (default OFF, mirroring the app).
 	const structural = has("--structural");
+	// U2 verify sub-pass: follows the recall passes (on whenever retake OR structural is on)
+	// with a `--no-verify` override, so it fires exactly when recall candidates exist (R5).
+	const verify = (retake || structural) && !has("--no-verify");
 	const clamp = !has("--no-clamp");
 	// Positional dir = first non-flag arg that isn't a flag's value (--runs 3 etc).
 	const flagValues = new Set(
@@ -489,6 +497,7 @@ async function main(): Promise<void> {
 			compression,
 			retake,
 			structural,
+			verify,
 			clamp,
 		});
 		return;
