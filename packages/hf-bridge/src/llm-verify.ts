@@ -115,18 +115,72 @@ function candidateAnchor(c: VerifyCandidate): string {
 	return `[${a}-${b}]`;
 }
 
-/** Render each candidate as a C-indexed review row with its span, anchors, covered
- * text, and reason. No `undefined`/`NaN` can leak (numbers guarded, text falls back
- * to "-"). */
-function renderVerifyCandidates(candidates: readonly VerifyCandidate[]): string {
+/** Words per anchored run when breaking a retake candidate's covered text into
+ * rows (small enough that an edge word that does not belong stands out). */
+const RETAKE_RUN_WORDS = 6;
+
+/** Break a retake candidate's covered text into small ANCHORED word runs, one
+ * indented row each ("  w340-w345: '...'"), so the model can see which edge words do
+ * not belong to the flub and tighten them away. Anchors derive from the candidate's
+ * own startWord plus token offset, clamped to its endWord (rendering aid only; a
+ * tighten still resolves through the sanitizer). Empty text falls back to "-". */
+function renderRetakeRuns(c: VerifyCandidate): string {
+	const start = isInt(c.startWord) ? c.startWord : 0;
+	const end = isInt(c.endWord) ? c.endWord : start;
+	const tokens = c.coveredText.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return `  w${start}-w${end}: "-"`;
+	const rows: string[] = [];
+	for (let i = 0; i < tokens.length; i += RETAKE_RUN_WORDS) {
+		const run = tokens.slice(i, i + RETAKE_RUN_WORDS);
+		const a = Math.min(start + i, end);
+		const b = Math.min(start + i + run.length - 1, end);
+		rows.push(`  w${a}-w${b}: "${run.join(" ")}"`);
+	}
+	return rows.join("\n");
+}
+
+/** List each covered line of a structural candidate on its own anchored row
+ * ("  L12: '...'") so the model can see which edge lines do not belong to the
+ * tangent and tighten them away. Falls back to one coveredText row when the
+ * candidate's line ids do not resolve against the catalog (fail-open). */
+function renderStructuralRows(
+	c: VerifyCandidate,
+	lines: readonly RedundancyLine[],
+): string {
+	const startIdx = lines.findIndex((l) => l.lineId === c.startLineId);
+	const endIdx = lines.findIndex((l) => l.lineId === c.endLineId);
+	if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+		const text = c.coveredText.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
+		return `  ${candidateAnchor(c)}: "${text}"`;
+	}
+	return lines
+		.slice(startIdx, endIdx + 1)
+		.map((l) => {
+			const text = l.text.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
+			return `  ${l.lineId}: "${text}"`;
+		})
+		.join("\n");
+}
+
+/** Render each candidate as a C-indexed header row (span, anchors, reason) followed
+ * by its covered content BROKEN DOWN into anchored interior rows: per-line rows for
+ * structural candidates, small word runs for retake candidates. The interior rows
+ * are what let the model SEE edge bleed and tighten it. No `undefined`/`NaN` can
+ * leak (numbers guarded, text falls back to "-"). */
+function renderVerifyCandidates(
+	candidates: readonly VerifyCandidate[],
+	lines: readonly RedundancyLine[],
+): string {
 	return candidates
 		.map((c, i) => {
 			const conf = Number.isFinite(c.confidence) ? c.confidence : 0.5;
 			const start = Number.isFinite(c.startSec) ? c.startSec : 0;
 			const end = Number.isFinite(c.endSec) ? c.endSec : 0;
-			const text = c.coveredText.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
 			const reason = c.reason.trim().replace(/\s+/g, " ").slice(0, 200) || "-";
-			return `[C${i}] (${c.category}, conf ${conf.toFixed(1)}) ${start.toFixed(1)}s-${end.toFixed(1)}s ${candidateAnchor(c)} "${text}" reason: "${reason}"`;
+			const header = `[C${i}] (${c.category}, conf ${conf.toFixed(1)}) ${start.toFixed(1)}s-${end.toFixed(1)}s ${candidateAnchor(c)} reason: "${reason}"`;
+			const body =
+				c.category === "retake" ? renderRetakeRuns(c) : renderStructuralRows(c, lines);
+			return `${header}\n${body}`;
 		})
 		.join("\n");
 }
@@ -155,16 +209,18 @@ export function buildVerifyPrompt({
 	return `You are a precision EDITOR reviewing a list of PROPOSED CUTS before they reach the timeline. Each proposed cut was already found by an earlier recall pass that hunted aggressively for removable material. Your job is DAMAGE REVIEW, not taste: decide, for each proposed span, whether removing it would harm the finished video.
 
 For EACH candidate below, return exactly one verdict:
-- "keep": removing this span is safe - the finished cut still reads cleanly without it. This is the DEFAULT.
-- "reject": removing this span would visibly DAMAGE the finished video - it destroys load-bearing dialog the audience needs, or it cuts mid-thought into material that stays. Reject ONLY for real damage.
-- "tighten": the span is right to cut but BLEEDS beyond the flub or tangent its reason names, taking good words with it. Return the NARROWED range that removes exactly the bad part. The narrowed range MUST land strictly INSIDE the candidate's own span.
+- "keep": removing this span is safe - the finished cut still reads cleanly without it.
+- "reject": removing this span would visibly DAMAGE the finished video - it destroys load-bearing dialog the audience needs, or it cuts mid-thought into material that stays. Reserve reject for a candidate that is wrong at its CORE, not merely bleeding at an edge.
+- "tighten": the span is right to cut at its core but BLEEDS beyond the flub or tangent its reason names, taking good words with it. Return the NARROWED range that removes exactly the bad part. The narrowed range MUST land strictly INSIDE the candidate's own span.
 
-Do NOT re-litigate whether the material could be cut - recall was the finder pass's job, and every candidate below was already judged removable. You are ONLY checking for DAMAGE and BLEED. When in doubt, keep.
+Each candidate's covered content is broken down ROW BY ROW beneath it with its own anchors (one row per covered line for structural candidates, small word runs for retake candidates) so you can see exactly which rows belong to the flub or tangent and which do not. When the START or END of a span includes material that does not belong to the flub or tangent its reason names, TIGHTEN to exclude that material, returning the narrowed range via the anchors shown. Even a few extra words at an edge damage the finished edit - small edge bleed is NEVER a reason to keep. When torn between keep and tighten, tighten to the core.
+
+Do NOT re-litigate whether the material could be cut - recall was the finder pass's job, and every candidate below was already judged removable. You are ONLY checking for DAMAGE and BLEED. When torn between keep and reject, keep.
 
 A tighten narrows through the candidate's OWN reference anchors: a retake candidate carries a word range [w<start>-w<end>], so return "startWord"/"endWord" GLOBAL word indices inside it; a structural candidate carries a line range [L<start>-L<end>], so return "startLineId"/"endLineId" inside it. Never return raw seconds.
 
 CANDIDATES:
-${renderVerifyCandidates(candidates)}
+${renderVerifyCandidates(candidates, lines)}
 
 TRANSCRIPT (full line catalog, for context):
 ${renderVerifyLineCatalog(lines)}

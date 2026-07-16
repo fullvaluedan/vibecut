@@ -25,14 +25,15 @@ const mkLines = (...texts: string[]): RedundancyLine[] =>
 const WORDS = mkWords(12);
 const LINES = mkLines("l0", "l1", "l2", "l3", "l4", "l5", "l6");
 
-// C0 retake: word range [w2-w8] -> span [2, 8.5].
+// C0 retake: word range [w2-w8] -> span [2, 8.5]; coveredText is 7 tokens, one per
+// covered word index, so the anchored runs are exact.
 const retakeC: VerifyCandidate = {
 	category: "retake",
 	startSec: 2,
 	endSec: 8.5,
 	reason: "abandoned false start before the clean restart",
 	confidence: 0.7,
-	coveredText: "so the- so the trick",
+	coveredText: "so the- so the trick is simple",
 	startWord: 2,
 	endWord: 8,
 };
@@ -70,6 +71,22 @@ describe("buildVerifyPrompt (load-bearing substrings)", () => {
 	test("renders each candidate's own anchors for BOTH kinds", () => {
 		expect(prompt).toContain("[w2-w8]"); // retake word range
 		expect(prompt).toContain("[L2-L5]"); // structural line range
+	});
+
+	test("breaks each candidate's covered content into anchored interior rows", () => {
+		// Retake: covered words in small anchored runs (6 per run).
+		expect(prompt).toContain('  w2-w7: "so the- so the trick is"');
+		expect(prompt).toContain('  w8-w8: "simple"');
+		// Structural: one row per covered line, from the catalog.
+		expect(prompt).toContain('  L2: "l2"');
+		expect(prompt).toContain('  L5: "l5"');
+	});
+
+	test("carries the edge-bleed tighten bias (tighten, never keep, on bleeding edges)", () => {
+		expect(prompt).toContain("does not belong to the flub or tangent its reason names");
+		expect(prompt).toContain("small edge bleed is NEVER a reason to keep");
+		expect(prompt).toContain("tighten to the core");
+		expect(prompt).toContain("wrong at its CORE"); // reject reserved for core-wrong
 	});
 
 	test("echoes each candidate's reason", () => {
