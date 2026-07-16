@@ -31,6 +31,15 @@ import {
 } from "./llm-reference-sanitizer";
 import type { ClaudeAuth } from "./types";
 
+/**
+ * Bumped on every WORDING change to the verify prompt. The eval cache keys on the
+ * pass INPUT payload, so a prompt revision without an input change would silently
+ * replay stale cached verdicts; the adapter folds this version into the payload so
+ * wording changes bust the cache (the KTD7 discipline, learned the hard way when
+ * prompt v2's gate re-run cache-hit v1's verdicts).
+ */
+export const VERIFY_PROMPT_VERSION = 2;
+
 /** Which recall pass produced a candidate (fixes which anchors it tightens through). */
 export type VerifyCategory = "retake" | "structural";
 

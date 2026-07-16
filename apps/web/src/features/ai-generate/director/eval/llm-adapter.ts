@@ -28,6 +28,7 @@ import {
 	planRetake,
 	planStructural,
 	planVerify,
+	VERIFY_PROMPT_VERSION,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
 import type {
@@ -374,13 +375,18 @@ export function createEvalLlmAdapter(
 		// The verify sub-pass (U2): OMITTED when `enableVerify` is false so the pipeline's
 		// `if (llm.verify)` guard skips it. Cached by payload hash + watchdog-bounded like
 		// the other passes; the candidate list rides the payload, so the cache busts when
-		// the candidate set changes (KTD2).
+		// the candidate set changes (KTD2). VERIFY_PROMPT_VERSION rides the payload too:
+		// a prompt WORDING change has no input-shape footprint, and without the version
+		// the eval would silently replay stale cached verdicts across prompt revisions.
 		...(enableVerify
 			? {
 					async verify(
 						input: DirectorVerifyRequest,
 					): Promise<DirectorVerifyResponse> {
-						return cachedCall("verify", input, async () => {
+						return cachedCall(
+							"verify",
+							{ ...input, promptVersion: VERIFY_PROMPT_VERSION },
+							async () => {
 							const { plan } = await planners.verify({
 								candidates: input.candidates,
 								lines: input.lines,

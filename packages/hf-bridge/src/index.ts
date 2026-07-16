@@ -95,6 +95,7 @@ export {
 	planVerify,
 	buildVerifyPrompt,
 	sanitizeVerifyPlan,
+	VERIFY_PROMPT_VERSION,
 	type VerifyCandidate,
 	type VerifyVerdict,
 	type VerifyPlan,
