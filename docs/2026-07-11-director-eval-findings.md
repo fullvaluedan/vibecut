@@ -152,3 +152,33 @@ To move from the one-click AUTO draft to the OFFERED number, Dan accepts roughly
 ### The next lever (named, per R8)
 
 A **structural-drop pass**: section/line-granularity, OFFERED-only review rows proposing whole-tangent and weak-take drops (the compression contract's judgment, emitted through the OFFERED machinery instead of inflating plan-pass spans). Evidence: compression's +9.4pp recall on google shows the LLM CAN identify this material when licensed; the clamp + defaultAccept:false machinery shipped this round is exactly the safety envelope it needed. Secondary: attack the detector-sourced AUTO essLost floor (pacing spans overlapping kept words), and more fixtures from _Finals when a Groq key exists.
+
+## ADDENDUM 4 (2026-07-16): round-4 verdict — the structural-drop pass, floor-tuned, split verdict
+
+Round 4 (plan docs/plans/2026-07-16-002) shipped the structural-drop pass: full-catalog single-call throughline judgment emitting line-range section drops as OFFERED-only rows (category `structural`, defaultAccept false, runaway guard MAX_STRUCTURAL_DROP_FRACTION 0.35, floor STRUCTURAL_CONFIDENCE_FLOOR 0.6). AUTO is byte-identical with the pass on or off by construction. All numbers OFFERED adjusted match / recall / essLost / missed vs the round-3 default config.
+
+### The floor tuning that made it work
+
+At the sibling passes' 0.5 floor, how-to-edit gained +657 recall words but +253 kept-word collateral (2.6:1, R8 fail, match -4.3). A per-band probe of the cached response showed the model's confidence is well calibrated for section drops: EVERY wrongly-flagged kept word lived in the [0.5, 0.6) band; drops at 0.6+ hit 322 truth-cut words with zero collateral. Floor 0.6 flipped the fixture to match +1.7 with zero added essLost. google showed the same shape but weaker (0.6+ = 2.8:1 pre-trim, nothing above 0.7), hermes weaker still.
+
+### Results (structural on vs off)
+
+| fixture | match adj | recall | essLost | missed | R8 ratio (gained:lost) |
+|---|---|---|---|---|---|
+| google-omni | 61.6 -> 61.6 | 26.3 -> 32.9 | 106 -> 151 | 1081 -> 983 | 2.2:1 MISS |
+| hermes-cloud | 75.5 -> 74.9 | 46.2 -> 53.3 | 441 -> 536 | 887 -> 770 | 1.2:1 MISS |
+| how-to-edit | 36.4 -> 38.1 | 28.2 -> 33.5 | 167 -> 167 | 2995 -> 2775 | no words lost, PASS |
+| pokemon-tcg | 82.2 -> 82.9 | 62.5 -> 65.1 | 252 -> 249 | 266 -> 248 | no words lost, PASS |
+
+Max-assist sanity point (structural + retake, pokemon): 81.0, WORSE than structural alone (82.9); the retake pass's collateral drags the combo, consistent with the round-3 verdict. Remaining combos skipped with this evidence (each costs live calls; retake stays off).
+
+### Verdict
+
+1. **R8 precision gate: split.** Passed with zero collateral on how-to-edit and pokemon-tcg; missed on google (2.2:1) and hermes (1.2:1). The misses are boundary bleed: the model's section ranges include adjacent kept context on fixtures where Dan's structural cuts interleave with re-records.
+2. **R9 match bar (0.90 on 3 of 4): NOT met.** Best cell 82.9 (pokemon, structural on). Raw within 0.5pp of adjusted everywhere, no raw-gap flags. Stated plainly: two rounds of safe levers moved the per-fixture match by +1.7 to +2.4 total; the bar needs precision work on the two interleaved fixtures, not more recall classes.
+3. **Default: `directorStructural` stays OFF** (R10 discipline: the scorecard does not clearly justify a default that is negative on one fixture). **Recommendation to Dan: turn it on for your own runs.** It is the first pass whose rows directly mirror your structural editing (match up or flat on 3 of 4, +2.6 to +7.1pp recall everywhere, every row OFFERED with a throughline reason). Review load: +1 to +13 structural rows per video.
+4. Eval flags now: `--structural` (recommended), `--retake` (off), `--compression` (opt-in), `--keeper`.
+
+### Next lever (named)
+
+Boundary precision on interleaved footage (google/hermes): the structural pass finds the right sections but bleeds into adjacent kept lines. Candidate devices: a per-drop verify sub-pass (judge each proposed range against the throughline reason it claims), or line-level confidence from the model (score each line inside the range, trim tail lines below the floor). Secondary: the round-3 residuals (detector-sourced AUTO essLost floor; more fixtures when a Groq key exists).
