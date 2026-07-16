@@ -39,6 +39,7 @@ import { detectTinyClipCuts } from "./tiny-clip";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 import { detectVadDeadAirCuts } from "./vad-dead-air";
 import { snapRemovalOps } from "./snap-cut";
+import { clampCutExtent } from "./clamp-cut-extent";
 import { refineCutWordBounds } from "./refine-cut-words";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
 import { justifyCuts } from "./justify-cuts";
@@ -376,9 +377,25 @@ export async function buildDirectorProposals(
 	const rawPlanOps = Array.isArray(data?.plan?.operations)
 		? data.plan.operations
 		: [];
-	const planOps: DirectorOp[] = usedVision
+	const mappedPlanOps: DirectorOp[] = usedVision
 		? rawPlanOps.map((op) => ({ ...op, category: "vision" }))
 		: rawPlanOps;
+	// Span discipline (U2/R5): the plan pass thinks in segments and routinely emits a
+	// single cut spanning tens of seconds that engulfs kept dialog. Before the merge,
+	// shrink each oversized plan cut to its deterministically-evidenced word runs (the
+	// already-computed filler/dead-air/duplicate/pacing + phrase-repeat + take-cluster
+	// removals), or demote an oversized span without evidence to an OFFERED review row.
+	// Selection is by ARRAY MEMBERSHIP here (this array holds only the plan-pass ops), so
+	// vision-tagged plan ops are disciplined the same as untagged ones. Fail-open (no
+	// words → unchanged). Only start/end matter downstream (KTD1), so split ids regenerate.
+	const clampEvidence = [...wordCuts, ...phraseRepeatCuts, ...redundancyOps].map(
+		(op) => ({ startSec: op.startSec, endSec: op.endSec }),
+	);
+	const planOps: DirectorOp[] = clampCutExtent({
+		ops: mappedPlanOps,
+		words,
+		evidence: clampEvidence,
+	});
 	// The LLM's keep ops (U4) mark load-bearing spans the imp score may underrate;
 	// they protect (never remove), so fold them into the keeper set alongside the
 	// take-cluster keepers and the capped high-value spans (U3).
