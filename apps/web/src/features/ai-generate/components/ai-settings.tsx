@@ -182,6 +182,10 @@ export function AiSettingsContent() {
 
 			<DirectorVadGatedTranscriptionSection />
 
+			<DirectorRetakeSection />
+
+			<DirectorStructuralSection />
+
 			<LowPowerSection />
 
 			<IntegrationsSection />
@@ -232,6 +236,53 @@ function DirectorVadDeadAirSection() {
 					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
 					candidates (a small model downloads once). Off by default; failures are
 					ignored so the Director still runs.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorRetakeSection() {
+	const enabled = useAiSettingsStore((s) => s.directorRetake);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorRetake);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Retake hunt (extra pass)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Adds a dedicated AI pass that hunts retakes, false starts, and flubs at
+					word level and offers them as unchecked review rows (never auto-cut).
+					Off by default: measured as roughly break-even on quality, it mostly
+					adds rows to review. Costs one extra AI call per Director run.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function DirectorStructuralSection() {
+	const enabled = useAiSettingsStore((s) => s.directorStructural);
+	const setEnabled = useAiSettingsStore((s) => s.setDirectorStructural);
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">Section drops (extra pass)</SectionTitle>
+				<div className="flex items-center p-1">
+					<Switch checked={enabled} onCheckedChange={setEnabled} />
+				</div>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Adds a dedicated AI pass that reads the whole transcript, infers the
+					video&apos;s throughline, and offers whole sections a ruthless editor
+					would drop (tangents, weak takes, over-explanation) as unchecked review
+					rows. RECOMMENDED if you cut a lot: it surfaces the structural cuts the
+					other passes cannot see. Costs one extra AI call per Director run.
 				</p>
 			</SectionContent>
 		</Section>

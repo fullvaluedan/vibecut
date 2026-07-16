@@ -122,7 +122,7 @@ describe("createEvalLlmAdapter", () => {
 
 	test("retake caches by payload hash and replays without re-calling the planner (U3)", async () => {
 		const { planners, calls } = countingPlanners();
-		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: true });
 		const payload = { words: [{ text: "a", startSec: 0, endSec: 0.4 }] };
 
 		const first = await adapter.retake!(payload);
@@ -144,7 +144,7 @@ describe("createEvalLlmAdapter", () => {
 				return { plan: { cuts: [] }, usage: {} };
 			}) as unknown as EvalPlanners["retake"],
 		});
-		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: true });
 		const words = [{ text: "a", startSec: 0, endSec: 0.4 }];
 		const spans = [{ startSec: 0, endSec: 1 }];
 		await adapter.retake!({ words, handledSpans: spans });
@@ -155,17 +155,19 @@ describe("createEvalLlmAdapter", () => {
 		expect(seen).toEqual([spans, [{ startSec: 0, endSec: 2 }], undefined]); // forwarded unchanged
 	});
 
-	test("enableRetake false OMITS the retake method (eval --no-retake)", () => {
+	test("retake is OMITTED by default and with enableRetake false (off mirrors the app)", () => {
 		const { planners } = countingPlanners();
-		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: true });
+		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: false });
 		expect(typeof on.retake).toBe("function");
+		expect(byDefault.retake).toBeUndefined();
 		expect(off.retake).toBeUndefined();
 	});
 
 	test("structural caches by payload hash and replays without re-calling the planner (U2)", async () => {
 		const { planners, calls } = countingPlanners();
-		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: true });
 		const payload = { lines: [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }] };
 
 		const first = await adapter.structural!(payload);
@@ -187,7 +189,7 @@ describe("createEvalLlmAdapter", () => {
 				return { plan: { drops: [] }, usage: {} };
 			}) as unknown as EvalPlanners["structural"],
 		});
-		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const adapter = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: true });
 		const lines = [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }];
 		const spans = [{ startSec: 0, endSec: 1 }];
 		await adapter.structural!({ lines, handledSpans: spans });
@@ -211,6 +213,7 @@ describe("createEvalLlmAdapter", () => {
 			auth: AUTH,
 			cacheDir,
 			planners,
+			enableStructural: true,
 			structuralRemovalHint: "This creator removes roughly 80% of raw words in the finished cut",
 		});
 		const lines = [{ lineId: "L0", startSec: 0, endSec: 1, text: "hi" }];
@@ -220,11 +223,13 @@ describe("createEvalLlmAdapter", () => {
 		expect(seen[0]).toBe("This creator removes roughly 80% of raw words in the finished cut");
 	});
 
-	test("enableStructural false OMITS the structural method (eval --structural off)", () => {
+	test("structural is OMITTED by default and with enableStructural false (off mirrors the app)", () => {
 		const { planners } = countingPlanners();
-		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
+		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: true });
+		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: false });
 		expect(typeof on.structural).toBe("function");
+		expect(byDefault.structural).toBeUndefined();
 		expect(off.structural).toBeUndefined();
 	});
 });

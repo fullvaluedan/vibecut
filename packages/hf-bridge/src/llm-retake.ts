@@ -235,7 +235,7 @@ Lines tagged [HANDLED] are already substantially flagged by the other editing pa
 `
 		: "";
 	const removalSentence =
-		removalHint ??
+		removalHint ||
 		"This creator, like most talking-head creators, removes a large share of the raw footage before publishing";
 	return `You are an expert video EDITOR hunting RETAKES, FALSE STARTS, and FLUBBED takes in a talking-head recording's transcript. Below is every spoken line IN ORDER. Each line is tagged like [L12 w340-352]: L12 is the line number, and w340-352 gives the GLOBAL word index of its FIRST word (340) and its LAST word (352). Every word in the line is numbered sequentially from that first index, so the third word of [L12 w340-352] is global index 342. These GLOBAL word indices are absolute and never restart, even when you only see part of the transcript.
 

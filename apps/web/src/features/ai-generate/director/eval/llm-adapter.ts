@@ -223,8 +223,10 @@ export function createEvalLlmAdapter(
 		attempts = 2,
 		signal,
 		planners = DEFAULT_PLANNERS,
-		enableRetake = true,
-		enableStructural = true,
+		// Both recall passes default OFF, matching the in-app defaults and the JSDoc
+		// above; the runner always passes explicit values from its flags.
+		enableRetake = false,
+		enableStructural = false,
 		structuralRemovalHint,
 	} = options;
 

@@ -34,6 +34,11 @@ const JUSTIFIED_REMOVAL: ReadonlySet<string> = new Set([
 	"take",
 	"vision",
 	"reorder",
+	// The OFFERED-only recall passes (rounds 3-4): their rows carry a concrete
+	// reason and must reach review; without these entries a short trimmed
+	// remainder in continuous speech was silently reverted before review.
+	"retake",
+	"structural",
 ]);
 
 /** Whether an op carries a real reason to remove its span (so it is never reverted). */

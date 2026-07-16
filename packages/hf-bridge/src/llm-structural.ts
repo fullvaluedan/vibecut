@@ -163,7 +163,7 @@ Sections tagged [HANDLED] are already flagged by the other editing passes - that
 `
 		: "";
 	const removalSentence =
-		removalHint ??
+		removalHint ||
 		"This creator, like most talking-head creators, removes a large share of the raw footage before publishing";
 	return `You are a ruthless video EDITOR deciding which whole SECTIONS to drop from a talking-head recording. Below is every spoken line IN ORDER, each with an id like [L12], its source clip, and timing.
 

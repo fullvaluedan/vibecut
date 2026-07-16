@@ -56,7 +56,10 @@ import { detectDuplicateWordCuts } from "@/features/ai-generate/director/duplica
 import { detectFillerCuts } from "@/features/ai-generate/director/filler-words";
 import { buildTakeClusters, type KeeperPolicy } from "@/features/ai-generate/director/take-clusters";
 import { detectRedundancyCuts } from "@/features/ai-generate/director/redundancy";
-import { buildDirectorProposals } from "@/features/ai-generate/director/build-director-proposals";
+import {
+	buildDirectorProposals,
+	formatRemovalHint,
+} from "@/features/ai-generate/director/build-director-proposals";
 import {
 	createEvalLlmAdapter,
 	resolveClaudeAuth,
@@ -337,9 +340,7 @@ async function runLlmMode({
 		// creator's removal share from the fixture's own truth ratio and feed it to the
 		// structural pass (the SAME sentence the in-app path builds from compressionTarget)
 		// so the removalHint lever is exercised without enabling the compression contract.
-		const structuralRemovalHint = structural
-			? `This creator removes roughly ${Math.round(cutRatio * 100)}% of raw words in the finished cut`
-			: undefined;
+		const structuralRemovalHint = structural ? formatRemovalHint(cutRatio) : undefined;
 		console.error(
 			`  [${fixture.name}] keep-ratio ${((1 - cutRatio) * 100).toFixed(1)}% ` +
 				`(removes ${(cutRatio * 100).toFixed(1)}%)  keeper=${keeperPolicy}  ` +

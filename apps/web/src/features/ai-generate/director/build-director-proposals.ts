@@ -121,10 +121,16 @@ export interface DirectorRetakeRequest {
 	 * instead of re-finding flagged material. Rides the adapter payload, so the eval
 	 * cache busts automatically when the mask changes (KTD7). */
 	handledSpans?: { startSec: number; endSec: number }[];
-	/** One-line removal-share hint (e.g. "this creator removes roughly 59% of raw
-	 * words"); absent = the prompt's generic exhaustive wording. */
+	/** One-line removal-share hint (see `formatRemovalHint`); absent = the prompt's
+	 * generic exhaustive wording. */
 	removalHint?: string;
 	taste?: string;
+}
+
+/** The ONE removal-share hint sentence every recall pass and the eval runner use.
+ * A single home so the wording and rounding can never drift between prompts. */
+export function formatRemovalHint(removedFraction: number): string {
+	return `This creator removes roughly ${Math.round(removedFraction * 100)}% of raw words in the finished cut`;
 }
 export interface DirectorRetakeResponse {
 	plan?: { cuts?: RetakeCut[] };
@@ -681,9 +687,7 @@ export async function buildDirectorProposals(
 					.filter((op) => op.op === "cut" || op.op === "take_select")
 					.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
 				...(compressionTarget !== undefined && Number.isFinite(compressionTarget)
-					? {
-							removalHint: `This creator removes roughly ${Math.round(compressionTarget * 100)}% of raw words in the finished cut`,
-						}
+					? { removalHint: formatRemovalHint(compressionTarget) }
 					: {}),
 				taste: taste || undefined,
 			});
@@ -767,9 +771,7 @@ export async function buildDirectorProposals(
 					.filter((op) => op.op === "cut" || op.op === "take_select")
 					.map((op) => ({ startSec: op.startSec, endSec: op.endSec })),
 				...(compressionTarget !== undefined && Number.isFinite(compressionTarget)
-					? {
-							removalHint: `This creator removes roughly ${Math.round(compressionTarget * 100)}% of raw words in the finished cut`,
-						}
+					? { removalHint: formatRemovalHint(compressionTarget) }
 					: {}),
 				taste: taste || undefined,
 			});
