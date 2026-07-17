@@ -33,6 +33,7 @@ import type { SourceMapElement } from "./source-map";
 import type { TranscriptSegment } from "./build-signal-table";
 import type { SpeechGap } from "./vad-dead-air";
 import { ENERGY_WINDOW_SEC, meanEnergyOverRange } from "./audio-features";
+import { guardHallucinations } from "./hallucination-guard";
 import { buildSignalTable } from "./build-signal-table";
 import { detectDuplicateWordCuts } from "./duplicate-words";
 import { detectPhraseRepeatCuts } from "./phrase-repeat";
@@ -268,9 +269,9 @@ export async function buildDirectorProposals(
 	input: BuildDirectorProposalsInput,
 ): Promise<BuildDirectorProposalsResult> {
 	const {
-		words,
-		segments,
-		features,
+		words: rawWords,
+		segments: rawSegments,
+		features: rawFeatures,
 		envelope,
 		gaps,
 		clipSpans,
@@ -292,6 +293,25 @@ export async function buildDirectorProposals(
 	const abort = () => {
 		if (signal?.aborted) throw new Error("Cancelled");
 	};
+
+	// Hallucination guard (round 6 U1): quarantine transcript spans whose audio
+	// is silence BEFORE any speech-presence consumer runs. Everything below
+	// (detectors, features rows, take clusters, importance, every LLM catalog,
+	// the refine/justify word math) sees only the clean views, so Whisper's
+	// silence-bleed text can never make dead air look like speech. The features
+	// array is segments-parallel, so it is filtered by the SAME surviving
+	// indices. guard.hallucinatedSpans feed the envelope dead-air detector (U2)
+	// and the clamp evidence set (U6). Fail-open: no envelope or no words means
+	// the views are the inputs, byte-identical behavior.
+	const guard = guardHallucinations({
+		words: rawWords,
+		segments: rawSegments,
+		envelope,
+		windowSec: ENERGY_WINDOW_SEC,
+	});
+	const words = guard.cleanWords;
+	const segments = guard.cleanSegments;
+	const features = guard.survivingSegmentIndices.map((i) => rawFeatures[i]);
 
 	// Always-on word-level cleanup (NOT repeat detectors): doubled words, dead air,
 	// fillers, pacing — the LLM works at segment level and misses these. The REPEAT
