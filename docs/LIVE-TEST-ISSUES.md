@@ -56,7 +56,8 @@ Dan's directive: keep the list current, fix nothing until he says so.
 
 ## Round-6 smoke pass findings (Dan, 2026-07-17, post-fix run with recommended cuts only)
 
-9. **Redundancy pass auto-cuts deliberate restatements.** With only recommended rows
+9. FIXED (round 7, findings ADDENDUM 7): near-verbatim gate on redundancy
+   auto-accept; paraphrase groups are opt-in rows. **Redundancy pass auto-cuts deliberate restatements.** With only recommended rows
    accepted, cuts still landed inside the flowing 0-45s conversation (~29.5s and
    ~34.3s): the LLM redundancy pass grouped Dan's instructional setup-then-payoff
    restatements as repeats and auto-accepted them (confidence >= 0.7). Fix direction:
