@@ -26,6 +26,18 @@ export interface RippleTrimShift {
 	newStartTime: MediaTime;
 }
 
+/**
+ * One element a right-handle ripple trim will shift, snapshotted at mousedown.
+ * `baseStartTime` is the COMMITTED start: the drag's live preview re-derives
+ * each shifted position from this base, so it stays immune to its own
+ * preview overlay and a drag back to the origin restores exact positions.
+ */
+export interface RippleTrimTarget {
+	trackId: string;
+	elementId: string;
+	baseStartTime: MediaTime;
+}
+
 /** The context a right-handle ripple commit carries from the drag session. */
 export interface RippleTrimCommit {
 	/** The grabbed clip's OLD end: the edit point downstream of which shifts. */
@@ -45,6 +57,51 @@ function orderedTracks(tracks: SceneTracks) {
  * the same signed delta. The resized members are excluded (their patches
  * already place them); a clip that merely straddles the pivot stays put.
  */
+export function collectRippleTrimTargets({
+	tracks,
+	pivotTime,
+	excludeElementIds,
+}: {
+	tracks: SceneTracks;
+	pivotTime: MediaTime;
+	excludeElementIds: ReadonlySet<string>;
+}): RippleTrimTarget[] {
+	return orderedTracks(tracks).flatMap((track) =>
+		track.elements
+			.filter(
+				(element) =>
+					!excludeElementIds.has(element.id) &&
+					element.startTime >= pivotTime,
+			)
+			.map((element) => ({
+				trackId: track.id,
+				elementId: element.id,
+				baseStartTime: element.startTime,
+			})),
+	);
+}
+
+/**
+ * Shift every snapshotted target by the signed delta. A zero delta is NOT
+ * short-circuited: it yields each target at its base, which is what a live
+ * preview needs when the drag returns to the origin (stale overlay positions
+ * must be overwritten back to the committed start).
+ */
+export function shiftRippleTrimTargets({
+	targets,
+	deltaTime,
+}: {
+	targets: readonly RippleTrimTarget[];
+	deltaTime: MediaTime;
+}): RippleTrimShift[] {
+	return targets.map((target) => ({
+		trackId: target.trackId,
+		elementId: target.elementId,
+		newStartTime: addMediaTime({ a: target.baseStartTime, b: deltaTime }),
+	}));
+}
+
+/** The commit-side shifts: the snapshot moved by the final delta. */
 export function computeRippleTrimShifts({
 	tracks,
 	pivotTime,
@@ -57,19 +114,10 @@ export function computeRippleTrimShifts({
 	excludeElementIds: ReadonlySet<string>;
 }): RippleTrimShift[] {
 	if (deltaTime === ZERO_MEDIA_TIME) return [];
-	return orderedTracks(tracks).flatMap((track) =>
-		track.elements
-			.filter(
-				(element) =>
-					!excludeElementIds.has(element.id) &&
-					element.startTime >= pivotTime,
-			)
-			.map((element) => ({
-				trackId: track.id,
-				elementId: element.id,
-				newStartTime: addMediaTime({ a: element.startTime, b: deltaTime }),
-			})),
-	);
+	return shiftRippleTrimTargets({
+		targets: collectRippleTrimTargets({ tracks, pivotTime, excludeElementIds }),
+		deltaTime,
+	});
 }
 
 /**

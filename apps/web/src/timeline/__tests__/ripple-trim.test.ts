@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { FrameRate } from "opencut-wasm";
 import {
+	collectRippleTrimTargets,
 	computeRippleShrinkFloor,
 	computeRippleTrimShifts,
 	liftShiftingNeighborBounds,
+	shiftRippleTrimTargets,
 } from "@/timeline/ripple-trim";
 import { computeLinkedResize } from "@/timeline/group-resize";
 import type { GroupResizeMember } from "@/timeline/group-resize";
@@ -160,6 +162,60 @@ describe("computeRippleTrimShifts (cross-track, Dan's fork)", () => {
 				excludeElementIds: exclude,
 			}),
 		).toEqual([]);
+	});
+});
+
+describe("collectRippleTrimTargets + shiftRippleTrimTargets (live preview)", () => {
+	// Same shape as the shifts fixture: grabbed clip v [0, 20) on main,
+	// downstream on both tracks, a straddler on the audio track.
+	const tracks = buildTracks({
+		main: [
+			vid({ id: "v", startTime: 0, duration: 20 * FRAME }),
+			vid({ id: "v2", startTime: 20 * FRAME, duration: 10 * FRAME }),
+			vid({ id: "v3", startTime: 40 * FRAME, duration: 10 * FRAME }),
+		],
+		audio: [
+			[
+				aud({ id: "bed", startTime: 10 * FRAME, duration: 20 * FRAME }), // straddles 20
+				aud({ id: "a2", startTime: 35 * FRAME, duration: 10 * FRAME }),
+			],
+		],
+	});
+	const pivotTime = mediaTime({ ticks: 20 * FRAME });
+	const targets = collectRippleTrimTargets({
+		tracks,
+		pivotTime,
+		excludeElementIds: new Set(["v"]),
+	});
+
+	test("the snapshot holds every downstream element on ALL tracks at its committed start; members and straddlers are out", () => {
+		expect(targets).toEqual([
+			{ trackId: "main", elementId: "v2", baseStartTime: 20 * FRAME },
+			{ trackId: "main", elementId: "v3", baseStartTime: 40 * FRAME },
+			{ trackId: "audio-0", elementId: "a2", baseStartTime: 35 * FRAME },
+		]);
+	});
+
+	test("zero delta re-emits every target at its base (drag returned to origin overwrites stale overlay)", () => {
+		expect(
+			shiftRippleTrimTargets({ targets, deltaTime: ZERO_MEDIA_TIME }),
+		).toEqual([
+			{ trackId: "main", elementId: "v2", newStartTime: 20 * FRAME },
+			{ trackId: "main", elementId: "v3", newStartTime: 40 * FRAME },
+			{ trackId: "audio-0", elementId: "a2", newStartTime: 35 * FRAME },
+		]);
+	});
+
+	test("preview shifts equal the commit shifts for the same delta (no jump at mouseup)", () => {
+		const deltaTime = mediaTime({ ticks: -3 * FRAME });
+		expect(shiftRippleTrimTargets({ targets, deltaTime })).toEqual(
+			computeRippleTrimShifts({
+				tracks,
+				pivotTime,
+				deltaTime,
+				excludeElementIds: new Set(["v"]),
+			}),
+		);
 	});
 });
 
