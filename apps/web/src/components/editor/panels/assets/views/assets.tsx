@@ -421,7 +421,8 @@ function MediaItemWithContextMenu({
 							: "Convert for editing"}
 					</ContextMenuItem>
 				)}
-				<ContextMenuItem disabled>Export clips</ContextMenuItem>
+				{/* "Export clips" hidden until implemented (menu IA audit): was shown
+					permanently disabled with no path to enable it. */}
 				<ContextMenuItem
 					variant="destructive"
 					onClick={(event: React.MouseEvent<HTMLDivElement>) =>
