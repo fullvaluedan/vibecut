@@ -7,7 +7,7 @@ Closes round 8's known v1 limitation: with **Ripple editing ON**, a right-handle
 - [ ] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps.
 - [ ] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump.
 - [ ] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began.
-- [ ] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit — that path is the per-track heuristic, not this preview).
+- [ ] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit; that path is the per-track heuristic, not this preview).
 
 ## Audio-separation regression on multi/selected bin drags (2026-06-24, commit `ab77bcd5`)
 Fixed: the multi-asset drag path stopped separating source audio (regression from `6ac45541`), so dragging selected clips combined audio into the video. Now separates in-batch onto a shared audio track. Drag-drop is DOM-bound → live-verify in-app:
