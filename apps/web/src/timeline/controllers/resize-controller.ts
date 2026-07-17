@@ -10,12 +10,14 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 import {
-	computeResize,
+	computeLinkedResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
 	type ResizeSide,
 } from "@/timeline/group-resize";
+import { findLinkedPartners } from "@/timeline/link-elements";
+import { useTimelineStore } from "@/timeline/timeline-store";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
@@ -223,16 +225,25 @@ export class ResizeController {
 		const fps = this.config.getActiveProjectFps();
 		if (!fps) return;
 
-		// A trim resizes ONLY the grabbed clip, always (no group-resize). Building
-		// a one-member session from the grabbed ref means computeGroupResize is
-		// clamped solely by this clip's own source/neighbor bounds, never fanned
-		// out across the selection or clamped by another selected clip's tighter
-		// limit. (U2 / OQ2: group-resize removed by decision.)
+		// Linked trim (Dan's fork, 2026-07-17): with linked selection ON, a trim
+		// resizes the grabbed clip AND its linked partners (a video + its
+		// separated audio) as one gesture; Alt on the handle trims just the
+		// grabbed clip. Scope is strictly linked partners (findLinkedPartners,
+		// timeline mode), NEVER the arbitrary multi-selection: the U2 / OQ2
+		// no-group-resize decision stands for multi-select. The whole member set
+		// is excluded from neighbor bounds (buildResizeMembers), the drag delta
+		// is clamped by the MOST restrictive member (computeLinkedResize), and
+		// the commit is one UpdateElementsCommand, so one undo reverts the pair.
 		const ref = { trackId: track.id, elementId: element.id };
+		const tracks = this.config.getSceneTracks();
+		const linkedRefs =
+			!event.altKey && useTimelineStore.getState().linkedSelectionEnabled
+				? findLinkedPartners({ ref, tracks, mode: "timeline" })
+				: [];
 
 		const members = buildResizeMembers({
-			tracks: this.config.getSceneTracks(),
-			selectedElements: [ref],
+			tracks,
+			selectedElements: [ref, ...linkedRefs],
 		});
 		if (members.length === 0) return;
 
@@ -345,8 +356,8 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeResize({
-			member: session.members[0],
+		const result = computeLinkedResize({
+			members: session.members,
 			side: session.side,
 			deltaTime,
 			fps: session.fps,

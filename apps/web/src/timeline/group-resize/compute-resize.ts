@@ -16,6 +16,7 @@ import {
 	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import type {
+	ComputeLinkedResizeArgs,
 	ComputeResizeArgs,
 	GroupResizeMember,
 	GroupResizeResult,
@@ -24,11 +25,12 @@ import type {
 } from "./types";
 
 /**
- * Resize a SINGLE clip (the grabbed one). A trim only ever affects the grabbed
- * clip — group fan-out was removed by decision (U2 / OQ2) — so this is clamped
- * solely by that clip's own source extent and its neighbor bounds. An adjacent
- * clip constrains the drag only as a `leftNeighborBound` / `rightNeighborBound`,
- * never as a co-resized member.
+ * Resize a SINGLE clip (the grabbed one), clamped solely by that clip's own
+ * source extent and its neighbor bounds. An adjacent clip constrains the drag
+ * only as a `leftNeighborBound` / `rightNeighborBound`, never as a co-resized
+ * member. Arbitrary multi-select group fan-out stays removed by decision
+ * (U2 / OQ2); the only multi-member path is `computeLinkedResize`, scoped
+ * strictly to LINKED partners (a video and its separated audio).
  */
 export function computeResize({
 	member,
@@ -36,19 +38,51 @@ export function computeResize({
 	deltaTime,
 	fps,
 }: ComputeResizeArgs): GroupResizeResult {
+	return computeLinkedResize({ members: [member], side, deltaTime, fps });
+}
+
+/**
+ * Resize a linked set (the grabbed clip plus its linked partners) as ONE
+ * gesture: a single shared timeline delta, clamped by the MOST restrictive
+ * member (max of per-member minimums, min of per-member maximums, including
+ * each member's own source headroom and neighbor bounds; the caller builds
+ * members so the whole set is excluded from neighbor bounds). The delta is
+ * snapped to a frame exactly once, then ONE update per member is derived from
+ * it; source-side deltas are computed PER MEMBER inside `buildResizeUpdate`
+ * (a retimed partner consumes `delta * rate` of source, never the shared
+ * timeline delta). Scope is strictly linked partners; this is NOT the removed
+ * multi-select group-resize (U2 / OQ2).
+ */
+export function computeLinkedResize({
+	members,
+	side,
+	deltaTime,
+	fps,
+}: ComputeLinkedResizeArgs): GroupResizeResult {
 	const minDuration = mediaTime({
 		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
 	});
-	const minimumDeltaTime = getMinimumAllowedDeltaTime({
-		member,
-		side,
-		minDuration,
-	});
-	const maximumDeltaTime = getMaximumAllowedDeltaTime({
-		member,
-		side,
-		minDuration,
-	});
+	const minimumDeltaTime = members.reduce<MediaTime>(
+		(minimum, member) =>
+			maxMediaTime({
+				a: minimum,
+				b: getMinimumAllowedDeltaTime({ member, side, minDuration }),
+			}),
+		getMinimumAllowedDeltaTime({ member: members[0], side, minDuration }),
+	);
+	const maximumDeltaTime = members.reduce<MediaTime | null>(
+		(maximum, member) => {
+			const memberMaximum = getMaximumAllowedDeltaTime({
+				member,
+				side,
+				minDuration,
+			});
+			if (memberMaximum === null) return maximum;
+			if (maximum === null) return memberMaximum;
+			return minMediaTime({ a: maximum, b: memberMaximum });
+		},
+		null,
+	);
 
 	const clampedDeltaTime =
 		maximumDeltaTime === null
@@ -84,13 +118,13 @@ export function computeResize({
 
 	return {
 		deltaTime: Object.is(finalDeltaTime, -0) ? ZERO_MEDIA_TIME : finalDeltaTime,
-		updates: [
+		updates: members.map((member) =>
 			buildResizeUpdate({
 				member,
 				side,
 				deltaTime: finalDeltaTime,
 			}),
-		],
+		),
 	};
 }
 

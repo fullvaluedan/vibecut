@@ -35,3 +35,11 @@ export interface ComputeResizeArgs {
 	deltaTime: MediaTime;
 	fps: FrameRate;
 }
+
+export interface ComputeLinkedResizeArgs {
+	/** The grabbed clip first, then its linked partners (never a multi-select). */
+	members: GroupResizeMember[];
+	side: ResizeSide;
+	deltaTime: MediaTime;
+	fps: FrameRate;
+}
