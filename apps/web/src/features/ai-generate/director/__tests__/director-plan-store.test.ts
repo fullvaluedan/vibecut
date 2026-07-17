@@ -142,7 +142,7 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		{ groupId: "g1", keeperLineId: "l1", members: [], confidence: 0.6, reason: "r" },
 	];
 
-	test("docks in the panel with open:false and preserves plan/decisions/groups", () => {
+	test("docks with open:false and preserves plan/decisions/groups", () => {
 		useDirectorPlanStore.getState().close();
 		useDirectorPlanStore.getState().openCutPanel({
 			plan: optIn,
@@ -150,7 +150,6 @@ describe("openCutPanel (docked cut review, U6)", () => {
 			redundancyGroups: groups,
 		});
 		const s = useDirectorPlanStore.getState();
-		expect(s.surface).toBe("panel");
 		expect(s.mode).toBe("cut");
 		// `open` stays false so the still-mounted modal does NOT also pop.
 		expect(s.open).toBe(false);
@@ -160,12 +159,72 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		expect(s.redundancyGroups.map((g) => g.groupId)).toEqual(["g1"]);
 	});
 
-	test("close() resets the surface back to the modal default", () => {
+	test("close() resets the dock tab back to the properties default", () => {
 		useDirectorPlanStore.getState().openCutPanel({ plan: optIn });
 		useDirectorPlanStore.getState().close();
 		const s = useDirectorPlanStore.getState();
-		expect(s.surface).toBe("modal");
+		expect(s.dockTab).toBe("properties");
 		expect(s.plan).toBeNull();
+	});
+});
+
+describe("dockTab (R1: persistent Director dock, surface field retired)", () => {
+	const plan: DirectorPlan = { operations: [op({ id: "a", kind: "cut" })] };
+
+	test("the store starts on the properties tab", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().dockTab).toBe("properties");
+	});
+
+	test("setDockTab focuses a tab directly", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("director");
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().setDockTab("properties");
+		expect(useDirectorPlanStore.getState().dockTab).toBe("properties");
+	});
+
+	test("openCutPanel auto-focuses the Director tab on completion", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("openWith auto-focuses the Director tab on completion", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openWith({ plan });
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("openAssemble auto-focuses the Director tab on completion", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openAssemble({
+			draft: { spans: [], alternatesByClusterId: {} },
+		});
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().closeAssemble();
+	});
+
+	test("openHighlight docks (no modal) and auto-focuses the Director tab", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openHighlight({
+			keeps: [{ startSec: 0, endSec: 3 }],
+			preview: { keptCount: 1, totalCount: 1, keptSec: 3, totalSec: 3 },
+			totalSec: 3,
+		});
+		const s = useDirectorPlanStore.getState();
+		expect(s.dockTab).toBe("director");
+		expect(s.mode).toBe("highlight");
+		// The highlight modal path is retired (R1): `open` must stay false so
+		// DirectorReviewDialog never pops for highlight mode.
+		expect(s.open).toBe(false);
+		useDirectorPlanStore.getState().close();
 	});
 });
 

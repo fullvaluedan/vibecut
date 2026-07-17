@@ -467,6 +467,7 @@ describe("applyHighlightPlan (composition glue)", () => {
 			]);
 		}
 		expect(result.removedSec).toBe(10);
+		expect(result.appliedCommand).toBe(executed[0]);
 	});
 
 	test("a full-timeline keep executes nothing", () => {
@@ -477,7 +478,7 @@ describe("applyHighlightPlan (composition glue)", () => {
 			totalSec: 12,
 		});
 		expect(executed).toHaveLength(0);
-		expect(result).toEqual({ cuts: 0, removedSec: 0 });
+		expect(result).toEqual({ cuts: 0, removedSec: 0, appliedCommand: null });
 	});
 
 	test("an empty keep set throws (never removes everything)", () => {
