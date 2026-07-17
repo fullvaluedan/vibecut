@@ -7,7 +7,7 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
-import { stableCutId } from "./cut-utils";
+import { stableCutId, stripWordsFromRemoval, type WordTiming } from "./cut-utils";
 
 /** A transcript segment with timeline-relative timing (seconds). */
 export interface PacingSegment {
@@ -27,10 +27,16 @@ const DEFAULT_TARGET_GAP_SECONDS = 0.4;
  */
 export function detectPacingCuts({
 	segments,
+	words = [],
 	minGapSeconds = DEFAULT_MIN_GAP_SECONDS,
 	targetGapSeconds = DEFAULT_TARGET_GAP_SECONDS,
 }: {
 	segments: readonly PacingSegment[];
+	/** Word timings for the U5 word-guard: a pacing span containing a word
+	 * midpoint is split into word-free sub-spans at emission. Segment gaps
+	 * SHOULD be word-free, but segment and word boundaries can disagree
+	 * (transcription drift), and a pacing cut must never ship speech. */
+	words?: readonly WordTiming[];
 	minGapSeconds?: number;
 	targetGapSeconds?: number;
 }): DirectorOp[] {
@@ -42,7 +48,7 @@ export function detectPacingCuts({
 		const cutStart = prevEnd + targetGapSeconds;
 		const cutEnd = segments[i].start;
 		if (cutEnd - cutStart <= 0) continue;
-		ops.push({
+		const op: DirectorOp = {
 			id: `pac-${stableCutId(`${cutStart.toFixed(3)}:${cutEnd.toFixed(3)}`)}`,
 			op: "cut",
 			startSec: cutStart,
@@ -50,7 +56,8 @@ export function detectPacingCuts({
 			reason: `Long pause (${gap.toFixed(1)}s) — tighten`,
 			confidence: 0.5,
 			category: "pacing",
-		});
+		};
+		ops.push(...stripWordsFromRemoval({ op, words }));
 	}
 	return ops;
 }

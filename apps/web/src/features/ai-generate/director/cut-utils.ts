@@ -29,6 +29,61 @@ export function stableCutId(input: string): string {
 	return (hash >>> 0).toString(36);
 }
 
+/** A word-guard fragment shorter than this is dropped (mirrors remove-silences
+ * MIN_REMOVED_SEC): a sub-0.2s splice buys nothing and risks a pop. */
+export const STRIP_MIN_FRAGMENT_SEC = 0.2;
+
+/**
+ * Word-guard for GAP-DERIVED removals (round 6 U5): a pacing/silence tighten
+ * must never contain a real word. Splits the removal on every contained word
+ * (midpoint containment) into word-free sub-spans, drops fragments under
+ * `minFragmentSec`, and keeps all other op fields. Fragment ids extend the
+ * original id (`<id>.w<n>`) so id-prefix consumers (the `sp-` premise guard)
+ * still recognize the family. A removal containing no word midpoint returns
+ * byte-identical `[op]`; non-removals pass through; empty words is fail-open.
+ *
+ * This is the belt on top of the emphasis-pause keepers and the second-pass
+ * interior-subtraction fix: whatever asymmetry the inverse remap introduces,
+ * an emitted gap-derived span cannot ship speech (live-test sp- bug, 3.75s
+ * op swallowing a whole sentence).
+ */
+export function stripWordsFromRemoval({
+	op,
+	words,
+	minFragmentSec = STRIP_MIN_FRAGMENT_SEC,
+}: {
+	op: DirectorOp;
+	words: readonly WordTiming[];
+	minFragmentSec?: number;
+}): DirectorOp[] {
+	if (op.op !== "cut" && op.op !== "take_select") {
+		return [op];
+	}
+	const contained = words
+		.filter((w) => {
+			const mid = (w.start + w.end) / 2;
+			return mid >= op.startSec && mid < op.endSec;
+		})
+		.sort((a, b) => a.start - b.start);
+	if (contained.length === 0) {
+		return [op];
+	}
+	const fragments: DirectorOp[] = [];
+	let cursor = op.startSec;
+	let index = 0;
+	const pushFragment = (startSec: number, endSec: number) => {
+		if (endSec - startSec >= minFragmentSec) {
+			fragments.push({ ...op, id: `${op.id}.w${index++}`, startSec, endSec });
+		}
+	};
+	for (const w of contained) {
+		pushFragment(cursor, Math.min(w.start, op.endSec));
+		cursor = Math.max(cursor, w.end);
+	}
+	pushFragment(cursor, op.endSec);
+	return fragments;
+}
+
 /** A timeline span that a take cluster decided to KEEP — never removable. */
 export interface KeeperSpan {
 	startSec: number;

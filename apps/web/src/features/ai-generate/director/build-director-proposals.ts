@@ -337,7 +337,7 @@ export async function buildDirectorProposals(
 		words,
 		totalSec,
 	});
-	const pacingCuts = detectPacingCuts({ segments }).filter(
+	const pacingCuts = detectPacingCuts({ segments, words }).filter(
 		(op) =>
 			!envelopeDeadAirCuts.some(
 				(e) => e.startSec < op.endSec && op.startSec < e.endSec,

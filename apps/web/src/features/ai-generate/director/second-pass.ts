@@ -21,6 +21,7 @@ import type { DirectorOp } from "@framecut/hf-bridge";
 import {
 	removalCoversKeeper,
 	stableCutId,
+	stripWordsFromRemoval,
 	type KeeperSpan,
 	type WordTiming,
 } from "./cut-utils";
@@ -204,7 +205,7 @@ function detectOnTranscript({
 		...detectDuplicateWordCuts({ words: [...words] }),
 		...detectDeadAirCuts({ words }),
 		...detectFillerCuts({ words: [...words] }),
-		...detectPacingCuts({ segments }),
+		...detectPacingCuts({ segments, words }),
 	];
 	// U4: the compressed segments ride along so a compression-revealed
 	// cross-sentence n-gram match gets the same HIGH_SIMILAR gate and demotion
@@ -285,16 +286,26 @@ export function runSecondPass({
 		// and give it a fresh `sp-` id (encoding the original span) so it can never
 		// collide with a pass-1 id and the dedup below can identify what survived.
 		const remapped = detectOnTranscript({ words: rw, segments: rs, redundancyRan });
-		const originalCoordOps: DirectorOp[] = remapped.map((op) => {
-			const startSec = inverseRemapTime(op.startSec, removals, "start");
-			const endSec = inverseRemapTime(op.endSec, removals, "end");
-			return {
-				...op,
-				startSec,
-				endSec,
-				id: `sp-${stableCutId(`${op.category}:${startSec.toFixed(3)}:${endSec.toFixed(3)}`)}`,
-			};
-		});
+		const originalCoordOps: DirectorOp[] = remapped
+			.map((op) => {
+				const startSec = inverseRemapTime(op.startSec, removals, "start");
+				const endSec = inverseRemapTime(op.endSec, removals, "end");
+				return {
+					...op,
+					startSec,
+					endSec,
+					id: `sp-${stableCutId(`${op.category}:${startSec.toFixed(3)}:${endSec.toFixed(3)}`)}`,
+				};
+			})
+			// U5 word-guard: the asymmetric inverse remap can re-expand a GAP-derived
+			// span across real retained words (the live-test 3.75s pacing op that
+			// swallowed a sentence). Strip pacing ops against the ORIGINAL-domain
+			// words so an emitted gap span can never ship speech. Content-derived
+			// ops (filler, duplicate, repeat, hesitation dead-air) remove the words
+			// they target by design and pass through untouched.
+			.flatMap((op) =>
+				op.category === "pacing" ? stripWordsFromRemoval({ op, words }) : [op],
+			);
 
 		// Dedup + keeper protection. Pass-1's blanket any-overlap dedup is WRONG here:
 		// a repeat take revealed by compression legitimately CONTAINS the pass-1
