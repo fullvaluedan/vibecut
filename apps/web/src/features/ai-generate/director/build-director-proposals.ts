@@ -522,9 +522,19 @@ export async function buildDirectorProposals(
 	// Selection is by ARRAY MEMBERSHIP here (this array holds only the plan-pass ops), so
 	// vision-tagged plan ops are disciplined the same as untagged ones. Fail-open (no
 	// words → unchanged). Only start/end matter downstream (KTD1), so split ids regenerate.
-	const clampEvidence = [...wordCuts, ...phraseRepeatCuts, ...redundancyOps].map(
-		(op) => ({ startSec: op.startSec, endSec: op.endSec }),
-	);
+	// Round 6 U6: the evidence set learns SILENCE. Envelope dead-air runs and
+	// hallucinated (silence-bleed) spans are deterministic proof a region is
+	// removable, so an oversized LLM plan cut whose interior is dead air (the
+	// live-test 24s dead-outro) SHRINKS to the evidence and ships AUTO instead
+	// of being demoted to an unchecked row for lack of word-detector coverage.
+	const clampEvidence = [
+		...wordCuts,
+		...phraseRepeatCuts,
+		...redundancyOps,
+		...envelopeDeadAirCuts,
+	]
+		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
+		.concat(guard.hallucinatedSpans.map((s) => ({ startSec: s.startSec, endSec: s.endSec })));
 	const planOps: DirectorOp[] = clampCutExtent({
 		ops: mappedPlanOps,
 		words,

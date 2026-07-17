@@ -120,6 +120,26 @@ describe("clampCutExtent", () => {
 		expect([out[0].startSec, out[0].endSec]).toEqual([10, 20]);
 	});
 
+	test("R6-U6 dead-outro shape: silence evidence covering 95pct shrinks, keeps AUTO", () => {
+		// The live-test inversion: a 24s LLM plan cut over a dead-air tail was
+		// demoted for lack of word-detector evidence. With envelope dead-air +
+		// hallucinated spans in the evidence set, it shrinks to the union and
+		// ships default-accepted.
+		const words = mkWords(120); // words end at 60.0; the cut targets 60-84
+		const ops = clampCutExtent({
+			ops: [op({ startSec: 60, endSec: 84 })],
+			words,
+			evidence: [
+				{ startSec: 60.2, endSec: 81.9 }, // envelope dead-air run
+				{ startSec: 81.9, endSec: 83.5 }, // hallucinated span
+			],
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).not.toBe(false);
+		expect(ops[0].startSec).toBeCloseTo(60.2, 3);
+		expect(ops[0].endSec).toBeCloseTo(83.5, 3);
+	});
+
 	test("oversized span with no evidence is demoted to OFFERED, span untouched", () => {
 		const [demoted, ...rest] = clampCutExtent({
 			ops: [op({ startSec: 0, endSec: 39, id: "keepme" })],
