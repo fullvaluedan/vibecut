@@ -221,14 +221,20 @@ google 5 segments / 51 words, hermes 40 / 212, how-to-edit 21 / 129, pokemon 12 
 
 ### Gate (b): four-fixture eval, default config, single draw (baselines = Addendum 3 clamp-default column)
 
+A first measurement ran with U1's original whole-segment energy criterion; the round-6 code review then proved that criterion quarantined sparse REAL quiet speech (a 7s trailing-pause segment holding one soft word), and the corrected criterion (word-SPAN energy) cut fixture flags from 5/40/21/12 segments to 0/17/6/6, keeping only true hallucination cores. The table below is the CORRECTED measurement; the interim numbers (hermes 77.3 etc.) are superseded.
+
 | fixture | OFFERED match adj | OFFERED recall | OFFERED essLost | AUTO match adj | AUTO essLost |
 |---|---|---|---|---|---|
-| google-omni | 61.6 -> 62.6 | 26.3 -> 29.9 | 106 -> 110 | 58.2 | 99 |
-| hermes-cloud | 75.5 -> 77.3 | 46.2 -> 43.6 | 441 -> 334 | 75.7 | 173 |
-| how-to-edit | 36.4 -> 36.2 | 28.2 -> 22.1 | 167 -> 115 | 35.1 | 43 |
-| pokemon-tcg | 82.2 -> 82.3 | 62.5 -> 45.4 | 252 -> 163 | 83.0 | 81 |
+| google-omni | 61.6 -> 61.6 | 26.3 -> 25.6 | 106 -> 103 | 58.6 | 59 |
+| hermes-cloud | 75.5 -> 78.4 | 46.2 -> 39.8 | 441 -> 246 | 77.0 | 93 |
+| how-to-edit | 36.4 -> 37.4 | 28.2 -> 20.4 | 167 -> 61 | 34.8 | 26 |
+| pokemon-tcg | 82.2 -> 81.6 | 62.5 -> 41.5 | 252 -> 163 | 82.0 | 27 |
 
-Verdict: PASS. OFFERED match regresses nowhere beyond noise (-0.2 on how-to-edit against a documented +/-5pp single-draw variance; up on the other three, hermes 77.3 is its best cell in any round). Essential-words-lost falls 52-107 words on three fixtures (google +4, noise). Recall falls on pokemon/how-to-edit while match holds or rises: the rows we no longer offer were the collateral-heavy ones (hallucination-driven and false-positive repeats), which is the trade this round exists to make. Caveats recorded honestly: single draw per cell (the round-5 variance lesson stands; a --runs 3 pass remains the right next measurement); AUTO essLost baselines were not recorded per-tier in prior addenda, so the AUTO column starts its own series here (99/173/43/81).
+Verdict: PASS. OFFERED match regresses nowhere beyond noise (pokemon -0.6 against a documented +/-5pp single-draw variance; hermes 78.4 is its best cell in any round, +2.9 over the prior best). Essential-words-lost collapses: OFFERED down 3/195/106/89 words, and the AUTO tier starts its recorded series at 59/93/26/27 (the corrected guard roughly halved AUTO damage versus the interim run). Recall falls while match holds or rises: the rows no longer offered were the collateral-heavy ones (hallucination-driven spans and false-positive repeats), the exact trade this round exists to make. Caveat: single draw per cell; the round-5 variance lesson stands and a --runs 3 pass remains the right next measurement.
+
+### The round-6 code review (before ship)
+
+Five parallel finder agents (line-scan, removed-behavior, cross-file, cleanup, altitude/conventions) swept the diff and confirmed 8 fixes, applied and re-gated: the zero-median threshold collapse, the guard's whole-segment energy criterion (above), a start-edge window off-by-one in the swallow walk, flush-edge snap-back, keeper-span bleed-through, pacing deferring to opt-in edead rows, clamp evidence laundering demoted spans, and em dashes in reason strings. Accepted-by-design residuals: boundary-spanning retake demotion (review row remains), sub-0.2s second-pass fragment drops, gap-derived category predicates scattered across call sites, a duplicated test envelope helper.
 
 ### Gate (e): hands-on smoke pass (Dan, 2026-07-17)
 
