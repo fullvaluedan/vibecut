@@ -217,6 +217,88 @@ async function main(): Promise<void> {
 	};
 	fs.writeFileSync(OUT, JSON.stringify(result, null, 1));
 	console.log(JSON.stringify({ opCount: result.opCount, auto: result.autoRemovalCount, offered: result.offeredRemovalCount, autoCutSeconds: result.autoCutSeconds, fragments: fragments.length, out: OUT }, null, 1));
+
+	/* ---- Round-6 U7 assertion mode: mechanize R1-R3 and exit non-zero. ---- */
+	const { guardHallucinations } = await import(
+		"@/features/ai-generate/director/hallucination-guard"
+	);
+	const guard = guardHallucinations({
+		words: words as { text: string; start: number; end: number }[],
+		segments,
+		envelope,
+		windowSec: 0.05,
+	});
+	const cleanWords = guard.cleanWords;
+	const failures: string[] = [];
+	const GAP_CATEGORIES = new Set(["pacing", "deadair", "noise"]);
+	const removals = operations.filter((o) => o.op === "cut" || o.op === "take_select");
+
+	// R1a: no gap-derived AUTO removal contains a clean word midpoint.
+	for (const op of removals) {
+		if (op.defaultAccept === false) continue;
+		if (!GAP_CATEGORIES.has(op.category ?? "")) continue;
+		for (const w of cleanWords) {
+			const mid = (w.start + w.end) / 2;
+			if (mid >= op.startSec && mid < op.endSec) {
+				failures.push(`R1a: gap-derived AUTO ${op.id} [${op.startSec.toFixed(2)}-${op.endSec.toFixed(2)}] contains word "${w.text}"`);
+			}
+		}
+	}
+	// R1b: no removal boundary of ANY family strictly inside a clean word.
+	// Whisper emits OVERLAPPING word timestamps, so a boundary sitting exactly
+	// on SOME clean word's edge counts as word-boundary-placed even when
+	// another overlapping word technically contains it.
+	const atWordEdge = (t: number) =>
+		cleanWords.some((w) => Math.abs(t - w.start) <= 0.02 || Math.abs(t - w.end) <= 0.02);
+	for (const op of removals) {
+		for (const w of cleanWords) {
+			for (const [label, t] of [["start", op.startSec], ["end", op.endSec]] as const) {
+				if (t > w.start + 0.01 && t < w.end - 0.01 && !atWordEdge(t)) {
+					failures.push(`R1b: ${op.id} ${label} ${t.toFixed(2)} inside word "${w.text}" [${w.start}-${w.end}]`);
+				}
+			}
+		}
+	}
+	// R2: every AUTO removal boundary is silence-placed (kept-side residual <= 0.2s)
+	// or word-adjacent (within 0.3s of a clean word edge).
+	const wordAdjacent = (t: number) =>
+		cleanWords.some((w) => Math.abs(t - w.end) <= 0.3 || Math.abs(t - w.start) <= 0.3);
+	for (const op of removals) {
+		if (op.defaultAccept === false) continue;
+		for (const [label, t, keptSide] of [
+			["start", op.startSec, "before"],
+			["end", op.endSec, "after"],
+		] as const) {
+			if (t <= 0.01 || t >= TOTAL_SEC - 0.01) continue; // timeline edge is fine
+			// A boundary within one envelope window of a silence-interval EDGE is
+			// flush against the speech that ends/starts the silence: residual 0.
+			const nearSilenceEdge = SILENCE.some(
+				([s, e]) => Math.abs(t - s) <= 0.1 || Math.abs(t - e) <= 0.1,
+			);
+			const sil = silenceAt(t);
+			const residual =
+				sil === null ? Infinity : keptSide === "before" ? t - sil[0] : sil[1] - t;
+			if (residual > 0.21 && !wordAdjacent(t) && !nearSilenceEdge) {
+				failures.push(`R2: ${op.id} ${label} ${t.toFixed(2)} leaves ${residual === Infinity ? "speech-interior" : residual.toFixed(2) + "s"} residual and is not word-adjacent`);
+			}
+		}
+	}
+	// R3: the dead-air tail and the 3.4s pause are cut AUTO.
+	const autoCovers = (a: number, b: number) =>
+		merged.some((c) => c.s <= a && c.e >= b);
+	if (!autoCovers(58.5, 81.0)) failures.push("R3: the 24s dead-air tail [58.5-81.0] is not covered by an AUTO cut");
+	if (!autoCovers(45.2, 47.8)) failures.push("R3: the 3.4s pause [45.2-47.8] is not covered by an AUTO cut");
+	// Sanity band on merged-union AUTO seconds (catastrophe catch, generous).
+	if (result.autoCutSeconds < 20 || result.autoCutSeconds > 45) {
+		failures.push(`band: merged AUTO cut seconds ${result.autoCutSeconds} outside [20, 45]`);
+	}
+
+	if (failures.length > 0) {
+		console.error(`\nASSERTIONS FAILED (${failures.length}):`);
+		for (const f of failures) console.error("  - " + f);
+		process.exit(1);
+	}
+	console.log("\nASSERTIONS PASSED (R1a, R1b, R2, R3, band)");
 }
 
 main().catch((e) => {
