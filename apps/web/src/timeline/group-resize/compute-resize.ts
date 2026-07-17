@@ -58,11 +58,12 @@ export function computeLinkedResize({
 	side,
 	deltaTime,
 	fps,
+	rippleTrim,
 }: ComputeLinkedResizeArgs): GroupResizeResult {
 	const minDuration = mediaTime({
 		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
 	});
-	const minimumDeltaTime = members.reduce<MediaTime>(
+	const membersMinimumDeltaTime = members.reduce<MediaTime>(
 		(minimum, member) =>
 			maxMediaTime({
 				a: minimum,
@@ -70,6 +71,17 @@ export function computeLinkedResize({
 			}),
 		getMinimumAllowedDeltaTime({ member: members[0], side, minDuration }),
 	);
+	// Ripple shrink floor: a right-handle shrink with ripple ON shifts
+	// downstream clips left on every track, so the cross-track headroom the
+	// caller measured also bounds the delta (a shifted clip must never land on
+	// a clip that straddles the pivot and stays put).
+	const minimumDeltaTime =
+		side === "right" && rippleTrim?.shrinkFloorDelta != null
+			? maxMediaTime({
+					a: membersMinimumDeltaTime,
+					b: rippleTrim.shrinkFloorDelta,
+				})
+			: membersMinimumDeltaTime;
 	const maximumDeltaTime = members.reduce<MediaTime | null>(
 		(maximum, member) => {
 			const memberMaximum = getMaximumAllowedDeltaTime({

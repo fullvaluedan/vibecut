@@ -17,6 +17,11 @@ import {
 	type ResizeSide,
 } from "@/timeline/group-resize";
 import { findLinkedPartners } from "@/timeline/link-elements";
+import {
+	computeRippleShrinkFloor,
+	liftShiftingNeighborBounds,
+	type RippleTrimCommit,
+} from "@/timeline/ripple-trim";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import {
 	buildTimelineSnapPoints,
@@ -49,6 +54,15 @@ interface ResizeSession {
 	fps: FrameRate;
 	members: GroupResizeMember[];
 	result: GroupResizeResult | null;
+	/**
+	 * Cross-track ripple trim (right handle with ripple editing ON): the
+	 * grabbed clip's OLD end (the edit point) and the shrink headroom measured
+	 * at mousedown. Null = plain neighbor-clamped trim.
+	 */
+	rippleTrim: {
+		pivotTime: MediaTime;
+		shrinkFloorDelta: MediaTime | null;
+	} | null;
 }
 
 type Session = { kind: "idle" } | ResizeSession;
@@ -64,7 +78,10 @@ export interface ResizeConfig {
 	getActiveProjectFps: () => FrameRate | null;
 	discardPreview: () => void;
 	previewElements: (updates: GroupResizeUpdate[]) => void;
-	commitElements: (updates: GroupResizeUpdate[]) => void;
+	commitElements: (
+		updates: GroupResizeUpdate[],
+		ripple: RippleTrimCommit | null,
+	) => void;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 }
 
@@ -247,6 +264,30 @@ export class ResizeController {
 		});
 		if (members.length === 0) return;
 
+		// Cross-track ripple trim (Dan's fork): with ripple editing ON, a RIGHT
+		// handle drag shifts all downstream material at commit, so shifting
+		// neighbors stop clamping the extend (a neighbor parked before the edit
+		// point still binds) and the shrink is floored by the tightest track's
+		// straddler headroom, both measured once at mousedown. Left-handle trims
+		// keep today's per-track heuristic ripple.
+		const pivotTime = addMediaTime({
+			a: element.startTime,
+			b: element.duration,
+		});
+		const rippleTrim =
+			side === "right" && useTimelineStore.getState().rippleEditingEnabled
+				? {
+						pivotTime,
+						shrinkFloorDelta: computeRippleShrinkFloor({
+							tracks,
+							pivotTime,
+							excludeElementIds: new Set(
+								members.map((member) => member.elementId),
+							),
+						}),
+					}
+				: null;
+
 		this.config.discardPreview();
 
 		this.session = {
@@ -254,8 +295,14 @@ export class ResizeController {
 			side,
 			startX: event.clientX,
 			fps,
-			members,
+			members: rippleTrim
+				? liftShiftingNeighborBounds({
+						members,
+						pivotTime: rippleTrim.pivotTime,
+					})
+				: members,
 			result: null,
+			rippleTrim,
 		};
 		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
@@ -361,6 +408,13 @@ export class ResizeController {
 			side: session.side,
 			deltaTime,
 			fps: session.fps,
+			...(session.rippleTrim
+				? {
+						rippleTrim: {
+							shrinkFloorDelta: session.rippleTrim.shrinkFloorDelta,
+						},
+					}
+				: {}),
 		});
 
 		session.result = result;
@@ -377,7 +431,17 @@ export class ResizeController {
 			session.result &&
 			hasResizeChanges({ members: session.members, result: session.result })
 		) {
-			this.config.commitElements(session.result.updates);
+			const ripple =
+				session.rippleTrim && session.result.deltaTime !== 0
+					? {
+							pivotTime: session.rippleTrim.pivotTime,
+							deltaTime: session.result.deltaTime,
+							excludeElementIds: new Set(
+								session.members.map((member) => member.elementId),
+							),
+						}
+					: null;
+			this.config.commitElements(session.result.updates, ripple);
 		}
 
 		this.finishSession();

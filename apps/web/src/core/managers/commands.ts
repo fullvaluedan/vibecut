@@ -8,6 +8,8 @@ interface CommandHistoryEntry {
 	command: Command;
 	previousSelection: EditorSelectionSnapshot;
 	selectionOverride?: EditorSelectionSnapshot;
+	/** See `execute`; carried on the entry so redo honors it too. */
+	suppressRipple?: boolean;
 }
 
 /**
@@ -26,10 +28,24 @@ export class CommandManager {
 
 	constructor(private editor: EditorCore) {}
 
-	execute({ command }: { command: Command }): Command {
-		const beforeTracks = this.isRippleEnabled
-			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
-			: null;
+	/**
+	 * `suppressRipple`: skip the post-execute ripple diff heuristic for THIS
+	 * command (and its redo). A command that already contains its own explicit
+	 * downstream shifts (the cross-track ripple-trim BatchCommand) must opt out,
+	 * or the heuristic re-shifts gapped clips a second time. Deletes and every
+	 * other command keep the heuristic.
+	 */
+	execute({
+		command,
+		suppressRipple = false,
+	}: {
+		command: Command;
+		suppressRipple?: boolean;
+	}): Command {
+		const beforeTracks =
+			this.isRippleEnabled && !suppressRipple
+				? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
+				: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
 		this.applyRippleIfEnabled({ beforeTracks });
@@ -39,6 +55,7 @@ export class CommandManager {
 			command,
 			previousSelection,
 			selectionOverride,
+			...(suppressRipple ? { suppressRipple } : {}),
 		});
 		this.redoStack = [];
 		return command;
@@ -82,9 +99,10 @@ export class CommandManager {
 			return;
 		}
 
-		const beforeTracks = this.isRippleEnabled
-			? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
-			: null;
+		const beforeTracks =
+			this.isRippleEnabled && !entry.suppressRipple
+				? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
+				: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
 		this.applyRippleIfEnabled({ beforeTracks });
@@ -95,6 +113,7 @@ export class CommandManager {
 			command: entry.command,
 			previousSelection,
 			selectionOverride,
+			...(entry.suppressRipple ? { suppressRipple: entry.suppressRipple } : {}),
 		});
 	}
 
