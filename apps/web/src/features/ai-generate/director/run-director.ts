@@ -34,7 +34,6 @@ import {
 	computeEnergyEnvelope,
 	computeSpeechFeatures,
 	ENERGY_WINDOW_SEC,
-	meanEnergyOverRange,
 } from "./audio-features";
 import { buildSignalTable } from "./build-signal-table";
 import { toast } from "sonner";
@@ -53,8 +52,6 @@ import { detectPacingCuts } from "./pacing";
 import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectTinyClipCuts } from "./tiny-clip";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
-import { detectVadDeadAirCuts } from "./vad-dead-air";
-import { vadService } from "@/services/vad/service";
 import { snapRemovalOps } from "./snap-cut";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
 import { justifyCuts } from "./justify-cuts";
@@ -256,62 +253,12 @@ export async function runDirector({
 		segments,
 	});
 
-	// VAD dead-air (Plan A / U5, default ON per U2/KTD3, still a user override): a
-	// Silero VAD pass over the decoded audio surfaces long NON-speech gaps as
-	// reviewable "dead air" cuts, the silent "just sitting there" a transcript can't
-	// see. Runs in its own worker; NON-throwing (a VAD failure must never break the
-	// Director) and overlap-filtered against the other detected cuts so it can't
-	// double with pacing / dead-air.
-	let vadDeadAirCuts: DirectorOp[] = [];
-	if (useAiSettingsStore.getState().directorVadDeadAirEnabled) {
-		onProgress?.("Scanning for dead air...");
-		try {
-			const { gaps } = await vadService.detectSpeechGaps({
-				samples,
-				sampleRate,
-				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
-			});
-			// Overlap-dedup only against DEFAULT-ACCEPTED rows (X4): an opt-in row (an
-			// unchecked tiny-clip shard, a review-only noise fragment) must not veto the
-			// only default remover of the silence around it, or a shattered timeline's
-			// edge silence ships with neither the shard nor the gap removed.
-			const acceptedOverlapSources = [...wordCuts, ...noiseCuts, ...tinyClipCuts].filter(
-				(other) => other.defaultAccept !== false,
-			);
-			// Energy test for edge gaps (X5): Silero gaps are NON-speech, not silence. A
-			// music sting / b-roll cold open reads as a gap but carries real energy, so
-			// compare each gap's mean RMS against the median SPEECH segment energy; at or
-			// above the ratio it is deliberate audio, opt-in rather than auto-removed.
-			const speechEnergies = features.map((f) => f.energy).sort((a, b) => a - b);
-			const medianSpeechEnergy =
-				speechEnergies.length > 0
-					? speechEnergies[Math.floor(speechEnergies.length / 2)]
-					: 0;
-			const ENERGETIC_GAP_RATIO = 0.35;
-			const isEnergetic = (gap: { startSec: number; endSec: number }): boolean =>
-				medianSpeechEnergy > 0 &&
-				meanEnergyOverRange({
-					envelope,
-					windowSec: ENERGY_WINDOW_SEC,
-					startSec: gap.startSec,
-					endSec: gap.endSec,
-				}) >=
-					medianSpeechEnergy * ENERGETIC_GAP_RATIO;
-			vadDeadAirCuts = detectVadDeadAirCuts({
-				gaps,
-				totalSec: (totalDuration as number) / TICKS_PER_SECOND,
-				isEnergetic,
-			}).filter(
-				(op) =>
-					!acceptedOverlapSources.some(
-						(other) => other.startSec < op.endSec && op.startSec < other.endSec,
-					),
-			);
-		} catch {
-			// VAD unavailable / failed — skip; the Director runs normally.
-		}
-		abort();
-	}
+	// VAD dead-air (Silero pass): DELETED from the default Director path (menu IA
+	// round, Dan's decision) along with the directorVadDeadAirEnabled toggle and
+	// its Settings section. `gaps` arrives empty rather than running the pass.
+	// detectVadDeadAirCuts stays in ./vad-dead-air.ts (its own unit tests still
+	// exercise it directly) for a future opt-in surface to reuse.
+	const vadDeadAirCuts: DirectorOp[] = [];
 
 	// Keep-side signal (Phase B / U1-U4): score each segment's emphasis/anchor
 	// importance. It rides the signal table as an advisory "imp" column and yields a
