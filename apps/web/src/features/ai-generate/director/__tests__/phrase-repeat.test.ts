@@ -86,4 +86,80 @@ describe("detectPhraseRepeatCuts", () => {
 		expect(ops).toHaveLength(2);
 		expect(ops.map((o) => o.startSec)).toEqual([0, 3]); // first two cut, last kept
 	});
+
+	// Round 6 U4: the whole-segment similarity gate.
+
+	/** Segments derived from phrase() words: one segment per [text, startSec]. */
+	function segs(
+		...entries: [string, number, number][]
+	): { text: string; start: number; end: number }[] {
+		return entries.map(([text, start, end]) => ({ text, start, end }));
+	}
+
+	test("live false positive: 'We are going to' across different sentences demotes", () => {
+		const a = "we are going to build it and walk you through that process";
+		const b = "before we do that we are going to showcase the process because i need your help";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 10 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4.8], [b, 10, 16.4]),
+		});
+		expect(ops.length).toBeGreaterThanOrEqual(1);
+		for (const op of ops) {
+			expect(op.defaultAccept).toBe(false);
+			expect(op.reason).toContain("DIFFERENT sentence");
+		}
+	});
+
+	test("live false positive: 'You do not have to' across different sentences demotes", () => {
+		const a = "you do not have to link to your google profile";
+		const b = "you do not have to subscribe and you can join the group still";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 6 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4], [b, 6, 11.2]),
+		});
+		expect(ops.length).toBeGreaterThanOrEqual(1);
+		for (const op of ops) {
+			expect(op.defaultAccept).toBe(false);
+		}
+	});
+
+	test("a true retake (near-identical segments) keeps its AUTO default", () => {
+		const a = "so we grab the config file and restart the server";
+		const b = "so we grab the config file and restart the server now";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 6 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4], [b, 6, 10.4]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBeUndefined();
+		expect(ops[0].startSec).toBe(0); // earlier occurrence cut, later kept
+	});
+
+	test("without segments the legacy behavior is unchanged (no demotion)", () => {
+		const a = "we are going to build it and walk you through that process";
+		const b = "before we do that we are going to showcase the process because i need your help";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 10 })];
+		const ops = detectPhraseRepeatCuts({ words });
+		for (const op of ops) {
+			expect(op.defaultAccept).toBeUndefined();
+		}
+	});
+
+	test("an occurrence whose midpoint falls outside every segment demotes (unconfirmed)", () => {
+		const a = "this is the main point";
+		const words = [
+			...phrase({ text: a, startSec: 0 }),
+			...phrase({ text: a, startSec: 3 }),
+		];
+		// Segments cover neither occurrence midpoint.
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs(["unrelated", 50, 55]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+	});
 });

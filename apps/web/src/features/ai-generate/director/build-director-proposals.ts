@@ -349,7 +349,7 @@ export async function buildDirectorProposals(
 		...detectFillerCuts({ words }),
 		...pacingCuts,
 	];
-	const phraseRepeatCuts = detectPhraseRepeatCuts({ words });
+	const phraseRepeatCuts = detectPhraseRepeatCuts({ words, segments });
 	// Segment-level consecutive-repeat backstop (fallback only). Drop any that overlap
 	// a word-level / phrase-repeat cut so the layers don't double up in the review.
 	const segmentRepeatCuts = detectSegmentRepeatCuts({ segments }).filter(

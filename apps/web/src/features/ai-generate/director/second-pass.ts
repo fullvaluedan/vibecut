@@ -206,7 +206,10 @@ function detectOnTranscript({
 		...detectFillerCuts({ words: [...words] }),
 		...detectPacingCuts({ segments }),
 	];
-	const phraseRepeatCuts = detectPhraseRepeatCuts({ words });
+	// U4: the compressed segments ride along so a compression-revealed
+	// cross-sentence n-gram match gets the same HIGH_SIMILAR gate and demotion
+	// as pass 1 instead of shipping AUTO ungated.
+	const phraseRepeatCuts = detectPhraseRepeatCuts({ words, segments });
 	// Drop segment-repeat cuts overlapping a word-level / phrase-repeat cut so the
 	// layers don't double up (mirrors run-director's pass-1 filter).
 	const segmentRepeatCuts = detectSegmentRepeatCuts({ segments }).filter(
