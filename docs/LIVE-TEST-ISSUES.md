@@ -8,6 +8,12 @@ Dan's directive: keep the list current, fix nothing until he says so.
 
 ## Cut quality (the priority)
 
+> ROUND 6 STATUS (2026-07-17): items 1-4 FIXED by plan 2026-07-17-001 (commits on
+> feat/director-eval; measured verdict in findings doc ADDENDUM 6). The diag replay
+> assertion harness passes; the four-fixture eval shows no match regression and
+> essential-words-lost down 52-107 on three fixtures. Remaining: Dan's hands-on
+> smoke pass (gate e). Item details kept below for the record.
+
 1. **Over-cutting clean footage.** The join-the-group clip needs only a head trim; the
    dialog is smooth for 45s — no mistakes, no repeats. The Director still produced many
    cuts. ROOT-CAUSED 2026-07-17 by replaying the pipeline on the exact live-run transcript

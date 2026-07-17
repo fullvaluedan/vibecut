@@ -206,3 +206,36 @@ google-omni, isolated structural arm: the verifier read 7 candidates and rejecte
 ### The next lever (named)
 
 Variance-aware gating: aggregate the gate metrics over --runs 3 (the runner already supports per-run cache indexing) so pass/fail reflects the distribution, not one draw. Secondary: hermes-class footage (interleaved editorial keeps) is beyond transcript-only judgment; the honest levers there are Dan's own review (the rows exist, with reasons) or vision/audio signals. The 0.90 bar stands; best measured cells today: google 63.8, hermes 75.5, how-to-edit 38.1, pokemon 82.9.
+
+## ADDENDUM 6 (2026-07-17): round-6 verdict, the waveform becomes a first-class cutting signal
+
+Round 6 (plan docs/plans/2026-07-17-001, prompted by Dan's live test in docs/LIVE-TEST-ISSUES.md) shipped six deterministic units, zero LLM prompt changes: U1 hallucination guard (silence-bleed transcript spans quarantined from every catalog and detector), U2 envelope dead-air (AUTO cuts for 2.5s+ pure-silence runs, no VAD model, Dan-approved), U3 pause-swallowing boundary placement (removal edges widen through silence to word +/- 0.15s handles, replacing the residual-leaving trough snap on both the pipeline and keeper-swap paths), U4 phrase-repeat similarity gate (cross-sentence n-gram matches demote; true retakes at segment similarity >= 0.8 keep AUTO; the gate rides the second pass too), U5 gap-derived word-guard (a pacing or second-pass gap span can never contain a word), U6 clamp evidence learns silence (dead-air runs + hallucinated spans count as evidence, ending the demoted-dead-outro inversion).
+
+### The live-test clip, replayed with assertions (gate a)
+
+The diag replay (apps/web/scripts/diag-join-the-group.ts, now an assertion harness) passes R1a/R1b/R2/R3 and the sanity band. Concretely against the 2026-07-17 live-test failures: head silence cut flush (0-0.80), the "We are going to" and "You do not have to" n-gram amputations demoted to unchecked rows, the second-pass "to link to your" match demoted through the same gate, the 3.4s pause cut with word-adjacent joins, the 24s hallucination-masked dead-air tail cut AUTO (57.85-81.95 plus a flush tail cut), zero removal boundaries inside clean words, 5 substantial keep fragments (the smooth 1-29s stretch is one unbroken keep). Merged AUTO removal: 33.1s of 83.9s.
+
+### Fixture guard hits (U1, the cache-reprime prediction)
+
+google 5 segments / 51 words, hermes 40 / 212, how-to-edit 21 / 129, pokemon 12 / 69. All four caches re-primed as KTD7 predicted. The hermes and how-to-edit numbers name a suspect for their historically poor cells: their catalogs carried hundreds of hallucinated words.
+
+### Gate (b): four-fixture eval, default config, single draw (baselines = Addendum 3 clamp-default column)
+
+| fixture | OFFERED match adj | OFFERED recall | OFFERED essLost | AUTO match adj | AUTO essLost |
+|---|---|---|---|---|---|
+| google-omni | 61.6 -> 62.6 | 26.3 -> 29.9 | 106 -> 110 | 58.2 | 99 |
+| hermes-cloud | 75.5 -> 77.3 | 46.2 -> 43.6 | 441 -> 334 | 75.7 | 173 |
+| how-to-edit | 36.4 -> 36.2 | 28.2 -> 22.1 | 167 -> 115 | 35.1 | 43 |
+| pokemon-tcg | 82.2 -> 82.3 | 62.5 -> 45.4 | 252 -> 163 | 83.0 | 81 |
+
+Verdict: PASS. OFFERED match regresses nowhere beyond noise (-0.2 on how-to-edit against a documented +/-5pp single-draw variance; up on the other three, hermes 77.3 is its best cell in any round). Essential-words-lost falls 52-107 words on three fixtures (google +4, noise). Recall falls on pokemon/how-to-edit while match holds or rises: the rows we no longer offer were the collateral-heavy ones (hallucination-driven and false-positive repeats), which is the trade this round exists to make. Caveats recorded honestly: single draw per cell (the round-5 variance lesson stands; a --runs 3 pass remains the right next measurement); AUTO essLost baselines were not recorded per-tier in prior addenda, so the AUTO column starts its own series here (99/173/43/81).
+
+### Gate (e): hands-on smoke pass
+
+Pending Dan: import the join-the-group clip, run AI CUT, play every join, verdict recorded here when done.
+
+### Defaults and residuals
+
+1. Envelope dead-air ships AUTO (Dan decree 2026-07-17, cut-storm-proof by construction: a run holding a clean word is ineligible).
+2. Sub-2.5s silence runs stay pacing's job this round (the diag joins came out clean without a new opt-in class).
+3. Residuals for a future round: the 1.05s non-speech blip (81.95-83.0) survives as a keep fragment (below no detector's floor, above noise-fragment's 0.5s cap); the LLM redundancy pass can still start a cut one word early ("too." at 29.46, one essLost word on the diag clip); directorVadDeadAirEnabled defaults ON while EDA now covers the same ground with no model download, a default-flip decision for Dan; the inverseRemapTime asymmetry root cause remains (U5 guards the symptom completely).
