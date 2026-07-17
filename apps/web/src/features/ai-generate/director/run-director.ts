@@ -51,6 +51,7 @@ import { useDirectorTasteStore } from "./taste";
 import { vadService } from "@/services/vad/service";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
+import { expandMovesToLinkedPartners } from "./linked-reorder";
 import type { SpeechGap } from "./vad-dead-air";
 import {
 	buildDirectorProposals,
@@ -79,7 +80,10 @@ declare global {
  * BEFORE the Director transcribes + cuts, so the cut runs on the right order. Each
  * video track is reordered within itself (handles clips on V1 OR an overlay lane).
  * One MoveElementCommand (one undo) covering all tracks; a no-op when clips are
- * already ordered or aren't all timestamped. Returns the number of clips moved.
+ * already ordered or aren't all timestamped. Every move is expanded to its
+ * LINKED partners (a video's separated audio shifts by the same delta on its
+ * own track, in the same command), so reordering linked clips is safe.
+ * Returns the number of clips moved (partners included).
  */
 function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 	const tracks = editor.scenes.getActiveScene().tracks;
@@ -89,10 +93,10 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 	const plannedMoves: PlannedElementMove[] = [];
 	for (const track of videoTracks) {
 		const videoElements = track.elements.filter((element) => element.type === "video");
-		// Don't reorder a track whose clips have SEPARATED linked audio — MoveElementCommand
-		// moves only the video, leaving its linked audio partner behind (A/V desync baked in
-		// before the cut). Conservative: skip rather than risk the desync.
-		if (videoElements.some((element) => element.linkId)) continue;
+		// Linked clips no longer force a skip: every planned move is expanded to
+		// its linked partners below (expandMovesToLinkedPartners), so a video's
+		// separated audio shifts by the same delta in the same command and no
+		// A/V desync can be baked in before the cut.
 		const clips: ChronoClip[] = videoElements.map((element) => ({
 			elementId: element.id,
 			name: element.name,
@@ -111,8 +115,14 @@ function reorderClipsByTimestamp({ editor }: { editor: EditorCore }): number {
 		}
 	}
 	if (plannedMoves.length === 0) return 0;
-	editor.command.execute({ command: new MoveElementCommand({ moves: plannedMoves }) });
-	return plannedMoves.length;
+	const movesWithPartners = expandMovesToLinkedPartners({
+		tracks,
+		moves: plannedMoves,
+	});
+	editor.command.execute({
+		command: new MoveElementCommand({ moves: movesWithPartners }),
+	});
+	return movesWithPartners.length;
 }
 
 /**
