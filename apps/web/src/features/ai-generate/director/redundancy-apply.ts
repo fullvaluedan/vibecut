@@ -12,7 +12,7 @@
 
 import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
 import { stableCutId, type WordTiming } from "./cut-utils";
-import { snapRemovalOps } from "./snap-cut";
+import { swallowPauseBounds } from "./swallow-pause";
 import { refineCutWordBounds } from "./refine-cut-words";
 
 /**
@@ -190,12 +190,15 @@ export function applyKeeperSwap({
 			defaultAccept,
 		}),
 	);
-	// KTD5: run the rebuilt cuts through the energy-snap → word-refine chain (the same
-	// order the main pipeline uses) so a swapped group's edges are snapped + word-safe,
-	// not raw line spans. Both steps no-op without their input (envelope / words).
+	// KTD5 + round 6 U3: run the rebuilt cuts through the SAME placement chain the
+	// main pipeline uses (pause-swallow with trough-snap fallback, then word-refine)
+	// so a swapped group's joins match pipeline joins instead of regressing to the
+	// old residual-leaving snap. Both steps no-op without their input (envelope /
+	// words); the fixed-ceiling threshold applies here because this path has no
+	// per-segment energies to compute the adaptive median from.
 	const snapped =
 		envelope && envelope.length > 0
-			? snapRemovalOps({ ops: rawRebuilt, envelope })
+			? swallowPauseBounds({ ops: rawRebuilt, envelope, words: words ?? [] })
 			: rawRebuilt;
 	const rebuilt = refineCutWordBounds({ ops: snapped, words });
 	return [...others, ...rebuilt].sort((a, b) => a.startSec - b.startSec);

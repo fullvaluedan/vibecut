@@ -48,7 +48,7 @@ import {
 	computeSilenceThreshold,
 	detectEnvelopeDeadAirCuts,
 } from "./envelope-dead-air";
-import { snapRemovalOps } from "./snap-cut";
+import { swallowPauseBounds } from "./swallow-pause";
 import { clampCutExtent } from "./clamp-cut-extent";
 import { refineCutWordBounds } from "./refine-cut-words";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
@@ -927,10 +927,18 @@ export async function buildDirectorProposals(
 			abort();
 		}
 	}
-	// Issue E: snap each cut's edges to a nearby low-energy trough so a removal
-	// begins and ends in the quiet BETWEEN sounds, not mid-word. Reuses the noise
-	// guard's envelope; reorder ops are left untouched.
-	const energySnapped = snapRemovalOps({ ops: verified, envelope });
+	// Pause-swallowing placement (round 6 U3, supersedes the issue-E trough snap
+	// for Director removals): each cut edge WIDENS through adjacent sub-threshold
+	// silence to the neighboring clean word plus a room-tone handle, so the join
+	// carries a natural breath and no residual silence ships in the kept footage.
+	// Edges flush against speech keep the old trough-snap fallback internally.
+	const energySnapped = swallowPauseBounds({
+		ops: verified,
+		envelope,
+		windowSec: ENERGY_WINDOW_SEC,
+		threshold: silenceThreshold,
+		words,
+	});
 	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
 	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move
 	// any removal edge that lands inside a word onto its nearest gap — shrink to exclude
