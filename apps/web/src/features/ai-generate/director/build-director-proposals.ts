@@ -337,9 +337,15 @@ export async function buildDirectorProposals(
 		words,
 		totalSec,
 	});
+	// Pacing defers only to DEFAULT-ACCEPTED edead ops (the X4 rule): an opt-in
+	// row (a whole-timeline run the fraction guard demoted) must not veto the
+	// only default tightener of the pauses it covers.
+	const acceptedEnvelopeDeadAir = envelopeDeadAirCuts.filter(
+		(e) => e.defaultAccept !== false,
+	);
 	const pacingCuts = detectPacingCuts({ segments, words }).filter(
 		(op) =>
-			!envelopeDeadAirCuts.some(
+			!acceptedEnvelopeDeadAir.some(
 				(e) => e.startSec < op.endSec && op.startSec < e.endSec,
 			),
 	);
@@ -527,14 +533,27 @@ export async function buildDirectorProposals(
 	// removable, so an oversized LLM plan cut whose interior is dead air (the
 	// live-test 24s dead-outro) SHRINKS to the evidence and ships AUTO instead
 	// of being demoted to an unchecked row for lack of word-detector coverage.
+	// Evidence must itself be DEFAULT-ACCEPTED: a U4-demoted phrase repeat or a
+	// fraction-guard-demoted edead row is a review question, not proof, and
+	// using it would launder demoted spans back into an AUTO plan cut.
+	// Hallucinated spans covering most of the timeline are excluded for the
+	// same reason the whole-timeline edead run demotes: one shrink must not be
+	// able to auto-wipe a (hallucinated-transcript) timeline.
+	const hallucinatedTotalSec = guard.hallucinatedSpans.reduce(
+		(a, s) => a + (s.endSec - s.startSec),
+		0,
+	);
+	const hallucinatedEvidence =
+		hallucinatedTotalSec <= totalSec * 0.8 ? guard.hallucinatedSpans : [];
 	const clampEvidence = [
 		...wordCuts,
 		...phraseRepeatCuts,
 		...redundancyOps,
 		...envelopeDeadAirCuts,
 	]
+		.filter((op) => op.defaultAccept !== false)
 		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
-		.concat(guard.hallucinatedSpans.map((s) => ({ startSec: s.startSec, endSec: s.endSec })));
+		.concat(hallucinatedEvidence.map((s) => ({ startSec: s.startSec, endSec: s.endSec })));
 	const planOps: DirectorOp[] = clampCutExtent({
 		ops: mappedPlanOps,
 		words,
@@ -645,9 +664,12 @@ export async function buildDirectorProposals(
 	// mistake-sourced cut in scope, then protect the qualifying inter-segment gaps via
 	// keepers — mergeDetectedCuts drops the pacing / vad-dead-air removals over them,
 	// suppressing ALL pause-removing sources at once (R2/KTD2). No words -> no keepers.
+	// A U4-demoted phrase repeat ("likely natural repetition") is not a MISTAKE:
+	// it must not disqualify the emphasis-pause keeper next to it nor spawn an
+	// AUTO pause-floor tighten for a flub the pipeline itself judged unlikely.
 	const repeatMistakeSpans = [
 		...duplicateWordCuts,
-		...phraseRepeatCuts,
+		...phraseRepeatCuts.filter((op) => op.defaultAccept !== false),
 		...segmentRepeatCuts,
 		...redundancyOps,
 		...redundancyCuts,
@@ -948,6 +970,9 @@ export async function buildDirectorProposals(
 		windowSec: ENERGY_WINDOW_SEC,
 		threshold: silenceThreshold,
 		words,
+		// The word-FREE protected beats: words alone cannot stop a walk through
+		// an emphasis pause the merge deliberately preserved.
+		keepers: emphasisPauseKeepers,
 	});
 	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
 	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move

@@ -1,12 +1,13 @@
 /**
- * Word-boundary refinement (U1, R1/KTD1/KTD2). Every LLM/detector removal is snapped
- * to acoustic troughs by `snapRemovalOps` FIRST — but a trough can still fall mid-word
+ * Word-boundary refinement (U1, R1/KTD1/KTD2). Every LLM/detector removal has its
+ * edges placed by `swallowPauseBounds` FIRST (round 6; pause-widening with an
+ * in-speech trough-snap fallback), but a fallback trough can still fall mid-word
  * (a plosive gap inside "because", the quiet between two syllables), so a cut edge can
  * land inside a real word and amputate a fragment ("So", "phone.") that the transcript
  * counts as an essential kept word. This pass corrects exactly those landings: it moves
  * each removal edge OFF any word it lands inside, to that word's nearest gap.
  *
- * Runs AFTER `snapRemovalOps` and BEFORE `resolveTrimVsCut` (KTD2): energy snap finds
+ * Runs AFTER `swallowPauseBounds` and BEFORE `resolveTrimVsCut` (KTD2): edge placement finds
  * the acoustic trough, this pass nudges the few edges that trough left mid-word onto a
  * word gap, trim-vs-cut then sees word-safe edges, and `justifyCuts` judges the refined
  * boundaries. Edges already sitting in a gap are untouched (idempotent). Overwrites

@@ -87,10 +87,22 @@ function isTextAbsurd<W extends SpanText>(segment: SpanText, segWords: readonly 
 	return false;
 }
 
-/** Median of a non-empty number array; caller guards emptiness. */
-function median(values: number[]): number {
-	const sorted = [...values].sort((a, b) => a - b);
-	return sorted[Math.floor(sorted.length / 2)];
+/**
+ * The silence threshold shared by the guard, the envelope dead-air detector,
+ * and the swallow walk (KTD1): min(fixed ceiling, median x ratio) over CLEAN
+ * per-segment energies. A degenerate median (0: muted or digitally-silent
+ * audio with a transcript) falls back to the fixed ceiling; a strict
+ * `< threshold` test against 0 would silently disable every silence consumer
+ * on exactly the fully-dead footage they exist to clean. One definition here
+ * so the three passes can never diverge.
+ */
+export function computeSilenceThreshold(segmentEnergies: readonly number[]): number {
+	if (segmentEnergies.length === 0) {
+		return SILENCE_RMS_CEILING;
+	}
+	const sorted = [...segmentEnergies].sort((a, b) => a - b);
+	const adaptive = sorted[Math.floor(sorted.length / 2)] * MEDIAN_RATIO;
+	return adaptive > 0 ? Math.min(SILENCE_RMS_CEILING, adaptive) : SILENCE_RMS_CEILING;
 }
 
 /**
@@ -126,12 +138,26 @@ export function guardHallucinations<W extends SpanText, S extends SpanText>({
 
 	// KTD1: the adaptive median only sees segments the TEXT screen trusts.
 	const screenedEnergies = energies.filter((_, i) => !absurd[i]);
-	const threshold =
-		screenedEnergies.length > 0
-			? Math.min(SILENCE_RMS_CEILING, median(screenedEnergies) * MEDIAN_RATIO)
-			: SILENCE_RMS_CEILING;
+	const threshold = computeSilenceThreshold(screenedEnergies);
 
-	const flagged = segments.map((_, i) => absurd[i] && energies[i] < threshold);
+	// Energy leg: judge the segment's WORD SPANS, not the whole-segment mean.
+	// A sparse real utterance in a long trailing-pause segment (a quiet "Okay."
+	// followed by 6s of room tone) has a sub-threshold WHOLE-segment mean but a
+	// clearly energetic word span; a hallucinated word's span is itself silent.
+	// Wordless segments fall back to the whole-segment mean.
+	const wordSpanSilent = segments.map((_, i) => {
+		if (segWords[i].length === 0) return energies[i] < threshold;
+		const maxWordEnergy = segWords[i].reduce(
+			(max, w) =>
+				Math.max(
+					max,
+					meanEnergyOverRange({ envelope, windowSec, startSec: w.start, endSec: w.end }),
+				),
+			0,
+		);
+		return maxWordEnergy < threshold;
+	});
+	const flagged = segments.map((_, i) => absurd[i] && wordSpanSilent[i]);
 	if (!flagged.some(Boolean)) {
 		return passThrough();
 	}

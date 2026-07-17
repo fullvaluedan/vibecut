@@ -167,6 +167,22 @@ describe("detectEnvelopeDeadAirCuts", () => {
 		).toHaveLength(0);
 	});
 
+	test("review fix: a leading run starting after a loud window 0 cuts flush to the RUN, not to 0", () => {
+		// An intro transient occupies window 0 [0, 0.05); silence follows to 1.0.
+		// The cut must start at the run's own start (0.05), preserving the transient.
+		const env = envelope(30, LOUD, [0.05, 1.0, QUIET]);
+		const words = wordsIn(1.1, 29, 50);
+		const ops = detectEnvelopeDeadAirCuts({
+			envelope: env,
+			windowSec: WIN,
+			threshold: THRESH,
+			words,
+			totalSec: 30,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBeCloseTo(0.05, 3);
+	});
+
 	test("a timeline far longer than the audio keeps tail runs interior", () => {
 		// Audio ends at 30s but the timeline runs to 120s: the 26-30s run must
 		// NOT cut flush to 120 (the envelope says nothing about 30-120).

@@ -135,8 +135,8 @@ export function detectPhraseRepeatCuts({
 				startSec: startTok.start,
 				endSec: endTok.end,
 				reason: confirmedRetake
-					? `Repeated phrase "${preview}${len > 6 ? "…" : ""}" — earlier of two near-identical takes`
-					: `Phrase "${preview}${len > 6 ? "…" : ""}" recurs in a DIFFERENT sentence — likely natural repetition, review before cutting`,
+					? `Repeated phrase "${preview}${len > 6 ? "…" : ""}": earlier of two near-identical takes`
+					: `Phrase "${preview}${len > 6 ? "…" : ""}" recurs in a DIFFERENT sentence: likely natural repetition, review before cutting`,
 				// A longer verbatim run is a stronger restart signal.
 				confidence: Math.min(0.9, 0.55 + (bestLen - minPhraseWords) * 0.05),
 				category: "repeat",

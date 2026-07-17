@@ -23,7 +23,9 @@
 
 import type { DirectorOp } from "@framecut/hf-bridge";
 import { stableCutId } from "./cut-utils";
-import { MEDIAN_RATIO, SILENCE_RMS_CEILING } from "./hallucination-guard";
+import { computeSilenceThreshold } from "./hallucination-guard";
+
+export { computeSilenceThreshold };
 
 /** Interior silence runs at or above this duration are AUTO dead-air cuts. */
 export const AUTO_MIN_RUN_SEC = 2.5;
@@ -39,21 +41,6 @@ const MAX_AUTO_ACCEPT_TIMELINE_FRACTION = 0.8;
 export interface SilenceRun {
 	startSec: number;
 	endSec: number;
-}
-
-/**
- * The silence threshold shared by this detector, the hallucination guard, and
- * U3's swallow walk: min(fixed ceiling, median x ratio) over the CLEAN
- * per-segment energies the caller supplies. Empty input falls back to the
- * fixed ceiling alone.
- */
-export function computeSilenceThreshold(segmentEnergies: readonly number[]): number {
-	if (segmentEnergies.length === 0) {
-		return SILENCE_RMS_CEILING;
-	}
-	const sorted = [...segmentEnergies].sort((a, b) => a - b);
-	const median = sorted[Math.floor(sorted.length / 2)];
-	return Math.min(SILENCE_RMS_CEILING, median * MEDIAN_RATIO);
 }
 
 /** Maximal contiguous runs of sub-threshold envelope windows, in seconds. */
@@ -126,7 +113,11 @@ export function detectEnvelopeDeadAirCuts({
 		const floor = leading || trailing ? EDGE_MIN_RUN_SEC : AUTO_MIN_RUN_SEC;
 		if (duration < floor) continue;
 
-		const cutStart = leading ? 0 : run.startSec + KEEP_BEAT_PAD_SEC;
+		// Flush edges never extend past the RUN's own bounds toward audio the
+		// detector classified as non-silent: a run starting at 0.05 because
+		// window 0 is loud (an intro transient) must not swallow that window.
+		// A true head run starts at 0 and cuts flush from 0 anyway.
+		const cutStart = leading ? run.startSec : run.startSec + KEEP_BEAT_PAD_SEC;
 		const cutEnd = trailing ? totalSec : run.endSec - KEEP_BEAT_PAD_SEC;
 		if (cutEnd - cutStart <= 0) continue; // padding swallowed the run
 

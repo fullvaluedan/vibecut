@@ -139,6 +139,79 @@ describe("swallowPauseBounds", () => {
 		expect(ops[0].endSec).toBeCloseTo(83.85, 2);
 	});
 
+	test("review fix: the start-edge check inspects the boundary's own window (no jump-over)", () => {
+		// A clap occupies window [1.00, 1.05); windows before it are silent. A
+		// cut starting at 1.04 (inside the clap's window) must NOT widen back
+		// through the silence, swallowing the clap the walk never inspected.
+		const env = envelope(30, QUIET, [1.0, 1.05, LOUD], [1.05, 29, LOUD]);
+		const words = [{ start: 1.1, end: 28 }];
+		const ops = swallowPauseBounds({
+			ops: [cut(1.04, 5)],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		// Pre-boundary window (containing 1.039) is LOUD -> fallback snap, no widen to 0.
+		expect(ops[0].startSec).toBeGreaterThan(0.7);
+	});
+
+	test("review fix: flush edges at the timeline extremes stay put", () => {
+		// A trailing dead-air cut ends at totalSec (beyond the envelope): the
+		// fallback snap must not pull it back inside.
+		const env = envelope(20, LOUD, [15, 20, QUIET]);
+		const words = [{ start: 1, end: 14.8 }];
+		const ops = swallowPauseBounds({
+			ops: [cut(15.15, 20.01), cut(0, 0.8)],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		const trailing = ops.find((o) => o.endSec > 19)!;
+		expect(trailing.endSec).toBeCloseTo(20.01, 3);
+		const leading = ops.find((o) => o.startSec < 0.1)!;
+		expect(leading.startSec).toBe(0);
+	});
+
+	test("review fix: empty words means bounded snap only, never an uncapped widen", () => {
+		// Degraded transcript: a cut edge in a huge quiet region must not walk
+		// the whole region; only the bounded trough snap applies.
+		const env = envelope(60, QUIET, [30, 32, LOUD]);
+		const ops = swallowPauseBounds({
+			ops: [cut(10, 12)],
+			envelope: env,
+			words: [],
+			threshold: THRESH,
+		});
+		expect(ops[0].startSec).toBeGreaterThan(9.7); // moved at most searchSec
+		expect(ops[0].endSec).toBeLessThan(12.3);
+	});
+
+	test("review fix: the walk never enters a keeper span (protected beat survives)", () => {
+		// A protected 1s emphasis beat [12, 13] sits after a filler cut ending
+		// at 12: without the keeper limit the end edge would widen through the
+		// beat to the next word at 14.
+		const env = envelope(30, LOUD, [11.9, 13.9, QUIET]);
+		const words = [
+			{ start: 1, end: 11.9 },
+			{ start: 14, end: 15 },
+		];
+		const withKeeper = swallowPauseBounds({
+			ops: [cut(11.5, 12)],
+			envelope: env,
+			words,
+			keepers: [{ startSec: 12, endSec: 13 }],
+			threshold: THRESH,
+		});
+		expect(withKeeper[0].endSec).toBeLessThanOrEqual(12 + 1e-6);
+		const withoutKeeper = swallowPauseBounds({
+			ops: [cut(11.5, 12)],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		expect(withoutKeeper[0].endSec).toBeGreaterThan(13); // proves the limit did the work
+	});
+
 	test("keep and reorder ops pass through untouched", () => {
 		const env = envelope(30, LOUD, [10, 14, QUIET]);
 		const keep: DirectorOp = {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	computeSilenceThreshold,
 	guardHallucinations,
 	MAX_PLAUSIBLE_WORD_SEC,
 	SILENCE_RMS_CEILING,
@@ -167,6 +168,32 @@ describe("guardHallucinations", () => {
 		expect(result.cleanWords).toEqual(words);
 		expect(result.cleanSegments).toEqual(segments);
 		expect(result.survivingSegmentIndices).toEqual([0]);
+	});
+
+	test("review fix: a zero median falls back to the ceiling instead of collapsing to 0", () => {
+		// Muted/digitally-silent audio with a transcript: median energy 0 must
+		// NOT produce threshold 0 (strict < 0 would disable everything).
+		expect(computeSilenceThreshold([0, 0, 0])).toBeCloseTo(SILENCE_RMS_CEILING, 6);
+		expect(computeSilenceThreshold([])).toBeCloseTo(SILENCE_RMS_CEILING, 6);
+	});
+
+	test("review fix: sparse real speech in a trailing-pause segment is NOT flagged", () => {
+		// A quiet but REAL 'Okay' (energetic word span) inside a 7s segment of
+		// room tone: the whole-segment mean is silent but the word span is not.
+		const words = [
+			...spread("normal speech before the pause segment here", 0, 4),
+			{ text: "Okay.", start: 5.2, end: 5.6 },
+		];
+		const segments = [
+			seg("normal speech before the pause segment here", 0, 4),
+			seg("Okay.", 5, 12), // 7s trailing-pause segment, wpm ~8.6 (absurd)
+		];
+		// Room tone quiet, but the word span [5.2, 5.6] carries real energy.
+		const env = envelope(12, 0.05, [5, 12, 0.001], [5.2, 5.6, 0.03]);
+		const result = guardHallucinations({ words, segments, envelope: env, windowSec: WIN });
+
+		expect(result.hallucinatedSpans).toHaveLength(0);
+		expect(result.cleanWords.some((w) => w.text === "Okay.")).toBe(true);
 	});
 
 	test("threshold ceiling: with silent screened median the fixed ceiling still applies", () => {

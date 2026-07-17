@@ -51,6 +51,7 @@ export function swallowPauseBounds({
 	windowSec = ENERGY_WINDOW_SEC,
 	threshold = SILENCE_RMS_CEILING,
 	words,
+	keepers = [],
 	handleSec = HANDLE_SEC,
 	searchSec = DEFAULT_SNAP_SEARCH_SEC,
 }: {
@@ -58,8 +59,14 @@ export function swallowPauseBounds({
 	envelope: readonly number[];
 	windowSec?: number;
 	threshold?: number;
-	/** CLEAN words (post hallucination-guard); the walk stops at word +/- handle. */
+	/** CLEAN words (post hallucination-guard); the walk stops at word +/- handle.
+	 * EMPTY words = degraded transcript: no widening at all (bounded trough snap
+	 * only), since an uncapped walk could swallow a whole quiet region. */
 	words: readonly { start: number; end: number }[];
+	/** Protected spans the walk must never enter (emphasis-pause keepers: the
+	 * word-FREE beats merge-time protection preserved; words alone cannot stop
+	 * a walk through them). */
+	keepers?: readonly { startSec: number; endSec: number }[];
 	handleSec?: number;
 	searchSec?: number;
 }): DirectorOp[] {
@@ -69,6 +76,7 @@ export function swallowPauseBounds({
 	const audioEndSec = envelope.length * windowSec;
 	const silent = (w: number): boolean =>
 		w >= 0 && w < envelope.length && envelope[w] < threshold;
+	const widenAllowed = words.length > 0;
 
 	const prevWordEnd = (t: number): number => {
 		let best = Number.NEGATIVE_INFINITY;
@@ -84,6 +92,20 @@ export function swallowPauseBounds({
 		}
 		return best;
 	};
+	const prevKeeperEnd = (t: number): number => {
+		let best = Number.NEGATIVE_INFINITY;
+		for (const k of keepers) {
+			if (k.endSec <= t + 1e-6 && k.endSec > best) best = k.endSec;
+		}
+		return best;
+	};
+	const nextKeeperStart = (t: number): number => {
+		let best = Number.POSITIVE_INFINITY;
+		for (const k of keepers) {
+			if (k.startSec >= t - 1e-6 && k.startSec < best) best = k.startSec;
+		}
+		return best;
+	};
 
 	const widened = ops.map((op) => {
 		if (!isRemoval(op)) {
@@ -92,43 +114,63 @@ export function swallowPauseBounds({
 		let startSec = op.startSec;
 		let endSec = op.endSec;
 
-		// START edge: the window just BEFORE the boundary decides silence-vs-speech.
-		const startWindow = Math.floor(startSec / windowSec) - 1;
-		if (silent(startWindow)) {
-			let w = startWindow;
-			while (silent(w - 1)) w--;
-			const silenceStartSec = w * windowSec;
-			const prevEnd = prevWordEnd(op.startSec);
-			const limit = prevEnd === Number.NEGATIVE_INFINITY ? 0 : prevEnd + handleSec;
-			startSec = Math.min(op.startSec, Math.max(silenceStartSec, limit, 0));
-		} else {
-			startSec = Math.max(
-				0,
-				Math.min(
-					audioEndSec,
-					nearestLowEnergyTime({ envelope, windowSec, centerSec: startSec, searchSec }),
-				),
-			);
+		// Edges already flush at the timeline/audio extremes stay put: the
+		// envelope-dead-air detector cuts leading silence from 0 and trailing
+		// silence to totalSec by design, and an out-of-range window would read
+		// as "speech" and let the fallback snap pull the flush edge back in.
+		const startAtEdge = startSec <= 1e-6;
+		const endAtEdge = endSec >= audioEndSec - 1e-6;
+
+		// START edge: the window containing the instant just BEFORE the boundary
+		// decides silence-vs-speech (floor(start/win) - 1 skipped the boundary's
+		// own window whenever start was not window-aligned, jumping the walk
+		// over un-inspected audio).
+		if (!startAtEdge) {
+			const preWindow = Math.floor((startSec - 1e-9) / windowSec);
+			if (widenAllowed && silent(preWindow)) {
+				let w = preWindow;
+				while (silent(w - 1)) w--;
+				const silenceStartSec = w * windowSec;
+				const prevEnd = prevWordEnd(op.startSec);
+				const wordLimit = prevEnd === Number.NEGATIVE_INFINITY ? 0 : prevEnd + handleSec;
+				const keeperLimit = prevKeeperEnd(op.startSec);
+				const limit = Math.max(
+					wordLimit,
+					keeperLimit === Number.NEGATIVE_INFINITY ? 0 : keeperLimit,
+				);
+				startSec = Math.min(op.startSec, Math.max(silenceStartSec, limit, 0));
+			} else {
+				startSec = Math.max(
+					0,
+					Math.min(
+						audioEndSec,
+						nearestLowEnergyTime({ envelope, windowSec, centerSec: startSec, searchSec }),
+					),
+				);
+			}
 		}
 
 		// END edge: the window just AFTER the boundary decides.
-		const endWindow = Math.floor(endSec / windowSec);
-		if (silent(endWindow)) {
-			let w = endWindow;
-			while (silent(w + 1)) w++;
-			const silenceEndSec = Math.min((w + 1) * windowSec, audioEndSec);
-			const nextStart = nextWordStart(op.endSec);
-			const limit =
-				nextStart === Number.POSITIVE_INFINITY ? audioEndSec : nextStart - handleSec;
-			endSec = Math.max(op.endSec, Math.min(silenceEndSec, limit));
-		} else {
-			endSec = Math.max(
-				0,
-				Math.min(
-					audioEndSec,
-					nearestLowEnergyTime({ envelope, windowSec, centerSec: endSec, searchSec }),
-				),
-			);
+		if (!endAtEdge) {
+			const endWindow = Math.floor(endSec / windowSec);
+			if (widenAllowed && silent(endWindow)) {
+				let w = endWindow;
+				while (silent(w + 1)) w++;
+				const silenceEndSec = Math.min((w + 1) * windowSec, audioEndSec);
+				const nextStart = nextWordStart(op.endSec);
+				const wordLimit =
+					nextStart === Number.POSITIVE_INFINITY ? audioEndSec : nextStart - handleSec;
+				const keeperLimit = nextKeeperStart(op.endSec);
+				endSec = Math.max(op.endSec, Math.min(silenceEndSec, wordLimit, keeperLimit));
+			} else {
+				endSec = Math.max(
+					0,
+					Math.min(
+						audioEndSec,
+						nearestLowEnergyTime({ envelope, windowSec, centerSec: endSec, searchSec }),
+					),
+				);
+			}
 		}
 
 		if (endSec <= startSec) {
