@@ -205,6 +205,58 @@ describe("buildAvSyncMap", () => {
 		expect(map.has("v3")).toBe(false);
 	});
 
+	test("split + move + extend regression: pairing picks the LARGEST source overlap", () => {
+		// LIVE-TEST item 10. A linked A/V pair split at 20 frames (all four halves
+		// share one linkId, today's legacy shape), the right pair moved to 30, then
+		// the LEFT video extended across the old cut (source [0, 25]). The old
+		// first-source-overlap rule paired the right AUDIO half (source [20, 40])
+		// with the LEFT video (overlap 5) instead of the right video (overlap 20),
+		// reporting a bogus 10s drift on an in-sync pair.
+		const scene = tracks({
+			main: [
+				vid({ id: "v1", startTime: 0, duration: 25 * FRAME, trimStart: 0, mediaId: "m", linkId: "L" }),
+				vid({ id: "v2", startTime: 30 * FRAME, duration: 20 * FRAME, trimStart: 20 * FRAME, mediaId: "m", linkId: "L" }),
+			],
+			audio: [
+				[
+					aud({ id: "a1", startTime: 0, duration: 20 * FRAME, trimStart: 0, mediaId: "m", linkId: "L" }),
+					aud({ id: "a2", startTime: 30 * FRAME, duration: 20 * FRAME, trimStart: 20 * FRAME, mediaId: "m", linkId: "L" }),
+				],
+			],
+		});
+		const map = buildAvSyncMap({ tracks: scene, fps: FPS });
+		// The right pair is in sync: both landed at 30 with trimStart 20.
+		expect(map.get("a2")?.partner).toEqual({ trackId: "main", elementId: "v2" });
+		expect(map.get("a2")?.offsetFrames).toBe(0);
+		expect(map.get("v2")?.partner).toEqual({ trackId: "audio-0", elementId: "a2" });
+		expect(map.get("v2")?.offsetFrames).toBe(0);
+		// The left pair is in sync too (v1 overlaps a1 by 20 frames vs a2 by 5).
+		expect(map.get("v1")?.partner).toEqual({ trackId: "audio-0", elementId: "a1" });
+		expect(map.get("v1")?.offsetFrames).toBe(0);
+		expect(map.get("a1")?.offsetFrames).toBe(0);
+		assertParity(scene);
+	});
+
+	test("equal source overlap tie-breaks on the largest timeline overlap", () => {
+		// Both audio candidates cover the same source span; the one that also
+		// overlaps the video on the TIMELINE is the real partner.
+		const scene = tracks({
+			main: [
+				vid({ id: "v", startTime: 0, duration: 20 * FRAME, trimStart: 0, mediaId: "m", linkId: "L" }),
+			],
+			audio: [
+				[
+					aud({ id: "far", startTime: 100 * FRAME, duration: 20 * FRAME, trimStart: 0, mediaId: "m", linkId: "L" }),
+					aud({ id: "near", startTime: 2 * FRAME, duration: 20 * FRAME, trimStart: 0, mediaId: "m", linkId: "L" }),
+				],
+			],
+		});
+		const map = buildAvSyncMap({ tracks: scene, fps: FPS });
+		expect(map.get("v")?.partner).toEqual({ trackId: "audio-0", elementId: "near" });
+		expect(map.get("v")?.offsetFrames).toBe(2);
+		assertParity(scene);
+	});
+
 	test("recomputes for a new tracks reference", () => {
 		const before = tracks({
 			main: [vid({ id: "v", startTime: 0, duration: 40 * FRAME, mediaId: "m", linkId: "L" })],

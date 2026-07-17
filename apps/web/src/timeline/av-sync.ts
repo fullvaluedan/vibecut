@@ -26,6 +26,65 @@ export function sourceOverlap(a: MediaBacked, b: MediaBacked): boolean {
 	);
 }
 
+/** Overlap of the two clips' SOURCE spans in ticks (<= 0 means no overlap). */
+export function sourceOverlapAmount(a: MediaBacked, b: MediaBacked): number {
+	return (
+		Math.min(a.trimStart + a.duration, b.trimStart + b.duration) -
+		Math.max(a.trimStart, b.trimStart)
+	);
+}
+
+/** Overlap of the two clips' TIMELINE spans in ticks (<= 0 means no overlap). */
+export function timelineOverlapAmount(a: MediaBacked, b: MediaBacked): number {
+	return (
+		Math.min(a.startTime + a.duration, b.startTime + b.duration) -
+		Math.max(a.startTime, b.startTime)
+	);
+}
+
+export interface AvSyncPartnerCandidate {
+	ref: ElementRef;
+	media: MediaBacked;
+}
+
+/**
+ * Whether `candidate` should replace `current` as `self`'s A/V partner.
+ * Pairing picks the LARGEST source overlap (tie-break: largest timeline
+ * overlap; remaining ties keep the earlier candidate in track order).
+ *
+ * The old rule ("first source-overlapping candidate wins") mispaired after a
+ * split + extend: a video extended across an old cut source-overlaps BOTH
+ * audio halves, and the first half won even when the other was the true
+ * partner, so the sync badge fired on a genuinely in-sync pair (LIVE-TEST
+ * item 10). Shared by `computeAvSyncOffset` and `buildAvSyncMap` so the two
+ * always resolve the same partner.
+ */
+export function isBetterAvSyncPartner({
+	self,
+	current,
+	candidate,
+}: {
+	self: MediaBacked;
+	current: AvSyncPartnerCandidate | null;
+	candidate: AvSyncPartnerCandidate;
+}): boolean {
+	if (!current) return true;
+	const candidateSource = Math.max(0, sourceOverlapAmount(self, candidate.media));
+	const currentSource = Math.max(0, sourceOverlapAmount(self, current.media));
+	if (candidateSource !== currentSource) {
+		return candidateSource > currentSource;
+	}
+	const candidateTimeline = Math.max(
+		0,
+		timelineOverlapAmount(self, candidate.media),
+	);
+	const currentTimeline = Math.max(
+		0,
+		timelineOverlapAmount(self, current.media),
+	);
+	return candidateTimeline > currentTimeline;
+}
+
 /**
  * The signed frame drift of a video/audio pair, audio relative to video:
  *   (start − trimStart)_audio − (start − trimStart)_video
@@ -60,7 +119,8 @@ export function computeOffsetFrames({
  *
  * Partner pairing prefers the shared `linkId` (still found after the clips
  * drift apart) and falls back to same `mediaId` + overlapping source span for
- * legacy clips that predate linking.
+ * legacy clips that predate linking. Among qualifying candidates the LARGEST
+ * source overlap wins (see `isBetterAvSyncPartner`).
  */
 export function computeAvSyncOffset({
 	element,
@@ -75,8 +135,7 @@ export function computeAvSyncOffset({
 	if (!self) return null;
 	const wantType = self.type === "video" ? "audio" : "video";
 
-	let partnerRef: ElementRef | null = null;
-	let partner: MediaBacked | null = null;
+	let best: AvSyncPartnerCandidate | null = null;
 	for (const track of [...tracks.overlay, tracks.main, ...tracks.audio]) {
 		for (const candidate of track.elements) {
 			const other = asMediaBacked(candidate);
@@ -88,17 +147,17 @@ export function computeAvSyncOffset({
 				other.mediaId === self.mediaId &&
 				sourceOverlap(self, other);
 			if (!linked && !legacy) continue;
-			// Prefer the closest source-overlapping partner.
-			if (!partner || sourceOverlap(self, other)) {
-				partner = other;
-				partnerRef = { trackId: track.id, elementId: candidate.id };
-				if (sourceOverlap(self, other)) break;
+			const next = {
+				ref: { trackId: track.id, elementId: candidate.id },
+				media: other,
+			};
+			if (isBetterAvSyncPartner({ self, current: best, candidate: next })) {
+				best = next;
 			}
 		}
-		if (partner && partnerRef && sourceOverlap(self, partner)) break;
 	}
-	if (!partner || !partnerRef) return null;
+	if (!best) return null;
 
-	const offsetFrames = computeOffsetFrames({ self, partner, fps });
-	return { offsetFrames, partner: partnerRef };
+	const offsetFrames = computeOffsetFrames({ self, partner: best.media, fps });
+	return { offsetFrames, partner: best.ref };
 }
