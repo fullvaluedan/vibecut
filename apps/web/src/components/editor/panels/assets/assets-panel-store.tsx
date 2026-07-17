@@ -2,7 +2,6 @@ import type { ElementType } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
-	ArrowRightDoubleIcon,
 	ClosedCaptionIcon,
 	Folder03Icon,
 	Note01Icon,
@@ -10,12 +9,14 @@ import {
 	MagicWand05Icon,
 	TextIcon,
 	Settings01Icon,
-	SlidersHorizontalIcon,
 	ColorsIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import { OcShapesIcon } from "@/components/icons";
 
+// Dead surfaces removed (menu IA audit): "transitions" and "adjustment" were
+// permanent "coming soon" placeholder views with no functionality behind
+// them and no code path that ever selected them.
 export const TAB_KEYS = [
 	"media",
 	"hyperframes",
@@ -23,10 +24,8 @@ export const TAB_KEYS = [
 	"text",
 	"shapes",
 	"effects",
-	"transitions",
 	"captions",
 	"transcript",
-	"adjustment",
 	"settings",
 ] as const;
 
@@ -65,10 +64,6 @@ export const tabs = {
 		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
 		label: "Effects",
 	},
-	transitions: {
-		icon: createHugeiconsIcon({ icon: ArrowRightDoubleIcon }),
-		label: "Transitions",
-	},
 	captions: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
 		label: "Captions",
@@ -76,10 +71,6 @@ export const tabs = {
 	transcript: {
 		icon: createHugeiconsIcon({ icon: Note01Icon }),
 		label: "Transcript",
-	},
-	adjustment: {
-		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),
-		label: "Adjustment",
 	},
 	settings: {
 		icon: createHugeiconsIcon({ icon: Settings01Icon }),

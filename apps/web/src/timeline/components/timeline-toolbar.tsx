@@ -35,7 +35,6 @@ import {
 	AudioWave01Icon,
 	Bookmark02Icon,
 	Delete02Icon,
-	SnowIcon,
 	ScissorIcon,
 	MagnetIcon,
 	SearchAddIcon,
@@ -215,12 +214,8 @@ function ToolbarLeftSection() {
 					}
 				/>
 
-				<ToolbarButton
-					icon={<HugeiconsIcon icon={SnowIcon} />}
-					tooltip="Freeze frame (coming soon)"
-					disabled={true}
-					onClick={({ event: _event }) => {}}
-				/>
+				{/* Freeze frame removed (menu IA audit): dead surface, no functionality
+					behind the disabled button. Reintroduce when freeze-frame ships. */}
 
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={Layers01Icon} />}

@@ -26,6 +26,7 @@ import {
 import { PREVIEW_ZOOM_PRESETS } from "@/preview/zoom";
 import { usePreviewViewport } from "./preview-viewport";
 import { GridPopover } from "./guide-popover";
+import { ProjectInfoChip } from "./project-info-chip";
 import { usePreviewStore } from "@/preview/preview-store";
 import type { MediaTime } from "@/wasm";
 
@@ -44,6 +45,8 @@ export function PreviewToolbar({
 			</div>
 			<div className="justify-self-end flex w-full items-center justify-end gap-2.5">
 				<AssistantPrompt />
+				<Separator orientation="vertical" className="h-4" />
+				<ProjectInfoChip />
 				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />

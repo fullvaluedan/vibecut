@@ -7,6 +7,17 @@ import {
 	SectionHeader,
 	SectionTitle,
 } from "@/components/section";
+import {
+	Accordion,
+	AccordionContent,
+	AccordionItem,
+	AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+	Collapsible,
+	CollapsibleContent,
+	CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -16,14 +27,13 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import {
-	useAiSettingsStore,
-	type AiAuthMode,
-	type AiBackend,
-} from "@/features/ai-generate/store";
+import { useAiSettingsStore, type AiAuthMode } from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { useTranscriptStatusStore } from "@/features/transcription/transcript-cache";
 import { Switch } from "@/components/ui/switch";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowDownIcon } from "@hugeicons/core-free-icons";
+import { cn } from "@/utils/ui";
 
 const AUTH_MODE_LABELS: Record<AiAuthMode, string> = {
 	"claude-code": "Claude subscription (Claude Code)",
@@ -31,12 +41,81 @@ const AUTH_MODE_LABELS: Record<AiAuthMode, string> = {
 	custom: "Custom / local model",
 };
 
-const BACKEND_LABELS: Record<AiBackend, string> = {
-	local: "This computer (HyperFrames CLI)",
-	heygen: "HeyGen cloud (coming soon)",
-};
-
+// 4 collapsible groups (menu IA audit): Settings -> AI used to be a dozen
+// stacked toggle sections with paragraph copy. "Connections and keys" is the
+// only group open by default; the rest collapse until the user needs them.
 export function AiSettingsContent() {
+	return (
+		<div className="flex flex-col">
+			<RenderBackendNotice />
+
+			<Accordion type="multiple" defaultValue={["connections"]}>
+				<AccordionItem value="connections" className="border-b-0">
+					<AccordionTrigger className="px-3.5 py-0 h-11 text-sm no-underline! hover:no-underline!">
+						Connections and keys
+					</AccordionTrigger>
+					<AccordionContent className="pt-0 pb-0">
+						<AiConnectionSection />
+						<CloudTranscriptionSection />
+						<IntegrationsSection />
+					</AccordionContent>
+				</AccordionItem>
+
+				<AccordionItem value="director" className="border-b-0">
+					<AccordionTrigger className="px-3.5 py-0 h-11 text-sm no-underline! hover:no-underline!">
+						Director behavior
+					</AccordionTrigger>
+					<AccordionContent className="pt-0 pb-0">
+						<DirectorVisionSection />
+						<DirectorRetakeSection />
+						<DirectorStructuralSection />
+					</AccordionContent>
+				</AccordionItem>
+
+				<AccordionItem value="performance" className="border-b-0">
+					<AccordionTrigger className="px-3.5 py-0 h-11 text-sm no-underline! hover:no-underline!">
+						Performance
+					</AccordionTrigger>
+					<AccordionContent className="pt-0 pb-0">
+						<BackgroundTranscriptionSection />
+						<DirectorVadGatedTranscriptionSection />
+						<LowPowerSection />
+					</AccordionContent>
+				</AccordionItem>
+
+				<AccordionItem value="advanced" className="border-b-0">
+					<AccordionTrigger className="px-3.5 py-0 h-11 text-sm no-underline! hover:no-underline!">
+						Advanced
+					</AccordionTrigger>
+					<AccordionContent className="pt-0 pb-0">
+						<SelfLearningSection />
+					</AccordionContent>
+				</AccordionItem>
+			</Accordion>
+		</div>
+	);
+}
+
+// The render-backend picker is gone (HeyGen was hard-disabled, "local" was the
+// only real choice) -- static text instead of a single-option select. The
+// store field/setter stay untouched for when cloud rendering ships.
+function RenderBackendNotice() {
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader>
+				<SectionTitle>Rendering</SectionTitle>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3">
+				<p className="text-muted-foreground text-xs">
+					Renders locally; needs Node and FFmpeg. Cloud rendering arrives
+					later.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
+function AiConnectionSection() {
 	const authMode = useAiSettingsStore((s) => s.authMode);
 	const setAuthMode = useAiSettingsStore((s) => s.setAuthMode);
 	const anthropicApiKey = useAiSettingsStore((s) => s.anthropicApiKey);
@@ -47,65 +126,79 @@ export function AiSettingsContent() {
 	const setCustomModel = useAiSettingsStore((s) => s.setCustomModel);
 	const customApiKey = useAiSettingsStore((s) => s.customApiKey);
 	const setCustomApiKey = useAiSettingsStore((s) => s.setCustomApiKey);
-	const backend = useAiSettingsStore((s) => s.backend);
-	const setBackend = useAiSettingsStore((s) => s.setBackend);
 	const [isKeyVisible, setIsKeyVisible] = useState(false);
+	const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
 	return (
-		<div className="flex flex-col">
-			<Section showTopBorder={false}>
-				<SectionHeader className="justify-between">
-					<SectionTitle className="flex-1">AI connection</SectionTitle>
-					<Select
-						value={authMode}
-						onValueChange={(value) => setAuthMode(value as AiAuthMode)}
-					>
-						<SelectTrigger className="bg-transparent border-none p-1 h-auto">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{(Object.keys(AUTH_MODE_LABELS) as AiAuthMode[]).map((mode) => (
-								<SelectItem key={mode} value={mode}>
-									{AUTH_MODE_LABELS[mode]}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</SectionHeader>
-				<SectionContent className="px-3 pb-3 flex flex-col gap-2">
-					{authMode === "claude-code" && (
+		<Section showTopBorder={false}>
+			<SectionHeader className="justify-between">
+				<SectionTitle className="flex-1">AI connection</SectionTitle>
+				<Select
+					value={authMode}
+					onValueChange={(value) => setAuthMode(value as AiAuthMode)}
+				>
+					<SelectTrigger className="bg-transparent border-none p-1 h-auto">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						{(Object.keys(AUTH_MODE_LABELS) as AiAuthMode[]).map((mode) => (
+							<SelectItem key={mode} value={mode}>
+								{AUTH_MODE_LABELS[mode]}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+				{authMode === "claude-code" && (
+					<p className="text-muted-foreground text-xs">
+						Uses the Claude Code app installed on this computer. Generations
+						run on your Claude subscription, no API key needed.
+					</p>
+				)}
+				{authMode === "api-key" && (
+					<>
+						<div className="flex items-center gap-1">
+							<Input
+								type={isKeyVisible ? "text" : "password"}
+								placeholder="sk-ant-..."
+								value={anthropicApiKey}
+								onChange={(e) => setAnthropicApiKey(e.target.value)}
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<Button
+								variant="text"
+								size="sm"
+								onClick={() => setIsKeyVisible((v) => !v)}
+							>
+								{isKeyVisible ? "Hide" : "Show"}
+							</Button>
+						</div>
 						<p className="text-muted-foreground text-xs">
-							Uses the Claude Code app installed on this computer. Generations
-							run on your Claude subscription — no API key needed.
+							Stored only in this browser on this device, never saved into
+							project files or uploads. Get a key at console.anthropic.com.
 						</p>
-					)}
-					{authMode === "api-key" && (
-						<>
-							<div className="flex items-center gap-1">
-								<Input
-									type={isKeyVisible ? "text" : "password"}
-									placeholder="sk-ant-..."
-									value={anthropicApiKey}
-									onChange={(e) => setAnthropicApiKey(e.target.value)}
-									autoComplete="off"
-									spellCheck={false}
+					</>
+				)}
+				{authMode === "custom" && (
+					<Collapsible open={isAdvancedOpen} onOpenChange={setIsAdvancedOpen}>
+						<CollapsibleTrigger asChild>
+							<button
+								type="button"
+								className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+							>
+								<HugeiconsIcon
+									icon={ArrowDownIcon}
+									className={cn(
+										"size-3.5 shrink-0 transition-transform duration-150",
+										isAdvancedOpen ? "rotate-0" : "-rotate-90",
+									)}
 								/>
-								<Button
-									variant="text"
-									size="sm"
-									onClick={() => setIsKeyVisible((v) => !v)}
-								>
-									{isKeyVisible ? "Hide" : "Show"}
-								</Button>
-							</div>
-							<p className="text-muted-foreground text-xs">
-								Stored only in this browser on this device — never saved into
-								project files or uploads. Get a key at console.anthropic.com.
-							</p>
-						</>
-					)}
-					{authMode === "custom" && (
-						<>
+								Advanced: custom endpoint settings
+							</button>
+						</CollapsibleTrigger>
+						<CollapsibleContent className="flex flex-col gap-2 pt-2">
 							<div className="flex flex-col gap-1">
 								<p className="text-xs font-medium">Base URL</p>
 								<Input
@@ -136,62 +229,15 @@ export function AiSettingsContent() {
 							</div>
 							<p className="text-muted-foreground text-xs">
 								Point VibeCut at any OpenAI-compatible{" "}
-								<code>/chat/completions</code> endpoint — Ollama, LM Studio, or a
-								self-hosted model. Include <code>/v1</code> in the URL if your
-								server needs it. Everything stays on this device.
+								<code>/chat/completions</code> endpoint: Ollama, LM Studio, or
+								a self-hosted model. Include <code>/v1</code> in the URL if
+								your server needs it. Everything stays on this device.
 							</p>
-						</>
-					)}
-				</SectionContent>
-			</Section>
-
-			<Section showTopBorder={false}>
-				<SectionHeader className="justify-between">
-					<SectionTitle className="flex-1">Render videos on</SectionTitle>
-					<Select
-						value={backend}
-						onValueChange={(value) => setBackend(value as AiBackend)}
-					>
-						<SelectTrigger className="bg-transparent border-none p-1 h-auto">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{(Object.keys(BACKEND_LABELS) as AiBackend[]).map((b) => (
-								<SelectItem key={b} value={b} disabled={b === "heygen"}>
-									{BACKEND_LABELS[b]}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</SectionHeader>
-				<SectionContent className="px-3 pb-3">
-					<p className="text-muted-foreground text-xs">
-						Local rendering is free and private; it needs Node and FFmpeg on
-						this computer. HeyGen cloud rendering arrives in a later update.
-					</p>
-				</SectionContent>
-			</Section>
-
-			<BackgroundTranscriptionSection />
-
-			<CloudTranscriptionSection />
-
-			<DirectorVisionSection />
-
-			<DirectorVadDeadAirSection />
-
-			<DirectorVadGatedTranscriptionSection />
-
-			<DirectorRetakeSection />
-
-			<DirectorStructuralSection />
-
-			<LowPowerSection />
-
-			<IntegrationsSection />
-
-			<SelfLearningSection />
-		</div>
+						</CollapsibleContent>
+					</Collapsible>
+				)}
+			</SectionContent>
+		</Section>
 	);
 }
 
@@ -210,32 +256,9 @@ function DirectorVisionSection() {
 				<p className="text-muted-foreground text-xs">
 					Lets AI CUT&apos;s Director SEE your footage: it samples a frame per
 					spoken segment so it can cut off-screen, frozen, or visually dead
-					moments — not just what the audio says. Costs more (frames use extra
+					moments, not just what the audio says. Costs more (frames use extra
 					tokens) and needs an API key or a vision-capable custom model; the
 					claude-code CLI falls back to text. Off by default.
-				</p>
-			</SectionContent>
-		</Section>
-	);
-}
-
-function DirectorVadDeadAirSection() {
-	const enabled = useAiSettingsStore((s) => s.directorVadDeadAirEnabled);
-	const setEnabled = useAiSettingsStore((s) => s.setDirectorVadDeadAirEnabled);
-	return (
-		<Section showTopBorder={false}>
-			<SectionHeader className="justify-between">
-				<SectionTitle className="flex-1">Director dead-air (VAD)</SectionTitle>
-				<div className="flex items-center p-1">
-					<Switch checked={enabled} onCheckedChange={setEnabled} />
-				</div>
-			</SectionHeader>
-			<SectionContent className="px-3 pb-3">
-				<p className="text-muted-foreground text-xs">
-					Runs a voice-activity pass during the Director&apos;s analysis to flag
-					long silent / non-speech stretches as &ldquo;dead air&rdquo; cut
-					candidates (a small model downloads once). Off by default; failures are
-					ignored so the Director still runs.
 				</p>
 			</SectionContent>
 		</Section>
@@ -308,7 +331,7 @@ function DirectorVadGatedTranscriptionSection() {
 			<SectionContent className="px-3 pb-3">
 				<p className="text-muted-foreground text-xs">
 					Runs voice-activity detection first and transcribes only the spoken
-					parts (skipping silence) on the analysis path — faster on long, gappy
+					parts (skipping silence) on the analysis path, faster on long, gappy
 					recordings, and avoids hallucinated text over silence. Falls back to
 					full-audio transcription if VAD is off or fails. Off by default;
 					captions are unaffected.
@@ -346,7 +369,7 @@ function CloudTranscriptionSection() {
 			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
 				<p className="text-muted-foreground text-xs">
 					In browser: transcribe locally (slower, segment-level only). Groq:
-					upload the timeline audio to whisper-large-v3-turbo — seconds instead
+					upload the timeline audio to whisper-large-v3-turbo, seconds instead
 					of minutes, word-level cuts for the Director, and no out-of-memory on
 					long videos. Audio is compressed before upload. More cloud providers
 					can slot in here later.
@@ -362,10 +385,10 @@ function CloudTranscriptionSection() {
 							/>
 						</div>
 						<p className="text-muted-foreground text-xs">
-							Stored only in this browser on this device — sent only to
-							VibeCut&apos;s own <code>/api/transcribe</code> proxy, never to the
-							browser STT call. Get a key at console.groq.com. Without a key,
-							transcription stays in-browser.
+							Stored only in this browser on this device, sent only to
+							VibeCut&apos;s own <code>/api/transcribe</code> proxy, never to
+							the browser STT call. Get a key at console.groq.com. Without a
+							key, transcription stays in-browser.
 						</p>
 					</>
 				)}
@@ -523,8 +546,8 @@ function SelfLearningSection() {
 			</SectionHeader>
 			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
 				<p className="text-muted-foreground text-xs">
-					VibeCut watches how you react to AI output — effects you delete,
-					AI CUT passes you undo — and tells the AI about it on the next run.
+					VibeCut watches how you react to AI output, effects you delete,
+					AI CUT passes you undo, and tells the AI about it on the next run.
 					Everything stays on this device.
 				</p>
 				{enabled && notes.length > 0 && (
@@ -537,8 +560,8 @@ function SelfLearningSection() {
 				{enabled && notes.length === 0 && (
 					<p className="text-muted-foreground text-xs italic">
 						{observedCount > 0
-							? "Observing your edits — no strong preferences learned yet."
-							: "Nothing learned yet — run HyperFrames or AI CUT, then keep or undo the result."}
+							? "Observing your edits, no strong preferences learned yet."
+							: "Nothing learned yet, run HyperFrames or AI CUT, then keep or undo the result."}
 					</p>
 				)}
 				{observedCount > 0 && (

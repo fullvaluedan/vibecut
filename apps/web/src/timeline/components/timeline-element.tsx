@@ -74,7 +74,6 @@ import {
 	VolumeOffIcon,
 	VolumeMute02Icon,
 	Search01Icon,
-	Exchange01Icon,
 	KeyframeIcon,
 	MagicWand05Icon,
 	Layers01Icon,
@@ -533,12 +532,8 @@ function TimelineElementImpl({
 							>
 								Reveal media
 							</ContextMenuItem>
-							<ContextMenuItem
-								icon={<HugeiconsIcon icon={Exchange01Icon} />}
-								disabled
-							>
-								Replace media
-							</ContextMenuItem>
+							{/* "Replace media" hidden until implemented (menu IA audit): was
+								shown permanently disabled with no path to enable it. */}
 						</>
 					)}
 					<ContextMenuSeparator />

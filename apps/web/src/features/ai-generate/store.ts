@@ -75,15 +75,6 @@ interface AiSettingsStore {
 	directorVisionEnabled: boolean;
 	setDirectorVisionEnabled: (enabled: boolean) => void;
 	/**
-	 * Default ON (U2/KTD3): run a Silero VAD pass during AI Director analysis to
-	 * surface long NON-speech gaps as reviewable "dead air" cut candidates, so real
-	 * silent stretches (not only hesitation-word clusters) are removed by a default
-	 * AI CUT run. The VAD runs in its own worker; failures are swallowed (the
-	 * Director still runs). Remains a user override: turning it off is honored.
-	 */
-	directorVadDeadAirEnabled: boolean;
-	setDirectorVadDeadAirEnabled: (enabled: boolean) => void;
-	/**
 	 * Opt-in (default off): VAD-gated transcription on the analysis path — run the
 	 * Silero VAD first and transcribe ONLY the speech intervals (concatenated),
 	 * remapping word/segment times back to the timeline. Faster + no silence
@@ -204,10 +195,6 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			directorVisionEnabled: false,
 			setDirectorVisionEnabled: (directorVisionEnabled) =>
 				set({ directorVisionEnabled }),
-
-			directorVadDeadAirEnabled: true,
-			setDirectorVadDeadAirEnabled: (directorVadDeadAirEnabled) =>
-				set({ directorVadDeadAirEnabled }),
 
 			directorVadGatedTranscriptionEnabled: false,
 			setDirectorVadGatedTranscriptionEnabled: (
@@ -343,7 +330,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 		}),
 		{
 			name: "framecut-ai-settings",
-			version: 2,
+			version: 3,
 			migrate: (persisted, version) =>
 				migrateAiSettings(persisted, version) as unknown as AiSettingsStore,
 		},
@@ -357,6 +344,10 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
  * pre-v2 install has the old `false` default frozen in storage (any set()
  * persisted the whole state), which would silently override the new default
  * forever. Reset it once; turning it off after this persists under v2.
+ * v3: directorVadDeadAirEnabled deleted outright (menu IA round, Dan's decision):
+ * the toggle, its Settings section, and the Silero pass on the default Director
+ * path are gone, so a persisted value is stale data, not a preference. Drop the
+ * key rather than freezing it at some default (the delete-not-default precedent).
  */
 export function migrateAiSettings(
 	persisted: unknown,
@@ -368,6 +359,9 @@ export function migrateAiSettings(
 	}
 	if (version < 2) {
 		s.directorVadDeadAirEnabled = true;
+	}
+	if (version < 3) {
+		delete s.directorVadDeadAirEnabled;
 	}
 	return s;
 }

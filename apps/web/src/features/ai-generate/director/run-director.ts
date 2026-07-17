@@ -48,7 +48,6 @@ import {
 } from "./director-frames";
 import { useDirectorPlanStore } from "./director-plan-store";
 import { useDirectorTasteStore } from "./taste";
-import { vadService } from "@/services/vad/service";
 import { collectVideoClipSpansSec } from "@/features/editing/silence-refine";
 import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { expandMovesToLinkedPartners } from "./linked-reorder";
@@ -202,26 +201,12 @@ export async function runDirector({
 	const features = computeSpeechFeatures({ segments, envelope, windowSec: ENERGY_WINDOW_SEC });
 	abort();
 
-	// VAD dead-air (Plan A / U5, default ON per U2/KTD3, still a user override): a
-	// Silero VAD pass over the decoded audio surfaces long NON-speech gaps the
-	// transcript can't see. Runs in its own worker; NON-throwing (a VAD failure must
-	// never break the Director). The pure pipeline filters/energy-tests the gaps.
-	const vadEnabled = useAiSettingsStore.getState().directorVadDeadAirEnabled;
-	let gaps: SpeechGap[] = [];
-	if (vadEnabled) {
-		onProgress?.("Scanning for dead air...");
-		try {
-			const detected = await vadService.detectSpeechGaps({
-				samples,
-				sampleRate,
-				totalSec,
-			});
-			gaps = detected.gaps;
-		} catch {
-			// VAD unavailable / failed — skip; the Director runs normally.
-		}
-		abort();
-	}
+	// VAD dead-air (Silero pass): DELETED from the default Director path (menu IA
+	// round, Dan's decision) along with the directorVadDeadAirEnabled toggle and
+	// its Settings section. `gaps` stays empty and config.vadEnabled rides false;
+	// the envelope dead-air detector (round 6) is the silence engine now.
+	// vad-dead-air.ts and its unit tests remain for a future opt-in surface.
+	const gaps: SpeechGap[] = [];
 
 	// Shared clip geometry: the video clip spans (seconds) feed the tiny-clip sweep,
 	// the cut-remnant snap, and trim-vs-cut. The fps float drives the frame floors.
@@ -383,7 +368,7 @@ export async function runDirector({
 			frames,
 			taste: taste || undefined,
 			totalSec,
-			config: { vadEnabled, visionEnabled },
+			config: { vadEnabled: false, visionEnabled },
 			compressionTarget,
 			llm,
 			onProgress,
