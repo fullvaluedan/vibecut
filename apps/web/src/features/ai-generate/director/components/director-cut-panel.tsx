@@ -13,11 +13,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
-import type { EditorCore } from "@/core";
 import { applyDirectorPlan } from "../apply-plan";
 import {
+	ensureAppliedLockReactor,
 	isBatchControllable,
-	isReactorSuppressed,
 	reviseAppliedPlan,
 	toggleAbPreview,
 	withReactorSuppressed,
@@ -37,29 +36,6 @@ const ROW_FILTERS: { id: ReviewRowFilter; label: string }[] = [
 	{ id: "optin", label: "Opt-in" },
 	{ id: "rejected", label: "Rejected" },
 ];
-
-// Register (once per editor) a command reactor that LOCKS the applied phase the
-// moment an external edit or redo moves the Director batch off the controllable
-// stack top. Suppressed during our own revise/A-B so those never self-lock. A
-// manual Ctrl+Z (undo does not fire reactors) is caught instead by the guard inside
-// reviseAppliedPlan/toggleAbPreview on the next interaction, which refuses to touch
-// the moved batch and locks then. Either way the user never loses work.
-const reactorRegistered = new WeakSet<object>();
-function ensureAppliedReactor(editor: EditorCore): void {
-	if (reactorRegistered.has(editor)) return;
-	reactorRegistered.add(editor);
-	editor.command.registerReactor(() => {
-		if (isReactorSuppressed()) return;
-		const s = useDirectorPlanStore.getState();
-		if (s.phase !== "applied") return;
-		const controllable = isBatchControllable(editor, {
-			appliedBatch: s.appliedBatch,
-			appliedHasBatch: s.appliedHasBatch,
-			abShowing: s.abShowing,
-		});
-		if (!controllable) s.lockApplied();
-	});
-}
 
 export function DirectorCutPanel() {
 	const editor = useEditor();
@@ -81,7 +57,7 @@ export function DirectorCutPanel() {
 
 	// Register the applied-phase safety reactor once for this editor.
 	useEffect(() => {
-		ensureAppliedReactor(editor);
+		ensureAppliedLockReactor(editor);
 	}, [editor]);
 
 	if (!plan) return null;

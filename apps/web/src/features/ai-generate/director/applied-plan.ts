@@ -19,15 +19,20 @@
  * transitions to the terminal `applied-locked` phase.
  */
 
+import type { EditorCore } from "@/core";
 import type { Command } from "@/commands/base-command";
 import {
 	applyDirectorPlan,
+	applyHighlightPlan,
 	type ApplyDirectorPlanResult,
+	type ApplyHighlightResult,
 	type DirectorApplyEditor,
+	type InverseKeepSpan,
 } from "./apply-plan";
 import type { DirectorOp } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
 import type { ProtectedSpanSec } from "./coalesce-removal-ranges";
+import { useDirectorPlanStore } from "./director-plan-store";
 
 /** The command sink the revisable flow needs: execute + undo/redo + read-only peeks. */
 export interface RevisableCommandSink {
@@ -132,6 +137,39 @@ export function reviseAppliedPlan({
 	});
 }
 
+/** Outcome of a Highlight revise: the fresh apply result, or a refusal to touch a
+ * moved batch. */
+export type ReviseHighlightOutcome =
+	| { status: "revised"; result: ApplyHighlightResult }
+	| { status: "locked" };
+
+/**
+ * The Highlight sibling of `reviseAppliedPlan` (R1: the docked highlight panel gets
+ * the same stay-open-after-apply / revise-in-place behavior as DirectorCutPanel).
+ * Undoes the prior applied batch (only when one is currently applied AND showing
+ * "with"), then re-applies the current accepted keeps via `applyHighlightPlan`, so
+ * it stays exactly ONE undoable batch. GUARDED the same way: a moved batch refuses
+ * instead of touching the wrong command.
+ */
+export function reviseAppliedHighlightPlan({
+	editor,
+	keeps,
+	totalSec,
+	state,
+}: {
+	editor: RevisableEditor;
+	keeps: readonly InverseKeepSpan[];
+	totalSec: number;
+	state: RevisableState;
+}): ReviseHighlightOutcome {
+	if (!isBatchControllable(editor, state)) return { status: "locked" };
+	const undoFirst = state.appliedHasBatch && state.abShowing === "with";
+	return withReactorSuppressed(() => {
+		if (undoFirst) editor.command.undo();
+		return { status: "revised", result: applyHighlightPlan({ editor, keeps, totalSec }) };
+	});
+}
+
 /** Outcome of an A/B toggle: the new showing, or a refusal to touch a moved batch. */
 export type AbOutcome =
 	| { status: "toggled"; showing: "with" | "without" }
@@ -157,4 +195,34 @@ export function toggleAbPreview({
 	}
 	withReactorSuppressed(() => editor.command.redo());
 	return { status: "toggled", showing: "with" };
+}
+
+// --- Applied-lock reactor ---------------------------------------------------
+// Registered (once per editor) by whichever docked panel mounts first.
+// DirectorCutPanel and DirectorHighlightPanel share this ONE implementation (R1)
+// since the lock condition is mode-agnostic: it reads only the generic
+// phase/appliedBatch/appliedHasBatch/abShowing store fields. Fires on
+// execute/redo and LOCKS the applied phase the moment an external edit or redo
+// moves the applied batch off the controllable stack top. Suppressed during our
+// own revise/A-B (see `withReactorSuppressed`) so those never self-lock. A manual
+// Ctrl+Z (undo does not fire reactors) is instead caught by the guard inside
+// reviseAppliedPlan/reviseAppliedHighlightPlan/toggleAbPreview on the next
+// interaction, which refuses to touch the moved batch and locks then.
+const reactorRegisteredEditors = new WeakSet<object>();
+
+/** Register the applied-lock reactor for `editor`, at most once. */
+export function ensureAppliedLockReactor(editor: EditorCore): void {
+	if (reactorRegisteredEditors.has(editor)) return;
+	reactorRegisteredEditors.add(editor);
+	editor.command.registerReactor(() => {
+		if (isReactorSuppressed()) return;
+		const s = useDirectorPlanStore.getState();
+		if (s.phase !== "applied") return;
+		const controllable = isBatchControllable(editor, {
+			appliedBatch: s.appliedBatch,
+			appliedHasBatch: s.appliedHasBatch,
+			abShowing: s.abShowing,
+		});
+		if (!controllable) s.lockApplied();
+	});
 }

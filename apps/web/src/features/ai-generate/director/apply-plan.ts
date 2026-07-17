@@ -329,6 +329,12 @@ export interface ApplyHighlightResult {
 	cuts: number;
 	/** Total seconds removed. */
 	removedSec: number;
+	/**
+	 * The executed `RemoveRangesCommand`, or null when nothing was applied. Mirrors
+	 * `ApplyDirectorPlanResult.appliedCommand` (R1): the docked highlight panel's
+	 * revisable-apply flow captures this handle the same way DirectorCutPanel does.
+	 */
+	appliedCommand: Command | null;
 }
 
 /**
@@ -352,9 +358,9 @@ export function applyHighlightPlan({
 		ticksPerSecond: TICKS_PER_SECOND,
 	});
 	if (ranges.length === 0) {
-		return { cuts: 0, removedSec: 0 };
+		return { cuts: 0, removedSec: 0, appliedCommand: null };
 	}
 	const command = new RemoveRangesCommand({ ranges });
 	editor.command.execute({ command });
-	return { cuts: command.getRemovedCount(), removedSec };
+	return { cuts: command.getRemovedCount(), removedSec, appliedCommand: command };
 }
