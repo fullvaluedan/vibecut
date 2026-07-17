@@ -44,6 +44,10 @@ import { detectNoiseFragmentCuts } from "./noise-fragment";
 import { detectTinyClipCuts } from "./tiny-clip";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
 import { detectVadDeadAirCuts } from "./vad-dead-air";
+import {
+	computeSilenceThreshold,
+	detectEnvelopeDeadAirCuts,
+} from "./envelope-dead-air";
 import { snapRemovalOps } from "./snap-cut";
 import { clampCutExtent } from "./clamp-cut-extent";
 import { refineCutWordBounds } from "./refine-cut-words";
@@ -320,11 +324,30 @@ export async function buildDirectorProposals(
 	// Doubled words are a stutter/MISTAKE — kept as its own const so it can join the
 	// repeat/mistake proximity set that disqualifies an emphasis pause (U2).
 	const duplicateWordCuts = detectDuplicateWordCuts({ words });
+	// Envelope dead-air (round 6 U2): the default silence remover, straight from
+	// the shared envelope, no VAD model. Runs FIRST among the gap detectors so
+	// pacing can defer to it: any pacing cut overlapping an edead op is dropped,
+	// making EDA the sole owner of pauses at/above its floor (shorter pauses stay
+	// pacing's job). The threshold is the shared clean-median formula (KTD1).
+	const silenceThreshold = computeSilenceThreshold(features.map((f) => f.energy));
+	const envelopeDeadAirCuts = detectEnvelopeDeadAirCuts({
+		envelope,
+		windowSec: ENERGY_WINDOW_SEC,
+		threshold: silenceThreshold,
+		words,
+		totalSec,
+	});
+	const pacingCuts = detectPacingCuts({ segments }).filter(
+		(op) =>
+			!envelopeDeadAirCuts.some(
+				(e) => e.startSec < op.endSec && op.startSec < e.endSec,
+			),
+	);
 	const wordCuts = [
 		...duplicateWordCuts,
 		...detectDeadAirCuts({ words }),
 		...detectFillerCuts({ words }),
-		...detectPacingCuts({ segments }),
+		...pacingCuts,
 	];
 	const phraseRepeatCuts = detectPhraseRepeatCuts({ words });
 	// Segment-level consecutive-repeat backstop (fallback only). Drop any that overlap
@@ -368,9 +391,12 @@ export async function buildDirectorProposals(
 		// unchecked tiny-clip shard, a review-only noise fragment) must not veto the
 		// only default remover of the silence around it, or a shattered timeline's
 		// edge silence ships with neither the shard nor the gap removed.
-		const acceptedOverlapSources = [...wordCuts, ...noiseCuts, ...tinyClipCuts].filter(
-			(other) => other.defaultAccept !== false,
-		);
+		const acceptedOverlapSources = [
+			...wordCuts,
+			...envelopeDeadAirCuts,
+			...noiseCuts,
+			...tinyClipCuts,
+		].filter((other) => other.defaultAccept !== false);
 		// Energy test for edge gaps (X5): Silero gaps are NON-speech, not silence. A
 		// music sting / b-roll cold open reads as a gap but carries real energy, so
 		// compare each gap's mean RMS against the median SPEECH segment energy; at or
@@ -665,6 +691,7 @@ export async function buildDirectorProposals(
 		flags: contextFlags,
 		existingCuts: [
 			...wordCuts,
+			...envelopeDeadAirCuts,
 			...noiseCuts,
 			...tinyClipCuts,
 			...vadDeadAirCuts,
@@ -677,6 +704,7 @@ export async function buildDirectorProposals(
 		planOps,
 		extraOps: [
 			...wordCuts,
+			...envelopeDeadAirCuts,
 			...noiseCuts,
 			...tinyClipCuts,
 			...vadDeadAirCuts,
