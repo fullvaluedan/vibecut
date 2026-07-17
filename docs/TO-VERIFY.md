@@ -2,6 +2,13 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Ripple-drag live preview (2026-07-17, commit `3d93a3d9`, branch `feat/director-eval`)
+Closes round 8's known v1 limitation: with **Ripple editing ON**, a right-handle trim now shifts the downstream clips ON SCREEN during the drag instead of them jumping at mouseup. Numerically verified in-app (3 butted clips; preview shifts tracked the drag both directions, a drag back to the origin restored exact base positions, and the commit matched the final preview to the tick). Confirm the FEEL on real footage:
+- [ ] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps.
+- [ ] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump.
+- [ ] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began.
+- [ ] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit — that path is the per-track heuristic, not this preview).
+
 ## Audio-separation regression on multi/selected bin drags (2026-06-24, commit `ab77bcd5`)
 Fixed: the multi-asset drag path stopped separating source audio (regression from `6ac45541`), so dragging selected clips combined audio into the video. Now separates in-batch onto a shared audio track. Drag-drop is DOM-bound → live-verify in-app:
 - [ ] **The regression:** select 2-3 videos in the bin, drag one onto the timeline → all land, each with its audio on a **separate audio track**, video+audio **linked** (move/trim together).
