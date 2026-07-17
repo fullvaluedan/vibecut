@@ -230,9 +230,9 @@ google 5 segments / 51 words, hermes 40 / 212, how-to-edit 21 / 129, pokemon 12 
 
 Verdict: PASS. OFFERED match regresses nowhere beyond noise (-0.2 on how-to-edit against a documented +/-5pp single-draw variance; up on the other three, hermes 77.3 is its best cell in any round). Essential-words-lost falls 52-107 words on three fixtures (google +4, noise). Recall falls on pokemon/how-to-edit while match holds or rises: the rows we no longer offer were the collateral-heavy ones (hallucination-driven and false-positive repeats), which is the trade this round exists to make. Caveats recorded honestly: single draw per cell (the round-5 variance lesson stands; a --runs 3 pass remains the right next measurement); AUTO essLost baselines were not recorded per-tier in prior addenda, so the AUTO column starts its own series here (99/173/43/81).
 
-### Gate (e): hands-on smoke pass
+### Gate (e): hands-on smoke pass (Dan, 2026-07-17)
 
-Pending Dan: import the join-the-group clip, run AI CUT, play every join, verdict recorded here when done.
+Dan ran AI CUT and accepted only the recommended rows. Verdict: the round-5-class complaints (hard cuts, head/tail silences, fragmentation, the dead-air tail) did NOT recur; the remaining cut-quality complaint is ONE class: the LLM redundancy pass auto-cut his deliberate instructional restatements inside the flowing 0-45s conversation (the "leave a link in the description" line at ~29.5s and "You have to join the group" at ~34.3s). His editorial read: setup then payoff, context still flowing, not redundancy. This is the round-7 cut lever: redundancy groups that are PARAPHRASE-level (not near-verbatim) should not auto-accept; mirror the U4 philosophy at mapRedundancyGroups. The rest of his smoke-pass feedback is editor UX (persistent Director panel, clip-stretch ripple and linked A/V moves, a spurious frame-out-of-sync notice, menu information architecture) and lives in docs/LIVE-TEST-ISSUES.md items 5-12.
 
 ### Defaults and residuals
 

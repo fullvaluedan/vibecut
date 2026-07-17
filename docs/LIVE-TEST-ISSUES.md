@@ -54,6 +54,27 @@ Dan's directive: keep the list current, fix nothing until he says so.
 8. **OFFERED-row discoverability.** The review rows (where the measured value lives) are
    easy to never see; the timeline shows the AUTO floor most prominently. Ties into item 7.
 
+## Round-6 smoke pass findings (Dan, 2026-07-17, post-fix run with recommended cuts only)
+
+9. **Redundancy pass auto-cuts deliberate restatements.** With only recommended rows
+   accepted, cuts still landed inside the flowing 0-45s conversation (~29.5s and
+   ~34.3s): the LLM redundancy pass grouped Dan's instructional setup-then-payoff
+   restatements as repeats and auto-accepted them (confidence >= 0.7). Fix direction:
+   paraphrase-level groups (members NOT near-verbatim by whole-line similarity)
+   demote to review; near-verbatim groups keep AUTO. Mirrors the U4 gate philosophy
+   at mapRedundancyGroups. THE remaining cut-quality lever.
+10. **Clip stretch/extend is terrible** (extends item 5): stretching a video cut
+    forces manually moving every downstream piece, then moving audio and video
+    separately (no linked ripple), and then a "frame out of sync" notification
+    appears on the clip BEHIND the edit, which should not happen. Reference
+    CapCut/Premiere ripple-trim and linked-clip behavior.
+11. **Director's cut persistent panel is now a demand** (escalates item 7): always
+    available; shows AI CUT before a run, the live review state after.
+12. **Menu information architecture.** Many menus are useless, unoptimized, or
+    redundant. Named specifics: "Project info" does not belong in Settings; the
+    Settings -> AI panel is a mess (a dozen stacked toggle sections with paragraph
+    copy). Audit against CapCut/Premiere menu conventions.
+
 ## Process failures (why these shipped)
 
 - Five rounds gated on test suites + offline eval; zero rounds gated on hands-on product
