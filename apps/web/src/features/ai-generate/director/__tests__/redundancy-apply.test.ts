@@ -8,11 +8,24 @@ import {
 } from "../redundancy-apply";
 import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
 
-const member = ({ lineId, startSec, endSec }: { lineId: string; startSec: number; endSec: number }): RedundancyMember => ({
+// Members share a near-verbatim take text by default so the confidence-gate
+// tests exercise confidence semantics; the round-7 near-verbatim gate has its
+// own describe block with paraphrase-level texts.
+const member = ({
 	lineId,
 	startSec,
 	endSec,
-	text: lineId,
+	text = "so we grab the config file and restart the server",
+}: {
+	lineId: string;
+	startSec: number;
+	endSec: number;
+	text?: string;
+}): RedundancyMember => ({
+	lineId,
+	startSec,
+	endSec,
+	text,
 });
 
 const group = ({
@@ -364,5 +377,75 @@ describe("lexicalBackstopDefaultAccept (U1/KTD2)", () => {
 	});
 	test("soft backstop is the sole authority on route-error fallback → accepted default", () => {
 		expect(lexicalBackstopDefaultAccept({ verbatim: false, redundancyRan: false })).toBe(true);
+	});
+});
+
+describe("round-7 near-verbatim gate (Dan smoke pass 2026-07-17)", () => {
+	test("Dan's live restatement pair (paraphrase-level) demotes despite 0.8 confidence", () => {
+		// The exact pair the redundancy pass auto-cut inside the flowing 0-45s
+		// conversation: deliberate setup-then-payoff, not a retake.
+		const g = group({
+			members: [
+				member({
+					lineId: "L7",
+					startSec: 29.92,
+					endSec: 31.58,
+					text: "So I'm going to leave a link in the description.",
+				}),
+				member({
+					lineId: "L12",
+					startSec: 47.9,
+					endSec: 51.36,
+					text: "So I'm going to leave a link in the description, and all you do is hit join group.",
+				}),
+			],
+			keeperLineId: "L12",
+			confidence: 0.8,
+		});
+		const { cuts } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0].defaultAccept).toBe(false);
+		expect(cuts[0].reason).toContain("paraphrased");
+	});
+
+	test("a true near-verbatim retake keeps the auto-accept at 0.8 confidence", () => {
+		const g = group({
+			members: [
+				member({ lineId: "A", startSec: 0, endSec: 4 }),
+				member({ lineId: "B", startSec: 6, endSec: 10 }),
+			],
+			keeperLineId: "B",
+			confidence: 0.8,
+		});
+		const { cuts } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts).toHaveLength(1);
+		expect(cuts[0].defaultAccept).toBeUndefined();
+		expect(cuts[0].reason).not.toContain("paraphrased");
+	});
+
+	test("missing or empty member text is conservatively opt-in", () => {
+		const g = group({
+			members: [
+				member({ lineId: "A", startSec: 0, endSec: 4, text: "" }),
+				member({ lineId: "B", startSec: 6, endSec: 10 }),
+			],
+			keeperLineId: "B",
+			confidence: 0.9,
+		});
+		const { cuts } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts[0].defaultAccept).toBe(false);
+	});
+
+	test("a paraphrase group below the accept threshold stays opt-in (no double demotion weirdness)", () => {
+		const g = group({
+			members: [
+				member({ lineId: "A", startSec: 0, endSec: 4, text: "completely different words here" }),
+				member({ lineId: "B", startSec: 6, endSec: 10, text: "another sentence about the topic" }),
+			],
+			keeperLineId: "B",
+			confidence: 0.6,
+		});
+		const { cuts } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts[0].defaultAccept).toBe(false);
 	});
 });

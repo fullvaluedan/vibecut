@@ -732,11 +732,16 @@ export async function buildDirectorProposals(
 			...redundancyCuts,
 		],
 	});
+	// Envelope dead-air ops do NOT enter this merge (review fix, round 7): the
+	// merge drops an extra op overlapping a plan removal, but a plan cut can be
+	// REJECTED by the verify pass later, and the deterministic silence cut it
+	// displaced would be gone with it (a draw-dependent coverage hole over a
+	// provably-silent pause). Silence ops are ground truth, not candidates:
+	// they fold in AFTER verify, deduped against the SURVIVING removals.
 	const baseMerged = mergeDetectedCuts({
 		planOps,
 		extraOps: [
 			...wordCuts,
-			...envelopeDeadAirCuts,
 			...noiseCuts,
 			...tinyClipCuts,
 			...vadDeadAirCuts,
@@ -761,8 +766,16 @@ export async function buildDirectorProposals(
 					planOps: baseMerged.filter(
 						(op) =>
 							op.op === "reorder" ||
+							// Only an ACCEPTED redundancy cut may subsume a contained
+							// cleaning removal: an opt-in row (sub-threshold or the
+							// round-7 paraphrase demotion) starts unchecked, and letting
+							// it swallow the AUTO cleanup inside it would leave NEITHER
+							// active by default (the X4 rule again).
 							!redundancyCuts.some(
-								(rc) => rc.startSec <= op.startSec && op.endSec <= rc.endSec,
+								(rc) =>
+									rc.defaultAccept !== false &&
+									rc.startSec <= op.startSec &&
+									op.endSec <= rc.endSec,
 							),
 					),
 					extraOps: redundancyCuts,
@@ -959,13 +972,30 @@ export async function buildDirectorProposals(
 			abort();
 		}
 	}
+	// Fold the envelope dead-air ops in AFTER verify (round 7): silence cuts are
+	// deterministic ground truth and never verify candidates; folding here means
+	// a plan cut that verify rejects can no longer displace them (the merge-drop
+	// coverage hole). Dedup against the SURVIVING removals so a plan cut that
+	// verify kept still owns its span.
+	const survivingRemovals = verified.filter(
+		(op) => op.op === "cut" || op.op === "take_select",
+	);
+	const verifiedPlusSilence = [
+		...verified,
+		...envelopeDeadAirCuts.filter(
+			(e) =>
+				!survivingRemovals.some(
+					(op) => op.startSec < e.endSec && e.startSec < op.endSec,
+				),
+		),
+	];
 	// Pause-swallowing placement (round 6 U3, supersedes the issue-E trough snap
 	// for Director removals): each cut edge WIDENS through adjacent sub-threshold
 	// silence to the neighboring clean word plus a room-tone handle, so the join
 	// carries a natural breath and no residual silence ships in the kept footage.
 	// Edges flush against speech keep the old trough-snap fallback internally.
 	const energySnapped = swallowPauseBounds({
-		ops: verified,
+		ops: verifiedPlusSilence,
 		envelope,
 		windowSec: ENERGY_WINDOW_SEC,
 		threshold: silenceThreshold,

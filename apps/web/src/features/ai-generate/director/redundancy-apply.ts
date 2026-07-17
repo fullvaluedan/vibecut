@@ -14,6 +14,32 @@ import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf
 import { stableCutId, type WordTiming } from "./cut-utils";
 import { swallowPauseBounds } from "./swallow-pause";
 import { refineCutWordBounds } from "./refine-cut-words";
+import { HIGH_SIMILAR, similarity } from "./text-similarity";
+
+/**
+ * Round 7 (Dan's 2026-07-17 smoke pass): a redundancy group auto-accepts only
+ * when it is NEAR-VERBATIM, i.e. every non-keeper take reads as the same line
+ * as the keeper (similarity >= HIGH_SIMILAR). Paraphrase-level groups are the
+ * model judging that two DIFFERENT sentences make the same point; on Dan's
+ * instructional footage those are deliberate setup-then-payoff restatements
+ * (the "leave a link in the description" pair the pass auto-cut at ~29.5s),
+ * so they surface as opt-in review rows regardless of model confidence.
+ * Missing/empty member text is conservatively NOT near-verbatim.
+ */
+export function isNearVerbatimGroup(group: RedundancyGroup): boolean {
+	const keeper = group.members.find((m) => m.lineId === group.keeperLineId);
+	if (!keeper || typeof keeper.text !== "string" || keeper.text.trim().length === 0) {
+		return false;
+	}
+	return group.members
+		.filter((m) => m.lineId !== group.keeperLineId)
+		.every(
+			(m) =>
+				typeof m.text === "string" &&
+				m.text.trim().length > 0 &&
+				similarity({ a: m.text, b: keeper.text }) >= HIGH_SIMILAR,
+		);
+}
 
 /**
  * Groups below this LLM confidence are dropped entirely (inclusive at the floor).
@@ -47,22 +73,29 @@ function buildRedundancyCutOp({
 	confidence,
 	reason,
 	defaultAccept = true,
+	paraphrase = false,
 }: {
 	member: RedundancyMember;
 	groupId: string;
 	confidence: number;
 	reason: string;
-	/** Sub-floor groups pass `false` so their row starts unchecked (opt-in). */
+	/** Sub-floor and paraphrase-level groups pass `false`: row starts unchecked. */
 	defaultAccept?: boolean;
+	/** True when the round-7 near-verbatim gate demoted this group: the reason
+	 * tells Dan WHY the row is unchecked (deliberate restatement vs flub). */
+	paraphrase?: boolean;
 }): DirectorOp {
+	const label = paraphrase
+		? "Possible repeat (paraphrased, may be a deliberate restatement)"
+		: "Repeat";
 	return {
 		id: `redun-${stableCutId(`${member.startSec.toFixed(3)}:${member.endSec.toFixed(3)}`)}`,
 		op: "cut",
 		startSec: member.startSec,
 		endSec: member.endSec,
 		reason: reason
-			? `Repeat — kept the best take (${reason})`.slice(0, 240)
-			: "Repeat — kept the best of the takes",
+			? `${label}: kept the best take (${reason})`.slice(0, 240)
+			: `${label}: kept the best of the takes`,
 		confidence,
 		category: "redundancy",
 		groupId,
@@ -110,7 +143,10 @@ export function mapRedundancyGroups({
 		const groupId = `g${gi++}`;
 		// Sub-threshold groups are opt-in: their cut ops start unchecked so the higher
 		// recall never auto-cuts distinct content (R7); the user approves them per row.
-		const defaultAccept = group.confidence >= acceptThreshold;
+		// Round 7: paraphrase-level groups are ALSO opt-in regardless of confidence;
+		// only a near-verbatim group (a true retake) earns the auto-accept.
+		const nearVerbatim = isNearVerbatimGroup(group);
+		const defaultAccept = group.confidence >= acceptThreshold && nearVerbatim;
 		for (const member of nonKeepers) {
 			cuts.push(
 				buildRedundancyCutOp({
@@ -119,6 +155,7 @@ export function mapRedundancyGroups({
 					confidence: group.confidence,
 					reason: group.reason,
 					defaultAccept,
+					paraphrase: !nearVerbatim,
 				}),
 			);
 		}
