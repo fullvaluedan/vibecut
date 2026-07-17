@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
 import { resolveClaude } from "./renderer";
+import { stableOpId } from "./stable-op-id";
 import type {
 	ClaudeAuth,
 	EffectPlan,
@@ -490,22 +491,10 @@ const DIRECTOR_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
-/** Deterministic id for an op (djb2 over its identity fields) so re-planning the same
- * output is stable. Exported so downstream span surgery (clamp-cut-extent) can mint
- * split-op ids in the same namespace instead of copying the hash. */
-export function stableOpId(op: {
-	op: string;
-	startSec: number;
-	endSec: number;
-	targetStartSec?: number;
-}): string {
-	const key = `${op.op}|${op.startSec}|${op.endSec}|${op.targetStartSec ?? ""}`;
-	let h = 5381;
-	for (let i = 0; i < key.length; i++) {
-		h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
-	}
-	return `op_${h.toString(36)}`;
-}
+/** Re-export the deterministic op-id hash for the barrel. The implementation lives
+ * in ./stable-op-id (a dependency-free leaf) so client code can import it without
+ * pulling this module's node:child_process graph. Used internally at planOps below. */
+export { stableOpId };
 
 /**
  * Render the per-segment signal table the planner reasons over (pipe-escaped).

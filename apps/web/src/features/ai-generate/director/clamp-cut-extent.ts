@@ -29,7 +29,8 @@
  * `startSec`/`endSec` matter downstream (KTD1), so split ops get fresh stable ids.
  */
 
-import { stableOpId, type DirectorOp } from "@framecut/hf-bridge";
+import { stableOpId } from "@framecut/hf-bridge/stable-op-id";
+import type { DirectorOp } from "@framecut/hf-bridge";
 import type { WordTiming } from "./cut-utils";
 
 /**
