@@ -505,3 +505,11 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set((state) => (state.phase === "applied" ? { phase: "applied-locked" } : {})),
 	close: () => set({ ...CLEARED }),
 }));
+
+// Dev convenience (mirrors window.__vibeEditor in core/index.ts): lets console
+// sessions and automated smoke checks drive the review dock directly.
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+	(
+		window as unknown as { __directorPlanStore?: typeof useDirectorPlanStore }
+	).__directorPlanStore = useDirectorPlanStore;
+}
