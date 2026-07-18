@@ -40,6 +40,12 @@ class TranscriptionService {
 				return;
 			}
 
+			const cleanup = () => {
+				this.worker?.removeEventListener("message", handleMessage);
+				this.worker?.removeEventListener("error", handleWorkerFailure);
+				this.worker?.removeEventListener("messageerror", handleWorkerFailure);
+			};
+
 			const handleMessage = (event: MessageEvent<WorkerResponse>) => {
 				const response = event.data;
 
@@ -53,7 +59,7 @@ class TranscriptionService {
 						break;
 
 					case "transcribe-complete":
-						this.worker?.removeEventListener("message", handleMessage);
+						cleanup();
 						resolve({
 							text: response.text,
 							segments: response.segments,
@@ -64,18 +70,33 @@ class TranscriptionService {
 						break;
 
 					case "transcribe-error":
-						this.worker?.removeEventListener("message", handleMessage);
+						cleanup();
 						reject(new Error(response.error));
 						break;
 
 					case "cancelled":
-						this.worker?.removeEventListener("message", handleMessage);
+						cleanup();
 						reject(new Error("Transcription cancelled"));
 						break;
 				}
 			};
 
+			// A WORKER-LEVEL crash (an uncaught throw, an out-of-memory kill, a
+			// bad postMessage payload) fires 'error'/'messageerror' on the Worker
+			// object, never a posted "transcribe-error" message - so with only a
+			// message listener the promise hung forever and a Director run spun
+			// with a live-looking elapsed ticker (round 12 U3/R4). Mirror
+			// services/vad/service.ts: reject with a plain message and terminate
+			// so a broken worker is not reused on the next run.
+			const handleWorkerFailure = () => {
+				cleanup();
+				this.terminate();
+				reject(new Error("Transcription stopped working. Try running it again."));
+			};
+
 			this.worker.addEventListener("message", handleMessage);
+			this.worker.addEventListener("error", handleWorkerFailure);
+			this.worker.addEventListener("messageerror", handleWorkerFailure);
 
 			this.worker.postMessage({
 				type: "transcribe",
@@ -127,6 +148,12 @@ class TranscriptionService {
 				return;
 			}
 
+			const cleanup = () => {
+				this.worker?.removeEventListener("message", handleMessage);
+				this.worker?.removeEventListener("error", handleWorkerFailure);
+				this.worker?.removeEventListener("messageerror", handleWorkerFailure);
+			};
+
 			const handleMessage = (event: MessageEvent<WorkerResponse>) => {
 				const response = event.data;
 
@@ -140,7 +167,7 @@ class TranscriptionService {
 						break;
 
 					case "init-complete":
-						this.worker?.removeEventListener("message", handleMessage);
+						cleanup();
 						this.isInitialized = true;
 						this.isInitializing = false;
 						this.currentModelId = modelId;
@@ -148,7 +175,7 @@ class TranscriptionService {
 						break;
 
 					case "init-error":
-						this.worker?.removeEventListener("message", handleMessage);
+						cleanup();
 						this.isInitializing = false;
 						this.terminate();
 						reject(new Error(response.error));
@@ -156,7 +183,21 @@ class TranscriptionService {
 				}
 			};
 
+			// Same worker-level guard as transcribe() above (round 12 U3/R4): a
+			// crash while the model loads (the likeliest hang: a huge download in
+			// a dying tab) must reject instead of leaving init pending forever.
+			const handleWorkerFailure = () => {
+				cleanup();
+				this.isInitializing = false;
+				this.terminate();
+				reject(
+					new Error("The transcription engine failed to load. Try running it again."),
+				);
+			};
+
 			this.worker.addEventListener("message", handleMessage);
+			this.worker.addEventListener("error", handleWorkerFailure);
+			this.worker.addEventListener("messageerror", handleWorkerFailure);
 
 			this.worker.postMessage({
 				type: "init",

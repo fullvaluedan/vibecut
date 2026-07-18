@@ -170,6 +170,12 @@ async function planViaApiKeySchema(
 	return { raw: extractJson(text), usage };
 }
 
+/** Kill leash for the claude-code CLI spawn (round 12 U3/R4): a wedged CLI (a
+ * hung network call, a login prompt waiting on a terminal that isn't there)
+ * previously kept the child - and the whole Director run - alive forever. On
+ * expiry the child is killed and the plan call rejects with a plain message. */
+const CLAUDE_CLI_KILL_TIMEOUT_MS = 300_000;
+
 function planViaClaudeCode(
 	prompt: string,
 ): Promise<{ raw: unknown; usage: TokenUsage | null }> {
@@ -182,10 +188,28 @@ function planViaClaudeCode(
 		});
 		let out = "";
 		let err = "";
+		// Kill timer (round 12 U3/R4): reject FIRST (so the caller fails with the
+		// real reason, not a generic exit-code message from the kill's close event),
+		// then kill the child. `timedOut` makes the close handler a no-op after.
+		let timedOut = false;
+		const killTimer = setTimeout(() => {
+			timedOut = true;
+			reject(
+				new Error(
+					`The claude CLI did not respond within ${CLAUDE_CLI_KILL_TIMEOUT_MS / 60_000} minutes and was stopped. Check that the CLI works (run \`claude\` in a terminal), or switch Settings -> AI to an Anthropic API key.`,
+				),
+			);
+			child.kill();
+		}, CLAUDE_CLI_KILL_TIMEOUT_MS);
 		child.stdout.on("data", (d) => (out += d.toString()));
 		child.stderr.on("data", (d) => (err += d.toString()));
-		child.on("error", reject);
+		child.on("error", (e) => {
+			clearTimeout(killTimer);
+			reject(e);
+		});
 		child.on("close", (code) => {
+			clearTimeout(killTimer);
+			if (timedOut) return; // already rejected; this close came from the kill
 			// claude-code `--output-format json` reports API/auth errors in the STDOUT
 			// JSON (`is_error` / `api_error_status` / `result`) — typically with a
 			// NON-zero exit and EMPTY stderr. Parse stdout FIRST so we surface the real
