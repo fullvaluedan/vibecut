@@ -1,7 +1,7 @@
 /**
- * State for the Director Review modal (U4): the proposed plan + the user's per-op
- * accept/reject decisions + open state. The decision logic is pure (testable);
- * the zustand store is a thin wrapper the modal subscribes to.
+ * State for the Director review (U4): the proposed plan + the user's per-op
+ * accept/reject decisions. The decision logic is pure (testable); the zustand
+ * store is a thin wrapper the persistent Director dock panels subscribe to.
  */
 
 import { create } from "zustand";
@@ -188,7 +188,6 @@ export function selectApplyGuardSpans({
 }
 
 interface DirectorPlanState {
-	open: boolean;
 	/**
 	 * Which tab of the persistent Director dock is focused (R1/KTD1). The dock's
 	 * visibility is no longer gated on a transient `surface` flag: "properties" and
@@ -259,23 +258,10 @@ interface DirectorPlanState {
 	/** Close the assemble panel, leaving the assembled cut on the timeline. */
 	closeAssemble: () => void;
 	/**
-	 * Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie
-	 * notes + redundancy groups. Vestigial (R1): production runs go through
-	 * `openCutPanel` instead, but this stays available for a future non-docked caller
-	 * and still auto-focuses the Director tab for consistency.
-	 */
-	openWith: (args: {
-		plan: DirectorPlan;
-		nearTies?: readonly NearTieNote[];
-		redundancyGroups?: readonly RedundancyReviewGroup[];
-		words?: readonly WordTiming[];
-		protectedSpans?: readonly { startSec: number; endSec: number }[];
-	}) => void;
-	/**
-	 * Dock the cut review (U6): same fresh-plan state as `openWith` but `open:false`
-	 * so it renders inside the persistent Director dock instead of popping a modal,
-	 * persistent + editable while the user works, surviving deselection. Auto-
-	 * focuses the Director dock tab (R1).
+	 * Dock the cut review (U6): a fresh plan (all ops accepted) + any near-tie
+	 * notes + redundancy groups, rendered inside the persistent Director dock.
+	 * Persistent + editable while the user works, surviving deselection.
+	 * Auto-focuses the Director dock tab (R1).
 	 */
 	openCutPanel: (args: {
 		plan: DirectorPlan;
@@ -340,7 +326,6 @@ interface DirectorPlanState {
 }
 
 const CLEARED = {
-	open: false,
 	dockTab: "properties" as const,
 	mode: "cut" as const,
 	phase: "review" as const,
@@ -366,9 +351,6 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	setSeekPreRollSec: (sec) =>
 		set({ seekPreRollSec: Math.max(1, Math.min(10, Math.round(sec))) }),
 	setDockTab: (tab) => set({ dockTab: tab }),
-	// `open` stays FALSE: the docked surfaces key off mode/draft/plan/keeps, not
-	// `open`, so the still-mounted modal DirectorReviewDialog (which renders on
-	// `open`) does NOT pop a spurious "nothing to change" dialog over the dock.
 	openAssemble: ({ draft }) =>
 		set({ ...CLEARED, mode: "assemble", draft, dockTab: "director" }),
 	applyDraftEdit: (spans) =>
@@ -376,21 +358,6 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openWith: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
-		set({
-			...CLEARED,
-			open: true,
-			mode: "cut",
-			plan,
-			decisions: initDecisions(plan),
-			words: [...(words ?? [])],
-			protectedSpans: [...(protectedSpans ?? [])],
-			nearTies: [...(nearTies ?? [])],
-			redundancyGroups: [...(redundancyGroups ?? [])],
-			dockTab: "director",
-		}),
-	// `open` stays FALSE: the docked panel keys off mode/plan, not `open`, so the
-	// still-mounted modal DirectorReviewDialog does NOT also pop over the dock.
 	openCutPanel: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
 		set({
 			...CLEARED,
@@ -435,8 +402,7 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		const rows = initKeepRows(keeps);
 		const decisions: OpDecisions = {};
 		for (const row of rows) decisions[row.id] = true;
-		// `open` stays FALSE (R1: the highlight modal is retired). This docks the same
-		// way `openCutPanel` does, so DirectorReviewDialog never pops for highlight mode.
+		// Docks the same way `openCutPanel` does (R1: the highlight modal is retired).
 		set({
 			...CLEARED,
 			mode: "highlight",

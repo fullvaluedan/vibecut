@@ -142,7 +142,7 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		{ groupId: "g1", keeperLineId: "l1", members: [], confidence: 0.6, reason: "r" },
 	];
 
-	test("docks with open:false and preserves plan/decisions/groups", () => {
+	test("docks and preserves plan/decisions/groups", () => {
 		useDirectorPlanStore.getState().close();
 		useDirectorPlanStore.getState().openCutPanel({
 			plan: optIn,
@@ -151,8 +151,6 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		});
 		const s = useDirectorPlanStore.getState();
 		expect(s.mode).toBe("cut");
-		// `open` stays false so the still-mounted modal does NOT also pop.
-		expect(s.open).toBe(false);
 		expect(s.plan?.operations.map((o) => o.id)).toEqual(["a", "b"]);
 		// defaultAccept:false op starts unchecked; nothing new is auto-applied.
 		expect(s.decisions).toEqual({ a: true, b: false });
@@ -208,14 +206,6 @@ describe("dockTab (R1: persistent Director dock, surface field retired)", () => 
 		useDirectorPlanStore.getState().close();
 	});
 
-	test("openWith auto-focuses the Director tab on completion", () => {
-		useDirectorPlanStore.getState().close();
-		useDirectorPlanStore.getState().setDockTab("properties");
-		useDirectorPlanStore.getState().openWith({ plan });
-		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
-		useDirectorPlanStore.getState().close();
-	});
-
 	test("openAssemble auto-focuses the Director tab on completion", () => {
 		useDirectorPlanStore.getState().close();
 		useDirectorPlanStore.getState().setDockTab("properties");
@@ -237,9 +227,6 @@ describe("dockTab (R1: persistent Director dock, surface field retired)", () => 
 		const s = useDirectorPlanStore.getState();
 		expect(s.dockTab).toBe("director");
 		expect(s.mode).toBe("highlight");
-		// The highlight modal path is retired (R1): `open` must stay false so
-		// DirectorReviewDialog never pops for highlight mode.
-		expect(s.open).toBe(false);
 		useDirectorPlanStore.getState().close();
 	});
 });

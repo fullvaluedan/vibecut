@@ -22,7 +22,6 @@ import {
 	runHighlightAction,
 	runRemoveSilencesAction,
 } from "@/features/ai-generate/director/ai-cut-actions";
-import { DirectorReviewDialog } from "@/features/ai-generate/director/components/director-review-dialog";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScissorIcon } from "@hugeicons/core-free-icons";
@@ -126,7 +125,6 @@ export function AiCutMenu() {
 					Stop
 				</Button>
 			)}
-			<DirectorReviewDialog />
 		</>
 	);
 }
