@@ -1,25 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { DirectorOp } from "@framecut/hf-bridge";
 import { HANDLE_SEC, swallowPauseBounds } from "../swallow-pause";
+import { envelope } from "./test-envelope";
 
 const WIN = 0.05;
 const QUIET = 0.001;
 const LOUD = 0.05;
 const THRESH = 0.01;
-
-function envelope(
-	seconds: number,
-	base: number,
-	...spans: [number, number, number][]
-): number[] {
-	const env = new Array<number>(Math.round(seconds / WIN)).fill(base);
-	for (const [s, e, level] of spans) {
-		for (let w = Math.floor(s / WIN); w < Math.min(env.length, Math.ceil(e / WIN)); w++) {
-			env[w] = level;
-		}
-	}
-	return env;
-}
 
 function cut(startSec: number, endSec: number, extra: Partial<DirectorOp> = {}): DirectorOp {
 	return {

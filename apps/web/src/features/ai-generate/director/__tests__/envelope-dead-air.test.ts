@@ -8,25 +8,11 @@ import {
 	KEEP_BEAT_PAD_SEC,
 } from "../envelope-dead-air";
 import { SILENCE_RMS_CEILING } from "../hallucination-guard";
+import { envelope } from "./test-envelope";
 
 const WIN = 0.05;
 const QUIET = 0.001;
 const LOUD = 0.05;
-
-/** Envelope of `seconds` at `base` level with [start,end,level] overrides. */
-function envelope(
-	seconds: number,
-	base: number,
-	...spans: [number, number, number][]
-): number[] {
-	const env = new Array<number>(Math.round(seconds / WIN)).fill(base);
-	for (const [s, e, level] of spans) {
-		for (let w = Math.floor(s / WIN); w < Math.min(env.length, Math.ceil(e / WIN)); w++) {
-			env[w] = level;
-		}
-	}
-	return env;
-}
 
 /** Evenly spaced words filling [startSec, endSec). */
 function wordsIn(startSec: number, endSec: number, count: number) {
