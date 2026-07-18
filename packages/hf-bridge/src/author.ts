@@ -401,7 +401,8 @@ export type DirectorOpCategory =
 	| "context"
 	| "retake"
 	| "structural"
-	| "speculation";
+	| "speculation"
+	| "join";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {

@@ -61,6 +61,7 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	retake: "Retake",
 	structural: "Structural",
 	speculation: "Speculation",
+	join: "Join",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -108,6 +109,10 @@ export function describeReviewOp({
 			// Coherent trailing speculation starts unchecked (round 9): this editor
 			// keeps that style, so the resting state reads as a deliberate keep.
 			rejectedHint = "Keeping the speculation";
+		} else if (op.category === "join") {
+			// A join-texture swallow (round 12): rejecting it keeps the stranded
+			// fragment (or sliver) between the two neighboring cuts.
+			rejectedHint = "Keeping the fragment";
 		}
 	}
 

@@ -42,6 +42,10 @@ const JUSTIFIED_REMOVAL: ReadonlySet<string> = new Set([
 	// Tagged trailing-speculation cuts (round 9): OFFERED-only like retake and
 	// structural, and they must reach review rather than be silently reverted.
 	"speculation",
+	// Join-texture ops (round 12): a silent sliver or stranded fragment between
+	// two accepted cuts is a concrete join repair. Its span is sub-floor by
+	// construction, so without this entry every join op would silently revert.
+	"join",
 ]);
 
 /** Whether an op carries a real reason to remove its span (so it is never reverted). */
