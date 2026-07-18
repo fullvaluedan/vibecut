@@ -22,7 +22,7 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
-import { stableCutId } from "./cut-utils";
+import { isMidpointContained, stableCutId } from "./cut-utils";
 import { computeSilenceThreshold } from "./hallucination-guard";
 
 export { computeSilenceThreshold };
@@ -94,10 +94,14 @@ export function detectEnvelopeDeadAirCuts({
 	const audioEndSec = envelope.length * windowSec;
 	const ops: DirectorOp[] = [];
 	for (const run of computeSilenceRuns({ envelope, windowSec, threshold })) {
-		const holdsWord = words.some((w) => {
-			const mid = (w.start + w.end) / 2;
-			return mid >= run.startSec && mid < run.endSec;
-		});
+		const holdsWord = words.some((w) =>
+			isMidpointContained({
+				spanStart: w.start,
+				spanEnd: w.end,
+				containerStart: run.startSec,
+				containerEnd: run.endSec,
+			}),
+		);
 		if (holdsWord) continue;
 
 		const duration = run.endSec - run.startSec;

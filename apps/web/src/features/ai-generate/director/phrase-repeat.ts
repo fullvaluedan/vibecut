@@ -26,7 +26,7 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
-import { normalizeWord, stableCutId, type WordTiming } from "./cut-utils";
+import { isMidpointContained, normalizeWord, stableCutId, type WordTiming } from "./cut-utils";
 import { HIGH_SIMILAR, similarity } from "./text-similarity";
 
 /** Min consecutive matching tokens for a phrase repeat (shorter = noisy). */
@@ -62,15 +62,22 @@ export function detectPhraseRepeatCuts({
 	minPhraseWords?: number;
 	windowSeconds?: number;
 }): DirectorOp[] {
-	/** The segment containing a time point (midpoint containment), or null. */
+	/** The segment containing [spanStart, spanEnd)'s midpoint, or null. */
 	const containingSegment = (
-		t: number,
+		spanStart: number,
+		spanEnd: number,
 	): { text: string; start: number; end: number } | null => {
 		if (!segments) return null;
-		for (const seg of segments) {
-			if (t >= seg.start && t < seg.end) return seg;
-		}
-		return null;
+		return (
+			segments.find((seg) =>
+				isMidpointContained({
+					spanStart,
+					spanEnd,
+					containerStart: seg.start,
+					containerEnd: seg.end,
+				}),
+			) ?? null
+		);
 	};
 	// Drop punctuation-only/empty tokens so they don't break an otherwise
 	// consecutive phrase; each kept token carries its own timing.
@@ -122,8 +129,8 @@ export function detectPhraseRepeatCuts({
 			if (segments && segments.length > 0) {
 				const laterStart = tokens[bestJ];
 				const laterEnd = tokens[Math.min(bestJ + len - 1, tokens.length - 1)];
-				const earlierSeg = containingSegment((startTok.start + endTok.end) / 2);
-				const laterSeg = containingSegment((laterStart.start + laterEnd.end) / 2);
+				const earlierSeg = containingSegment(startTok.start, endTok.end);
+				const laterSeg = containingSegment(laterStart.start, laterEnd.end);
 				confirmedRetake =
 					earlierSeg !== null &&
 					laterSeg !== null &&

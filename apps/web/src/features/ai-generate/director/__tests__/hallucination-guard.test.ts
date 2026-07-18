@@ -5,24 +5,9 @@ import {
 	MAX_PLAUSIBLE_WORD_SEC,
 	SILENCE_RMS_CEILING,
 } from "../hallucination-guard";
+import { envelope } from "./test-envelope";
 
 const WIN = 0.05;
-
-/** Envelope covering [0, seconds) at WIN hop, filled with `level`, with
- * optional [start, end, level] overrides painted on top. */
-function envelope(
-	seconds: number,
-	base: number,
-	...spans: [number, number, number][]
-): number[] {
-	const env = new Array<number>(Math.round(seconds / WIN)).fill(base);
-	for (const [s, e, level] of spans) {
-		for (let w = Math.floor(s / WIN); w < Math.min(env.length, Math.ceil(e / WIN)); w++) {
-			env[w] = level;
-		}
-	}
-	return env;
-}
 
 /** Space-delimited text into evenly spaced words across [startSec, endSec). */
 function spread(text: string, startSec: number, endSec: number) {
