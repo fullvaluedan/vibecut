@@ -7,6 +7,7 @@
  */
 import type { DirectorOp } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
+import { isMidpointContained } from "../cut-utils";
 import type { TruthCutSpan } from "./align";
 
 export interface ProposedCutSpan {
@@ -71,8 +72,15 @@ function isWordInSpans(
 	word: TranscriptionWord,
 	spans: ProposedCutSpan[],
 ): boolean {
-	const mid = (word.start + word.end) / 2;
-	return spans.some((s) => mid >= s.startSec && mid <= s.endSec);
+	return spans.some((s) =>
+		isMidpointContained({
+			spanStart: word.start,
+			spanEnd: word.end,
+			containerStart: s.startSec,
+			containerEnd: s.endSec,
+			inclusiveEnd: true,
+		}),
+	);
 }
 
 function collectRuns(

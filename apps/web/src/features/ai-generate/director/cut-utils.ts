@@ -34,6 +34,36 @@ export function stableCutId(input: string): string {
 export const STRIP_MIN_FRAGMENT_SEC = 0.2;
 
 /**
+ * The Director's standard containment test: true when the midpoint of
+ * [spanStart, spanEnd) falls inside [containerStart, containerEnd). Used
+ * across the pipeline to decide whether a word/segment/run "belongs to"
+ * another span (word-guards, dead-air eligibility, hallucination screening,
+ * phrase-repeat segment attribution, eval scoring): a boundary that only
+ * grazes an edge should not count as touching it. Half-open by default (a
+ * midpoint sitting exactly on containerEnd is NOT contained, matching the
+ * [start, end) span convention used throughout Director); pass
+ * `inclusiveEnd: true` for a closed interval (eval scoring only).
+ */
+export function isMidpointContained({
+	spanStart,
+	spanEnd,
+	containerStart,
+	containerEnd,
+	inclusiveEnd = false,
+}: {
+	spanStart: number;
+	spanEnd: number;
+	containerStart: number;
+	containerEnd: number;
+	inclusiveEnd?: boolean;
+}): boolean {
+	const mid = (spanStart + spanEnd) / 2;
+	return inclusiveEnd
+		? mid >= containerStart && mid <= containerEnd
+		: mid >= containerStart && mid < containerEnd;
+}
+
+/**
  * Word-guard for GAP-DERIVED removals (round 6 U5): a pacing/silence tighten
  * must never contain a real word. Splits the removal on every contained word
  * (midpoint containment) into word-free sub-spans, drops fragments under
@@ -60,10 +90,14 @@ export function stripWordsFromRemoval({
 		return [op];
 	}
 	const contained = words
-		.filter((w) => {
-			const mid = (w.start + w.end) / 2;
-			return mid >= op.startSec && mid < op.endSec;
-		})
+		.filter((w) =>
+			isMidpointContained({
+				spanStart: w.start,
+				spanEnd: w.end,
+				containerStart: op.startSec,
+				containerEnd: op.endSec,
+			}),
+		)
 		.sort((a, b) => a.start - b.start);
 	if (contained.length === 0) {
 		return [op];

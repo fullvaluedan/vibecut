@@ -27,6 +27,7 @@
  */
 
 import { meanEnergyOverRange } from "./audio-features";
+import { isMidpointContained } from "./cut-utils";
 
 /** Mirrors remove-silences.ts RMS_THRESHOLD: linear RMS ceiling for "silence". */
 export const SILENCE_RMS_CEILING = 0.015;
@@ -68,10 +69,14 @@ function wordsWithin<W extends SpanText>(
 	startSec: number,
 	endSec: number,
 ): W[] {
-	return words.filter((w) => {
-		const mid = (w.start + w.end) / 2;
-		return mid >= startSec && mid < endSec;
-	});
+	return words.filter((w) =>
+		isMidpointContained({
+			spanStart: w.start,
+			spanEnd: w.end,
+			containerStart: startSec,
+			containerEnd: endSec,
+		}),
+	);
 }
 
 /** The text-side absurdity screen (no energy involved), per KTD3 leg 1. */
@@ -186,10 +191,17 @@ export function guardHallucinations<W extends SpanText, S extends SpanText>({
 		}
 	}
 
-	const cleanWords = words.filter((w) => {
-		const mid = (w.start + w.end) / 2;
-		return !hallucinatedSpans.some((s) => mid >= s.startSec && mid < s.endSec);
-	});
+	const cleanWords = words.filter(
+		(w) =>
+			!hallucinatedSpans.some((s) =>
+				isMidpointContained({
+					spanStart: w.start,
+					spanEnd: w.end,
+					containerStart: s.startSec,
+					containerEnd: s.endSec,
+				}),
+			),
+	);
 
 	return { cleanWords, cleanSegments, survivingSegmentIndices, hallucinatedSpans };
 }
