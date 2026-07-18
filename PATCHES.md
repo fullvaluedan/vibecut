@@ -311,3 +311,9 @@ All eight patches were authored and build-validated (`bun run build:web` exit 0)
 |---|---|---|---|
 | `apps/web/src/components/editor/panels/properties/index.tsx` | R1: removed the two Director takeover early-returns (`surface==="panel"` gating `DirectorPanel`/`DirectorCutPanel`) added 2026-07-01. The Director review no longer lives inside the Properties panel at all: it now has its own "Director" tab in the new `DirectorDockShell` (ours, `features/ai-generate/director/components/`), always reachable alongside Properties instead of only while a review takes over the inspector. `PropertiesPanel`'s own selection-driven element-tabs/EmptyView/HyperframesDraftsPanel logic is unchanged. | 2026-07-17 | Two early-returns + their store selectors removed; supersedes the 2026-07-01 docked-cut-panel row above |
 | `apps/web/src/app/editor/[project_id]/page.tsx` | R1: the "properties" `ResizablePanel` now mounts `DirectorDockShell` instead of `PropertiesPanel` directly. The shell owns a "Properties \| Director" tab header and renders both (kept mounted, hidden via CSS) so the Director dock's applied-lock reactor and row state survive a tab switch. One import + one line swap. | 2026-07-17 | `PropertiesPanel` itself is unchanged and still rendered, just one level deeper |
+
+## Recall passes consolidation (Addendum 9, 2026-07-18)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/features/ai-generate/store.ts` | `directorRetake` + `directorStructural` deleted outright (version bump to 4, migrate drops both persisted keys rather than freezing them at a default), following the v3 VAD delete-not-default precedent. Both recall passes (and the verify sub-pass that rides along with them) are default-ON in the app now; the eval script keeps its own opt-in `--retake`/`--structural` flags untouched. | 2026-07-18 | Fields + setters removed; migration test in `__tests__/director-recall-toggles-removed.test.ts` |

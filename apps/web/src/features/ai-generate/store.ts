@@ -84,24 +84,6 @@ interface AiSettingsStore {
 	directorVadGatedTranscriptionEnabled: boolean;
 	setDirectorVadGatedTranscriptionEnabled: (enabled: boolean) => void;
 	/**
-	 * Opt-in (default off), U4: run the dedicated retake-hunt pass during Director
-	 * analysis, surfacing word-level retakes/false-starts/flubs as OFFERED-only
-	 * review rows (never auto-applied). Default OFF per the U5 measurement verdict
-	 * (match-neutral-at-best) and R10 (nothing new auto-applies, no default loosens
-	 * without a clear scorecard justification); available, not on by default.
-	 */
-	directorRetake: boolean;
-	setDirectorRetake: (enabled: boolean) => void;
-	/**
-	 * Opt-in (default off), U3: run the dedicated structural-drop pass during
-	 * Director analysis, surfacing whole-section drops (tangents, weak takes,
-	 * over-explanation) as OFFERED-only review rows (never auto-applied). No UI
-	 * toggle yet; default stays OFF until the U4 measurement verdict, matching the
-	 * retake precedent.
-	 */
-	directorStructural: boolean;
-	setDirectorStructural: (enabled: boolean) => void;
-	/**
 	 * Low-power mode for constrained machines: pauses background transcription
 	 * and lowers the preview render scale. Heavy renders are already serialized.
 	 */
@@ -200,12 +182,6 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			setDirectorVadGatedTranscriptionEnabled: (
 				directorVadGatedTranscriptionEnabled,
 			) => set({ directorVadGatedTranscriptionEnabled }),
-
-			directorRetake: false,
-			setDirectorRetake: (directorRetake) => set({ directorRetake }),
-
-			directorStructural: false,
-			setDirectorStructural: (directorStructural) => set({ directorStructural }),
 
 			lowPowerMode: false,
 			setLowPowerMode: (lowPowerMode) => set({ lowPowerMode }),
@@ -330,7 +306,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 		}),
 		{
 			name: "framecut-ai-settings",
-			version: 3,
+			version: 4,
 			migrate: (persisted, version) =>
 				migrateAiSettings(persisted, version) as unknown as AiSettingsStore,
 		},
@@ -348,6 +324,11 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
  * the toggle, its Settings section, and the Silero pass on the default Director
  * path are gone, so a persisted value is stale data, not a preference. Drop the
  * key rather than freezing it at some default (the delete-not-default precedent).
+ * v4: directorRetake + directorStructural deleted outright (Addendum 9
+ * consolidation verdict: match gains on all four eval fixtures with AUTO harm
+ * unchanged, so both recall passes go default-ON with their Settings toggles
+ * removed, following the v3 VAD delete-not-default precedent). A persisted
+ * true/false for either key is stale data, not a preference; drop both.
  */
 export function migrateAiSettings(
 	persisted: unknown,
@@ -362,6 +343,10 @@ export function migrateAiSettings(
 	}
 	if (version < 3) {
 		delete s.directorVadDeadAirEnabled;
+	}
+	if (version < 4) {
+		delete s.directorRetake;
+		delete s.directorStructural;
 	}
 	return s;
 }
