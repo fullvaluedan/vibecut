@@ -16,6 +16,22 @@ import { applyKeeperSwap, type RedundancyReviewGroup } from "./redundancy-apply"
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
 
+/**
+ * A failed Director run (round 12 U3/R4). Before this, a failure showed only a
+ * 15-second toast and the dock reverted to idle, so a user who looked away saw
+ * nothing, ever. The dock now renders this record as a persistent error card
+ * (stage + plain-language message + Retry) until a new run starts, a run
+ * completes, or the user dismisses it.
+ */
+export interface DirectorRunError {
+	/** The progress stage the run died in (e.g. "Transcribing..."). */
+	stage: string;
+	/** Plain-language failure message (never a raw stack trace). */
+	message: string;
+	/** When it failed (epoch ms), so the card can say when. */
+	at: number;
+}
+
 /** One keep span shown as a row in Highlight mode (accept = keep, reject = drop). */
 export interface HighlightKeepRow {
 	id: string;
@@ -249,6 +265,13 @@ interface DirectorPlanState {
 	totalSec: number;
 	/** Assemble mode: the editable rough-cut draft (ordered spans + swap alternates). */
 	draft: AssemblyDraft | null;
+	/** The last failed run (round 12 U3/R4), rendered as a persistent error card in
+	 * the dock. Null when the last run succeeded, was dismissed, or none ran yet. */
+	runError: DirectorRunError | null;
+	/** Record a failed run (the catch in ai-cut-actions.ts). `at` is stamped here. */
+	setRunError: (args: { stage: string; message: string }) => void;
+	/** Dismiss the error card (also cleared by every new run and every open*). */
+	clearRunError: () => void;
 	/** Focus a dock tab directly (the tab header click handler). */
 	setDockTab: (tab: "properties" | "director") => void;
 	/** Open the auto-assemble REVIEW, docked (auto-focuses the Director tab). */
@@ -343,6 +366,7 @@ const CLEARED = {
 	preview: null,
 	totalSec: 0,
 	draft: null,
+	runError: null,
 };
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
@@ -350,6 +374,9 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	seekPreRollSec: 1,
 	setSeekPreRollSec: (sec) =>
 		set({ seekPreRollSec: Math.max(1, Math.min(10, Math.round(sec))) }),
+	setRunError: ({ stage, message }) =>
+		set({ runError: { stage, message, at: Date.now() } }),
+	clearRunError: () => set({ runError: null }),
 	setDockTab: (tab) => set({ dockTab: tab }),
 	openAssemble: ({ draft }) =>
 		set({ ...CLEARED, mode: "assemble", draft, dockTab: "director" }),

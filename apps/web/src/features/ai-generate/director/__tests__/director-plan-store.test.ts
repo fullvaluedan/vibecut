@@ -524,3 +524,58 @@ describe("setAll scoping (U8 fix): a bulk toggle respects the active row filter"
 		useDirectorPlanStore.getState().close();
 	});
 });
+
+describe("run error state (round 12 U3/R4): a failure persists until dismissed or superseded", () => {
+	const errPlan: DirectorPlan = {
+		operations: [
+			{ id: "a", op: "cut", startSec: 0, endSec: 1, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("the store starts with no run error", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("setRunError records stage + message + a timestamp", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.setRunError({ stage: "Transcribing...", message: "No speech found" });
+		const err = useDirectorPlanStore.getState().runError;
+		expect(err?.stage).toBe("Transcribing...");
+		expect(err?.message).toBe("No speech found");
+		expect(err?.at).toBeGreaterThan(0);
+		useDirectorPlanStore.getState().clearRunError();
+	});
+
+	test("clearRunError dismisses the card", () => {
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().clearRunError();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("a successful run (openCutPanel) clears the previous failure", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().openCutPanel({ plan: errPlan });
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("close clears it too", () => {
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("setRunError does not disturb an open review (dismiss returns to it)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: errPlan });
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		const s = useDirectorPlanStore.getState();
+		expect(s.plan?.operations.map((o) => o.id)).toEqual(["a"]);
+		expect(s.decisions).toEqual({ a: true });
+		useDirectorPlanStore.getState().close();
+	});
+});

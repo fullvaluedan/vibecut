@@ -317,3 +317,9 @@ All eight patches were authored and build-validated (`bun run build:web` exit 0)
 | File | Reason | Date | Notes for a future port |
 |---|---|---|---|
 | `apps/web/src/features/ai-generate/store.ts` | `directorRetake` + `directorStructural` deleted outright (version bump to 4, migrate drops both persisted keys rather than freezing them at a default), following the v3 VAD delete-not-default precedent. Both recall passes (and the verify sub-pass that rides along with them) are default-ON in the app now; the eval script keeps its own opt-in `--retake`/`--structural` flags untouched. | 2026-07-18 | Fields + setters removed; migration test in `__tests__/director-recall-toggles-removed.test.ts` |
+
+## Run feedback + robustness (round 12 U3, 2026-07-19)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/services/transcription/service.ts` | Round 12 U3/R4: worker-level `error`/`messageerror` handlers on BOTH pending promises (transcribe + model init) that reject with a plain-language message and terminate the worker (mirrors `services/vad/service.ts`) - a worker crash previously left the promise pending forever, hanging a Director run with a live-looking elapsed ticker. | 2026-07-19 | Additive listeners + a shared `cleanup()` per promise; the message protocol is unchanged |

@@ -53,6 +53,12 @@ import { planChronologicalReorder, type ChronoClip } from "./clip-chronology";
 import { expandMovesToLinkedPartners } from "./linked-reorder";
 import type { SpeechGap } from "./vad-dead-air";
 import {
+	AUX_PASS_TIMEOUT_MS,
+	composePassSignal,
+	isTimeoutAbort,
+	PLAN_PASS_TIMEOUT_MS,
+} from "./pass-timeout";
+import {
 	buildDirectorProposals,
 	type DirectorLlmAdapter,
 	type DirectorPlanResponse,
@@ -240,20 +246,37 @@ export async function runDirector({
 	}));
 
 	// LLM adapter seam (KTD2): wraps the route fetches, unchanged, same auth
-	// headers, same abort signal. `plan` throws on failure (the Director aborts, as
-	// it always has); `redundancy`/`context` throw on a route error and the pure
-	// pipeline falls back. The vision degrade/cost toast lives here because it
-	// depends on `formatVisionNotice` + `toast` (browser-only), keeping the pure
-	// pipeline free of the media/UI layer. `retake`/`structural`/`verify` (Addendum
-	// 9) are always-present fetches now; see the methods below.
+	// headers. Each fetch's signal composes the run's cancel signal with a
+	// per-pass watchdog timeout (round 12 U3/R4, see pass-timeout.ts), so a hung
+	// route can no longer spin the run forever. `plan` throws on failure (the
+	// Director aborts, as it always has, and a plan TIMEOUT throws a
+	// plain-language error); `redundancy`/`context` throw on a route error OR a
+	// timeout and the pure pipeline falls back. The vision degrade/cost toast
+	// lives here because it depends on `formatVisionNotice` + `toast`
+	// (browser-only), keeping the pure pipeline free of the media/UI layer.
+	// `retake`/`structural`/`verify` (Addendum 9) are always-present fetches now;
+	// see the methods below.
 	const llm: DirectorLlmAdapter = {
 		async plan(planInput) {
-			const res = await fetch("/api/director/plan", {
-				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
-				body: JSON.stringify(planInput),
-			});
+			let res: Response;
+			try {
+				res = await fetch("/api/director/plan", {
+					method: "POST",
+					headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+					signal: composePassSignal({ cancel: signal, timeoutMs: PLAN_PASS_TIMEOUT_MS }),
+					body: JSON.stringify(planInput),
+				});
+			} catch (e) {
+				// The plan pass is mandatory, so its watchdog timeout fails the run
+				// with a plain message (it lands in the dock's error card). A user
+				// cancel rethrows untouched and still reads as "stopped".
+				if (isTimeoutAbort(e)) {
+					throw new Error(
+						"The planning step took longer than 5 minutes and was stopped. Check your connection and AI settings, then try again.",
+					);
+				}
+				throw e;
+			}
 			if (!res.ok) {
 				const err = await res.json().catch(() => null);
 				throw new Error(err?.error ?? `Director planning failed (${res.status})`);
@@ -276,7 +299,7 @@ export async function runDirector({
 			const res = await fetch("/api/director/redundancy", {
 				method: "POST",
 				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
+				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
 			if (!res.ok) throw new Error(`Director redundancy failed (${res.status})`);
@@ -286,7 +309,7 @@ export async function runDirector({
 			const res = await fetch("/api/director/context", {
 				method: "POST",
 				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
+				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
 			if (!res.ok) throw new Error(`Director context failed (${res.status})`);
@@ -301,7 +324,7 @@ export async function runDirector({
 			const res = await fetch("/api/director/retake", {
 				method: "POST",
 				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
+				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
 			if (!res.ok) throw new Error(`Director retake failed (${res.status})`);
@@ -317,7 +340,7 @@ export async function runDirector({
 			const res = await fetch("/api/director/structural", {
 				method: "POST",
 				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
+				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
 			if (!res.ok) throw new Error(`Director structural failed (${res.status})`);
@@ -330,7 +353,7 @@ export async function runDirector({
 			const res = await fetch("/api/director/verify", {
 				method: "POST",
 				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-				signal,
+				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
 			if (!res.ok) throw new Error(`Director verify failed (${res.status})`);

@@ -39,7 +39,11 @@ function beginRun(label: string): AbortController {
 	activity.setLabel(label);
 	activity.setStage("Starting...");
 	activity.setCancel(() => controller.abort());
-	useDirectorPlanStore.getState().setDockTab("director");
+	const planStore = useDirectorPlanStore.getState();
+	// A new run supersedes the previous failure: clear the dock's error card
+	// (round 12 U3/R4) so the Running view is what the user sees.
+	planStore.clearRunError();
+	planStore.setDockTab("director");
 	return controller;
 }
 
@@ -94,8 +98,11 @@ export async function runRemoveSilencesAction({
 	}
 }
 
-/** AI Director: plans then opens the docked review (that panel owns apply + the
- * result toast, so this flow has no success toast of its own). */
+/** AI Director: plans then opens the docked review (that panel owns apply; this
+ * flow announces completion with a one-line toast, round 12 U3/R4). A failure
+ * writes a persistent error record into the plan store (the dock renders it as
+ * an error card with Retry), so the 15-second toast is no longer the only
+ * evidence a run died. */
 export async function runDirectorAction({ editor }: { editor: EditorCore }): Promise<void> {
 	if (isAiCutBusy()) return;
 	const controller = beginRun("AI Director");
@@ -110,13 +117,27 @@ export async function runDirectorAction({ editor }: { editor: EditorCore }): Pro
 			},
 			signal: controller.signal,
 		});
-		toast.dismiss(toastId);
+		// The review just opened with a fresh plan (runDirector resolves after
+		// openCutPanel), so read the proposed-change count straight from the store.
+		const opCount =
+			useDirectorPlanStore.getState().plan?.operations.length ?? 0;
+		toast.success(
+			`Director's cut ready - ${opCount} proposed change${opCount === 1 ? "" : "s"}`,
+			{ id: toastId },
+		);
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		if (message === "Cancelled" || controller.signal.aborted) {
 			toast.info("AI Director stopped", { id: toastId });
 		} else {
 			console.error(`AI Director failed during "${lastStage.current}"`, e);
+			// Persist the failure so the dock shows an error card until the user
+			// dismisses it or a new run starts (round 12 U3/R4). The toast stays as
+			// the immediate signal, but it is no longer the only evidence.
+			useDirectorPlanStore.getState().setRunError({
+				stage: lastStage.current,
+				message,
+			});
 			toast.error("AI Director failed", {
 				id: toastId,
 				duration: 15000,
