@@ -2,6 +2,13 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Director round 9 — review defaults + dock UX (2026-07-18, commits `048a8d01`..`5e9d0bc7`, branch `feat/director-eval`)
+Your four asks from the finished-video run. Re-run **AI CUT → AI Director** on that same video and check:
+- [ ] **Trailing speculation kept.** The trailing-speculation cuts (like the 4:11-4:31 "edge case... IPO soon" one) now arrive as **unchecked** rows with a **Speculation** badge and "Keeping the speculation". Your deliberate musings stay in unless you opt in to the cut. Incoherent rambling should still auto-cut - if the model mis-files one direction or the other, tell me which clip time and I'll tighten the prompt rule.
+- [ ] **Smooth fillers unchecked.** Fillers inside continuous speech ("kind of" at 0:24.7, the "you know"s) start **unchecked** with reason "...speech flows through". A filler next to a real pause still auto-cuts. If one you WANTED auto-cut shows up unchecked (or vice versa), note the timestamp - the dial is `SMOOTH_GAP_SEC` (0.2s) in filler-words.ts.
+- [ ] **Timestamp click jumps the timeline.** Click any row's timecode: the playhead seeks to (cut start - lead-in) and PLAYS, so you watch the transition into the cut. The **Lead-in slider** (1-10s, default 1s) sits under the filter tabs; drag it and clicks honor the new value. It keeps its value if you cancel and re-run.
+- [ ] **No Done button; review persists.** After Apply, the panel stays open indefinitely - toggle rows on/off any time and the timeline updates live (unchecking an applied cut brings the segment back). Starting a NEW AI CUT run replaces the list. Cancel still exists before Apply. Known edge: if you leave the A/B on "Preview original" and start a new run, flip back with the A/B button first.
+
 ## Ripple-drag live preview (2026-07-17, commit `3d93a3d9`, branch `feat/director-eval`)
 Closes round 8's known v1 limitation: with **Ripple editing ON**, a right-handle trim now shifts the downstream clips ON SCREEN during the drag instead of them jumping at mouseup. Numerically verified in-app (3 butted clips; preview shifts tracked the drag both directions, a drag back to the origin restored exact base positions, and the commit matched the final preview to the tick). Confirm the FEEL on real footage:
 - [ ] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps.
