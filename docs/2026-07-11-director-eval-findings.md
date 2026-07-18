@@ -282,3 +282,31 @@ Three verdicts fall out:
 
 The consolidation comparison (same three draws with `--retake --structural`, verify auto-on) ran
 next; its verdict follows in Addendum 9.
+
+## ADDENDUM 9 (2026-07-18): the consolidation verdict, measured against distributions
+
+Same three draws with the recall passes on (`--llm --runs 3 --retake --structural`, verify auto-on).
+Mean +/- std, toggles-on vs the Addendum 8 baseline:
+
+| fixture | match adj base -> cons | AUTO essLost base -> cons | OFFERED essLost base -> cons | recall base -> cons |
+|---|---|---|---|---|
+| google-omni | 62.3+/-0.9 -> 63.2+/-2.4 | 9.0 -> 8.7 | 106 -> 157 | 29.8% -> 38.6% |
+| hermes-cloud | 78.8+/-0.4 -> 80.5+/-1.8 | 58.3 -> 58.0 | 306 -> 465 | 43.6% -> 65.5% |
+| how-to-edit | 36.7+/-0.2 -> 39.3+/-0.4 | 35.0 -> 35.0 | 98 -> 103 | 21.9% -> 30.8% |
+| pokemon-tcg | 83.5+/-1.3 -> 85.6+/-1.0 | 16.3 -> 16.0 | 135 -> 144 | 45.7% -> 58.4% |
+
+**Verdict: default-on is justified.** The round-5 criterion was "match gains beyond noise without
+AUTO harm." Measured: match adj rises on ALL FOUR fixtures; how-to-edit (+2.6 at std 0.4) and
+pokemon (+2.1 at std ~1) are clear signal, hermes (+1.7) is borderline-positive, google (+0.9) is
+within noise but non-negative. AUTO essential-words-lost is IDENTICAL on every fixture (the recall
+rows are OFFERED-only by construction), so the one-click apply stays near-harmless with the passes
+always on.
+
+**Costs, named:** (a) every Director run pays 3 extra LLM passes (retake, structural, verify);
+(b) the review list grows, and the offered rows' worst-case damage-if-blindly-accepted rises
+(hermes OFFERED essLost 306 -> 465 mean, max 649) - these rows start unchecked, so this is review
+burden, not applied harm; (c) hermes' stable-high AUTO essLost (~58) is untouched by consolidation
+and remains the top targeted hunt (Addendum 8 verdict 3).
+
+Consolidation per the round-5 framing: retake + structural default-on with the Settings toggles
+deleted (the VAD delete-not-default precedent), verify riding along as it already does.
