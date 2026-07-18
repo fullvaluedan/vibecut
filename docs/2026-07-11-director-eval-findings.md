@@ -321,3 +321,73 @@ two near-identical" cuts. The round-11 lever is therefore the near-verbatim AUTO
 choice vs Dan's, and a deliberate-repeat signal (bookend/sign-off lines repeat ON PURPOSE) that
 should demote even near-verbatim groups to opt-in. Pacing is a minor contributor (10 words), not
 the driver.
+
+## ADDENDUM 10 (2026-07-18): round 11, the same-segment vacuity, AUTO harm down a third suite-wide
+
+The postscript pointed at "deliberate-repeat protection" for the whole de-dup family. Diagnosis
+split that family in two and only the SMALLER half turned out to be about deliberate repeats.
+
+**The mechanism (not a hypothesis, a self-comparison bug).** `detectPhraseRepeatCuts` earns its
+AUTO default from the round-6 U4 gate: the two occurrences' containing SEGMENTS must be
+near-identical (`similarity >= HIGH_SIMILAR`). When both occurrences fall inside ONE segment, that
+test compares a segment with ITSELF and returns 1.0 unconditionally. The gate was vacuous for every
+intra-segment repeat, which is the ordinary shape of a mid-sentence stumble. The module's own doc
+comment names the failure it was built to stop ("We are going to build it" vs "we are going to
+showcase"); that example is CROSS-segment, and Dan's real footage is not.
+
+Measured on hermes over the 31 AUTO phrase-repeat ops (deterministic diagnostic, no LLM):
+
+| gate evidence | Dan KEPT (bad cut) | Dan CUT (good cut) | residual similarity |
+|---|---|---|---|
+| same-segment | 17 | 6 | 1.00 on every single op |
+| no-residual (segment adds nothing past the phrase) | 2 | 3 | n/a |
+| real-evidence (cross-segment, residual both sides) | 1 | 2 | 0.24-0.74 |
+
+Same-segment matches now demote to an unchecked review row. The other two buckets are untouched:
+their ratios do not justify it and the sample is small.
+
+**The result, 3-run means, before -> after:**
+
+| fixture | AUTO essLost | OFFERED match adj | AUTO match adj (draw 1) |
+|---|---|---|---|
+| google-omni | 9.0 -> 8.0 | 62.3 -> 62.3 | 59.0 -> 58.3 |
+| hermes-cloud | 58.3 -> 44.3 | 78.8 -> 78.8 | 76.4 -> 75.5 |
+| how-to-edit | 35.0 -> 20.0 | 36.7 -> 36.7 | 33.9 -> 33.8 |
+| pokemon-tcg | 16.3 -> 7.3 | 83.5 -> 83.5 | 82.2 -> 81.7 |
+| **suite** | **29.7 -> 19.9 (-33%)** | 65.3 -> 65.3 | |
+
+Three things make this readable as signal rather than luck:
+
+1. **The deltas are exactly deterministic.** Each fixture's std is UNCHANGED (hermes 1.9 both
+   sides) and its min/max moved by the identical amount (hermes 57-61 -> 43-47, -14 on both ends).
+   The change shifts every draw by a constant; it is not a lucky draw.
+2. **Every OFFERED metric is identical to the decimal on all four fixtures.** That is structural
+   (KTD2: demote, never drop) and it means nothing was lost, only moved to one click away. It also
+   serves as the change's own regression test: any OFFERED movement would have been a bug.
+3. **It was never a hermes problem.** how-to-edit (-15.0) and pokemon (-9.0) benefited as much or
+   more than hermes (-14.0). The vacuity was firing on every fixture; the attribution only looked
+   at hermes.
+
+**The cost, named honestly.** AUTO match adjusted falls 0.1 to 0.9 points per fixture, and AUTO cut
+recall on hermes halves (13.0% -> 7.2%). This is NOT the lever cutting worse, it is the lever
+cutting LESS: AUTO match sits essentially AT its span-discipline ceiling both before and after
+(hermes 75.5 vs a 76.3 ceiling, google 58.3 vs 58.3), and the ceiling itself moved down by the same
+amount. By word count the demoted ops were 87% correct (96 correctly-cut words vs 14 wrongly
+destroyed), so this trades a real amount of useful automatic cutting for a third less destroyed
+dialog. The round-5 criterion prioritizes AUTO harmlessness and every demoted cut is still one
+click away, which is why it ships; Dan's taste pass is the check on whether that weighting is right
+for how he actually works.
+
+**Methodological warning for the next round.** The op-level contingency table above (17 bad : 6
+good) predicted a much cleaner win than the word-level eval delivered, because an op that cuts 40
+words where Dan kept 2 counts as "bad" in an op-level table and is 95% good in the eval. Op counts
+are fine for LOCATING a mechanism and misleading for SIZING it. Size with the eval.
+
+**What is left on hermes AUTO (44.3).** By category: redundancy 16, pacing 10, cut 8, duplicate 3,
+filler 3, repeat 3. The de-dup family is now 19 (was 33) and the `repeat` half is essentially
+solved (17 -> 3). The top remaining lever is the LLM redundancy pass's 16 words, which IS the
+deliberate-repeat problem: Dan's sign-off "But we don't do that here at Full Value, Dan." The
+handoff's bookend framing does not fit it, though. The two instances are 4 seconds apart (16:18 and
+16:22), an immediately-repeated catchphrase, not a far-apart callback. Round 12 should attribute the
+redundancy AUTO groups the same way this round attributed the phrase-repeat ops before designing a
+signal, rather than reasoning from the word "bookend".

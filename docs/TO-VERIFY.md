@@ -2,6 +2,11 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 11: fewer auto-checked repeat cuts (2026-07-18, commit `06784d9d`, branch `feat/director-eval`)
+A repeat detector was auto-checking cuts on no real evidence: when you say a phrase twice inside ONE sentence ("we are going to start this up, we are going to launch a small instance"), its safety check was comparing that sentence against itself and always passing. Those rows now start UNCHECKED. Measured across all four eval fixtures, the one-click apply destroys **a third less of your kept dialog** (suite mean 29.7 to 19.9 words); nothing was removed from the review list, so every one of those cuts is still one click away.
+- [ ] **The trade, which is yours to judge.** One-click apply now cuts less on its own: it does less damage, but it also leaves more for you to check off. On a real run, does the safer default feel right, or did the Director get too timid? If it feels timid, say so and I will narrow the rule to only the cases where you repeat a phrase deliberately.
+- [ ] **The unchecked rows read sensibly.** Rows demoted this way say `repeats INSIDE one sentence: a stumble or deliberate emphasis, review before cutting`. When you hit one, is it usually a stumble you WOULD cut? If nearly all of them are, that is the signal to loosen the rule.
+
 ## Recall-pass consolidation — retake/structural always on (2026-07-18, commits `8ceabc51`..`6641603e`, branch `feat/director-eval`)
 Addendum 9 measured it (match up on all four fixtures, one-click harm identical), so per your round-5 framing the retake and structural passes now ALWAYS run and their two Settings toggles are gone (store v4 migration drops the old fields silently). What to feel for on a real run:
 - [ ] **More review rows, same safe apply.** Runs now surface retake + structural rows (all unchecked opt-ins) every time. The one-click apply should feel unchanged; the review list is longer. If the extra rows feel like noise rather than recall, say so - the levers are the pass floors, not the deleted toggles.
