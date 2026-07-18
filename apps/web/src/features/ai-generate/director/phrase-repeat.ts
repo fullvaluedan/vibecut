@@ -23,6 +23,15 @@
  * segments (legacy callers) behavior is unchanged. Aligns with the repeat
  * brainstorm R7: the LLM redundancy pass is the primary repeat catcher and the
  * lexical detectors are its high-precision backstop.
+ *
+ * Round 11 (hermes AUTO essLost attribution): the U4 gate had a hole. When BOTH
+ * occurrences of the phrase live inside ONE segment, the similarity test compares
+ * that segment with ITSELF and returns 1.0 no matter what, so every intra-segment
+ * repeat kept its AUTO default unchecked by any real evidence. That is the common
+ * shape of a mid-sentence stumble ("we are going to start this up we are going to
+ * launch a small instance"), and on hermes 17 of the 23 ops that took this path
+ * destroyed dialog Dan KEPT. Same-segment matches now demote to a review row; the
+ * cross-segment comparison, which has two distinct texts to weigh, is unchanged.
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
@@ -124,6 +133,9 @@ export function detectPhraseRepeatCuts({
 			// near-identical WHOLE segments is a true retake worth an AUTO cut.
 			// A shared n-gram across different sentences demotes to review.
 			let confirmedRetake = true;
+			// True when both occurrences resolved to the SAME segment, i.e. the
+			// similarity test had nothing to compare against (round 11).
+			let sameSegment = false;
 			// An EMPTY segments array carries no information to gate on (degraded
 			// transcripts, tests): legacy behavior, same as absent.
 			if (segments && segments.length > 0) {
@@ -131,7 +143,12 @@ export function detectPhraseRepeatCuts({
 				const laterEnd = tokens[Math.min(bestJ + len - 1, tokens.length - 1)];
 				const earlierSeg = containingSegment(startTok.start, endTok.end);
 				const laterSeg = containingSegment(laterStart.start, laterEnd.end);
+				// Identity, not text equality: `containingSegment` returns the element
+				// from the caller's array, so one segment holding both occurrences is
+				// exactly `earlierSeg === laterSeg` and needs no tolerance constant.
+				sameSegment = earlierSeg !== null && earlierSeg === laterSeg;
 				confirmedRetake =
+					!sameSegment &&
 					earlierSeg !== null &&
 					laterSeg !== null &&
 					similarity({ a: earlierSeg.text, b: laterSeg.text }) >= HIGH_SIMILAR;
@@ -143,7 +160,9 @@ export function detectPhraseRepeatCuts({
 				endSec: endTok.end,
 				reason: confirmedRetake
 					? `Repeated phrase "${preview}${len > 6 ? "…" : ""}": earlier of two near-identical takes`
-					: `Phrase "${preview}${len > 6 ? "…" : ""}" recurs in a DIFFERENT sentence: likely natural repetition, review before cutting`,
+					: sameSegment
+						? `Phrase "${preview}${len > 6 ? "…" : ""}" repeats INSIDE one sentence: a stumble or deliberate emphasis, review before cutting`
+						: `Phrase "${preview}${len > 6 ? "…" : ""}" recurs in a DIFFERENT sentence: likely natural repetition, review before cutting`,
 				// A longer verbatim run is a stronger restart signal.
 				confidence: Math.min(0.9, 0.55 + (bestLen - minPhraseWords) * 0.05),
 				category: "repeat",
