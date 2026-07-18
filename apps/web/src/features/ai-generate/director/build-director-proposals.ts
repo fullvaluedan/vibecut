@@ -49,6 +49,7 @@ import {
 	detectEnvelopeDeadAirCuts,
 } from "./envelope-dead-air";
 import { swallowPauseBounds } from "./swallow-pause";
+import { detectJoinTextureCuts } from "./join-texture";
 import { clampCutExtent } from "./clamp-cut-extent";
 import { refineCutWordBounds } from "./refine-cut-words";
 import { resolveTrimVsCut } from "./resolve-trim-vs-cut";
@@ -1031,6 +1032,21 @@ export async function buildDirectorProposals(
 		words,
 		floorSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
 	});
+	// Join-texture layer (round 12 U1, KTD1): only now, with every pass merged,
+	// snapped, refined, and justified, do adjacent default-accepted cut spans
+	// exist to pair - a join is a property of the ASSEMBLED result, not of any
+	// single pass. Wordless slivers between accepted cuts swallow AUTO (zero
+	// kept words, metric-invisible, KTD3); short stranded word fragments become
+	// OFFERED rows Dan or the final-read pass judges (KTD2). Appended, never
+	// merged: a join op covers the GAP between removals, so the overlap-dedup
+	// rules above have nothing to say about it.
+	const joinCuts = detectJoinTextureCuts({ ops: operations, words });
+	// Appended then re-sorted by start (the pinned op-list invariant); with zero
+	// joins the list is byte-identical to the join-less pipeline.
+	const finalOperations =
+		joinCuts.length > 0
+			? [...operations, ...joinCuts].sort((a, b) => a.startSec - b.startSec)
+			: operations;
 	// Spans the APPLY-time coalescer must never swallow (review F5): every plan-time
 	// keeper (a word-free protected pause has no word-guard protection at apply) plus
 	// each cut justify reverted just above (re-swallowing it would re-create the exact
@@ -1060,7 +1076,7 @@ export async function buildDirectorProposals(
 	void config.visionEnabled;
 
 	return {
-		operations,
+		operations: finalOperations,
 		nearTies,
 		redundancyGroups: redundancyReviewGroups,
 		protectedSpans,

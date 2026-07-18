@@ -69,6 +69,15 @@ describe("describeReviewOp", () => {
 		expect(rejected.rejectedHint).toBe("Keeping this content");
 	});
 
+	test("a join cut shows the badge; rejecting keeps the fragment (round 12)", () => {
+		const accepted = describeReviewOp({ op: op({ op: "cut", category: "join" }), accepted: true });
+		expect(accepted.badge).toBe("Cut");
+		expect(accepted.categoryBadge).toBe("Join");
+		expect(accepted.rejectedHint).toBe("");
+		const rejected = describeReviewOp({ op: op({ op: "cut", category: "join" }), accepted: false });
+		expect(rejected.rejectedHint).toBe("Keeping the fragment");
+	});
+
 	test("a reorder never gets a rejected hint", () => {
 		expect(describeReviewOp({ op: op({ op: "reorder" }), accepted: false }).rejectedHint).toBe("");
 		expect(describeReviewOp({ op: op({ op: "reorder" }), accepted: true }).badge).toBe("Reorder");

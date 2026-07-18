@@ -120,4 +120,14 @@ describe("justifyCuts (2P-U5 / R9)", () => {
 		expect(out).toHaveLength(1);
 		expect(out[0].category).toBe("speculation");
 	});
+
+	test("join rows are justified removals (round 12: sub-floor by construction, never reverted)", () => {
+		const words = [word("one", 0, 0.4), word("two", 0.6, 1.0)];
+		const ops = [
+			cut({ startSec: 0.4, endSec: 0.6, category: "join", reason: "silent sliver between cuts" }),
+		];
+		const out = justifyCuts({ ops, words, floorSec: FLOOR_SEC });
+		expect(out).toHaveLength(1);
+		expect(out[0].category).toBe("join");
+	});
 });
