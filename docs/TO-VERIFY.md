@@ -2,6 +2,11 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Recall-pass consolidation — retake/structural always on (2026-07-18, commits `8ceabc51`..`6641603e`, branch `feat/director-eval`)
+Addendum 9 measured it (match up on all four fixtures, one-click harm identical), so per your round-5 framing the retake and structural passes now ALWAYS run and their two Settings toggles are gone (store v4 migration drops the old fields silently). What to feel for on a real run:
+- [ ] **More review rows, same safe apply.** Runs now surface retake + structural rows (all unchecked opt-ins) every time. The one-click apply should feel unchanged; the review list is longer. If the extra rows feel like noise rather than recall, say so - the levers are the pass floors, not the deleted toggles.
+- [ ] **Run time.** Every Director run now makes 3 extra LLM calls (retake, structural, verify). If runs feel meaningfully slower, tell me and I'll look at parallelizing the passes.
+
 ## Director round 9 — review defaults + dock UX (2026-07-18, commits `048a8d01`..`5e9d0bc7`, branch `feat/director-eval`)
 Your four asks from the finished-video run. AGENT-VERIFIED live in-app (2026-07-18, synthetic plan through the real dock + timeline, numeric via `window.__vibeEditor` + the new `window.__directorPlanStore` dev hook): speculation and smooth-filler rows start unchecked with badges + hints; timestamp click seeks to start minus lead-in and plays (29.0s at 1s, 25.0s at 5s for a 30s cut); slider updates store + label; no Done in any phase; Apply 60s -> 56.4s, uncheck restored the 3s segment (59.4s), recheck re-applied, panel persisted. Also verified pipeline-side by the four-fixture eval: speculation ops are OFFERED-only on every fixture, fillers shifted heavily AUTO -> OFFERED. What's left is the TASTE judgment only - run **AI CUT → AI Director** on your real footage and confirm:
 - [ ] **Speculation tagging matches your intent.** The model should tag YOUR coherent trailing musings (kept, unchecked) but still auto-cut incoherent rambling. If it mis-files one direction or the other, tell me the clip time and I'll tighten the prompt rule.
