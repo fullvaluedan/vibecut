@@ -21,7 +21,9 @@
  * are derived from word gaps and sentence punctuation.
  *
  *   bun scripts/director-eval.ts --llm [dir]      # FULL pipeline (detectors + 3 LLM passes)
- *   bun scripts/director-eval.ts --llm --runs 3   # 3 live passes, mean/spread of the headline numbers
+ *   bun scripts/director-eval.ts --llm --runs 3   # 3 independent live draws per fixture: mean/std/
+ *                                                  # min/max of the headline numbers, per fixture and
+ *                                                  # pooled across fixtures (round-5 variance lesson)
  *   bun scripts/director-eval.ts --llm --auth api-key   # ANTHROPIC_API_KEY instead of claude-code
  *
  * Scope note: WITHOUT --llm this measures the DETERMINISTIC layers only. WITH
@@ -52,6 +54,7 @@ import {
 	type ProposedCutSpan,
 	type Scorecard,
 } from "@/features/ai-generate/director/eval/score";
+import { formatAggregateTable } from "@/features/ai-generate/director/eval/aggregate";
 import { detectDuplicateWordCuts } from "@/features/ai-generate/director/duplicate-words";
 import { detectFillerCuts } from "@/features/ai-generate/director/filler-words";
 import { buildTakeClusters, type KeeperPolicy } from "@/features/ai-generate/director/take-clusters";
@@ -242,13 +245,6 @@ const fmtSources = (bySource: Record<string, number>): string =>
 		.map(([k, v]) => `${k}:${v}`)
 		.join("  ") || "(none)";
 
-/** mean ± spread (max-min) over a sample. */
-function meanSpread(xs: number[]): { mean: number; spread: number } {
-	if (xs.length === 0) return { mean: 0, spread: 0 };
-	const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
-	return { mean, spread: Math.max(...xs) - Math.min(...xs) };
-}
-
 function printLlmFixture(
 	name: string,
 	runs: DualScorecard[],
@@ -272,19 +268,11 @@ function printLlmFixture(
 		console.log(`moved (reordered)      ${noise.movedWords} words (excluded from truth cuts)`);
 	}
 	if (runs.length > 1) {
-		const pctMS = (xs: number[]) => {
-			const { mean, spread } = meanSpread(xs);
-			return `${(mean * 100).toFixed(1)}% (spread ${(spread * 100).toFixed(1)}pp)`;
-		};
-		const numMS = (xs: number[]) => {
-			const { mean, spread } = meanSpread(xs);
-			return `${mean.toFixed(1)} (spread ${spread})`;
-		};
-		console.log(`\n-- variance across ${runs.length} live runs --`);
-		console.log(`auto cut recall        ${pctMS(runs.map((r) => r.auto.cutRecall))}`);
-		console.log(`auto essential lost    ${numMS(runs.map((r) => r.auto.essentialWordsLost))}`);
-		console.log(`offered cut recall     ${pctMS(runs.map((r) => r.offered.cutRecall))}`);
-		console.log(`offered essential lost ${numMS(runs.map((r) => r.offered.essentialWordsLost))}`);
+		// The variance round (round-5 lesson): a single draw is too noisy to tune
+		// thresholds against, so print mean/std/min/max for the headline metrics
+		// across the N live runs of THIS fixture.
+		console.log("");
+		console.log(formatAggregateTable(name, runs));
 	}
 	console.log("");
 }
@@ -331,6 +319,9 @@ async function runLlmMode({
 	if (auth.mode === "claude-code") verifyClaudeCli();
 
 	const jsonOut: unknown[] = [];
+	// Pooled across every fixture's runs (only populated when runs > 1), for the
+	// "total across fixtures" block the variance round asks for.
+	const allRuns: DualScorecard[] = [];
 	for (const fixture of fixtures) {
 		requireAudioFields(fixture);
 		// Ground truth is deterministic — align once, reuse across the live runs.
@@ -385,6 +376,7 @@ async function runLlmMode({
 				}),
 			);
 		}
+		if (runs > 1) allRuns.push(...runResults);
 		if (wantJson) {
 			jsonOut.push({
 				name: fixture.name,
@@ -399,6 +391,17 @@ async function runLlmMode({
 				substitutionWords: alignment.substitutionWords,
 				rawWordCount: fixture.rawWords.length,
 			});
+		}
+	}
+	// Total across fixtures (round-5 lesson, variance round): only meaningful once
+	// there is more than one live draw per fixture, and purely additive: `--runs 1`
+	// (the default) never reaches this branch, so today's output is untouched.
+	if (runs > 1 && allRuns.length > 0) {
+		if (wantJson) {
+			jsonOut.push({ name: "__all_fixtures__", totalAcrossFixtures: true, runs: allRuns });
+		} else {
+			console.log(formatAggregateTable("total across fixtures", allRuns));
+			console.log("");
 		}
 	}
 	if (wantJson) console.log(JSON.stringify(jsonOut, null, 2));
