@@ -310,3 +310,14 @@ and remains the top targeted hunt (Addendum 8 verdict 3).
 
 Consolidation per the round-5 framing: retake + structural default-on with the Settings toggles
 deleted (the VAD delete-not-default precedent), verify riding along as it already does.
+
+**Postscript (same day): the hermes AUTO harm is attributed.** The new per-op essLost attribution
+(cached re-score, zero LLM cost) refutes the Addendum 8 pacing hypothesis. hermes AUTO essLost 57
+splits: repeat 17 + redundancy 16 (the DE-DUP family, 58%), pacing 10, cut 8, duplicate 3,
+filler 3. The top offenders are near-verbatim de-dup cuts destroying instances Dan KEPT, including
+his signature sign-off "But we don't do that here at Full Value, Dan." (10 words, a redundancy
+group whose keeper choice or whose existence Dan overrode) and two "Repeated phrase: earlier of
+two near-identical" cuts. The round-11 lever is therefore the near-verbatim AUTO path: keeper
+choice vs Dan's, and a deliberate-repeat signal (bookend/sign-off lines repeat ON PURPOSE) that
+should demote even near-verbatim groups to opt-in. Pacing is a minor contributor (10 words), not
+the driver.
