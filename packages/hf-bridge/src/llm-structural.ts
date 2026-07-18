@@ -28,6 +28,14 @@ import {
 } from "./llm-reference-sanitizer";
 import type { ClaudeAuth } from "./types";
 
+/**
+ * Bumped on every WORDING change to the structural prompt. The eval cache keys on
+ * the pass INPUT payload, so a prompt revision without an input change would
+ * silently replay stale cached drops; the adapter folds this version into the
+ * payload so wording changes bust the cache (the VERIFY_PROMPT_VERSION precedent).
+ */
+export const STRUCTURAL_PROMPT_VERSION = 1;
+
 /** A timeline span the pipeline already removes (cut/take_select), in seconds. */
 export interface StructuralHandledSpan {
 	startSec: number;

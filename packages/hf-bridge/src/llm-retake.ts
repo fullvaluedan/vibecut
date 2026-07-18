@@ -30,6 +30,14 @@ import {
 	type ReferenceCatalog,
 } from "./llm-reference-sanitizer";
 
+/**
+ * Bumped on every WORDING change to the retake prompt. The eval cache keys on the
+ * pass INPUT payload, so a prompt revision without an input change would silently
+ * replay stale cached candidates; the adapter folds this version into the payload
+ * so wording changes bust the cache (the VERIFY_PROMPT_VERSION precedent).
+ */
+export const RETAKE_PROMPT_VERSION = 1;
+
 /** One transcript word with its own timing (the granularity a retake cut spans). */
 export interface RetakeWord {
 	text: string;

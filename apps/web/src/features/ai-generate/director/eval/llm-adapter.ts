@@ -29,6 +29,8 @@ import {
 	planStructural,
 	planVerify,
 	DIRECTOR_PROMPT_VERSION,
+	RETAKE_PROMPT_VERSION,
+	STRUCTURAL_PROMPT_VERSION,
 	VERIFY_PROMPT_VERSION,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
@@ -330,18 +332,26 @@ export function createEvalLlmAdapter(
 					async retake(
 						input: DirectorRetakeRequest,
 					): Promise<DirectorRetakeResponse> {
-						return cachedCall("retake", input, async () => {
-							// handledSpans + removalHint ride the payload, so the cache
-							// key busts automatically when the mask or hint changes (KTD7).
-							const { plan, usage } = await planners.retake({
-								words: input.words,
-								handledSpans: input.handledSpans,
-								removalHint: input.removalHint,
-								taste: input.taste,
-								auth,
-							});
-							return { plan, usage };
-						});
+						// RETAKE_PROMPT_VERSION rides the payload (the VERIFY_PROMPT_VERSION
+						// precedent): a prompt WORDING change has no input-shape footprint,
+						// and without the version the eval would silently replay stale
+						// cached candidates.
+						return cachedCall(
+							"retake",
+							{ ...input, promptVersion: RETAKE_PROMPT_VERSION },
+							async () => {
+								// handledSpans + removalHint ride the payload, so the cache
+								// key busts automatically when the mask or hint changes (KTD7).
+								const { plan, usage } = await planners.retake({
+									words: input.words,
+									handledSpans: input.handledSpans,
+									removalHint: input.removalHint,
+									taste: input.taste,
+									auth,
+								});
+								return { plan, usage };
+							},
+						);
 					},
 				}
 			: {}),
@@ -361,18 +371,27 @@ export function createEvalLlmAdapter(
 							structuralRemovalHint !== undefined
 								? { ...input, removalHint: structuralRemovalHint }
 								: input;
-						return cachedCall("structural", effective, async () => {
-							// lines + handledSpans + removalHint ride the payload, so the cache
-							// key busts automatically when the mask or hint changes (KTD7).
-							const { plan, usage } = await planners.structural({
-								lines: effective.lines,
-								handledSpans: effective.handledSpans,
-								removalHint: effective.removalHint,
-								taste: effective.taste,
-								auth,
-							});
-							return { plan, usage };
-						});
+						// STRUCTURAL_PROMPT_VERSION rides the payload (the
+						// VERIFY_PROMPT_VERSION precedent): a prompt WORDING change has no
+						// input-shape footprint, and without the version the eval would
+						// silently replay stale cached drops.
+						return cachedCall(
+							"structural",
+							{ ...effective, promptVersion: STRUCTURAL_PROMPT_VERSION },
+							async () => {
+								// lines + handledSpans + removalHint ride the payload, so the
+								// cache key busts automatically when the mask or hint changes
+								// (KTD7).
+								const { plan, usage } = await planners.structural({
+									lines: effective.lines,
+									handledSpans: effective.handledSpans,
+									removalHint: effective.removalHint,
+									taste: effective.taste,
+									auth,
+								});
+								return { plan, usage };
+							},
+						);
 					},
 				}
 			: {}),
