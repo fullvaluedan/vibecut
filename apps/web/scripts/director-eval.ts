@@ -55,6 +55,12 @@ import {
 	type Scorecard,
 } from "@/features/ai-generate/director/eval/score";
 import { formatAggregateTable } from "@/features/ai-generate/director/eval/aggregate";
+import {
+	attributeEssentialWordsLost,
+	formatByCategoryLine,
+	formatTopOffendingOps,
+	type EssentialLossAttribution,
+} from "@/features/ai-generate/director/eval/attribution";
 import { detectDuplicateWordCuts } from "@/features/ai-generate/director/duplicate-words";
 import { detectFillerCuts } from "@/features/ai-generate/director/filler-words";
 import { buildTakeClusters, type KeeperPolicy } from "@/features/ai-generate/director/take-clusters";
@@ -245,17 +251,39 @@ const fmtSources = (bySource: Record<string, number>): string =>
 		.map(([k, v]) => `${k}:${v}`)
 		.join("  ") || "(none)";
 
+/** Print the essLost-by-category line and top-offending-ops block for one
+ * section (AUTO or OFFERED), but only when that section actually lost
+ * essential words: an untouched fixture prints no attribution lines at all,
+ * so every existing report stays byte-identical. */
+function printAttribution(
+	essentialWordsLost: number,
+	attribution: EssentialLossAttribution,
+): void {
+	if (essentialWordsLost <= 0) return;
+	const categoryLine = formatByCategoryLine(attribution);
+	if (categoryLine) console.log(categoryLine);
+	const opLines = formatTopOffendingOps(attribution);
+	if (opLines) for (const line of opLines) console.log(line);
+}
+
 function printLlmFixture(
 	name: string,
 	runs: DualScorecard[],
 	noise: { movedWords: number; substitutionWords: number; rawWordCount: number },
+	/** First run's essLost attribution (auto + offered), for the "which ops
+	 * destroyed which kept words" lines. Mirrors `runs[0]`: attribution
+	 * printing is scoped to the same single draw the rest of the section
+	 * details (falseCutSpans, missedSpans) already report against. */
+	attribution: { auto: EssentialLossAttribution; offered: EssentialLossAttribution },
 ): void {
 	const first = runs[0];
 	console.log(formatScorecard(`${name} — AUTO (one-click apply)`, first.auto));
 	console.log(`proposals by source    ${fmtSources(first.autoBySource)}`);
+	printAttribution(first.auto.essentialWordsLost, attribution.auto);
 	console.log("");
 	console.log(formatScorecard(`${name} — OFFERED (all review rows)`, first.offered));
 	console.log(`proposals by source    ${fmtSources(first.offeredBySource)}`);
+	printAttribution(first.offered.essentialWordsLost, attribution.offered);
 	// Noise share: the label-noise words the adjusted match rate excludes, so the
 	// raw-vs-adjusted gap is legible next to the headline number.
 	const noiseWords = noise.substitutionWords + noise.movedWords;
@@ -344,6 +372,13 @@ async function runLlmMode({
 				`verify=${verify ? "on" : "off"}  clamp=${clamp ? "on" : "off"}`,
 		);
 		const runResults: DualScorecard[] = [];
+		// Per-run essLost attribution (auto + offered), parallel to `runResults`:
+		// which op(s) destroyed which kept words, for the hermes-class "stable-high
+		// AUTO essLost" hunt (ADDENDUM 8) that the plain scorecard can't answer.
+		const runAttributions: {
+			auto: EssentialLossAttribution;
+			offered: EssentialLossAttribution;
+		}[] = [];
 		for (let runIndex = 0; runIndex < runs; runIndex++) {
 			if (runs > 1) {
 				console.error(`  [${fixture.name}] live run ${runIndex + 1}/${runs}...`);
@@ -375,6 +410,20 @@ async function runLlmMode({
 					],
 				}),
 			);
+			runAttributions.push({
+				auto: attributeEssentialWordsLost({
+					rawWords: fixture.rawWords as TranscriptionWord[],
+					truthCutSpans: alignment.truthCutSpans,
+					operations,
+					mode: "auto",
+				}),
+				offered: attributeEssentialWordsLost({
+					rawWords: fixture.rawWords as TranscriptionWord[],
+					truthCutSpans: alignment.truthCutSpans,
+					operations,
+					mode: "offered",
+				}),
+			});
 		}
 		if (runs > 1) allRuns.push(...runResults);
 		if (wantJson) {
@@ -384,13 +433,21 @@ async function runLlmMode({
 				substitutionWords: alignment.substitutionWords,
 				finalOnlyWords: alignment.finalOnlyWords,
 				runs: runResults,
+				// New field (round-11 attribution lever): per-run essLost attribution,
+				// index-parallel to `runs`. Existing fields above are untouched.
+				essLostAttribution: runAttributions,
 			});
 		} else {
-			printLlmFixture(fixture.name, runResults, {
-				movedWords: alignment.movedWords,
-				substitutionWords: alignment.substitutionWords,
-				rawWordCount: fixture.rawWords.length,
-			});
+			printLlmFixture(
+				fixture.name,
+				runResults,
+				{
+					movedWords: alignment.movedWords,
+					substitutionWords: alignment.substitutionWords,
+					rawWordCount: fixture.rawWords.length,
+				},
+				runAttributions[0],
+			);
 		}
 	}
 	// Total across fixtures (round-5 lesson, variance round): only meaningful once

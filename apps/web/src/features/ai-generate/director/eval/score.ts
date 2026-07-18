@@ -107,19 +107,23 @@ function collectRuns(
 	return runs;
 }
 
-export function scoreCutProposals({
+/**
+ * Word-level truth/proposed cut flags, AFTER the duplicate-word attribution
+ * reconciliation swap (see the inline comment below). Exported so a consumer
+ * that needs the exact same false-cut set `scoreCutProposals` scores against,
+ * e.g. the eval's per-op essential-loss attribution (attribution.ts), reads
+ * identical flags instead of re-deriving the reconciliation logic and risking
+ * drift from this function.
+ */
+export function computeWordCutFlags({
 	rawWords,
 	truthCutSpans,
 	proposedSpans,
-	noiseSpans,
 }: {
 	rawWords: TranscriptionWord[];
 	truthCutSpans: TruthCutSpan[];
 	proposedSpans: ProposedCutSpan[];
-	/** Raw index runs excluded from the noise-adjusted match rate (substitution +
-	 * moved words). Optional: absent means adjusted equals raw. */
-	noiseSpans?: TruthCutSpan[];
-}): Scorecard {
+}): { truthCut: boolean[]; proposedCut: boolean[] } {
 	const truthCut = new Array<boolean>(rawWords.length).fill(false);
 	for (const span of truthCutSpans) {
 		for (let i = span.startIndex; i <= span.endIndex; i++) truthCut[i] = true;
@@ -144,6 +148,27 @@ export function scoreCutProposals({
 			break;
 		}
 	}
+	return { truthCut, proposedCut };
+}
+
+export function scoreCutProposals({
+	rawWords,
+	truthCutSpans,
+	proposedSpans,
+	noiseSpans,
+}: {
+	rawWords: TranscriptionWord[];
+	truthCutSpans: TruthCutSpan[];
+	proposedSpans: ProposedCutSpan[];
+	/** Raw index runs excluded from the noise-adjusted match rate (substitution +
+	 * moved words). Optional: absent means adjusted equals raw. */
+	noiseSpans?: TruthCutSpan[];
+}): Scorecard {
+	const { truthCut, proposedCut } = computeWordCutFlags({
+		rawWords,
+		truthCutSpans,
+		proposedSpans,
+	});
 
 	// Words excluded from the noise-adjusted kept-F1 (substitution + moved runs).
 	const excluded = new Array<boolean>(rawWords.length).fill(false);
@@ -242,6 +267,17 @@ export function scoreCutProposals({
  */
 export type ProposalMode = "auto" | "offered";
 
+/** Whether `op` belongs to `mode`'s proposal set: removal ops only, and in
+ * `auto` mode the opt-in rows (`defaultAccept === false`) are dropped since
+ * one-click apply skips them. Exported so the per-op essential-loss
+ * attribution (attribution.ts) filters on the identical predicate. */
+export function isModeOp(op: DirectorOp, mode: ProposalMode): boolean {
+	return (
+		(op.op === "cut" || op.op === "take_select") &&
+		(mode === "offered" || op.defaultAccept !== false)
+	);
+}
+
 /** Cut/take_select ops as scorable spans. In `auto` mode the opt-in rows
  * (`defaultAccept === false`) are dropped, since one-click apply skips them. */
 export function toProposedCutSpans(
@@ -249,11 +285,7 @@ export function toProposedCutSpans(
 	mode: ProposalMode,
 ): ProposedCutSpan[] {
 	return ops
-		.filter(
-			(op) =>
-				(op.op === "cut" || op.op === "take_select") &&
-				(mode === "offered" || op.defaultAccept !== false),
-		)
+		.filter((op) => isModeOp(op, mode))
 		.map((op) => ({
 			startSec: op.startSec,
 			endSec: op.endSec,
