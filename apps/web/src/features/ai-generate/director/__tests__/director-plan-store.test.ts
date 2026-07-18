@@ -166,6 +166,22 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		expect(s.dockTab).toBe("properties");
 		expect(s.plan).toBeNull();
 	});
+
+	test("seekPreRollSec is a session preference: survives close/reopen, clamps to 1-10 (round 9)", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(1); // default
+		useDirectorPlanStore.getState().setSeekPreRollSec(5);
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: optIn });
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(5);
+		useDirectorPlanStore.getState().setSeekPreRollSec(99);
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(10);
+		useDirectorPlanStore.getState().setSeekPreRollSec(0);
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(1);
+		// Reset for later describes (the store is module-global across tests).
+		useDirectorPlanStore.getState().setSeekPreRollSec(1);
+		useDirectorPlanStore.getState().close();
+	});
 });
 
 describe("dockTab (R1: persistent Director dock, surface field retired)", () => {

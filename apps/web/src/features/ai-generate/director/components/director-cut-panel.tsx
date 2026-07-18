@@ -13,13 +13,12 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
+import { mediaTimeFromSeconds } from "@/wasm";
 import { applyDirectorPlan } from "../apply-plan";
 import {
 	ensureAppliedLockReactor,
-	isBatchControllable,
 	reviseAppliedPlan,
 	toggleAbPreview,
-	withReactorSuppressed,
 } from "../applied-plan";
 import {
 	selectApplyGuardSpans,
@@ -48,6 +47,8 @@ export function DirectorCutPanel() {
 	const redundancyGroups = useDirectorPlanStore((s) => s.redundancyGroups);
 	const swapRedundancyKeeper = useDirectorPlanStore((s) => s.swapRedundancyKeeper);
 	const phase = useDirectorPlanStore((s) => s.phase);
+	const seekPreRollSec = useDirectorPlanStore((s) => s.seekPreRollSec);
+	const setSeekPreRollSec = useDirectorPlanStore((s) => s.setSeekPreRollSec);
 	const abShowing = useDirectorPlanStore((s) => s.abShowing);
 	const appliedHasBatch = useDirectorPlanStore((s) => s.appliedHasBatch);
 	const markApplied = useDirectorPlanStore((s) => s.markApplied);
@@ -97,6 +98,17 @@ export function DirectorCutPanel() {
 			firstOpIdByGroup.set(op.groupId, op.id);
 		}
 	}
+
+	// Jump the playhead to just before a cut and play, so the transition INTO the
+	// cut is watchable (round 9). Lead-in comes from the slider (1-10s).
+	const previewCut = (startSec: number) => {
+		editor.playback.seek({
+			time: mediaTimeFromSeconds({
+				seconds: Math.max(0, startSec - seekPreRollSec),
+			}),
+		});
+		editor.playback.play();
+	};
 
 	const fpsFloat = (): number => {
 		const fps = editor.project.getActive().settings.fps;
@@ -205,26 +217,9 @@ export function DirectorCutPanel() {
 		setAbShowing(outcome.showing);
 	};
 
-	// Dismiss is the ONLY thing that clears the plan (U8). If mid A/B "without" AND the
-	// batch is still controllable, redo first so the applied cuts (not the previewed
-	// original) are what stays; in the locked phase we must not touch the moved stack.
-	const handleDismiss = () => {
-		const s = useDirectorPlanStore.getState();
-		if (s.phase === "applied" || s.phase === "applied-locked") {
-			if (
-				s.phase === "applied" &&
-				s.appliedHasBatch &&
-				s.abShowing === "without" &&
-				isBatchControllable(editor, revisableState())
-			) {
-				withReactorSuppressed(() => editor.command.redo());
-			}
-			close();
-			toast.info("Director: review closed", {
-				description: "Applied cuts stay on the timeline (Ctrl+Z to undo).",
-			});
-			return;
-		}
+	// Cancel is review-phase only (round 9: there is no Done, the applied review
+	// PERSISTS until the next AI CUT run replaces it). Discards the un-applied plan.
+	const handleCancel = () => {
 		close();
 		toast.info("Director: review cancelled", {
 			description: "No cuts were applied. Any auto-assembled footage stays (Ctrl+Z to undo).",
@@ -234,21 +229,16 @@ export function DirectorCutPanel() {
 	return (
 		<div className="panel bg-background flex h-full flex-col overflow-hidden rounded-sm border">
 			<div className="border-b p-3">
-				<div className="flex items-center justify-between">
-					<h2 className="text-sm font-semibold">
-						Director&apos;s cut &middot;{" "}
-						{locked ? "applied (locked)" : applied ? "applied" : "review"}
-					</h2>
-					<Button variant="ghost" size="sm" onClick={handleDismiss}>
-						Done
-					</Button>
-				</div>
+				<h2 className="text-sm font-semibold">
+					Director&apos;s cut &middot;{" "}
+					{locked ? "applied (locked)" : applied ? "applied" : "review"}
+				</h2>
 				<p className="text-muted-foreground text-xs">
 					{locked
 						? "This cut is now part of your timeline (you edited or undid since applying). Reopen AI CUT to recut. Ctrl+Z still works."
 						: applied
-							? "Applied. Toggle any row to revise the cut in place, or A/B the original. Ctrl+Z restores everything."
-							: "Review each proposed change and apply the ones you want. Ctrl+Z restores everything."}
+							? "Applied. Toggle any row to revise the cut in place, or A/B the original. Click a timestamp to play into that cut. Ctrl+Z restores everything."
+							: "Review each proposed change and apply the ones you want. Click a timestamp to play into that cut. Ctrl+Z restores everything."}
 				</p>
 			</div>
 
@@ -298,6 +288,21 @@ export function DirectorCutPanel() {
 							</Button>
 						))}
 					</div>
+					<div className="flex items-center gap-2 px-3 pt-2">
+						<span className="text-muted-foreground shrink-0 text-xs">
+							Lead-in {seekPreRollSec}s
+						</span>
+						<input
+							type="range"
+							min={1}
+							max={10}
+							step={1}
+							value={seekPreRollSec}
+							aria-label="Seconds played before a cut when a timestamp is clicked"
+							className="min-w-0 flex-1"
+							onChange={(e) => setSeekPreRollSec(Number(e.target.value))}
+						/>
+					</div>
 					<div className="flex-1 space-y-1 overflow-y-auto p-2">
 						{visibleOps.length === 0 ? (
 							<p className="text-muted-foreground px-1 py-2 text-xs">
@@ -334,9 +339,19 @@ export function DirectorCutPanel() {
 													{display.categoryBadge}
 												</span>
 											) : null}
-											<span className="text-muted-foreground mr-2 text-xs">
+											<button
+												type="button"
+												title={`Play from ${seekPreRollSec}s before this cut`}
+												className="text-muted-foreground hover:text-foreground mr-2 cursor-pointer text-xs underline decoration-dotted underline-offset-2"
+												onClick={(e) => {
+													// A button inside the row label: never toggle the checkbox.
+													e.preventDefault();
+													e.stopPropagation();
+													previewCut(op.startSec);
+												}}
+											>
 												{formatTimeRange({ startSec: op.startSec, endSec: op.endSec })}
-											</span>
+											</button>
 											{op.reason}
 											{display.rejectedHint ? (
 												<span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-500">
@@ -401,19 +416,16 @@ export function DirectorCutPanel() {
 			)}
 
 			{applied ? (
-				<div className="flex items-center justify-between gap-2 border-t p-3">
+				<div className="flex items-center gap-2 border-t p-3">
 					<span className="text-muted-foreground text-xs">
 						{locked
 								? "Cut locked into the timeline"
-								: `Applied ${acceptedCount} of ${ops.length}${abShowing === "without" ? " · previewing original" : ""}`}
+								: `Applied ${acceptedCount} of ${ops.length}${abShowing === "without" ? " · previewing original" : ""} · stays open, a new AI CUT run replaces it`}
 					</span>
-					<Button size="sm" onClick={handleDismiss}>
-						Done
-					</Button>
 				</div>
 			) : (
 				<div className="flex justify-end gap-2 border-t p-3">
-					<Button variant="ghost" size="sm" onClick={handleDismiss}>
+					<Button variant="ghost" size="sm" onClick={handleCancel}>
 						Cancel
 					</Button>
 					<Button size="sm" onClick={apply} disabled={ops.length === 0}>

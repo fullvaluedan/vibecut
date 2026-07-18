@@ -328,6 +328,15 @@ interface DirectorPlanState {
 	lockApplied: () => void;
 	/** Close and clear. The ONLY thing that discards an applied plan (U8). */
 	close: () => void;
+	/**
+	 * Seconds of lead-in when a review row jumps the playhead (round 9): a click
+	 * seeks to (cut start - this) so the transition INTO the cut is watchable.
+	 * Session preference: lives OUTSIDE the CLEARED reset, so open/close/new-run
+	 * cycles preserve it.
+	 */
+	seekPreRollSec: number;
+	/** Set the jump lead-in, clamped to the slider's 1-10s band. */
+	setSeekPreRollSec: (sec: number) => void;
 }
 
 const CLEARED = {
@@ -353,6 +362,9 @@ const CLEARED = {
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	...CLEARED,
+	seekPreRollSec: 1,
+	setSeekPreRollSec: (sec) =>
+		set({ seekPreRollSec: Math.max(1, Math.min(10, Math.round(sec))) }),
 	setDockTab: (tab) => set({ dockTab: tab }),
 	// `open` stays FALSE: the docked surfaces key off mode/draft/plan/keeps, not
 	// `open`, so the still-mounted modal DirectorReviewDialog (which renders on
