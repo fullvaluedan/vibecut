@@ -110,4 +110,14 @@ describe("justifyCuts (2P-U5 / R9)", () => {
 		expect(out).toHaveLength(2);
 		expect(out.map((o) => o.category).sort()).toEqual(["retake", "structural"]);
 	});
+
+	test("speculation rows are justified removals (round 9: OFFERED-only, must reach review)", () => {
+		const words = [word("one", 0, 0.4), word("two", 0.6, 1.0)];
+		const ops = [
+			cut({ startSec: 0.4, endSec: 0.6, category: "speculation", reason: "trailing musing" }),
+		];
+		const out = justifyCuts({ ops, words, floorSec: FLOOR_SEC });
+		expect(out).toHaveLength(1);
+		expect(out[0].category).toBe("speculation");
+	});
 });

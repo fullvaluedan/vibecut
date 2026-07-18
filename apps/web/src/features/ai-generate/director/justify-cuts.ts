@@ -39,6 +39,9 @@ const JUSTIFIED_REMOVAL: ReadonlySet<string> = new Set([
 	// remainder in continuous speech was silently reverted before review.
 	"retake",
 	"structural",
+	// Tagged trailing-speculation cuts (round 9): OFFERED-only like retake and
+	// structural, and they must reach review rather than be silently reverted.
+	"speculation",
 ]);
 
 /** Whether an op carries a real reason to remove its span (so it is never reverted). */

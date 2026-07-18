@@ -207,6 +207,47 @@ describe("sanitizeDirectorPlan", () => {
 		expect(sanitizeDirectorPlan({ operations: [] }, 12).operations).toEqual([]);
 		expect(() => sanitizeDirectorPlan({}, 12)).toThrow(/no operations array/);
 	});
+
+	test('kind:"speculation" on a cut maps to the opt-in speculation category (round 9)', () => {
+		const raw = {
+			operations: [
+				{ op: "cut", startSec: 3, endSec: 5, reason: "trailing musing", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		const { operations } = sanitizeDirectorPlan(raw, 12);
+		expect(operations).toHaveLength(1);
+		expect(operations[0].category).toBe("speculation");
+		expect(operations[0].defaultAccept).toBe(false);
+	});
+
+	test("an unknown kind and a kind on a non-cut op are both ignored", () => {
+		const raw = {
+			operations: [
+				{ op: "cut", startSec: 1, endSec: 2, reason: "a", confidence: 0.8, kind: "banter" },
+				{ op: "keep", startSec: 3, endSec: 4, reason: "b", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		const { operations } = sanitizeDirectorPlan(raw, 12);
+		expect(operations).toHaveLength(2);
+		for (const op of operations) {
+			expect(op.category).toBeUndefined();
+			expect(op.defaultAccept).toBeUndefined();
+		}
+	});
+
+	test("speculation tagging does not change the op id", () => {
+		const plain = {
+			operations: [{ op: "cut", startSec: 3, endSec: 5, reason: "x", confidence: 0.8 }],
+		};
+		const tagged = {
+			operations: [
+				{ op: "cut", startSec: 3, endSec: 5, reason: "x", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		expect(sanitizeDirectorPlan(tagged, 12).operations[0].id).toBe(
+			sanitizeDirectorPlan(plain, 12).operations[0].id,
+		);
+	});
 });
 
 describe("renderSignalTable — importance (keep-side)", () => {

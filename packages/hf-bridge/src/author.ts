@@ -400,7 +400,8 @@ export type DirectorOpCategory =
 	| "redundancy"
 	| "context"
 	| "retake"
-	| "structural";
+	| "structural"
+	| "speculation";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {
@@ -481,6 +482,7 @@ const DIRECTOR_SCHEMA = {
 					reason: { type: "string" },
 					confidence: { type: "number" },
 					targetStartSec: { type: "number" },
+					kind: { type: "string", enum: ["speculation"] },
 				},
 				required: ["op", "startSec", "endSec", "reason", "confidence"],
 				additionalProperties: false,
@@ -548,6 +550,15 @@ export function clampCompressionTarget(target: number): number {
 	return Math.max(0, Math.min(MAX_COMPRESSION_TARGET, target));
 }
 
+/**
+ * Version of the Director plan prompt below. The eval cache keys on pass INPUT
+ * only, so ANY wording change here must bump this constant; it rides the eval
+ * payload (the VERIFY_PROMPT_VERSION precedent) or the eval silently replays
+ * stale cached plans. v2: trailing-speculation tagging (round 9) - coherent
+ * trailing musing arrives as "kind":"speculation" and is kept by default.
+ */
+export const DIRECTOR_PROMPT_VERSION = 2;
+
 export function buildDirectorPrompt({
 	segments,
 	totalSec,
@@ -590,7 +601,7 @@ export function buildDirectorPrompt({
 	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
-- "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness.
+- "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness. TRAILING SPECULATION EXCEPTION: when the speaker muses about implications, predictions, or future plans AFTER the point has already landed, AND that musing is coherent (complete deliberate sentences, not fumbling), still emit the cut but add "kind":"speculation" - this editor deliberately keeps that style, so tagged cuts are offered unchecked instead of auto-applied. Incoherent rambling, abandoned threads, and trailing dead time are plain cuts, never "speculation".
 - "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
 - "keep": optionally mark a load-bearing span you deliberately kept.
@@ -603,7 +614,7 @@ Rules:
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
 ${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}${compressionBlock}
-Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only)}, ...]}.`;
+Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only),"kind"(coherent trailing speculation only)}, ...]}.`;
 }
 
 /**
@@ -648,6 +659,11 @@ export function sanitizeDirectorPlan(raw: unknown, totalSec: number): DirectorPl
 				? Math.max(0, Math.min(1, confidence))
 				: 0.5,
 			...(targetStartSec !== undefined ? { targetStartSec } : {}),
+			// Prompt v2: a coherent trailing-speculation cut is categorized and
+			// surfaced as an unchecked opt-in row (this editor keeps that style).
+			...(op === "cut" && it.kind === "speculation"
+				? { category: "speculation" as const, defaultAccept: false }
+				: {}),
 		});
 	}
 

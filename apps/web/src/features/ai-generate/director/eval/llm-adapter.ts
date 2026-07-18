@@ -28,6 +28,7 @@ import {
 	planRetake,
 	planStructural,
 	planVerify,
+	DIRECTOR_PROMPT_VERSION,
 	VERIFY_PROMPT_VERSION,
 	type ClaudeAuth,
 } from "@framecut/hf-bridge";
@@ -267,7 +268,10 @@ export function createEvalLlmAdapter(
 
 	return {
 		async plan(input: DirectorPlanRequest): Promise<DirectorPlanResponse> {
-			return cachedCall("plan", input, async () => {
+			// DIRECTOR_PROMPT_VERSION rides the payload (the VERIFY precedent): a prompt
+			// WORDING change has no input-shape footprint, and without the version the
+			// eval would silently replay stale cached plans across prompt revisions.
+			return cachedCall("plan", { ...input, promptVersion: DIRECTOR_PROMPT_VERSION }, async () => {
 				if (input.frames && input.frames.length > 0) {
 					const { plan, usage, degraded } = await planners.vision({
 						segments: input.segments,

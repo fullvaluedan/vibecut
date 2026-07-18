@@ -60,6 +60,7 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	context: "Out of context",
 	retake: "Retake",
 	structural: "Structural",
+	speculation: "Speculation",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -103,6 +104,10 @@ export function describeReviewOp({
 		} else if (op.category === "structural") {
 			// A whole-section drop: rejecting it keeps that section in the video.
 			rejectedHint = "Keeping this section";
+		} else if (op.category === "speculation") {
+			// Coherent trailing speculation starts unchecked (round 9): this editor
+			// keeps that style, so the resting state reads as a deliberate keep.
+			rejectedHint = "Keeping the speculation";
 		}
 	}
 
