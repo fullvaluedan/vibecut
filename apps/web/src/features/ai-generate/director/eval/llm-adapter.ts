@@ -410,10 +410,16 @@ export function createEvalLlmAdapter(
 							"verify",
 							{ ...input, promptVersion: VERIFY_PROMPT_VERSION },
 							async () => {
+							// The final-read inputs (round 12 U2) thread through exactly
+							// like the app route does: assembled transcript + fragments
+							// already ride the hashed payload above, so the cache busts
+							// when the assembled result or the fragment set changes.
 							const { plan } = await planners.verify({
 								candidates: input.candidates,
 								lines: input.lines,
 								words: input.words,
+								assembledTranscript: input.assembledTranscript,
+								joinFragments: input.joinFragments,
 								taste: input.taste,
 								auth,
 							});

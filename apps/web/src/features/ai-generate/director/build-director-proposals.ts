@@ -25,6 +25,8 @@ import type {
 	RetakeWord,
 	StructuralDrop,
 	VerifyCandidate,
+	VerifyJoinFragment,
+	VerifyJoinVerdict,
 	VerifyVerdict,
 } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
@@ -65,7 +67,15 @@ import {
 } from "./redundancy-apply";
 import { mapRetakeCuts, trimRetakeCuts } from "./retake-apply";
 import { mapStructuralDrops } from "./structural-apply";
-import { applyVerifyVerdicts, collectVerifyCandidates } from "./verify-apply";
+import {
+	applyJoinVerdicts,
+	applyVerifyVerdicts,
+	collectVerifyCandidates,
+} from "./verify-apply";
+import {
+	buildAssembledTranscript,
+	collectJoinFragments,
+} from "./assembled-transcript";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
 import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
@@ -171,10 +181,18 @@ export interface DirectorVerifyRequest {
 	 * anchors the candidates carry). Both catalogs ride the payload so the eval cache
 	 * busts when the candidate set changes (R2/KTD2). */
 	words: RetakeWord[];
+	/** The ASSEMBLED post-cut transcript (or timestamped windows around each join
+	 * when over the cap) - the final read judges fragments against it (round 12
+	 * U2/R3). Sent only alongside join fragments; rides the payload, so the eval
+	 * cache busts when the assembled result changes. */
+	assembledTranscript?: string;
+	/** OFFERED join-fragment rows the final read adjudicates: op id, stranded
+	 * text, span, and the kept context each side (round 12 U2/R3). */
+	joinFragments?: VerifyJoinFragment[];
 	taste?: string;
 }
 export interface DirectorVerifyResponse {
-	plan?: { verdicts?: VerifyVerdict[] };
+	plan?: { verdicts?: VerifyVerdict[]; joinVerdicts?: VerifyJoinVerdict[] };
 }
 
 /**
@@ -929,16 +947,106 @@ export async function buildDirectorProposals(
 					keepers: allKeepers,
 				}).filter((op) => op.op !== "keep")
 			: withSecondPass;
+	// Deterministic assembly tail (round 12 U2): the silence fold + pause snap +
+	// word refine + trim-vs-cut + justify + join-texture chain, factored into ONE
+	// closure so it can run twice - once as a cheap pure PREVIEW before the verify
+	// call (the final read judges the ASSEMBLED result and its join fragments,
+	// which only exist after this chain) and once for real on the post-verify ops.
+	// Verify verdicts only touch OFFERED recall rows, so the preview's default-
+	// accepted spans - and thus its join ops and their stable ids - match the real
+	// pass in all but one rare case (a reject freeing a suppressed silence op);
+	// a join id the real pass no longer mints simply stays OFFERED (fail-open).
+	const assembleFinalCut = (
+		opsIn: readonly DirectorOp[],
+	): { operations: DirectorOp[]; trimmed: DirectorOp[]; joinCuts: DirectorOp[] } => {
+		// Fold the envelope dead-air ops in AFTER verify (round 7): silence cuts are
+		// deterministic ground truth and never verify candidates; folding here means
+		// a plan cut that verify rejects can no longer displace them (the merge-drop
+		// coverage hole). Dedup against the SURVIVING removals so a plan cut that
+		// verify kept still owns its span.
+		const survivingRemovals = opsIn.filter(
+			(op) => op.op === "cut" || op.op === "take_select",
+		);
+		const plusSilence = [
+			...opsIn,
+			...envelopeDeadAirCuts.filter(
+				(e) =>
+					!survivingRemovals.some(
+						(op) => op.startSec < e.endSec && e.startSec < op.endSec,
+					),
+			),
+		];
+		// Pause-swallowing placement (round 6 U3, supersedes the issue-E trough snap
+		// for Director removals): each cut edge WIDENS through adjacent sub-threshold
+		// silence to the neighboring clean word plus a room-tone handle, so the join
+		// carries a natural breath and no residual silence ships in the kept footage.
+		// Edges flush against speech keep the old trough-snap fallback internally.
+		const energySnapped = swallowPauseBounds({
+			ops: plusSilence,
+			envelope,
+			windowSec: ENERGY_WINDOW_SEC,
+			threshold: silenceThreshold,
+			words,
+			// The word-FREE protected beats: words alone cannot stop a walk through
+			// an emphasis pause the merge deliberately preserved.
+			keepers: emphasisPauseKeepers,
+		});
+		// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs,
+		// but a trough can still fall mid-word and amputate a kept fragment ("So",
+		// "phone."). Move any removal edge that lands inside a word onto its nearest
+		// gap - shrink to exclude the word, or swallow it whole when its midpoint is
+		// in the cut - so trim-vs-cut and justifyCuts below judge word-safe edges.
+		// Fail-open with no words. (KTD1: overwrites startSec/endSec in place - the
+		// apply path reads only those.)
+		const wordRefined = refineCutWordBounds({ ops: energySnapped, words });
+		// Trim-vs-cut (U4/KTD4): a removal whose edge lands within a few frames of a
+		// clip boundary is aligned to it so the removal TRIMS that clip edge
+		// (swallowing the 2-frame / 13-frame slivers a cut left) instead of
+		// fragmenting the clip; a removal with both edges mid-clip stays a
+		// ripple-cut. Reuses the clipSpans + fps above. (Adjacent same-source slices
+		// are then merged post-apply by the consolidation pass.)
+		const trimmed = resolveTrimVsCut({
+			ops: wordRefined,
+			clipStartsSec: clipSpans.map((c) => c.startSec),
+			clipEndsSec: clipSpans.map((c) => c.endSec),
+			toleranceSec: REMNANT_FRAMES_TOLERANCE / fpsFloat,
+		});
+		// No unnecessary cuts (2P-U5/R9): revert any sub-floor removal that splices
+		// two content words in continuous speech and carries no concrete reason, so
+		// a boundary is never created mid-sentence for nothing. Real pauses (silence
+		// removals) keep their flanking words a floor apart and are untouched.
+		// Fail-open with no words.
+		const operations = justifyCuts({
+			ops: trimmed,
+			words,
+			floorSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
+		});
+		// Join-texture layer (round 12 U1, KTD1): only now, with every pass merged,
+		// snapped, refined, and justified, do adjacent default-accepted cut spans
+		// exist to pair - a join is a property of the ASSEMBLED result, not of any
+		// single pass. Wordless slivers between accepted cuts swallow AUTO (zero
+		// kept words, metric-invisible, KTD3); short stranded word fragments become
+		// OFFERED rows the final-read pass or Dan judges (KTD2). Appended by the
+		// caller, never merged: a join op covers the GAP between removals, so the
+		// overlap-dedup rules above have nothing to say about it.
+		const joinCuts = detectJoinTextureCuts({ ops: operations, words });
+		return { operations, trimmed, joinCuts };
+	};
 	// Verify sub-pass (U2/R3/R4): the precision counterweight to the recall passes.
-	// Immediately after the recall fold and BEFORE the snap/refine/trim/justify chain,
-	// collect every recall candidate (category retake|structural) from the post-fold op
-	// list and hand them to ONE batched verify call: reject removes a damaging row, tighten
-	// shrinks a bleeding one to its resolved inner span, keep / no-verdict passes through.
-	// GUARDED and OPTIONAL like the recall passes: an absent method, a thrown/degraded
-	// result, or ZERO candidates leaves every candidate untouched and the run continues (R4).
-	// Zero candidates NEVER calls the LLM, so a recall-less run is byte-identical to the
-	// pre-verify pipeline (`verified` IS `withStructural`).
+	// Immediately after the recall fold, collect every recall candidate (category
+	// retake|structural) from the post-fold op list PLUS - round 12 U2 - the join
+	// fragments a PREVIEW of the assembly tail strands, and hand both to ONE
+	// batched verify call: reject removes a damaging recall row, tighten shrinks a
+	// bleeding one to its resolved inner span, keep / no-verdict passes through,
+	// and a confident "swallow" join verdict promotes its OFFERED join row when
+	// the real tail re-detects it below. FIRES when recall candidates OR join
+	// fragments exist (the final read must run even with zero recall rows).
+	// GUARDED and OPTIONAL like the recall passes: an absent method, a thrown/
+	// degraded result, or nothing to judge leaves every row untouched and the run
+	// continues (R4). Nothing to judge NEVER calls the LLM, so a candidate-less,
+	// fragment-less run is byte-identical to the pre-verify pipeline.
 	let verified = withStructural;
+	let joinVerdicts: VerifyJoinVerdict[] = [];
 	if (llm.verify) {
 		const verifyWords: RetakeWord[] = words.map((w) => ({
 			text: w.text,
@@ -950,13 +1058,34 @@ export async function buildDirectorProposals(
 			words: verifyWords,
 			lines: redundancyLines,
 		});
-		if (verifyCandidates.length > 0) {
+		// Final-read preview (round 12 U2/KTD4): run the pure assembly tail once on
+		// the pre-verify ops to materialize the ASSEMBLED result and the join
+		// fragments it strands - the questions the extended verify prompt asks.
+		const preview = assembleFinalCut(withStructural);
+		const joinFragments = collectJoinFragments({
+			ops: preview.operations,
+			joinOps: preview.joinCuts,
+			words,
+		});
+		if (verifyCandidates.length > 0 || joinFragments.length > 0) {
 			onProgress?.("Verifying proposed cuts...");
 			try {
 				const vData = await llm.verify({
 					candidates: verifyCandidates,
 					lines: redundancyLines,
 					words: verifyWords,
+					// The assembled transcript rides ONLY with fragments: a candidates-
+					// only call keeps the lean damage-review request (and cache key).
+					...(joinFragments.length > 0
+						? {
+								joinFragments,
+								assembledTranscript: buildAssembledTranscript({
+									words,
+									ops: preview.operations,
+									joinSpans: joinFragments,
+								}),
+							}
+						: {}),
 					taste: taste || undefined,
 				});
 				const verdicts = Array.isArray(vData?.plan?.verdicts)
@@ -967,85 +1096,32 @@ export async function buildDirectorProposals(
 					candidates: verifyCandidates,
 					verdicts,
 				});
+				joinVerdicts = Array.isArray(vData?.plan?.joinVerdicts)
+					? vData.plan.joinVerdicts
+					: [];
 			} catch {
-				// route error / degraded → every candidate passes through unverified (R4)
+				// route error / degraded: candidates pass through unverified and every
+				// join row stays OFFERED (R4 fail-open, never fail the run)
 			}
 			abort();
 		}
 	}
-	// Fold the envelope dead-air ops in AFTER verify (round 7): silence cuts are
-	// deterministic ground truth and never verify candidates; folding here means
-	// a plan cut that verify rejects can no longer displace them (the merge-drop
-	// coverage hole). Dedup against the SURVIVING removals so a plan cut that
-	// verify kept still owns its span.
-	const survivingRemovals = verified.filter(
-		(op) => op.op === "cut" || op.op === "take_select",
-	);
-	const verifiedPlusSilence = [
-		...verified,
-		...envelopeDeadAirCuts.filter(
-			(e) =>
-				!survivingRemovals.some(
-					(op) => op.startSec < e.endSec && e.startSec < op.endSec,
-				),
-		),
-	];
-	// Pause-swallowing placement (round 6 U3, supersedes the issue-E trough snap
-	// for Director removals): each cut edge WIDENS through adjacent sub-threshold
-	// silence to the neighboring clean word plus a room-tone handle, so the join
-	// carries a natural breath and no residual silence ships in the kept footage.
-	// Edges flush against speech keep the old trough-snap fallback internally.
-	const energySnapped = swallowPauseBounds({
-		ops: verifiedPlusSilence,
-		envelope,
-		windowSec: ENERGY_WINDOW_SEC,
-		threshold: silenceThreshold,
-		words,
-		// The word-FREE protected beats: words alone cannot stop a walk through
-		// an emphasis pause the merge deliberately preserved.
-		keepers: emphasisPauseKeepers,
-	});
-	// Word-boundary refinement (U1/R1/KTD2): energy snap finds acoustic troughs, but a
-	// trough can still fall mid-word and amputate a kept fragment ("So", "phone."). Move
-	// any removal edge that lands inside a word onto its nearest gap — shrink to exclude
-	// the word, or swallow it whole when its midpoint is in the cut — so trim-vs-cut and
-	// justifyCuts below judge word-safe edges. Fail-open with no words. (KTD1: overwrites
-	// startSec/endSec in place — the apply path reads only those.)
-	const wordRefined = refineCutWordBounds({ ops: energySnapped, words });
-	// Trim-vs-cut (U4/KTD4): a removal whose edge lands within a few frames of a clip
-	// boundary is aligned to it so the removal TRIMS that clip edge (swallowing the
-	// 2-frame / 13-frame slivers a cut left) instead of fragmenting the clip; a removal
-	// with both edges mid-clip stays a ripple-cut. Reuses the clipSpans + fps above.
-	// (Adjacent same-source slices are then merged post-apply by the consolidation pass.)
-	const trimmed = resolveTrimVsCut({
-		ops: wordRefined,
-		clipStartsSec: clipSpans.map((c) => c.startSec),
-		clipEndsSec: clipSpans.map((c) => c.endSec),
-		toleranceSec: REMNANT_FRAMES_TOLERANCE / fpsFloat,
-	});
-	// No unnecessary cuts (2P-U5/R9): revert any sub-floor removal that splices two
-	// content words in continuous speech and carries no concrete reason, so a boundary
-	// is never created mid-sentence for nothing. Real pauses (silence removals) keep
-	// their flanking words a floor apart and are untouched. Fail-open with no words.
-	const operations = justifyCuts({
-		ops: trimmed,
-		words,
-		floorSec: MIN_SURVIVING_CLIP_FRAMES / fpsFloat,
-	});
-	// Join-texture layer (round 12 U1, KTD1): only now, with every pass merged,
-	// snapped, refined, and justified, do adjacent default-accepted cut spans
-	// exist to pair - a join is a property of the ASSEMBLED result, not of any
-	// single pass. Wordless slivers between accepted cuts swallow AUTO (zero
-	// kept words, metric-invisible, KTD3); short stranded word fragments become
-	// OFFERED rows Dan or the final-read pass judges (KTD2). Appended, never
-	// merged: a join op covers the GAP between removals, so the overlap-dedup
-	// rules above have nothing to say about it.
-	const joinCuts = detectJoinTextureCuts({ ops: operations, words });
+	// The REAL assembly pass: the post-verify ops through the same deterministic
+	// tail the preview ran (byte-identical to the pre-U2 inline chain when verify
+	// is absent or judged nothing).
+	const { operations, trimmed, joinCuts } = assembleFinalCut(verified);
+	// Final-read promotion (round 12 U2/R3): a confident "swallow" verdict flips
+	// its OFFERED join row to checked; "keep", low confidence, an unknown id, or a
+	// failed verify leave every row exactly as detected (fail-open).
+	const adjudicatedJoins =
+		joinVerdicts.length > 0
+			? applyJoinVerdicts({ ops: joinCuts, verdicts: joinVerdicts })
+			: joinCuts;
 	// Appended then re-sorted by start (the pinned op-list invariant); with zero
 	// joins the list is byte-identical to the join-less pipeline.
 	const finalOperations =
-		joinCuts.length > 0
-			? [...operations, ...joinCuts].sort((a, b) => a.startSec - b.startSec)
+		adjudicatedJoins.length > 0
+			? [...operations, ...adjudicatedJoins].sort((a, b) => a.startSec - b.startSec)
 			: operations;
 	// Spans the APPLY-time coalescer must never swallow (review F5): every plan-time
 	// keeper (a word-free protected pause has no word-guard protection at apply) plus

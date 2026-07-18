@@ -102,6 +102,9 @@ export {
 	type VerifyCandidate,
 	type VerifyVerdict,
 	type VerifyPlan,
+	type VerifyJoinFragment,
+	type VerifyJoinVerdict,
+	type VerifyJoinVerdictKind,
 } from "./llm-verify";
 export {
 	resolveReferencedOps,

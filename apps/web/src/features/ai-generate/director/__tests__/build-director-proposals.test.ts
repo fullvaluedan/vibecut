@@ -4,6 +4,7 @@ import {
 	type DirectorLlmAdapter,
 	type DirectorRetakeRequest,
 	type DirectorVerifyRequest,
+	type DirectorVerifyResponse,
 } from "../build-director-proposals";
 import type { DirectorOp, RetakeCut, StructuralDrop } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
@@ -514,6 +515,26 @@ describe("buildDirectorProposals + verify pass (U2)", () => {
 		expect(Array.isArray(result.operations)).toBe(true);
 	});
 
+	test("zero recall candidates AND zero join fragments → verify is never invoked", async () => {
+		// Same fixture as the call-count pin above, spelled against the round 12 U2
+		// fire condition: this fixture strands no join fragment either, so the
+		// extended condition (candidates OR fragments) still never fires.
+		const words = mkWords(SENTENCE);
+		const input = baseInput(words, 7);
+		let verifyCalls = 0;
+		await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				async verify(req: DirectorVerifyRequest) {
+					verifyCalls++;
+					void req;
+					return { plan: { verdicts: [] } };
+				},
+			}),
+		});
+		expect(verifyCalls).toBe(0);
+	});
+
 	test("a reject verdict removes a structural row end-to-end through the pipeline", async () => {
 		const words = mkWords(SENTENCE);
 		const input = baseInput(words, 7);
@@ -543,5 +564,186 @@ describe("buildDirectorProposals + verify pass (U2)", () => {
 			}),
 		});
 		expect(rejected.operations.some((o) => o.category === "structural")).toBe(false);
+	});
+});
+
+/**
+ * Round 12 U2: the FINAL-READ side of the verify pass. Two default-accepted plan
+ * cuts strand one word between them, so the join-texture layer mints an OFFERED
+ * fragment row; the extended fire condition sends it to verify (join fragments
+ * ALONE, zero recall candidates), the request carries the assembled transcript +
+ * fragment rows, and a confident swallow verdict promotes the row while keep /
+ * low confidence / malformed responses leave it OFFERED.
+ */
+describe("buildDirectorProposals + final read (round 12 U2)", () => {
+	const SENTENCE =
+		"so um lets deploy the the project and now we verify the logs together carefully";
+	// Words are 0.3s-spaced: cut words 2-6 and 8-12, stranding word 7 ("and",
+	// [2.1, 2.38]) between two accepted removals.
+	const planCuts: DirectorOp[] = [
+		{
+			id: "plan-a",
+			op: "cut",
+			startSec: 0.6,
+			endSec: 2.08,
+			reason: "weak setup",
+			confidence: 0.9,
+		},
+		{
+			id: "plan-b",
+			op: "cut",
+			startSec: 2.4,
+			endSec: 3.88,
+			reason: "restated later",
+			confidence: 0.9,
+		},
+	];
+	const planStub = {
+		async plan() {
+			return { plan: { operations: planCuts } };
+		},
+	};
+	/** baseInput with FLAT delivery features (quiet, too-fast) so no segment
+	 * crosses the importance PROTECT_FLOOR - a protected segment would veto the
+	 * second plan cut in the merge and no join could form. */
+	const flatInput = (words: TranscriptionWord[]) => {
+		const base = baseInput(words, 7);
+		return {
+			...base,
+			features: base.features.map((f) => ({
+				...f,
+				loudnessRelative: 0.2,
+				wpm: 300,
+			})),
+		};
+	};
+	/** The OFFERED join-fragment rows in a final op list. */
+	const fragmentRows = (ops: readonly DirectorOp[]) =>
+		ops.filter((o) => o.category === "join" && o.defaultAccept === false);
+
+	test("join fragments ALONE fire verify, carrying the assembled transcript + fragment rows", async () => {
+		const words = mkWords(SENTENCE);
+		const input = flatInput(words);
+		let verifyCalls = 0;
+		let captured: DirectorVerifyRequest | undefined;
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...planStub,
+				async verify(req: DirectorVerifyRequest) {
+					verifyCalls++;
+					captured = req;
+					return { plan: { verdicts: [] } };
+				},
+			}),
+		});
+		// No retake/structural stubs → zero recall candidates, yet verify FIRED.
+		expect(verifyCalls).toBe(1);
+		expect(captured!.candidates).toHaveLength(0);
+		// The fragment rows ride the request: the stranded "and" with kept context.
+		const frags = captured!.joinFragments ?? [];
+		expect(frags.length).toBeGreaterThan(0);
+		const andFrag = frags.find((f) => f.text === "and");
+		expect(andFrag).toBeDefined();
+		// The assembled post-cut transcript rides along, seam-marked.
+		expect(captured!.assembledTranscript).toContain("[CUT]");
+		expect(captured!.assembledTranscript).toContain("and");
+		// With no verdicts returned, the fragment row ships OFFERED.
+		expect(fragmentRows(result.operations).length).toBeGreaterThan(0);
+	});
+
+	test("a confident swallow verdict promotes the join row to checked", async () => {
+		const words = mkWords(SENTENCE);
+		const input = flatInput(words);
+		const result = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...planStub,
+				async verify(req: DirectorVerifyRequest) {
+					return {
+						plan: {
+							verdicts: [],
+							joinVerdicts: (req.joinFragments ?? []).map((f) => ({
+								id: f.id,
+								verdict: "swallow" as const,
+								confidence: 0.9,
+							})),
+						},
+					};
+				},
+			}),
+		});
+		// Every fragment row was promoted: none left OFFERED, at least one join op
+		// now explicitly checked.
+		expect(fragmentRows(result.operations)).toHaveLength(0);
+		expect(
+			result.operations.some(
+				(o) => o.category === "join" && o.defaultAccept === true,
+			),
+		).toBe(true);
+	});
+
+	test("keep and low-confidence swallow verdicts leave the row OFFERED", async () => {
+		const words = mkWords(SENTENCE);
+		const input = flatInput(words);
+		const run = async (verdict: "keep" | "swallow", confidence: number) =>
+			buildDirectorProposals({
+				...input,
+				llm: stubLlm({
+					...planStub,
+					async verify(req: DirectorVerifyRequest) {
+						return {
+							plan: {
+								verdicts: [],
+								joinVerdicts: (req.joinFragments ?? []).map((f) => ({
+									id: f.id,
+									verdict,
+									confidence,
+								})),
+							},
+						};
+					},
+				}),
+			});
+		const keep = await run("keep", 0.95);
+		expect(fragmentRows(keep.operations).length).toBeGreaterThan(0);
+		const unsure = await run("swallow", 0.5);
+		expect(fragmentRows(unsure.operations).length).toBeGreaterThan(0);
+	});
+
+	test("a malformed or thrown verify response leaves every join row OFFERED (fail-open)", async () => {
+		const words = mkWords(SENTENCE);
+		const input = flatInput(words);
+		// Baseline: no verify at all → the fragment row exists, OFFERED.
+		const baseline = await buildDirectorProposals({
+			...input,
+			llm: stubLlm(planStub),
+		});
+		const offered = fragmentRows(baseline.operations);
+		expect(offered.length).toBeGreaterThan(0);
+
+		const malformed = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...planStub,
+				async verify() {
+					return {
+						plan: { verdicts: [], joinVerdicts: "garbage" },
+					} as unknown as DirectorVerifyResponse;
+				},
+			}),
+		});
+		expect(malformed.operations).toEqual(baseline.operations);
+
+		const thrown = await buildDirectorProposals({
+			...input,
+			llm: stubLlm({
+				...planStub,
+				async verify() {
+					throw new Error("route 500");
+				},
+			}),
+		});
+		expect(thrown.operations).toEqual(baseline.operations);
 	});
 });
