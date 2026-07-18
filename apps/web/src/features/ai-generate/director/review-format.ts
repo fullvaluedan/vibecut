@@ -90,6 +90,10 @@ export function describeReviewOp({
 		} else if (op.category === "redundancy") {
 			// A group's non-keeper take: rejecting it keeps that take in the cut.
 			rejectedHint = "Keeping this take";
+		} else if (op.category === "filler") {
+			// A filler cut: rejecting it keeps the filler word in the video. Mid-flow
+			// fillers start unchecked (round 9), so this is their resting-state note.
+			rejectedHint = "Keeping the filler";
 		} else if (op.category === "context") {
 			// An out-of-context flag: rejecting it keeps the content in the video.
 			rejectedHint = "Keeping this content";
