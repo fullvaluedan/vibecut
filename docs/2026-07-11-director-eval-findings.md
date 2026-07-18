@@ -251,3 +251,34 @@ Dan ran AI CUT and accepted only the recommended rows. Verdict: the round-5-clas
 Dan's post-round-6 smoke pass left one cut-quality complaint: with only recommended rows accepted, the LLM redundancy pass auto-cut his deliberate instructional restatements inside the flowing 0-45s conversation. Round 7 gates the auto-accept: a group's cuts default-accept only when NEAR-VERBATIM (every non-keeper take at similarity >= 0.8 to the keeper); paraphrase-level groups surface as opt-in rows labeled "Possible repeat (paraphrased, may be a deliberate restatement)" regardless of model confidence. Also fixed en route: envelope dead-air ops fold in AFTER the verify pass (a plan cut verify rejects can no longer displace a deterministic silence cut, the draw-dependent hole the assertion harness caught over the 3.4s pause), and only ACCEPTED redundancy cuts may subsume contained cleanup.
 
 Measured on the SAME cached draws (clean A/B against the Addendum 6 corrected table): AUTO essential-words-lost google 59 -> 8, hermes 93 -> 66, pokemon 27 -> 15, how-to-edit flat at 26; OFFERED match within noise (google -0.6, hermes -0.2, how-to-edit +0.1, pokemon flat), because demoted groups remain offered. Diag replay: assertions pass, zero AUTO cuts inside the flowing conversation, head + both silences + dead-air tail cut AUTO. The one-click apply is now near-harmless on every fixture; the recall levers (retake/structural/verify, variance-aware gating) remain the path toward the 0.90 OFFERED bar.
+
+## ADDENDUM 8 (2026-07-18): the variance round, measurement unblocked
+
+The round-5 blocker was "no threshold tuning until we know the draw-to-draw noise." Round 10 built the
+aggregation (`--runs N`, per-run cache salt, mean/std/min/max tables) and ran the baseline three-draw
+round: `bun scripts/director-eval.ts --llm --runs 3` (prompt v2 with speculation tagging; keeper=last,
+compression off, retake/structural/verify off, clamp on).
+
+| fixture | OFFERED match adj | AUTO essLost | OFFERED essLost |
+|---|---|---|---|
+| google-omni | 62.3 +/- 0.9 (61.1-63.4) | 9.0 +/- 5.1 (2-14) | 105.7 +/- 11.1 |
+| hermes-cloud | 78.8 +/- 0.4 (78.3-79.3) | 58.3 +/- 1.9 (57-61) | 306.3 +/- 15.2 |
+| how-to-edit | 36.7 +/- 0.2 (36.4-36.9) | 35.0 +/- 5.7 (27-39) | 98.0 +/- 23.0 |
+| pokemon-tcg | 83.5 +/- 1.3 (82.1-85.2) | 16.3 +/- 4.5 (11-22) | 134.7 +/- 15.1 |
+
+Three verdicts fall out:
+
+1. **The match metric is TIGHT** (std 0.2-1.3 points per fixture). Single-draw OFFERED-match
+   comparisons were legitimate all along; anything moving match by >2 points is signal. The
+   variance fear mainly applied to essLost, which does swing (AUTO std ~2-6 words, google's range
+   is 2-14): essLost comparisons must use 3-run means from now on.
+2. **The 0.90 bar gaps are structural, not noise.** google sits at 62 and how-to-edit at 37 with
+   sub-point stds; their span-discipline ceilings (~65 / ~39 measured in round 9) bind before any
+   threshold does. Tuning cannot close these; the road is recall levers (more/better offered spans)
+   plus span discipline, exactly as round 5 predicted.
+3. **hermes AUTO essLost is stable-high (57-61 across draws)**: a CONSISTENT set of harmful auto
+   cuts, not draw luck. That is a targeted hunt (which cuts, which pass) worth its own diag, and
+   the most promising single essLost lever on the board.
+
+The consolidation comparison (same three draws with `--retake --structural`, verify auto-on) ran
+next; its verdict follows in Addendum 9.
