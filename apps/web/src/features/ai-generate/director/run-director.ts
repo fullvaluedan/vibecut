@@ -244,8 +244,8 @@ export async function runDirector({
 	// it always has); `redundancy`/`context` throw on a route error and the pure
 	// pipeline falls back. The vision degrade/cost toast lives here because it
 	// depends on `formatVisionNotice` + `toast` (browser-only), keeping the pure
-	// pipeline free of the media/UI layer. `retake` (U4) is a fourth, OPTIONAL fetch,
-	// present only when the user has opted in; see the method below.
+	// pipeline free of the media/UI layer. `retake`/`structural`/`verify` (Addendum
+	// 9) are always-present fetches now; see the methods below.
 	const llm: DirectorLlmAdapter = {
 		async plan(planInput) {
 			const res = await fetch("/api/director/plan", {
@@ -292,66 +292,50 @@ export async function runDirector({
 			if (!res.ok) throw new Error(`Director context failed (${res.status})`);
 			return (await res.json()) as DirectorContextResponse;
 		},
-		// Retake-hunt pass (U4): OMITTED unless the user has opted in (`directorRetake`,
-		// default OFF per the U5 verdict: match-neutral-at-best, so it ships available
-		// but not on by default, R10). Omitting the method entirely (rather than gating
-		// inside it) makes `buildDirectorProposals`'s `if (llm.retake)` guard skip the
-		// pass for zero cost, matching the eval adapter's `enableRetake` convention.
-		...(useAiSettingsStore.getState().directorRetake
-			? {
-					async retake(input: DirectorRetakeRequest): Promise<DirectorRetakeResponse> {
-						const res = await fetch("/api/director/retake", {
-							method: "POST",
-							headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-							signal,
-							body: JSON.stringify(input),
-						});
-						if (!res.ok) throw new Error(`Director retake failed (${res.status})`);
-						return (await res.json()) as DirectorRetakeResponse;
-					},
-				}
-			: {}),
-		// Structural-drop pass (U3): OMITTED unless the user has opted in
-		// (`directorStructural`, default OFF, matching the retake precedent). Omitting
-		// the method entirely (rather than gating inside it) makes
-		// `buildDirectorProposals`'s `if (llm.structural)` guard skip the pass for zero
-		// cost, matching the eval adapter's `enableStructural` convention.
-		...(useAiSettingsStore.getState().directorStructural
-			? {
-					async structural(
-						input: DirectorStructuralRequest,
-					): Promise<DirectorStructuralResponse> {
-						const res = await fetch("/api/director/structural", {
-							method: "POST",
-							headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-							signal,
-							body: JSON.stringify(input),
-						});
-						if (!res.ok) throw new Error(`Director structural failed (${res.status})`);
-						return (await res.json()) as DirectorStructuralResponse;
-					},
-				}
-			: {}),
-		// Verify sub-pass (U3): OMITTED unless at least one recall pass is wired in
-		// (`directorRetake` or `directorStructural`), since with neither on there are
-		// never any recall candidates to judge, so the fetch would be dead weight. This
-		// round still gates on the SAME two flags the recall passes use; U5 makes it
-		// unconditional alongside them once the consolidation gates pass.
-		...(useAiSettingsStore.getState().directorRetake ||
-		useAiSettingsStore.getState().directorStructural
-			? {
-					async verify(input: DirectorVerifyRequest): Promise<DirectorVerifyResponse> {
-						const res = await fetch("/api/director/verify", {
-							method: "POST",
-							headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
-							signal,
-							body: JSON.stringify(input),
-						});
-						if (!res.ok) throw new Error(`Director verify failed (${res.status})`);
-						return (await res.json()) as DirectorVerifyResponse;
-					},
-				}
-			: {}),
+		// Retake-hunt pass: default-ON (Addendum 9 consolidation verdict: match gains
+		// on all four eval fixtures with AUTO harm unchanged, so this pass and its
+		// Settings toggle (`directorRetake`) are gone; every Director run pays for it).
+		// Surfaces word-level retakes/false-starts/flubs as OFFERED-only review rows
+		// (never auto-applied).
+		async retake(input: DirectorRetakeRequest): Promise<DirectorRetakeResponse> {
+			const res = await fetch("/api/director/retake", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				signal,
+				body: JSON.stringify(input),
+			});
+			if (!res.ok) throw new Error(`Director retake failed (${res.status})`);
+			return (await res.json()) as DirectorRetakeResponse;
+		},
+		// Structural-drop pass: default-ON (Addendum 9 consolidation verdict, same as
+		// retake above; the Settings toggle `directorStructural` is gone). Surfaces
+		// whole-section drops (tangents, weak takes, over-explanation) as OFFERED-only
+		// review rows (never auto-applied).
+		async structural(
+			input: DirectorStructuralRequest,
+		): Promise<DirectorStructuralResponse> {
+			const res = await fetch("/api/director/structural", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				signal,
+				body: JSON.stringify(input),
+			});
+			if (!res.ok) throw new Error(`Director structural failed (${res.status})`);
+			return (await res.json()) as DirectorStructuralResponse;
+		},
+		// Verify sub-pass: default-ON alongside retake + structural (Addendum 9: with
+		// both recall passes always on, there are always recall candidates to judge,
+		// so this rides along unconditionally rather than gating on either flag).
+		async verify(input: DirectorVerifyRequest): Promise<DirectorVerifyResponse> {
+			const res = await fetch("/api/director/verify", {
+				method: "POST",
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				signal,
+				body: JSON.stringify(input),
+			});
+			if (!res.ok) throw new Error(`Director verify failed (${res.status})`);
+			return (await res.json()) as DirectorVerifyResponse;
+		},
 	};
 
 	const { operations, nearTies, redundancyGroups, applyProtectedSpans } =

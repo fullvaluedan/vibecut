@@ -67,8 +67,6 @@ export function AiSettingsContent() {
 					</AccordionTrigger>
 					<AccordionContent className="pt-0 pb-0">
 						<DirectorVisionSection />
-						<DirectorRetakeSection />
-						<DirectorStructuralSection />
 					</AccordionContent>
 				</AccordionItem>
 
@@ -259,56 +257,6 @@ function DirectorVisionSection() {
 					moments, not just what the audio says. Costs more (frames use extra
 					tokens) and needs an API key or a vision-capable custom model; the
 					claude-code CLI falls back to text. Off by default.
-				</p>
-			</SectionContent>
-		</Section>
-	);
-}
-
-function DirectorRetakeSection() {
-	const enabled = useAiSettingsStore((s) => s.directorRetake);
-	const setEnabled = useAiSettingsStore((s) => s.setDirectorRetake);
-	return (
-		<Section showTopBorder={false}>
-			<SectionHeader className="justify-between">
-				<SectionTitle className="flex-1">Retake hunt (extra pass)</SectionTitle>
-				<div className="flex items-center p-1">
-					<Switch checked={enabled} onCheckedChange={setEnabled} />
-				</div>
-			</SectionHeader>
-			<SectionContent className="px-3 pb-3">
-				<p className="text-muted-foreground text-xs">
-					Adds a dedicated AI pass that hunts retakes, false starts, and flubs at
-					word level and offers them as unchecked review rows (never auto-cut).
-					Off by default: measured as roughly break-even on quality, it mostly
-					adds rows to review. Turning it on also runs a shared verification call
-					that double-checks each proposed row before it reaches your review list.
-				</p>
-			</SectionContent>
-		</Section>
-	);
-}
-
-function DirectorStructuralSection() {
-	const enabled = useAiSettingsStore((s) => s.directorStructural);
-	const setEnabled = useAiSettingsStore((s) => s.setDirectorStructural);
-	return (
-		<Section showTopBorder={false}>
-			<SectionHeader className="justify-between">
-				<SectionTitle className="flex-1">Section drops (extra pass)</SectionTitle>
-				<div className="flex items-center p-1">
-					<Switch checked={enabled} onCheckedChange={setEnabled} />
-				</div>
-			</SectionHeader>
-			<SectionContent className="px-3 pb-3">
-				<p className="text-muted-foreground text-xs">
-					Adds a dedicated AI pass that reads the whole transcript, infers the
-					video&apos;s throughline, and offers whole sections a ruthless editor
-					would drop (tangents, weak takes, over-explanation) as unchecked review
-					rows. RECOMMENDED if you cut a lot: it surfaces the structural cuts the
-					other passes cannot see. Turning it on also runs a shared verification
-					call that double-checks each proposed row before it reaches your review
-					list.
 				</p>
 			</SectionContent>
 		</Section>
