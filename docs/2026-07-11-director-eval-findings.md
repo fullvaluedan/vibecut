@@ -391,3 +391,63 @@ handoff's bookend framing does not fit it, though. The two instances are 4 secon
 16:22), an immediately-repeated catchphrase, not a far-apart callback. Round 12 should attribute the
 redundancy AUTO groups the same way this round attributed the phrase-repeat ops before designing a
 signal, rather than reasoning from the word "bookend".
+
+## ADDENDUM 11 (2026-07-19): round 12, join texture and the final read, a split verdict
+
+Dan's live verdict on a 10-file, 29-minute run drove this round: the cuts are individually fine but
+"our ai doesn't consider what the final product looks like when it cuts", concretely cutting
+everything around a filler "so..." and leaving sliver clips on the timeline. Diagnosis confirmed
+the architectural gap: every pass judges its own cuts and nothing reads the ASSEMBLED result.
+
+**The census (deterministic, cached).** Across the four fixtures' AUTO paths: 196 adjacent-cut
+joins, 18 stranded kept fragments of <= 4 words, and 2 wordless slivers (0.05s, 0.06s). Dan's
+finals CUT 15 of the 18 fragments entirely; he KEPT 3 ("and look at that", "Let's find out.",
+"I had some confusion"). Blanket auto-swallowing would have removed 38 words he cut and destroyed
+11 he kept, handing back over half of round 11's win. Hence the split design: wordless slivers
+auto-swallow (metric-invisible by construction), word-bearing fragments are OFFERED only.
+
+**U1 (join layer) shipped clean.** New `join` category, silent slivers AUTO, fragments OFFERED with
+the stranded text quoted. Eval guardrail held exactly as designed: AUTO essLost and OFFERED metrics
+unchanged to the decimal on all four fixtures.
+
+**U2 (final read) is a SPLIT VERDICT: precision perfect, recall well under bar.** The verify pass
+now receives the assembled post-cut transcript (with `[CUT]` seam markers, windowed past 24k chars)
+and adjudicates each fragment; a `swallow` verdict at >= 0.7 confidence pre-checks the row.
+VERIFY_PROMPT_VERSION 2 -> 3. Measured per-fragment against Dan's finals (runIndex 0, retake +
+structural on, mirroring the shipped app):
+
+| | swallowed | left offered |
+|---|---|---|
+| Dan CUT the fragment (14) | 5 | 9 |
+| Dan KEPT the fragment (3) | **0** | 3 |
+
+Precision 5/5 (100%), recall 5/14 (36%) against a plan bar of >= 80%. Zero kept words destroyed,
+which is why the four-fixture eval is flat: AUTO essLost hermes 44.0 -> 44.3, the other three
+identical, OFFERED metrics identical everywhere. It spared all three deliberate keeps.
+
+**Why recall is low, and a REFUTED intermediate theory.** The 0.7 confidence gate is NOT the
+binding constraint: of 19 cached `swallow` verdicts only 3 fall below it, so lowering the threshold
+buys almost nothing. The model genuinely votes `keep` about half the time. The first theory, formed
+on hermes alone, was that the prompt's "complete, deliberate beat" criterion mis-calibrates to Dan,
+who cuts complete-but-inessential lines ("Give that a moment.", "Test."). **how-to-edit refutes
+it**: the model also kept "Okay. Okay.", "Okay, well, model..." and "Thank you. Thank", which are
+not complete beats under any reading. The real behavior is general conservatism toward keeping, not
+a specific taste miscalibration. Do not tune the prompt on the hermes-only story.
+
+**Shipped anyway, with the miss recorded.** U2 is provably harmless (0 wrong swallows, 0 kept words
+destroyed, eval flat), spares every deliberate keep, and correctly pre-checks 5 fragments that
+would otherwise all sit unchecked. It is strictly better than the pre-U2 state, and the
+assembled-transcript builder is the infrastructure any future final-read work needs. But the round
+did NOT meet its own success bar and that is the honest headline: the final read currently finds a
+third of what it should.
+
+**Round 13 lever, with the evidence attached.** Raise final-read recall without touching precision.
+The prompt should ask whether a fragment EARNS its screen time in the assembled flow rather than
+whether it is well-formed, and the 9 missed fragments above are the labeled test set to tune
+against (they span obvious drops like "Okay. Okay." through to judgment calls like "Goodbye,
+Frank."). Measure with the same per-fragment harness; precision at 100% is the thing not to lose.
+
+**Methodological note.** The AUTO/OFFERED eval could not see this round at all: U1 is
+metric-invisible by construction and U2 only moves opt-in rows. A per-fragment harness scored
+against Dan's finals was the only instrument that could grade it. Round 11's lesson generalizes:
+pick the instrument that can actually see the lever before declaring a result.
