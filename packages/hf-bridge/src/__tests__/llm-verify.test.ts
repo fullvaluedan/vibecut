@@ -6,6 +6,7 @@ import {
 	planVerify,
 	sanitizeVerifyPlan,
 	type VerifyCandidate,
+	type VerifyJoinFragment,
 } from "../llm-verify";
 import type { ClaudeAuth } from "../types";
 
@@ -47,6 +48,24 @@ const structC: VerifyCandidate = {
 	coveredText: "a whole tangent about lunch",
 	startLineId: "L2",
 	endLineId: "L5",
+};
+
+// Two join fragments for the final-read block (round 12 U2).
+const fragA: VerifyJoinFragment = {
+	id: "join-abc",
+	text: "so...",
+	startSec: 12.3,
+	endSec: 13.1,
+	contextBefore: "we wrapped the demo",
+	contextAfter: "lets talk deployment",
+};
+const fragB: VerifyJoinFragment = {
+	id: "join-def",
+	text: "and look at that",
+	startSec: 44.0,
+	endSec: 45.2,
+	contextBefore: "hit the button",
+	contextAfter: "next step is",
 };
 
 describe("buildVerifyPrompt (load-bearing substrings)", () => {
@@ -109,6 +128,62 @@ describe("buildVerifyPrompt (load-bearing substrings)", () => {
 		expect(bare).not.toContain("undefined");
 		expect(bare).not.toContain("NaN");
 		expect(bare).toContain('"-"'); // empty text/reason fall back to "-"
+	});
+
+	test("without join fragments, no final-read block and no joinVerdicts hint", () => {
+		expect(prompt).not.toContain("ASSEMBLED RESULT");
+		expect(prompt).not.toContain("JOIN FRAGMENTS");
+		expect(prompt).not.toContain("joinVerdicts");
+	});
+});
+
+describe("buildVerifyPrompt (final-read block, round 12 U2)", () => {
+	const prompt = buildVerifyPrompt({
+		candidates: [retakeC],
+		lines: LINES,
+		assembledTranscript: "we wrapped the demo [CUT] so... [CUT] lets talk deployment",
+		joinFragments: [fragA, fragB],
+	});
+
+	test("renders the assembled result with its seam-marker explanation", () => {
+		expect(prompt).toContain("ASSEMBLED RESULT");
+		expect(prompt).toContain('" [CUT] " marks where two cuts meet');
+		expect(prompt).toContain(
+			"we wrapped the demo [CUT] so... [CUT] lets talk deployment",
+		);
+	});
+
+	test("renders each fragment as a J-row with id, span, stranded text, and kept context", () => {
+		expect(prompt).toContain("[J0 id=join-abc]");
+		expect(prompt).toContain("[J1 id=join-def]");
+		expect(prompt).toContain('stranded: "so..."');
+		expect(prompt).toContain('kept before: "we wrapped the demo"');
+		expect(prompt).toContain('kept after: "lets talk deployment"');
+		expect(prompt).toContain("12.3s-13.1s");
+	});
+
+	test("frames the swallow/keep judgment as better-assembled-read, with confidence", () => {
+		expect(prompt).toContain('"swallow"');
+		expect(prompt).toContain("stranded connective or orphan");
+		expect(prompt).toContain("complete, deliberate beat");
+		expect(prompt).toContain('"confidence": 0..1');
+	});
+
+	test("extends the JSON instruction with a joinVerdicts example", () => {
+		expect(prompt).toContain('"joinVerdicts":[{"id":"join-abc","verdict":"swallow","confidence":0.9}');
+	});
+
+	test("zero candidates + fragments still renders a coherent prompt (no undefined)", () => {
+		const fragOnly = buildVerifyPrompt({
+			candidates: [],
+			lines: LINES,
+			assembledTranscript: "a [CUT] b",
+			joinFragments: [fragA],
+		});
+		expect(fragOnly).toContain("(none this run");
+		expect(fragOnly).toContain("[J0 id=join-abc]");
+		expect(fragOnly).not.toContain("undefined");
+		expect(fragOnly).not.toContain("NaN");
 	});
 });
 
@@ -275,6 +350,92 @@ describe("sanitizeVerifyPlan (malformed responses never throw)", () => {
 	});
 });
 
+describe("sanitizeVerifyPlan (join verdicts, round 12 U2)", () => {
+	const args = {
+		candidates: [retakeC],
+		lines: LINES,
+		words: WORDS,
+		joinFragments: [fragA, fragB],
+	};
+
+	test("well-formed swallow/keep verdicts pass through with clamped confidence", () => {
+		const plan = sanitizeVerifyPlan({
+			raw: {
+				verdicts: [],
+				joinVerdicts: [
+					{ id: "join-abc", verdict: "swallow", confidence: 0.9 },
+					{ id: "join-def", verdict: "keep", confidence: 1.7 }, // clamps to 1
+				],
+			},
+			...args,
+		});
+		expect(plan.joinVerdicts).toEqual([
+			{ id: "join-abc", verdict: "swallow", confidence: 0.9 },
+			{ id: "join-def", verdict: "keep", confidence: 1 },
+		]);
+	});
+
+	test("unknown id, unknown verdict, bad confidence, and duplicates are dropped", () => {
+		const plan = sanitizeVerifyPlan({
+			raw: {
+				verdicts: [],
+				joinVerdicts: [
+					{ id: "join-zzz", verdict: "swallow", confidence: 0.9 }, // not a sent fragment
+					{ id: "join-abc", verdict: "maybe", confidence: 0.9 }, // unknown verdict
+					{ id: "join-abc", verdict: "swallow", confidence: "high" }, // non-number confidence
+					{ id: "join-abc", verdict: "swallow", confidence: Number.NaN }, // non-finite
+					{ id: "join-def", verdict: "keep", confidence: 0.6 }, // valid, first for its id
+					{ id: "join-def", verdict: "swallow", confidence: 0.9 }, // duplicate id
+					{ id: 7, verdict: "swallow", confidence: 0.9 }, // non-string id
+					"not an object",
+				],
+			},
+			...args,
+		});
+		expect(plan.joinVerdicts).toEqual([
+			{ id: "join-def", verdict: "keep", confidence: 0.6 },
+		]);
+	});
+
+	test("a malformed or absent joinVerdicts array yields zero join verdicts", () => {
+		expect(
+			sanitizeVerifyPlan({ raw: { verdicts: [] }, ...args }).joinVerdicts,
+		).toEqual([]);
+		expect(
+			sanitizeVerifyPlan({
+				raw: { verdicts: [], joinVerdicts: "nope" },
+				...args,
+			}).joinVerdicts,
+		).toEqual([]);
+		// A malformed verdicts array must not take the join verdicts down with it.
+		expect(
+			sanitizeVerifyPlan({
+				raw: {
+					verdicts: "nope",
+					joinVerdicts: [{ id: "join-abc", verdict: "swallow", confidence: 0.8 }],
+				},
+				...args,
+			}),
+		).toEqual({
+			verdicts: [],
+			joinVerdicts: [{ id: "join-abc", verdict: "swallow", confidence: 0.8 }],
+		});
+	});
+
+	test("join verdicts for fragments that were never sent yield nothing (no fragments)", () => {
+		const plan = sanitizeVerifyPlan({
+			raw: {
+				verdicts: [],
+				joinVerdicts: [{ id: "join-abc", verdict: "swallow", confidence: 0.9 }],
+			},
+			candidates: [retakeC],
+			lines: LINES,
+			words: WORDS,
+		});
+		expect(plan.joinVerdicts).toEqual([]);
+	});
+});
+
 describe("planVerify fail-open (R4)", () => {
 	// A custom endpoint that would REJECT fast if dispatched - proves the empty-
 	// candidates guard returns BEFORE any LLM call (a live call would fetch this host).
@@ -284,9 +445,33 @@ describe("planVerify fail-open (R4)", () => {
 		model: "unused",
 	};
 
-	test("empty candidates -> empty verdicts WITHOUT invoking the LLM", async () => {
+	test("empty candidates AND empty fragments -> empty verdicts WITHOUT invoking the LLM", async () => {
 		await expect(
 			planVerify({ candidates: [], lines: LINES, words: WORDS, auth: NO_CALL_AUTH }),
-		).resolves.toEqual({ plan: { verdicts: [] }, usage: null });
+		).resolves.toEqual({ plan: { verdicts: [], joinVerdicts: [] }, usage: null });
+		await expect(
+			planVerify({
+				candidates: [],
+				lines: LINES,
+				words: WORDS,
+				joinFragments: [],
+				auth: NO_CALL_AUTH,
+			}),
+		).resolves.toEqual({ plan: { verdicts: [], joinVerdicts: [] }, usage: null });
+	});
+
+	test("join fragments ALONE fire the pass (round 12 U2: the call is attempted)", async () => {
+		// The unreachable endpoint proves the inverse of the guard test above: with
+		// zero candidates but one fragment, planVerify must DISPATCH (and here fail).
+		await expect(
+			planVerify({
+				candidates: [],
+				lines: LINES,
+				words: WORDS,
+				assembledTranscript: "a [CUT] b",
+				joinFragments: [fragA],
+				auth: NO_CALL_AUTH,
+			}),
+		).rejects.toThrow();
 	});
 });

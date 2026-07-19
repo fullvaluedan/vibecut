@@ -38,13 +38,45 @@ import type { ClaudeAuth } from "./types";
  * wording changes bust the cache (the KTD7 discipline, learned the hard way when
  * prompt v2's gate re-run cache-hit v1's verdicts).
  */
-export const VERIFY_PROMPT_VERSION = 2;
+export const VERIFY_PROMPT_VERSION = 3;
 
 /** Which recall pass produced a candidate (fixes which anchors it tightens through). */
 export type VerifyCategory = "retake" | "structural";
 
 /** The three verdicts the verifier can return for a candidate. */
 export type VerifyVerdictKind = "keep" | "reject" | "tighten";
+
+/**
+ * One OFFERED join-fragment row (round 12 U2/R3): a short run of kept words left
+ * stranded between two accepted cuts in the ASSEMBLED result. The final-read side
+ * of the verify pass judges each one against the assembled transcript: swallow it
+ * (a stranded connective/orphan that breaks flow) or keep it (a complete,
+ * deliberate beat). Verdicts key back by `id` (the join op's stable id), never by
+ * index - the fragment set is tiny and the id survives the round trip verbatim.
+ */
+export interface VerifyJoinFragment {
+	/** The join op's stable id; the verdict echoes it verbatim. */
+	id: string;
+	/** The stranded kept text between the two cuts. */
+	text: string;
+	startSec: number;
+	endSec: number;
+	/** Up to ~15 KEPT words immediately before the fragment (assembled order). */
+	contextBefore: string;
+	/** Up to ~15 KEPT words immediately after the fragment (assembled order). */
+	contextAfter: string;
+}
+
+/** The two verdicts the final read can return for a join fragment. */
+export type VerifyJoinVerdictKind = "swallow" | "keep";
+
+/** One join-fragment verdict, keyed back to its fragment by `id`. */
+export interface VerifyJoinVerdict {
+	id: string;
+	verdict: VerifyJoinVerdictKind;
+	/** Model confidence 0..1 (clamped by the sanitizer). */
+	confidence: number;
+}
 
 /**
  * One recall-pass candidate handed to the verifier. Carries its resolved seconds
@@ -77,6 +109,9 @@ export interface VerifyVerdict {
 
 export interface VerifyPlan {
 	verdicts: VerifyVerdict[];
+	/** Per-fragment final-read verdicts (round 12 U2). Empty when no fragments
+	 * were sent or the response carried none/malformed ones (fail-open). */
+	joinVerdicts: VerifyJoinVerdict[];
 }
 
 const VERIFY_SCHEMA = {
@@ -95,6 +130,19 @@ const VERIFY_SCHEMA = {
 					endWord: { type: "number" },
 				},
 				required: ["index", "verdict"],
+				additionalProperties: false,
+			},
+		},
+		joinVerdicts: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					id: { type: "string" },
+					verdict: { type: "string" },
+					confidence: { type: "number" },
+				},
+				required: ["id", "verdict", "confidence"],
 				additionalProperties: false,
 			},
 		},
@@ -194,6 +242,20 @@ function renderVerifyCandidates(
 		.join("\n");
 }
 
+/** Render each join fragment as one J-tagged row carrying its id, span, stranded
+ * text, and the kept context on both sides. No `undefined`/`NaN` leaks (numbers
+ * guarded, empty text falls back to "-"). */
+function renderJoinFragments(fragments: readonly VerifyJoinFragment[]): string {
+	return fragments
+		.map((f, i) => {
+			const start = Number.isFinite(f.startSec) ? f.startSec : 0;
+			const end = Number.isFinite(f.endSec) ? f.endSec : 0;
+			const clean = (s: string): string => s.trim().replace(/\s+/g, " ") || "-";
+			return `[J${i} id=${f.id || "-"}] ${start.toFixed(1)}s-${end.toFixed(1)}s stranded: "${clean(f.text)}" | kept before: "${clean(f.contextBefore)}" | kept after: "${clean(f.contextAfter)}"`;
+		})
+		.join("\n");
+}
+
 /** Render the full transcript line catalog (context the verifier judges against). No
  * `undefined`/`NaN` leaks (timings are numbers, text falls back to "-"). */
 function renderVerifyLineCatalog(lines: readonly RedundancyLine[]): string {
@@ -210,11 +272,39 @@ export function buildVerifyPrompt({
 	candidates,
 	lines,
 	taste,
+	assembledTranscript,
+	joinFragments = [],
 }: {
 	candidates: readonly VerifyCandidate[];
 	lines: readonly RedundancyLine[];
 	taste?: string;
+	/** The ASSEMBLED post-cut transcript (or timestamped windows around each join
+	 * when the full text is too long). Sent only when join fragments exist. */
+	assembledTranscript?: string;
+	/** OFFERED join-fragment rows the final read adjudicates (round 12 U2/R3). */
+	joinFragments?: readonly VerifyJoinFragment[];
 }): string {
+	// Final-read block (round 12 U2/R3): rendered only when join fragments exist,
+	// so a candidates-only call keeps the lean damage-review prompt.
+	const joinBlock =
+		joinFragments.length > 0
+			? `
+ASSEMBLED RESULT (the transcript that REMAINS after every accepted cut, in order; " [CUT] " marks where two cuts meet):
+${assembledTranscript?.trim() || "-"}
+
+JOIN FRAGMENTS: Each row below is a SHORT run of kept words left stranded between two cuts in the assembled result above. For each fragment, read the assembled result around it and judge which version reads BETTER:
+- "swallow": the fragment is a stranded connective or orphan (a dangling "so...", a half thought, a lead-in whose payoff was cut) that breaks the flow of the join - the assembled result reads cleaner with the fragment cut too.
+- "keep": the fragment is a complete, deliberate beat that works on its own - a reaction, a punchline, a transition that lands - and cutting it would hurt the assembled result.
+
+${renderJoinFragments(joinFragments)}
+
+Return one entry per fragment in "joinVerdicts": {"id": the fragment's id string EXACTLY as shown, "verdict": "swallow" or "keep", "confidence": 0..1 (how sure you are)}.
+`
+			: "";
+	const joinJsonHint =
+		joinFragments.length > 0
+			? `,"joinVerdicts":[{"id":"join-abc","verdict":"swallow","confidence":0.9}, ...]`
+			: "";
 	return `You are a precision EDITOR reviewing a list of PROPOSED CUTS before they reach the timeline. Each proposed cut was already found by an earlier recall pass that hunted aggressively for removable material. Your job is DAMAGE REVIEW, not taste: decide, for each proposed span, whether removing it would harm the finished video.
 
 For EACH candidate below, return exactly one verdict:
@@ -229,12 +319,12 @@ Do NOT re-litigate whether the material could be cut - recall was the finder pas
 A tighten narrows through the candidate's OWN reference anchors: a retake candidate carries a word range [w<start>-w<end>], so return "startWord"/"endWord" GLOBAL word indices inside it; a structural candidate carries a line range [L<start>-L<end>], so return "startLineId"/"endLineId" inside it. Never return raw seconds.
 
 CANDIDATES:
-${renderVerifyCandidates(candidates, lines)}
-
+${candidates.length > 0 ? renderVerifyCandidates(candidates, lines) : "(none this run - only the join fragments below need verdicts)"}
+${joinBlock}
 TRANSCRIPT (full line catalog, for context):
 ${renderVerifyLineCatalog(lines)}
 ${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
-Respond with ONLY JSON: {"verdicts":[{"index":0,"verdict":"keep"},{"index":1,"verdict":"reject"},{"index":2,"verdict":"tighten","startWord":342,"endWord":348}, ...]} - "index" is the C-number of the candidate (0-based), "verdict" is keep, reject, or tighten, and a tighten adds startWord/endWord (retake) or startLineId/endLineId (structural) strictly inside that candidate's span.`;
+Respond with ONLY JSON: {"verdicts":[{"index":0,"verdict":"keep"},{"index":1,"verdict":"reject"},{"index":2,"verdict":"tighten","startWord":342,"endWord":348}, ...]${joinJsonHint}} - "index" is the C-number of the candidate (0-based), "verdict" is keep, reject, or tighten, and a tighten adds startWord/endWord (retake) or startLineId/endLineId (structural) strictly inside that candidate's span.`;
 }
 
 /** True when a resolved span is a proper SHRINK of the candidate's span: positive
@@ -253,35 +343,79 @@ function isInnerSpan(
 }
 
 /**
+ * Clean the raw `joinVerdicts` array into id-keyed fragment verdicts. Drops any
+ * entry whose id is not a string, does not match a SENT fragment id, repeats an
+ * already-seen id (first well-formed one wins), carries an unknown verdict kind,
+ * or has a non-finite confidence; confidence clamps to [0, 1]. A malformed or
+ * absent array yields zero join verdicts (fail-open). Never throws. Pure.
+ */
+function sanitizeJoinVerdicts({
+	raw,
+	joinFragments,
+}: {
+	raw: unknown;
+	joinFragments: readonly VerifyJoinFragment[];
+}): VerifyJoinVerdict[] {
+	if (!Array.isArray(raw) || joinFragments.length === 0) return [];
+	const sentIds = new Set(joinFragments.map((f) => f.id));
+	const seen = new Set<string>();
+	const out: VerifyJoinVerdict[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const e = entry as Record<string, unknown>;
+		if (typeof e.id !== "string" || !sentIds.has(e.id)) continue;
+		if (e.verdict !== "swallow" && e.verdict !== "keep") continue;
+		if (typeof e.confidence !== "number" || !Number.isFinite(e.confidence)) continue;
+		if (seen.has(e.id)) continue; // duplicate id: first well-formed one wins
+		seen.add(e.id);
+		out.push({
+			id: e.id,
+			verdict: e.verdict,
+			confidence: Math.min(1, Math.max(0, e.confidence)),
+		});
+	}
+	return out;
+}
+
+/**
  * Clean a raw verify response into index-keyed verdicts. Drops entries with an
  * unknown/duplicate/non-integer index or an unknown verdict string. Each tighten
  * resolves INDIVIDUALLY (a single-op resolver call) against a catalog built from BOTH
  * `lines` and `words` (word indices win when both are present); its span must land
  * strictly inside the candidate's original span, else the verdict degrades to keep. A
- * malformed response yields zero verdicts. Never throws. Pure -> unit-tested.
+ * malformed response yields zero verdicts. Join-fragment verdicts (round 12 U2) ride
+ * the same response and sanitize id-keyed against the SENT fragment set. Never
+ * throws. Pure -> unit-tested.
  */
 export function sanitizeVerifyPlan({
 	raw,
 	candidates,
 	lines,
 	words,
+	joinFragments = [],
 }: {
 	raw: unknown;
 	candidates: readonly VerifyCandidate[];
 	lines: readonly RedundancyLine[];
 	words: readonly ReferenceWord[];
+	joinFragments?: readonly VerifyJoinFragment[];
 }): VerifyPlan {
 	let value: unknown = raw;
 	if (typeof value === "string") {
 		try {
 			value = JSON.parse(value);
 		} catch {
-			return { verdicts: [] };
+			return { verdicts: [], joinVerdicts: [] };
 		}
 	}
-	if (typeof value !== "object" || value === null) return { verdicts: [] };
+	if (typeof value !== "object" || value === null)
+		return { verdicts: [], joinVerdicts: [] };
+	const joinVerdicts = sanitizeJoinVerdicts({
+		raw: (value as Record<string, unknown>).joinVerdicts,
+		joinFragments,
+	});
 	const arr = (value as Record<string, unknown>).verdicts;
-	if (!Array.isArray(arr)) return { verdicts: [] };
+	if (!Array.isArray(arr)) return { verdicts: [], joinVerdicts };
 
 	const catalog: ReferenceCatalog = {
 		lines: lines.map((l) => ({
@@ -334,31 +468,49 @@ export function sanitizeVerifyPlan({
 			verdicts.push({ index, verdict: "keep" });
 		}
 	}
-	return { verdicts };
+	return { verdicts, joinVerdicts };
 }
 
 /**
  * Build the verify prompt, dispatch it text-only, and return the sanitized verdicts
- * plus token usage. Mirrors `planStructural`. R4 FAIL-OPEN: zero candidates contribute
- * an empty verdict list WITHOUT calling the LLM (guard first, never a throw). One
- * batched call otherwise: the candidate set is small (a few dozen rows at most).
+ * plus token usage. Mirrors `planStructural`. R4 FAIL-OPEN: zero candidates AND zero
+ * join fragments contribute empty verdict lists WITHOUT calling the LLM (guard
+ * first, never a throw). One batched call otherwise: the candidate + fragment set is
+ * small (a few dozen rows at most). Round 12 U2: the pass fires for join fragments
+ * ALONE now - the final read must run even when no recall candidate exists.
  */
 export async function planVerify({
 	candidates,
 	lines,
 	words,
 	taste,
+	assembledTranscript,
+	joinFragments = [],
 	auth,
 }: {
 	candidates: readonly VerifyCandidate[];
 	lines: readonly RedundancyLine[];
 	words: readonly ReferenceWord[];
 	taste?: string;
+	/** Assembled post-cut transcript (or windows); sent with join fragments. */
+	assembledTranscript?: string;
+	/** OFFERED join-fragment rows the final read adjudicates (round 12 U2). */
+	joinFragments?: readonly VerifyJoinFragment[];
 	auth: ClaudeAuth;
 }): Promise<{ plan: VerifyPlan; usage: TokenUsage | null }> {
-	// R4: no candidates -> nothing to verify, and the LLM is never invoked (guard first).
-	if (candidates.length === 0) return { plan: { verdicts: [] }, usage: null };
-	const prompt = buildVerifyPrompt({ candidates, lines, taste });
+	// R4: nothing to verify at all -> the LLM is never invoked (guard first).
+	if (candidates.length === 0 && joinFragments.length === 0)
+		return { plan: { verdicts: [], joinVerdicts: [] }, usage: null };
+	const prompt = buildVerifyPrompt({
+		candidates,
+		lines,
+		taste,
+		assembledTranscript,
+		joinFragments,
+	});
 	const { raw, usage } = await planJson({ prompt, auth, schema: VERIFY_SCHEMA });
-	return { plan: sanitizeVerifyPlan({ raw, candidates, lines, words }), usage };
+	return {
+		plan: sanitizeVerifyPlan({ raw, candidates, lines, words, joinFragments }),
+		usage,
+	};
 }

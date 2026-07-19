@@ -4,6 +4,7 @@ import {
 	type RedundancyLine,
 	type RetakeWord,
 	type VerifyCandidate,
+	type VerifyJoinFragment,
 } from "@framecut/hf-bridge";
 import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
 
@@ -118,6 +119,42 @@ function parseWords(raw: unknown): RetakeWord[] | null {
 }
 
 /**
+ * Parse the wire `joinFragments` array into typed `VerifyJoinFragment[]`, dropping
+ * any malformed entry (round 12 U2). OPTIONAL on the wire: absent or not-an-array
+ * degrades to an empty list rather than a 400 - the final read is an enhancement
+ * on top of the damage review, never a reason to fail the pass.
+ */
+function parseJoinFragments(raw: unknown): VerifyJoinFragment[] {
+	if (!Array.isArray(raw)) return [];
+	const out: VerifyJoinFragment[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const it: Record<string, unknown> = entry;
+		if (
+			typeof it.id === "string" &&
+			it.id.length > 0 &&
+			typeof it.text === "string" &&
+			typeof it.startSec === "number" &&
+			Number.isFinite(it.startSec) &&
+			typeof it.endSec === "number" &&
+			Number.isFinite(it.endSec) &&
+			typeof it.contextBefore === "string" &&
+			typeof it.contextAfter === "string"
+		) {
+			out.push({
+				id: it.id,
+				text: it.text,
+				startSec: it.startSec,
+				endSec: it.endSec,
+				contextBefore: it.contextBefore,
+				contextAfter: it.contextAfter,
+			});
+		}
+	}
+	return out;
+}
+
+/**
  * The dedicated verify endpoint (U3): every recall-pass candidate (category
  * `retake`/`structural`) plus BOTH resolution catalogs (lines and words) in; a
  * sanitized, index-keyed `VerifyPlan` (keep/reject/tighten verdicts) + token usage
@@ -150,15 +187,36 @@ export async function POST(req: NextRequest) {
 		return NextResponse.json({ error: "Invalid words" }, { status: 400 });
 	}
 	const taste = typeof body?.taste === "string" ? body.taste : undefined;
+	// Final-read inputs (round 12 U2): both OPTIONAL on the wire. A missing or
+	// malformed assembled transcript / fragment list degrades to the plain damage
+	// review rather than a 400.
+	const joinFragments = parseJoinFragments(body?.joinFragments);
+	const assembledTranscript =
+		typeof body?.assembledTranscript === "string"
+			? body.assembledTranscript
+			: undefined;
 
 	try {
-		const { plan, usage } = await planVerify({ candidates, lines, words, taste, auth });
+		const { plan, usage } = await planVerify({
+			candidates,
+			lines,
+			words,
+			taste,
+			assembledTranscript,
+			joinFragments,
+			auth,
+		});
 		return NextResponse.json({ plan, usage });
 	} catch (e) {
 		// Fail-open (R4): a planner error degrades to zero verdicts instead of failing
 		// the whole Director run. Logged server-side only; the client sees a normal 200
-		// with an empty plan, and every candidate passes through unverified.
+		// with an empty plan, and every candidate passes through unverified (join rows
+		// stay OFFERED).
 		console.error("Verify planning failed:", e instanceof Error ? e.message : e);
-		return NextResponse.json({ plan: { verdicts: [] }, usage: null, degraded: true });
+		return NextResponse.json({
+			plan: { verdicts: [], joinVerdicts: [] },
+			usage: null,
+			degraded: true,
+		});
 	}
 }

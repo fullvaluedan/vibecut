@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+	applyJoinVerdicts,
 	applyVerifyVerdicts,
 	collectVerifyCandidates,
+	JOIN_SWALLOW_MIN_CONFIDENCE,
 } from "../verify-apply";
 import type {
 	DirectorOp,
 	RedundancyLine,
 	RetakeWord,
+	VerifyJoinVerdict,
 	VerifyVerdict,
 } from "@framecut/hf-bridge";
 
@@ -204,5 +207,105 @@ describe("applyVerifyVerdicts", () => {
 		expect(
 			applyVerifyVerdicts({ ops: [fillerOp], candidates: [], verdicts }),
 		).toEqual([fillerOp]);
+	});
+});
+
+/**
+ * Final-read join promotion (round 12 U2/R3): a confident "swallow" flips an
+ * OFFERED join row to checked; everything else - "keep", low confidence, an
+ * unknown id, a malformed entry - leaves every row exactly as detected, and a
+ * non-join op is never touched (fail toward OFFERED, never toward removal).
+ */
+describe("applyJoinVerdicts", () => {
+	// A word-bearing OFFERED fragment row and an AUTO (accepted) sliver row, as
+	// the join-texture layer mints them, plus a non-join bystander.
+	const fragmentJoin = op({
+		id: "j-frag",
+		startSec: 5.0,
+		endSec: 5.5,
+		reason: 'Stranded between two cuts: "so..." - swallow it?',
+		confidence: 0.6,
+		category: "join",
+		defaultAccept: false,
+	});
+	const sliverJoin = op({
+		id: "j-sliver",
+		startSec: 6.0,
+		endSec: 6.05,
+		reason: "Silent sliver (0.05s) between two cuts - swallowed for a clean join",
+		confidence: 0.6,
+		category: "join",
+	});
+	const OPS = [fillerOp, fragmentJoin, sliverJoin];
+
+	test("a swallow at EXACTLY the threshold promotes; every other field survives", () => {
+		const out = applyJoinVerdicts({
+			ops: OPS,
+			verdicts: [
+				{ id: "j-frag", verdict: "swallow", confidence: JOIN_SWALLOW_MIN_CONFIDENCE },
+			],
+		});
+		const promoted = out.find((o) => o.id === "j-frag")!;
+		expect(promoted.defaultAccept).toBe(true);
+		expect(promoted.category).toBe("join");
+		expect(promoted.reason).toBe(fragmentJoin.reason);
+		expect(promoted.startSec).toBe(5.0);
+		expect(promoted.endSec).toBe(5.5);
+		// The bystanders are untouched (the filler and the AUTO sliver).
+		expect(out.find((o) => o.id === "f1")).toBe(fillerOp);
+		expect(out.find((o) => o.id === "j-sliver")).toBe(sliverJoin);
+	});
+
+	test("a swallow BELOW the threshold leaves the row OFFERED", () => {
+		const out = applyJoinVerdicts({
+			ops: OPS,
+			verdicts: [{ id: "j-frag", verdict: "swallow", confidence: 0.69 }],
+		});
+		expect(out.find((o) => o.id === "j-frag")!.defaultAccept).toBe(false);
+	});
+
+	test("a keep verdict leaves the row OFFERED even at full confidence", () => {
+		const out = applyJoinVerdicts({
+			ops: OPS,
+			verdicts: [{ id: "j-frag", verdict: "keep", confidence: 1 }],
+		});
+		expect(out.find((o) => o.id === "j-frag")!.defaultAccept).toBe(false);
+	});
+
+	test("an id matching no join op is ignored; a non-join op with the id is never touched", () => {
+		// "f1" IS an op id in the list, but not a join op: it must pass through
+		// untouched even with a confident swallow naming it.
+		const out = applyJoinVerdicts({
+			ops: OPS,
+			verdicts: [
+				{ id: "j-unknown", verdict: "swallow", confidence: 0.95 },
+				{ id: "f1", verdict: "swallow", confidence: 0.95 },
+			],
+		});
+		expect(out).toEqual(OPS);
+	});
+
+	test("an already-accepted join (AUTO sliver) is never re-flagged by a verdict", () => {
+		const out = applyJoinVerdicts({
+			ops: OPS,
+			verdicts: [{ id: "j-sliver", verdict: "swallow", confidence: 0.95 }],
+		});
+		// defaultAccept stays ABSENT (accepted), not overwritten to explicit true.
+		expect(out.find((o) => o.id === "j-sliver")).toBe(sliverJoin);
+	});
+
+	test("malformed verdict entries promote nothing (belt on top of the sanitizer)", () => {
+		const malformed = [
+			null,
+			{ id: "j-frag", verdict: "swallow" }, // missing confidence
+			{ id: "j-frag", verdict: "swallow", confidence: "high" }, // non-number
+			{ id: "j-frag", verdict: "swallow", confidence: Number.NaN }, // non-finite
+			{ verdict: "swallow", confidence: 0.9 }, // missing id
+		] as unknown as VerifyJoinVerdict[];
+		expect(applyJoinVerdicts({ ops: OPS, verdicts: malformed })).toEqual(OPS);
+	});
+
+	test("empty verdicts pass every op through unchanged", () => {
+		expect(applyJoinVerdicts({ ops: OPS, verdicts: [] })).toEqual(OPS);
 	});
 });

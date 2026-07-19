@@ -25,6 +25,7 @@ import type {
 	RedundancyLine,
 	RetakeWord,
 	VerifyCandidate,
+	VerifyJoinVerdict,
 	VerifyVerdict,
 } from "@framecut/hf-bridge";
 
@@ -156,4 +157,48 @@ export function applyVerifyVerdicts({
 		}
 	}
 	return out;
+}
+
+/** A "swallow" join verdict below this confidence leaves the row OFFERED: the
+ * final read must be SURE before a fragment auto-swallows (round 12 U2/R3 - the
+ * census found 3 of 18 fragments were deliberate keeps). */
+export const JOIN_SWALLOW_MIN_CONFIDENCE = 0.7;
+
+/**
+ * Apply the final read's id-keyed join verdicts to a join-op list (round 12
+ * U2/R3). A "swallow" verdict at/above JOIN_SWALLOW_MIN_CONFIDENCE flips its
+ * OFFERED join op to `defaultAccept: true` (promoted to checked); a "keep"
+ * verdict, a low-confidence swallow, or no verdict leaves the row OFFERED; an id
+ * matching no join op is ignored; a non-join op (or an already-accepted join,
+ * e.g. an AUTO sliver) is NEVER touched. Malformed verdict entries (wrong types,
+ * missing confidence) promote nothing - the sanitizer upstream already drops
+ * them, these guards are belt-and-braces so a degraded response can only ever
+ * fail toward OFFERED. Pure.
+ */
+export function applyJoinVerdicts({
+	ops,
+	verdicts,
+}: {
+	ops: readonly DirectorOp[];
+	verdicts: readonly VerifyJoinVerdict[];
+}): DirectorOp[] {
+	const promote = new Set<string>();
+	for (const v of verdicts) {
+		if (typeof v !== "object" || v === null) continue;
+		if (typeof v.id !== "string") continue;
+		if (v.verdict !== "swallow") continue;
+		if (
+			typeof v.confidence !== "number" ||
+			!Number.isFinite(v.confidence) ||
+			v.confidence < JOIN_SWALLOW_MIN_CONFIDENCE
+		)
+			continue;
+		promote.add(v.id);
+	}
+	if (promote.size === 0) return [...ops];
+	return ops.map((op) =>
+		op.category === "join" && op.defaultAccept === false && promote.has(op.id)
+			? { ...op, defaultAccept: true }
+			: op,
+	);
 }
