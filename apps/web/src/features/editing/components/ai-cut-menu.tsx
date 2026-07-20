@@ -23,14 +23,22 @@ import {
 	runRemoveSilencesAction,
 } from "@/features/ai-generate/director/ai-cut-actions";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
+import {
+	HIDE_AUTO_ASSEMBLE_ACTION,
+	HIDE_HIGHLIGHT_ACTION,
+} from "@/features/editing/surface-flags";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScissorIcon } from "@hugeicons/core-free-icons";
 
 /**
- * The AI CUT toolbar dropdown. The four actions' run orchestration (progress
- * toasts, abort wiring, the transcriber-pause flag) lives in `ai-cut-actions.ts`
- * and writes into `ai-activity-store` (R1/KTD1); this component just renders the
- * shared label/stage/cancel, so it and the persistent Director dock's Running view
+ * The AI CUT toolbar dropdown. Shows exactly two entries (roadmap D2): "AI CUT"
+ * (the Director run) and "Remove silences". Auto-assemble and Highlight are
+ * hidden behind `surface-flags.ts`, not deleted - their menu items and the
+ * Highlight dialog stay in this file, just unreachable while the flags are on.
+ * All four actions' run orchestration (progress toasts, abort wiring, the
+ * transcriber-pause flag) lives in `ai-cut-actions.ts` and writes into
+ * `ai-activity-store` (R1/KTD1); this component just renders the shared
+ * label/stage/cancel, so it and the persistent Director dock's Running view
  * can never drift out of sync.
  */
 export function AiCutMenu() {
@@ -69,15 +77,19 @@ export function AiCutMenu() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
-					<DropdownMenuItem onClick={() => void runAutoAssembleAction({ editor })}>
-						Auto-assemble — build a cut from all my clips
-					</DropdownMenuItem>
+					{!HIDE_AUTO_ASSEMBLE_ACTION && (
+						<DropdownMenuItem onClick={() => void runAutoAssembleAction({ editor })}>
+							Auto-assemble: build a cut from all my clips
+						</DropdownMenuItem>
+					)}
 					<DropdownMenuItem onClick={() => void runDirectorAction({ editor })}>
-						AI Director — review &amp; cut the whole video
+						AI CUT: review and cut the whole video
 					</DropdownMenuItem>
-					<DropdownMenuItem onClick={() => setHighlightOpen(true)}>
-						Highlight — keep the best parts
-					</DropdownMenuItem>
+					{!HIDE_HIGHLIGHT_ACTION && (
+						<DropdownMenuItem onClick={() => setHighlightOpen(true)}>
+							Highlight: keep the best parts
+						</DropdownMenuItem>
+					)}
 					<DropdownMenuItem onClick={() => void runRemoveSilencesAction({ editor })}>
 						Remove silences
 					</DropdownMenuItem>
