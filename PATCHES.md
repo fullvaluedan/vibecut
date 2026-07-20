@@ -359,3 +359,11 @@ Hidden per Dan's roadmap decisions D4/D6 (`docs/plans/2026-07-19-002-feat-ui-ove
 | `apps/web/src/effects/components/effects-tab.tsx` | W2: found while auditing entry points into hidden tabs - the per-clip Effects tab's empty-state "Open effects" button switched the LEFT panel to the now-hidden Effects bin tab; the button is now hidden (and the empty-state copy adjusted) whenever `"effects"` is in `HIDDEN_ASSET_TABS`. | 2026-07-20 | One conditional button + one ternary string |
 
 `apps/web/src/features/editing/components/ai-cut-menu.tsx` and `apps/web/src/features/ai-generate/director/components/director-dock.tsx` also changed (AI CUT menu and the Director dock idle card both slim to exactly two entries, "AI CUT" and "Remove silences"; Auto-assemble/Highlight gated behind `HIDE_AUTO_ASSEMBLE_ACTION`/`HIDE_HIGHLIGHT_ACTION`) but both files live under `features/ai-generate`/`features/editing`, so per the project's own rule they are not upstream-originated and need no row here.
+
+## Transcript export (W4, 2026-07-20)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/subtitles/srt.ts` | W4: added `writeSrt({cues})`, the SRT serializer this module was missing (it only had `parseSrt`). Reused by the Transcript tab's Export menu (`features/transcription/export-transcript.ts`, ours) as the ONE SRT writer - no second serializer. Skips zero-duration/empty-text cues; round-trips with the existing `parseSrt` (verified in `subtitles/__tests__/srt.test.ts`, new). | 2026-07-20 | Pure addition, `parseSrt` untouched |
+
+`apps/web/src/features/transcription/{export-transcript.ts,find-active-transcript-index.ts}` (new, ours), `components/assets-view.tsx` (Export kebab replaces the old plain Export button; search box; live playhead highlight wiring), `components/transcript-text.tsx` (click-a-word seeks via new `onSeek` prop, `activeIndex` playing-word highlight, `query` search highlight/dim - all additive on top of the existing mousedown/mouseover/keydown selection handlers, which are unchanged), and `format-transcript-text.ts` (exported the existing internal `formatTimestamp` instead of duplicating it) also changed, but all four live under `features/transcription/`, so per the project's own rule they are not upstream-originated and need no row here.
