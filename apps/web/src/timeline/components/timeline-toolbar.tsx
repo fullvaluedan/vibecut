@@ -214,9 +214,6 @@ function ToolbarLeftSection() {
 					}
 				/>
 
-				{/* Freeze frame removed (menu IA audit): dead surface, no functionality
-					behind the disabled button. Reintroduce when freeze-frame ships. */}
-
 				<ToolbarButton
 					icon={<HugeiconsIcon icon={Layers01Icon} />}
 					tooltip="Nest selection into a new sequence"
@@ -289,7 +286,7 @@ function SceneSelector() {
 				<SplitButtonLeft>{currentScene?.name || "No Scene"}</SplitButtonLeft>
 				<SplitButtonSeparator />
 				<ScenesView>
-					<SplitButtonRight onClick={() => {}}>
+					<SplitButtonRight>
 						<HugeiconsIcon icon={Layers01Icon} className="size-4" />
 					</SplitButtonRight>
 				</ScenesView>
