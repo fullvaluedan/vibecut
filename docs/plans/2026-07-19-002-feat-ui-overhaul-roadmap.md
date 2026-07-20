@@ -35,15 +35,15 @@ Sounds tab, the Effects tab. KEEP: Media, Text, Shapes, Captions, Transcript, Se
 
 | ID | Feature (worktree) | Model | Phase | Premiere guiding principle | Status |
 |---|---|---|---|---|---|
-| W1 | Export: chunked audio mixing for long videos (the ~21-min `createBuffer` wall; Dan's live project is 29 min) | Opus | 1, NOW | Export never fails on length; render progresses visibly | launched |
-| W2 | Panel slimming: hidden-list above + AI CUT menu to two options + Director dock idle card to two actions | Sonnet | 1, NOW | Premiere ships many panels but a curated default workspace; hiding = workspace curation | launched |
-| W3 | Dead-code deletion: orphaned stickers view (3,435 LOC), guides popover, freeze-frame comment, stale "OpenCut" banner string (PATCHES row) | Sonnet | 1, NOW | n/a (hygiene) | launched |
-| W4 | Transcript create + export (VERY IMPORTANT): verify existing transcribe flow, add first-class export (TXT, SRT, VTT at minimum) | Sonnet | 1b, after research | Premiere's Text panel: transcribe sequence, export transcript as .txt/.srt/.csv | research running |
-| W5 | Masks deep fix | Opus | 2, after research | Premiere's masking: shape + pen masks on clips/effects, feather/expansion/opacity, direct-manipulation handles | research running (incl. GitHub prior art) |
-| W6 | Design-system unification: extract the Transform panel's control language (blue draggable numeric values, boxed groups, twirl-down layout) into shared components; apply panel by panel | Opus spec, Sonnet apply | 2, after research | Premiere's "hot text" blue scrubbable values and uniform panel conventions - the exact look Dan is pointing at | research running |
-| W7 | Solids: first-class solid-color layer (full-frame color matte), one click/drag from the Shapes or Text area | Sonnet | 1b, after research | Premiere's Color Matte / Legacy "Solid" | research running |
-| W8 | 20-minute smoke list distilled from TO-VERIFY, then reconcile (check off confirmed, reopen failures as named bugs) | Haiku draft, Dan executes | 1b | n/a | queued |
-| W9 | Director round 13: final-read recall (ADDENDUM 11's labeled 9-fragment test set; precision 5/5 must hold) + Cancel = one undo | Opus | 3 | Premiere has no equivalent; our own measured bar governs | queued |
+| W1 | Export: chunked audio mixing for long videos (the ~21-min `createBuffer` wall; Dan's live project is 29 min) | Opus | 1, NOW | Export never fails on length; render progresses visibly | MERGED 89aebd5b (live 29-min export = smoke #10) |
+| W2 | Panel slimming: hidden-list above + AI CUT menu to two options + Director dock idle card to two actions | Sonnet | 1, NOW | Premiere ships many panels but a curated default workspace; hiding = workspace curation | MERGED adf9b16a |
+| W3 | Dead-code deletion: orphaned stickers view (3,435 LOC), guides popover, freeze-frame comment, stale "OpenCut" banner string (PATCHES row) | Sonnet | 1, NOW | n/a (hygiene) | MERGED 198bd733 |
+| W4 | Transcript create + export (VERY IMPORTANT): verify existing transcribe flow, add first-class export (TXT, SRT, VTT at minimum) | Sonnet | 1b, after research | Premiere's Text panel: transcribe sequence, export transcript as .txt/.srt/.csv | MERGED 5bbda617 (shipped txt/srt/csv + word-seek + search) |
+| W5 | Masks deep fix | Opus | 2, after research | Premiere's masking: shape + pen masks on clips/effects, feather/expansion/opacity, direct-manipulation handles | MERGED cd40049f (3 red tests fixed; expansion/opacity built but flag-gated on the wasm rebuild) |
+| W6 | Design-system unification: extract the Transform panel's control language (blue draggable numeric values, boxed groups, twirl-down layout) into shared components; apply panel by panel | Opus spec, Sonnet apply | 2, after research | Premiere's "hot text" blue scrubbable values and uniform panel conventions - the exact look Dan is pointing at | MERGED dbe4d7d9 (follow-ups noted in its commit: speed-tab/project-info-chip Escape wire, multi-row group resets) |
+| W7 | Solids: first-class solid-color layer (full-frame color matte), one click/drag from the Media bin | Sonnet | 1b, after research | Premiere's Color Matte / Legacy "Solid" | MERGED d819efc3 (export render of a solid = live-verify) |
+| W8 | 20-minute smoke list distilled from TO-VERIFY, then reconcile (check off confirmed, reopen failures as named bugs) | Haiku draft, Dan executes | 1b | n/a | docs/SMOKE-20MIN.md committed 83bd950c; DAN'S TURN |
+| W9 | Director round 13: final-read recall (ADDENDUM 11's labeled 9-fragment test set; precision 5/5 must hold) + Cancel = one undo | Opus | 3 | Premiere has no equivalent; our own measured bar governs | queued (next build item) |
 
 ## Parked (roadmap, not scheduled)
 
