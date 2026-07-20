@@ -14,10 +14,14 @@ import {
 } from "../nodes/graphic-node";
 import { ImageNode } from "../nodes/image-node";
 import { RootNode } from "../nodes/root-node";
+import { SolidColorNode } from "../nodes/solid-color-node";
 import { StickerNode } from "../nodes/sticker-node";
 import { renderTextToContext, TextNode } from "../nodes/text-node";
 import { VideoNode } from "../nodes/video-node";
-import type { ResolvedVisualSourceNodeState } from "../nodes/visual-node";
+import type {
+	ResolvedVisualNodeState,
+	ResolvedVisualSourceNodeState,
+} from "../nodes/visual-node";
 import type {
 	FrameDescriptor,
 	FrameItemDescriptor,
@@ -183,7 +187,8 @@ async function collectNode({
 		node instanceof VideoNode ||
 		node instanceof ImageNode ||
 		node instanceof StickerNode ||
-		node instanceof GraphicNode
+		node instanceof GraphicNode ||
+		node instanceof SolidColorNode
 	) {
 		await collectVisualSourceNode({
 			node,
@@ -213,7 +218,7 @@ async function collectVisualSourceNode({
 	items,
 	textures,
 }: {
-	node: VideoNode | ImageNode | StickerNode | GraphicNode;
+	node: VideoNode | ImageNode | StickerNode | GraphicNode | SolidColorNode;
 	renderer: CanvasRenderer;
 	path: string;
 	items: FrameItemDescriptor[];
@@ -226,7 +231,9 @@ async function collectVisualSourceNode({
 	const source =
 		node instanceof GraphicNode
 			? node.getSource({ resolvedParams: node.resolved.resolvedParams })
-			: node.resolved.source;
+			: node instanceof SolidColorNode
+				? node.getSource({ width: renderer.width, height: renderer.height })
+				: node.resolved.source;
 	if (!source) {
 		return;
 	}
@@ -234,11 +241,15 @@ async function collectVisualSourceNode({
 	const sourceWidth =
 		node instanceof GraphicNode
 			? DEFAULT_GRAPHIC_SOURCE_SIZE
-			: (node.resolved as ResolvedVisualSourceNodeState).sourceWidth;
+			: node instanceof SolidColorNode
+				? renderer.width
+				: (node.resolved as ResolvedVisualSourceNodeState).sourceWidth;
 	const sourceHeight =
 		node instanceof GraphicNode
 			? DEFAULT_GRAPHIC_SOURCE_SIZE
-			: (node.resolved as ResolvedVisualSourceNodeState).sourceHeight;
+			: node instanceof SolidColorNode
+				? renderer.height
+				: (node.resolved as ResolvedVisualSourceNodeState).sourceHeight;
 
 	const textureId = `${path}:source`;
 	textures.set(textureId, {
@@ -332,7 +343,10 @@ function computeVisualTransform({
 	sourceHeight,
 }: {
 	renderer: CanvasRenderer;
-	resolved: ResolvedVisualSourceNodeState | ResolvedGraphicNodeState;
+	resolved:
+		| ResolvedVisualSourceNodeState
+		| ResolvedGraphicNodeState
+		| ResolvedVisualNodeState;
 	sourceWidth: number;
 	sourceHeight: number;
 }): QuadTransformDescriptor {
@@ -377,7 +391,7 @@ function buildMaskArtifacts({
 	transform,
 	textures,
 }: {
-	node: VideoNode | ImageNode | StickerNode | GraphicNode;
+	node: VideoNode | ImageNode | StickerNode | GraphicNode | SolidColorNode;
 	renderer: CanvasRenderer;
 	path: string;
 	transform: QuadTransformDescriptor;

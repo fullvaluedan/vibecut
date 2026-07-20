@@ -41,7 +41,7 @@ import {
 	useSelection,
 	useSelectionScope,
 } from "@/selection";
-import { insertMediaAsset } from "@/features/editing/insert-media";
+import { insertMediaAsset, insertSolidColorAsset } from "@/features/editing/insert-media";
 import { assembleBinToTimeline } from "@/features/editing/assemble";
 import {
 	type MediaSortKey,
@@ -54,6 +54,7 @@ import type { MediaAsset } from "@/media/types";
 import { cn } from "@/utils/ui";
 import {
 	CloudUploadIcon,
+	ColorPickerIcon,
 	FilmRoll01Icon,
 	GridViewIcon,
 	LeftToRightListDashIcon,
@@ -126,6 +127,19 @@ export function MediaView() {
 			multiple: true,
 			onFilesSelected: (files) => processFiles({ files }),
 		});
+
+	const handleAddSolidColor = () => {
+		if (!activeProject) {
+			toast.error("No active project");
+			return;
+		}
+		insertSolidColorAsset({
+			editor,
+			projectId: activeProject.metadata.id,
+			canvasSize: activeProject.settings.canvasSize,
+			startTime: editor.playback.getCurrentTime(),
+		});
+	};
 
 	const handleRemove = ({
 		event,
@@ -208,6 +222,7 @@ export function MediaView() {
 						sortOrder={mediaSortOrder}
 						onSort={handleSort}
 						onImport={openFilePicker}
+						onAddSolidColor={handleAddSolidColor}
 						onAssemble={() => {
 							const { added, skipped } = assembleBinToTimeline({
 								editor,
@@ -552,6 +567,16 @@ function MediaPreview({
 }) {
 	const shouldShowDurationBadge = variant === "grid";
 
+	if (item.solidColor) {
+		return (
+			<div
+				className="size-full rounded"
+				style={{ backgroundColor: item.solidColor }}
+				aria-label={item.name}
+			/>
+		);
+	}
+
 	if (item.type === "image") {
 		return (
 			<div className="relative flex size-full items-center justify-center bg-muted">
@@ -629,6 +654,7 @@ function MediaActions({
 	sortOrder,
 	onSort,
 	onImport,
+	onAddSolidColor,
 	onAssemble,
 }: {
 	mediaViewMode: MediaViewMode;
@@ -638,6 +664,7 @@ function MediaActions({
 	sortOrder: MediaSortOrder;
 	onSort: ({ key }: { key: MediaSortKey }) => void;
 	onImport: () => void;
+	onAddSolidColor: () => void;
 	onAssemble: () => void;
 }) {
 	return (
@@ -745,6 +772,17 @@ function MediaActions({
 					</TooltipContent>
 				</Tooltip>
 			</TooltipProvider>
+			<Button
+				variant="outline"
+				onClick={onAddSolidColor}
+				disabled={isProcessing}
+				size="sm"
+				aria-label="Add a solid color"
+				className="items-center justify-center gap-1.5"
+			>
+				<HugeiconsIcon icon={ColorPickerIcon} />
+				Solid color
+			</Button>
 			<Button
 				variant="outline"
 				onClick={onImport}

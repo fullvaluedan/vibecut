@@ -21,10 +21,12 @@ import {
 	MusicNote03Icon,
 	MagicWand05Icon,
 	DashboardSpeed02Icon,
+	ColorPickerIcon,
 } from "@hugeicons/core-free-icons";
 import { ElementParamsTab } from "./components/element-params-tab";
 import { EffectControlsTab } from "./components/effect-controls-tab";
 import { AudioSyncSection } from "./components/audio-sync-section";
+import { SolidColorTab } from "./components/solid-color-tab";
 import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
 import { HyperframesTab } from "@/features/ai-generate/components/hyperframes-tab";
 import { TemplateControlsTab } from "@/features/motion-templates/components/template-controls-tab";
@@ -32,6 +34,7 @@ import { MasksTab } from "@/masks/components/masks-tab";
 import { SpeedTab } from "@/speed/components/speed-tab";
 import { GraphicTab } from "@/graphics/components/graphic-tab";
 import { OcShapesIcon } from "@/components/icons";
+import { isSolidColorAsset } from "@/media/solid-color";
 
 const BLENDING_PARAM_KEYS = ["opacity", "blendMode"] as const;
 const AUDIO_PARAM_KEYS = ["volume", "muted"] as const;
@@ -284,14 +287,35 @@ function getVideoConfig({
 	};
 }
 
-function getImageConfig({
+function buildSolidColorTab({
 	element,
+	mediaAsset,
 }: {
 	element: ImageElement;
-}): ElementPropertiesConfig {
+	mediaAsset: MediaAsset | undefined;
+}): PropertiesTabDef {
 	return {
-		defaultTab: "transform",
+		id: "color",
+		label: "Color",
+		icon: <HugeiconsIcon icon={ColorPickerIcon} size={16} />,
+		content: ({ trackId }) => (
+			<SolidColorTab element={element} trackId={trackId} mediaAsset={mediaAsset} />
+		),
+	};
+}
+
+function getImageConfig({
+	element,
+	mediaAsset,
+}: {
+	element: ImageElement;
+	mediaAsset: MediaAsset | undefined;
+}): ElementPropertiesConfig {
+	const isSolid = isSolidColorAsset({ asset: mediaAsset });
+	return {
+		defaultTab: isSolid ? "color" : "transform",
 		tabs: [
+			...(isSolid ? [buildSolidColorTab({ element, mediaAsset })] : []),
 			buildTransformTab({ element }),
 			buildBlendingTab({ element }),
 			buildMasksTab({ element }),
@@ -368,8 +392,10 @@ export function getPropertiesConfig({
 			const mediaAsset = mediaAssets.find((a) => a.id === element.mediaId);
 			return getVideoConfig({ element, mediaAsset });
 		}
-		case "image":
-			return getImageConfig({ element });
+		case "image": {
+			const mediaAsset = mediaAssets.find((a) => a.id === element.mediaId);
+			return getImageConfig({ element, mediaAsset });
+		}
 		case "sticker":
 			return getStickerConfig({ element });
 		case "graphic":
