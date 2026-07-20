@@ -55,6 +55,16 @@ function getPreferredEdges({
 		};
 	}
 
+	if (handleId.kind === "scale") {
+		// The uniform scale handle is drawn at the mask's bottom-right corner
+		// (getBoxMaskHandlePositions, sizeMode "uniform"). A symmetric scale about
+		// the centre reaches the left and right canvas edges at the same instant, so
+		// without a preference the snap would light BOTH vertical guides. Preferring
+		// the dragged corner's edges shows only the right/bottom guide, matching the
+		// text mask's scale handle (getScalePreferredEdges in text.ts).
+		return { right: true, bottom: true };
+	}
+
 	return undefined;
 }
 

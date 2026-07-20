@@ -1,5 +1,6 @@
 import { drawCssBackground } from "@/gradients";
 import { getMaskDefinition } from "@/masks";
+import { MASK_EXPANSION_OPACITY_RENDERED } from "@/masks/types";
 import { incrementCounter } from "@/diagnostics/render-perf";
 import type { AnyBaseNode } from "../nodes/base-node";
 import type { CanvasRenderer } from "../canvas-renderer";
@@ -528,6 +529,15 @@ function buildMaskArtifacts({
 			textureId: maskTextureId,
 			feather,
 			inverted: mask.params.inverted,
+			// Plumbed to the wasm boundary but held at the no-op values until the
+			// compositor can consume them (see MASK_EXPANSION_OPACITY_RENDERED). Flip
+			// the flag in the same change that ships a wasm build reading these.
+			expansion: MASK_EXPANSION_OPACITY_RENDERED
+				? (mask.params.expansion ?? 0)
+				: 0,
+			opacity: MASK_EXPANSION_OPACITY_RENDERED
+				? (mask.params.opacity ?? 1)
+				: 1,
 		},
 		strokeLayer,
 	};

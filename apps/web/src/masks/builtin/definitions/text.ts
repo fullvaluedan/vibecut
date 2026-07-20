@@ -11,7 +11,9 @@ import { MIN_FONT_SIZE, MAX_FONT_SIZE } from "@/text/typography";
 import {
 	drawMeasuredTextLayout,
 	measureTextLayout,
+	resolveTextLayout,
 	strokeMeasuredTextLayout,
+	type MeasuredTextLayout,
 } from "@/text/primitives";
 import { getTextMeasurementContext } from "@/text/measure-element";
 import { getTextVisualRect } from "@/text/layout";
@@ -86,13 +88,82 @@ const TEXT_MASK_PARAMS: ParamDefinition<keyof TextMaskParams & string>[] = [
 	},
 ];
 
+// A text measurement context needs a canvas 2D context. It is always present in
+// the browser, but a headless worker (e.g. a unit-test runner) has neither
+// OffscreenCanvas nor document, so getTextMeasurementContext throws there. Swallow
+// that so mask snapping and interaction never crash mid-gesture; callers fall back
+// to an estimated text box.
+function getOptionalTextMeasurementContext():
+	| CanvasRenderingContext2D
+	| OffscreenCanvasRenderingContext2D
+	| null {
+	try {
+		return getTextMeasurementContext();
+	} catch {
+		return null;
+	}
+}
+
+// Fallback text-box estimate used only when no canvas 2D context is available.
+// resolveTextLayout needs no context, so this stays deterministic. The estimate
+// is coarse (average glyph advance ~= 0.6em) but only feeds snap/interaction
+// extents in degraded environments; the browser always takes the measured path.
+function estimateTextMaskIntrinsicSize({
+	params,
+	height,
+}: {
+	params: TextMaskParams;
+	height: number;
+}): { intrinsicWidth: number; intrinsicHeight: number } {
+	const resolved = resolveTextLayout({
+		text: {
+			content: params.content,
+			fontSize: params.fontSize,
+			fontFamily: params.fontFamily,
+			fontWeight: params.fontWeight,
+			fontStyle: params.fontStyle,
+			textAlign: TEXT_MASK_ALIGNMENT,
+			textDecoration: params.textDecoration,
+			letterSpacing: params.letterSpacing,
+			lineHeight: params.lineHeight,
+		},
+		canvasHeight: height,
+	});
+	const lines = params.content.split("\n");
+	const longestLineLength = lines.reduce(
+		(longest, line) => Math.max(longest, line.length),
+		0,
+	);
+	const averageGlyphAdvance = resolved.scaledFontSize * 0.6;
+	const estimatedWidth =
+		longestLineLength * averageGlyphAdvance +
+		Math.max(0, longestLineLength - 1) * resolved.letterSpacing;
+	const estimatedHeight = lines.length * resolved.lineHeightPx;
+	return {
+		intrinsicWidth: Math.max(1, estimatedWidth),
+		intrinsicHeight: Math.max(1, estimatedHeight),
+	};
+}
+
 function measureTextMask({
 	params,
 	height,
 }: {
 	params: TextMaskParams;
 	height: number;
-}) {
+}): {
+	layout: MeasuredTextLayout | null;
+	intrinsicWidth: number;
+	intrinsicHeight: number;
+} {
+	const ctx = getOptionalTextMeasurementContext();
+	if (!ctx) {
+		return {
+			layout: null,
+			...estimateTextMaskIntrinsicSize({ params, height }),
+		};
+	}
+
 	const layout = measureTextLayout({
 		text: {
 			content: params.content,
@@ -106,7 +177,7 @@ function measureTextMask({
 			lineHeight: params.lineHeight,
 		},
 		canvasHeight: height,
-		ctx: getTextMeasurementContext(),
+		ctx,
 	});
 	const visualRect = getTextVisualRect({
 		textAlign: layout.textAlign,
@@ -351,6 +422,8 @@ export const textMaskDefinition: MaskDefinition<"text"> = {
 				strokeColor: "#ffffff",
 				strokeWidth: 0,
 				strokeAlign: "center",
+				expansion: 0,
+				opacity: 1,
 				content: "Mask",
 				fontSize: 15,
 				fontFamily: "Arial",
@@ -376,6 +449,9 @@ export const textMaskDefinition: MaskDefinition<"text"> = {
 			drawOpaque({ resolvedParams, ctx, width, height }) {
 				const params = resolvedParams;
 				const { layout } = measureTextMask({ params, height });
+				if (!layout) {
+					return;
+				}
 
 				ctx.save();
 				ctx.translate(
@@ -400,6 +476,9 @@ export const textMaskDefinition: MaskDefinition<"text"> = {
 			renderStroke({ resolvedParams, ctx, width, height }) {
 				const params = resolvedParams;
 				const { layout } = measureTextMask({ params, height });
+				if (!layout) {
+					return;
+				}
 
 				ctx.save();
 				ctx.translate(
