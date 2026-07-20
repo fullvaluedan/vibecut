@@ -76,6 +76,37 @@ export function parseSrt({ input }: { input: string }): ParseSubtitleResult {
 	};
 }
 
+/** Seconds -> "HH:MM:SS,mmm", the SRT timestamp format `parseSrtTimestamp` reads back. */
+function formatSrtTimestamp({ seconds }: { seconds: number }): string {
+	const totalMs = Math.round(Math.max(0, seconds) * 1000);
+	const milliseconds = totalMs % 1000;
+	const totalSeconds = Math.floor(totalMs / 1000);
+	const secs = totalSeconds % 60;
+	const totalMinutes = Math.floor(totalSeconds / 60);
+	const minutes = totalMinutes % 60;
+	const hours = Math.floor(totalMinutes / 60);
+	return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")},${String(milliseconds).padStart(3, "0")}`;
+}
+
+/**
+ * Serialize cues to SRT text (the writer half of this module's parser). Cues
+ * with no duration or empty text are skipped rather than emitted as a
+ * malformed block. The transcript export menu (features/transcription/
+ * export-transcript.ts) is the production call site; this module's own tests
+ * are the second, verifying a parse(write(x)) round trip.
+ */
+export function writeSrt({ cues }: { cues: readonly SubtitleCue[] }): string {
+	const blocks = cues
+		.filter((cue) => cue.duration > 0 && cue.text.trim().length > 0)
+		.map((cue, index) => {
+			const start = formatSrtTimestamp({ seconds: cue.startTime });
+			const end = formatSrtTimestamp({ seconds: cue.startTime + cue.duration });
+			return `${index + 1}\n${start} --> ${end}\n${cue.text.trim()}`;
+		});
+	if (blocks.length === 0) return "";
+	return `${blocks.join("\n\n")}\n`;
+}
+
 function parseSrtTimestamp({ input }: { input: string }): number {
 	const normalized = input.trim().replace(",", ".");
 	const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})\.(\d{1,3})$/);

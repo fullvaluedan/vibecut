@@ -378,3 +378,11 @@ Repairs the three failing mask tests, adds Premiere-parity `expansion` + mask `o
 | `apps/web/src/services/renderer/compositor/types.ts` | R4: `LayerMaskDescriptor` gains `expansion` + `opacity` (consumed by the wasm compositor; held at no-op values at the descriptor edge until the wasm can read them). | 2026-07-20 | Two descriptor fields |
 | `apps/web/src/services/renderer/compositor/frame-descriptor.ts` | R4: `buildMaskArtifacts` populates the two new descriptor fields, gated by `MASK_EXPANSION_OPACITY_RENDERED` to the no-op values (0, 1) until an `opencut-wasm` build consumes them. | 2026-07-20 | Plumbing to the wasm boundary |
 | `apps/web/src/masks/__tests__/snap.test.ts` | R1/R5: build helpers carry the new base params; added pen/freeform coverage (subsequent-point append stays open, curved-segment De Casteljau preservation, open-path inactive vs closed-active, closed-state retained at 3+ points). | 2026-07-20 | Test-only additions |
+
+## Transcript export (W4, 2026-07-20)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/subtitles/srt.ts` | W4: added `writeSrt({cues})`, the SRT serializer this module was missing (it only had `parseSrt`). Reused by the Transcript tab's Export menu (`features/transcription/export-transcript.ts`, ours) as the ONE SRT writer - no second serializer. Skips zero-duration/empty-text cues; round-trips with the existing `parseSrt` (verified in `subtitles/__tests__/srt.test.ts`, new). | 2026-07-20 | Pure addition, `parseSrt` untouched |
+
+`apps/web/src/features/transcription/{export-transcript.ts,find-active-transcript-index.ts}` (new, ours), `components/assets-view.tsx` (Export kebab replaces the old plain Export button; search box; live playhead highlight wiring), `components/transcript-text.tsx` (click-a-word seeks via new `onSeek` prop, `activeIndex` playing-word highlight, `query` search highlight/dim - all additive on top of the existing mousedown/mouseover/keydown selection handlers, which are unchanged), and `format-transcript-text.ts` (exported the existing internal `formatTimestamp` instead of duplicating it) also changed, but all four live under `features/transcription/`, so per the project's own rule they are not upstream-originated and need no row here.
