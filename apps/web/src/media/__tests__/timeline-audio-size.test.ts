@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	audioBufferByteSize,
+	chunkFrameCount,
+	shouldChunkTimelineAudio,
 	timelineAudioFrameCount,
 } from "../timeline-audio-size";
 
@@ -75,5 +77,53 @@ describe("audioBufferByteSize", () => {
 		expect(stereo44k).toBeGreaterThan(450_000_000); // ~459 MB — the failing allocation
 		expect(mono16k).toBeLessThan(90_000_000); // ~83 MB — fits createBuffer
 		expect(stereo44k / mono16k).toBeGreaterThan(5); // ~5.5x reduction
+	});
+});
+
+describe("chunkFrameCount", () => {
+	test("frames in one window = ceil(sampleRate * chunkSeconds)", () => {
+		expect(chunkFrameCount({ sampleRate: 44100, chunkSeconds: 60 })).toBe(2_646_000);
+		expect(chunkFrameCount({ sampleRate: 48000, chunkSeconds: 0.5 })).toBe(24000);
+	});
+
+	test("never returns less than one frame", () => {
+		expect(chunkFrameCount({ sampleRate: 44100, chunkSeconds: 0 })).toBe(1);
+	});
+});
+
+describe("shouldChunkTimelineAudio", () => {
+	const MAX_BYTES = 192 * 1024 * 1024; // export cap: ~9 min stereo @ 44.1kHz
+
+	test("a short timeline stays under the cap (single-buffer path)", () => {
+		const frameCount = timelineAudioFrameCount({
+			durationTicks: 5 * 60 * TPS, // 5 min
+			sampleRate: 44100,
+			ticksPerSecond: TPS,
+		});
+		expect(
+			shouldChunkTimelineAudio({ frameCount, channels: 2, maxBytes: MAX_BYTES }),
+		).toBe(false);
+	});
+
+	test("the ~21-min timeline that hit the createBuffer wall is chunked", () => {
+		const frameCount = timelineAudioFrameCount({
+			durationTicks: Math.round(1302.96 * TPS), // ≈ the crash duration
+			sampleRate: 44100,
+			ticksPerSecond: TPS,
+		});
+		expect(
+			shouldChunkTimelineAudio({ frameCount, channels: 2, maxBytes: MAX_BYTES }),
+		).toBe(true);
+	});
+
+	test("a 30-min timeline (the proof length) is chunked", () => {
+		const frameCount = timelineAudioFrameCount({
+			durationTicks: 30 * 60 * TPS,
+			sampleRate: 44100,
+			ticksPerSecond: TPS,
+		});
+		expect(
+			shouldChunkTimelineAudio({ frameCount, channels: 2, maxBytes: MAX_BYTES }),
+		).toBe(true);
 	});
 });

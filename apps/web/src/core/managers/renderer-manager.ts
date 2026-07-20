@@ -6,7 +6,13 @@ import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import type { AudioChunkStream } from "@/services/renderer/scene-exporter";
+import {
+	createTimelineAudioBuffer,
+	createTimelineAudioChunks,
+	timelineAudioNeedsChunking,
+	EXPORT_AUDIO_STREAM,
+} from "@/media/audio";
 import { formatTimecode } from "opencut-wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import { downloadBlob } from "@/utils/browser";
@@ -173,19 +179,38 @@ export class RendererManager {
 			const exportFps = fps ?? activeProject.settings.fps;
 			const canvasSize = activeProject.settings.canvasSize;
 
+			// The audio stage owns the first 5% of the bar. Feed its real
+			// decode/mix/master progress through so it moves instead of looking
+			// frozen at 5% for the whole (often slow) audio build.
+			const audioProgress = (fraction: number) =>
+				onProgress?.({ progress: 0.01 + fraction * 0.04 });
+
 			let audioBuffer: AudioBuffer | null = null;
+			let audioChunks: AudioChunkStream | undefined;
 			if (includeAudio) {
-				// The audio stage owns the first 5% of the bar. Feed its real
-				// decode/mix/master progress through so it moves instead of looking
-				// frozen at 5% for the whole (often slow) audio build.
 				onProgress?.({ progress: 0.01 });
-				audioBuffer = await createTimelineAudioBuffer({
-					tracks,
-					mediaAssets,
-					duration,
-					onProgress: (fraction) =>
-						onProgress?.({ progress: 0.01 + fraction * 0.04 }),
-				});
+				if (timelineAudioNeedsChunking({ duration })) {
+					// Long timeline: stream the mix to the encoder in bounded windows
+					// so it never hits the createBuffer wall (~21 min stereo). The
+					// generator is lazy - it mixes each window as the exporter pulls it.
+					audioChunks = {
+						...EXPORT_AUDIO_STREAM,
+						chunks: createTimelineAudioChunks({
+							tracks,
+							mediaAssets,
+							duration,
+							onProgress: audioProgress,
+						}),
+					};
+				} else {
+					// Short timeline: keep the byte-identical single-buffer mix.
+					audioBuffer = await createTimelineAudioBuffer({
+						tracks,
+						mediaAssets,
+						duration,
+						onProgress: audioProgress,
+					});
+				}
 			}
 
 			const scene = buildScene({
@@ -204,6 +229,7 @@ export class RendererManager {
 				quality,
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
+				audioChunks,
 			});
 
 			exporter.on("progress", (progress) => {
