@@ -1,0 +1,73 @@
+---
+title: "feat: UI overhaul roadmap - core-loop stabilization, per-feature worktrees, Premiere as the guide"
+type: feat
+date: 2026-07-19
+depth: roadmap
+---
+
+# feat: UI overhaul roadmap (per-feature worktrees, delegated builds)
+
+## Dan's binding decisions (2026-07-19, supersedes the panel-audit defaults)
+
+- D1 Masks: BROKEN, wants DEEP FIXES, not hiding. Research prior art on GitHub first (the OpenCut
+  rewrite and other OSS editors).
+- D2 AI CUT: the menu shows exactly two options, "AI CUT" (the Director) and "Remove silences".
+  Auto-assemble and Highlight are hidden.
+- D3 Stickers: delete the orphaned code.
+- D4 Panels: hide the ones that are not useful, for now (reversible). Elevated as important:
+  CREATE AND EXPORT TRANSCRIPTS (very important), adding TEXT, adding SOLIDS.
+- D5 Design standard: the Transform panel (Effect Controls) is the reference for ALL panels - the
+  blue numbers, the boxes, the layout. Unify button/control behavior across the app to match it.
+- D6 HyperFrames/Remotion: PARKED on the roadmap. A week was spent and it failed. No further work,
+  and its UI surfaces are hidden with everything else in W2.
+- D7 Process: split work into per-feature worktrees, each developed/built/tested/verified in its
+  own environment; research the equivalent Premiere Pro experience as the guiding principle
+  BEFORE building; ALL implementation delegated to Opus/Sonnet/Haiku; Fable plans only.
+
+## Hidden-panel default list (W2, flag-gated and reversible in one edit)
+
+HIDE: HyperFrames bin tab, the RUN HYPERFRAMES toolbar cluster (button, dropdown, Versions x3,
+Log, Stop), the HyperFrames drafts panel, the assistant prompt box in the preview toolbar, the
+Sounds tab, the Effects tab. KEEP: Media, Text, Shapes, Captions, Transcript, Settings.
+(Dan can amend this list; it is one const in one file.)
+
+## Workstreams
+
+| ID | Feature (worktree) | Model | Phase | Premiere guiding principle | Status |
+|---|---|---|---|---|---|
+| W1 | Export: chunked audio mixing for long videos (the ~21-min `createBuffer` wall; Dan's live project is 29 min) | Opus | 1, NOW | Export never fails on length; render progresses visibly | launched |
+| W2 | Panel slimming: hidden-list above + AI CUT menu to two options + Director dock idle card to two actions | Sonnet | 1, NOW | Premiere ships many panels but a curated default workspace; hiding = workspace curation | launched |
+| W3 | Dead-code deletion: orphaned stickers view (3,435 LOC), guides popover, freeze-frame comment, stale "OpenCut" banner string (PATCHES row) | Sonnet | 1, NOW | n/a (hygiene) | launched |
+| W4 | Transcript create + export (VERY IMPORTANT): verify existing transcribe flow, add first-class export (TXT, SRT, VTT at minimum) | Sonnet | 1b, after research | Premiere's Text panel: transcribe sequence, export transcript as .txt/.srt/.csv | research running |
+| W5 | Masks deep fix | Opus | 2, after research | Premiere's masking: shape + pen masks on clips/effects, feather/expansion/opacity, direct-manipulation handles | research running (incl. GitHub prior art) |
+| W6 | Design-system unification: extract the Transform panel's control language (blue draggable numeric values, boxed groups, twirl-down layout) into shared components; apply panel by panel | Opus spec, Sonnet apply | 2, after research | Premiere's "hot text" blue scrubbable values and uniform panel conventions - the exact look Dan is pointing at | research running |
+| W7 | Solids: first-class solid-color layer (full-frame color matte), one click/drag from the Shapes or Text area | Sonnet | 1b, after research | Premiere's Color Matte / Legacy "Solid" | research running |
+| W8 | 20-minute smoke list distilled from TO-VERIFY, then reconcile (check off confirmed, reopen failures as named bugs) | Haiku draft, Dan executes | 1b | n/a | queued |
+| W9 | Director round 13: final-read recall (ADDENDUM 11's labeled 9-fragment test set; precision 5/5 must hold) + Cancel = one undo | Opus | 3 | Premiere has no equivalent; our own measured bar governs | queued |
+
+## Parked (roadmap, not scheduled)
+
+- HyperFrames/Remotion generation layer (D6). Everything hidden by W2 stays in the codebase;
+  un-hiding is one edit when Dan reopens it.
+- Director Vision v0 (stays gated off, no verification spend).
+- Transition slot (the suppressed "Add" affordance stays suppressed).
+- Playback-stutter #6 (blocked on the Rust/wasm toolchain, unchanged).
+
+## Process contract (every workstream)
+
+1. Own worktree branched from feat/director-eval tip; preamble: `git reset --hard
+   feat/director-eval`, `bun install`, copy `apps/web/.content-collections` from the main checkout.
+2. Research phase first where the table says so; the researcher's Premiere notes ride into the
+   builder's spec.
+3. Gates in the worktree before commit: apps/web suite (1465 pass + exactly 3 known mask failures
+   as of tip e91d636b; W5 is expected to CHANGE the mask number by fixing them), hf-bridge 188,
+   tsc clean. One commit per workstream, no push; Fable merges sequentially and re-gates.
+4. Hard rules ride along: Edit tool only, no em dashes, PATCHES.md same-commit for upstream files,
+   plain-language user-facing strings, prompt version bumps for prompt changes (W9).
+5. Fable's role: plans, specs, launch, review, gates, merges, docs. No product code.
+
+## Merge order and conflict watch
+
+W3 and W2 both touch `timeline-toolbar.tsx` (different regions); merge W3 first, then W2, re-gate
+after each. W1 is isolated (export engine). W4/W7 touch left-panel views after W2 lands, so they
+branch from the post-W2 tip. W6 lands last in its phase (it repaints what survives W2).
