@@ -2,6 +2,7 @@
 
 import type { MaskableElement } from "@/timeline";
 import type { Mask, MaskType, TextMask } from "@/masks/types";
+import { MASK_EXPANSION_OPACITY_RENDERED } from "@/masks/types";
 import type { NumberParamDefinition, SelectParamDefinition } from "@/params";
 import {
 	buildDefaultMaskInstance,
@@ -259,6 +260,12 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 					open={hasMask ? false : isDropdownOpen}
 					onOpenChange={handleDropdownOpenChange}
 				>
+					{/* One mask per element is a deliberate cap (W5 R6): per-element
+					    masks are our model, not Premiere's per-effect one. Descoped for
+					    now (W5 R7): mask tracking (auto-follow via computer vision) and
+					    multi-mask combine modes (add / subtract / intersect) are roadmap
+					    items, not this fix. That is why the Add button is blocked once a
+					    mask exists, rather than opening a second slot. */}
 					{hasMask ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
@@ -274,8 +281,8 @@ export function MasksTab({ element, trackId }: MasksTabProps) {
 								</span>
 							</TooltipTrigger>
 							<TooltipContent className="max-w-56 text-balance">
-								Only one mask is supported right now. If you need more,
-								duplicate the clip and apply a different mask to each copy.
+								One mask per layer for now. Need more? Duplicate the clip and
+								give each copy its own mask.
 							</TooltipContent>
 						</Tooltip>
 					) : (
@@ -591,6 +598,38 @@ function MaskParamsFields({
 					onCommit={onCommit}
 				/>
 			</SectionField>
+
+			{/* Expansion (grow/shrink independent of feather) and mask Opacity sit
+			    beside Feather. They are gated because the renderer half needs an
+			    opencut-wasm rebuild to consume them; see MASK_EXPANSION_OPACITY_RENDERED. */}
+			{MASK_EXPANSION_OPACITY_RENDERED ? (
+				<>
+					<SectionField label="Expansion">
+						<MaskNumberField
+							icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
+							param={getNumberParamDefinition({
+								definition,
+								key: "expansion",
+							})}
+							value={mask.params.expansion ?? 0}
+							onPreview={previewNumberParam("expansion")}
+							onCommit={onCommit}
+						/>
+					</SectionField>
+					<SectionField label="Opacity">
+						<MaskNumberField
+							icon="%"
+							param={getNumberParamDefinition({
+								definition,
+								key: "opacity",
+							})}
+							value={mask.params.opacity ?? 1}
+							onPreview={previewNumberParam("opacity")}
+							onCommit={onCommit}
+						/>
+					</SectionField>
+				</>
+			) : null}
 
 			<SectionField label="Stroke">
 				<div className="flex flex-col gap-2">
