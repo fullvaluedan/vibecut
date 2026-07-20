@@ -18,6 +18,7 @@ import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
 import { useVariantPickerStore } from "@/features/ai-generate/components/variant-picker-dialog";
 import { HyperframesDraftsPanel } from "@/features/ai-generate/components/hyperframes-drafts-panel";
+import { HIDE_HYPERFRAMES_DRAFTS_PANEL } from "@/features/editing/surface-flags";
 
 type ElementWithTrack = { track: TimelineTrack; element: TimelineElement };
 
@@ -64,9 +65,12 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
-	const hasHfDrafts = useVariantPickerStore(
+	// HyperFrames drafts panel takeover is parked (roadmap D6); code stays,
+	// the empty inspector just never routes to it.
+	const hasHfDraftsRaw = useVariantPickerStore(
 		(s) => (s.versions?.length ?? 0) > 0,
 	);
+	const hasHfDrafts = HIDE_HYPERFRAMES_DRAFTS_PANEL ? false : hasHfDraftsRaw;
 
 	// The Director review (cut/assemble/highlight) no longer takes over this panel
 	// (R1): it lives in its own "Director" tab of the dock shell, always reachable

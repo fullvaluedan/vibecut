@@ -24,6 +24,10 @@ import {
 	runRemoveSilencesAction,
 } from "../ai-cut-actions";
 import { useDirectorPlanStore, type DirectorRunError } from "../director-plan-store";
+import {
+	HIDE_AUTO_ASSEMBLE_ACTION,
+	HIDE_HIGHLIGHT_ACTION,
+} from "@/features/editing/surface-flags";
 import { DirectorPanel } from "./director-panel";
 import { DirectorCutPanel } from "./director-cut-panel";
 import { DirectorHighlightPanel } from "./director-highlight-panel";
@@ -79,11 +83,12 @@ function RunErrorView({ runError }: { runError: DirectorRunError }) {
 }
 
 /**
- * Idle state: the four AI CUT actions inline (R1). Reuses the exact handlers the
- * toolbar's AiCutMenu dropdown calls, so behavior (toasts, abort, taste seeding)
- * never drifts between the two surfaces. Highlight runs with no target-length
- * budget from here (the toolbar dropdown still offers that prompt): the docked
- * fast path is "keep all the good parts".
+ * Idle state: exactly two AI CUT actions inline (roadmap D2) - "AI CUT" (the
+ * Director run) and "Remove silences". Auto-assemble and Highlight are hidden
+ * behind `surface-flags.ts`, not deleted - their buttons and handlers stay in
+ * this file. Reuses the exact handlers the toolbar's AiCutMenu dropdown calls,
+ * so behavior (toasts, abort, taste seeding) never drifts between the two
+ * surfaces.
  */
 function IdleActions() {
 	const editor = useEditor();
@@ -96,30 +101,34 @@ function IdleActions() {
 			<p className="text-muted-foreground text-xs pb-1">
 				Let AI cut your footage, then review before anything lands.
 			</p>
-			<Button
-				variant="outline"
-				size="sm"
-				className="justify-start"
-				onClick={() => void runAutoAssembleAction({ editor })}
-			>
-				Auto-assemble: build a cut from all my clips
-			</Button>
+			{!HIDE_AUTO_ASSEMBLE_ACTION && (
+				<Button
+					variant="outline"
+					size="sm"
+					className="justify-start"
+					onClick={() => void runAutoAssembleAction({ editor })}
+				>
+					Auto-assemble: build a cut from all my clips
+				</Button>
+			)}
 			<Button
 				variant="outline"
 				size="sm"
 				className="justify-start"
 				onClick={() => void runDirectorAction({ editor })}
 			>
-				AI Director: review &amp; cut the whole video
+				AI CUT: review and cut the whole video
 			</Button>
-			<Button
-				variant="outline"
-				size="sm"
-				className="justify-start"
-				onClick={() => void runHighlightAction({ editor })}
-			>
-				Highlight: keep the best parts
-			</Button>
+			{!HIDE_HIGHLIGHT_ACTION && (
+				<Button
+					variant="outline"
+					size="sm"
+					className="justify-start"
+					onClick={() => void runHighlightAction({ editor })}
+				>
+					Highlight: keep the best parts
+				</Button>
+			)}
 			<Button
 				variant="outline"
 				size="sm"

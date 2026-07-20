@@ -87,6 +87,7 @@ import {
 	removeAllKeyframes,
 	removeAttributes,
 } from "@/features/editing/remove-attributes";
+import { HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM } from "@/features/editing/surface-flags";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
 import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
@@ -537,7 +538,9 @@ function TimelineElementImpl({
 						</>
 					)}
 					<ContextMenuSeparator />
-					{element.type === "video" && (
+					{/* HyperFrames generation is parked (roadmap D6); this context-menu
+						entry point stays hidden alongside the rest of that UI, code kept. */}
+					{!HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM && element.type === "video" && (
 						<ContextMenuItem
 							icon={<HugeiconsIcon icon={MagicWand05Icon} />}
 							onClick={(event: React.MouseEvent) => {

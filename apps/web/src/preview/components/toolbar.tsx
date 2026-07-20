@@ -13,6 +13,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { AssistantPrompt } from "./assistant-prompt";
+import { HIDE_ASSISTANT_PROMPT } from "@/features/editing/surface-flags";
 import { Slider } from "@/components/ui/slider";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Separator } from "@/components/ui/separator";
@@ -44,8 +45,13 @@ export function PreviewToolbar({
 				<PlaybackSpeedSlider />
 			</div>
 			<div className="justify-self-end flex w-full items-center justify-end gap-2.5">
-				<AssistantPrompt />
-				<Separator orientation="vertical" className="h-4" />
+				{/* Assistant prompt box hidden per roadmap D4/D6; code stays. */}
+				{!HIDE_ASSISTANT_PROMPT && (
+					<>
+						<AssistantPrompt />
+						<Separator orientation="vertical" className="h-4" />
+					</>
+				)}
 				<ProjectInfoChip />
 				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />
