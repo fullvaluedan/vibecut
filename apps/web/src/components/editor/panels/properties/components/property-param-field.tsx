@@ -12,6 +12,7 @@ import {
 } from "@/utils/math";
 import { SectionField } from "@/components/section";
 import { NumberField } from "@/components/ui/number-field";
+import { SliderNumberPair } from "@/components/ui/slider-number-pair";
 import { Switch } from "@/components/ui/switch";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { FontPicker } from "@/components/ui/font-picker";
@@ -234,6 +235,24 @@ function NumberParamField({
 		onCommit();
 	};
 
+	// Bounded params (both min and max declared) get the slider+number pair;
+	// unbounded params keep the plain scrubbable number (W6 R4).
+	if (max !== undefined) {
+		return (
+			<SliderNumberPair
+				icon={param.shortLabel ?? "↔"}
+				value={displayValue}
+				min={min}
+				max={max}
+				step={step}
+				isDefault={value === param.default}
+				onReset={handleReset}
+				onPreview={previewFromDisplay}
+				onCommit={onCommit}
+			/>
+		);
+	}
+
 	return (
 		<div className="flex w-full items-center gap-1">
 			<div className="min-w-0 flex-1">
@@ -245,6 +264,7 @@ function NumberParamField({
 					onFocus={draft.onFocus}
 					onChange={draft.onChange}
 					onBlur={draft.onBlur}
+					onCancel={draft.onCancel}
 					onScrub={previewFromDisplay}
 					onScrubEnd={onCommit}
 					onReset={handleReset}

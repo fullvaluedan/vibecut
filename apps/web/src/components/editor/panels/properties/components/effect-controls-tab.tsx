@@ -7,7 +7,7 @@
  * row, Scale gets a Uniform Scale checkbox like Premiere's Motion effect.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
 	getKeyframeAtTime,
 	hasKeyframesForPath,
@@ -17,6 +17,15 @@ import {
 import type { AnimationPath } from "@/animation/types";
 import { useElementPlayhead } from "@/components/editor/panels/properties/hooks/use-element-playhead";
 import { useKeyframedParamProperty } from "@/components/editor/panels/properties/hooks/use-keyframed-param-property";
+import { usePropertyDraft } from "@/components/editor/panels/properties/hooks/use-property-draft";
+import { NumberField } from "@/components/ui/number-field";
+import {
+	Section,
+	SectionContent,
+	SectionFields,
+	SectionHeader,
+	SectionTitle,
+} from "@/components/section";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -38,13 +47,11 @@ import {
 } from "@/params/registry";
 import type { TimelineElement, VisualElement } from "@/timeline";
 import type { MediaTime } from "@/wasm";
+import { formatNumberForDisplay } from "@/utils/math";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	ArrowDown01Icon,
 	ArrowLeft01Icon,
 	ArrowRight01Icon,
-	ArrowTurnBackwardIcon,
-	ArrowUp01Icon,
 	KeyframeIcon,
 	StopWatchIcon,
 } from "@hugeicons/core-free-icons";
@@ -59,9 +66,6 @@ const OPACITY = "opacity";
 const VOLUME = "volume";
 const MUTED = "muted";
 
-/** Pixels of horizontal drag per display-unit step while scrubbing. */
-const SCRUB_PX_PER_STEP = 2;
-
 interface RowContext {
 	element: VisualElement;
 	trackId: string;
@@ -74,10 +78,6 @@ function findParam(
 	key: string,
 ): ElementParamDefinition | null {
 	return getElementParams({ element }).find((p) => p.key === key) ?? null;
-}
-
-function formatDisplay(value: number, decimals: number): string {
-	return value.toFixed(decimals);
 }
 
 function paramRange(param: ElementParamDefinition): {
@@ -265,25 +265,28 @@ function KfNav({ group }: { group: KfGroup }) {
 }
 
 /**
- * Premiere-style value control. The blue number itself is the drag surface:
- * click-and-hold then drag left/right to scrub (pointer-locked), release
- * without moving to type an exact value. Tiny ▲/▼ arrows nudge by one step.
- * Values display in scaled units (e.g. scale 1.0 → 100.0); writes convert
- * back to model units and clamp to the param's range.
+ * Row value control (W6 R1): the SAME NumberField the rest of the app uses
+ * (Transform's old hand-rolled scrubbable number, with its hardcoded
+ * text-sky-400 and disabled+dimmed reset, is retired). Wired the same way
+ * property-param-field.tsx wires it: usePropertyDraft for typing/commit,
+ * onScrub for the drag handle, onReset+isDefault for NumberField's own
+ * hidden-at-default reset convention. Values display in scaled units (e.g.
+ * scale 1.0 → 100.0); writes convert back to model units and clamp to the
+ * param's range, same math as before, just funneled through NumberField.
  */
-function ValueField({
+function PropertyValueField({
 	resolved,
 	factor,
 	decimals,
 	suffix,
 	iconLabel,
 	isDefault,
-	step = 1,
 	minModel,
 	maxModel,
 	onPreviewModel,
 	onCommit,
 	onResetModel,
+	className,
 }: {
 	resolved: number;
 	factor: number;
@@ -291,182 +294,57 @@ function ValueField({
 	suffix?: string;
 	iconLabel?: string;
 	isDefault: boolean;
-	/** Increment per arrow click / per few px of drag, in DISPLAY units. */
-	step?: number;
 	minModel?: number;
 	maxModel?: number;
 	onPreviewModel: (modelValue: number) => void;
 	onCommit: () => void;
 	onResetModel?: () => void;
+	className?: string;
 }) {
-	const [editing, setEditing] = useState(false);
-	const [draft, setDraft] = useState("");
-	// Live readout while dragging: previews don't flow back into `resolved`
-	// until commit, so the scrub keeps its own display text.
-	const [scrubText, setScrubText] = useState<string | null>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-	const display = scrubText ?? formatDisplay(resolved * factor, decimals);
+	const displayValue = resolved * factor;
 
-	useEffect(() => {
-		if (editing) {
-			inputRef.current?.focus();
-			inputRef.current?.select();
-		}
-	}, [editing]);
-
-	const clampModel = (value: number) => {
-		let next = value;
-		if (minModel !== undefined) next = Math.max(minModel, next);
-		if (maxModel !== undefined) next = Math.min(maxModel, next);
+	const clampDisplayValue = (nextDisplayValue: number) => {
+		let next = nextDisplayValue;
+		if (minModel !== undefined) next = Math.max(minModel * factor, next);
+		if (maxModel !== undefined) next = Math.min(maxModel * factor, next);
 		return next;
 	};
-	/** Previews the clamped value and returns it in display units. */
-	const previewDisplay = (displayValue: number): number => {
-		const clampedModel = clampModel(displayValue / factor);
-		onPreviewModel(clampedModel);
-		return clampedModel * factor;
+
+	/** Clamps in display units, writes the model-unit value. */
+	const previewFromDisplay = (nextDisplayValue: number) => {
+		onPreviewModel(clampDisplayValue(nextDisplayValue) / factor);
 	};
 
-	const nudge = (direction: 1 | -1) => {
-		previewDisplay(resolved * factor + direction * step);
-		onCommit();
-	};
-
-	const startScrub = (event: React.PointerEvent<HTMLElement>) => {
-		if (event.button !== 0 || editing) return;
-		event.preventDefault();
-		const surface = event.currentTarget;
-		const startDisplay = resolved * factor;
-		let cumulative = 0;
-		let scrubbing = false;
-
-		const onMove = (move: PointerEvent) => {
-			cumulative += move.movementX;
-			if (!scrubbing && Math.abs(cumulative) >= 3) {
-				scrubbing = true;
-				// Pointer CAPTURE, not pointer lock: Chromium leaves the cursor
-				// invisible after exitPointerLock until the next click.
-				try {
-					surface.setPointerCapture(event.pointerId);
-				} catch {
-					// capture is best-effort
-				}
-				document.body.style.cursor = "ew-resize";
-			}
-			if (scrubbing) {
-				const shown = previewDisplay(
-					startDisplay + (cumulative / SCRUB_PX_PER_STEP) * step,
-				);
-				// Don't let the drag distance pile up past a min/max bound —
-				// otherwise the value "sticks" until you drag all the way back.
-				const cumulativeAtShown =
-					((shown - startDisplay) / step) * SCRUB_PX_PER_STEP;
-				if (Math.abs(cumulative - cumulativeAtShown) > SCRUB_PX_PER_STEP) {
-					cumulative = cumulativeAtShown;
-				}
-				setScrubText(formatDisplay(shown, decimals));
-			}
-		};
-		const onUp = () => {
-			document.removeEventListener("pointermove", onMove);
-			document.removeEventListener("pointerup", onUp);
-			document.body.style.cursor = "";
-			setScrubText(null);
-			if (scrubbing) {
-				onCommit();
-			} else {
-				// A plain click: switch to typing with the value pre-selected.
-				setDraft(display);
-				setEditing(true);
-			}
-		};
-		document.addEventListener("pointermove", onMove);
-		document.addEventListener("pointerup", onUp);
-	};
+	const draft = usePropertyDraft({
+		displayValue: formatNumberForDisplay({
+			value: displayValue,
+			fractionDigits: decimals,
+		}),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampDisplayValue(parsed);
+		},
+		onPreview: previewFromDisplay,
+		onCommit,
+	});
 
 	return (
-		<div className="flex items-center gap-0.5">
-			{onResetModel && (
-				<button
-					type="button"
-					title={isDefault ? "Already at default" : "Reset to default"}
-					disabled={isDefault}
-					className={cn(
-						"text-muted-foreground hover:text-foreground",
-						isDefault && "cursor-default opacity-25 hover:text-muted-foreground",
-					)}
-					onClick={onResetModel}
-				>
-					<HugeiconsIcon icon={ArrowTurnBackwardIcon} size={11} />
-				</button>
-			)}
-			<div className="bg-foreground/5 hover:bg-foreground/10 flex h-6 min-w-[76px] items-center justify-end gap-1 rounded px-1.5">
-				{iconLabel && (
-					<span className="text-muted-foreground select-none text-[10px]">
-						{iconLabel}
-					</span>
-				)}
-				{editing ? (
-					<input
-						ref={inputRef}
-						value={draft}
-						className="w-full min-w-0 bg-transparent text-right text-xs font-medium text-sky-400 outline-none"
-						onChange={(e) => {
-							setDraft(e.target.value);
-							const parsed = parseFloat(e.target.value);
-							if (Number.isFinite(parsed)) previewDisplay(parsed);
-						}}
-						onBlur={() => {
-							setEditing(false);
-							onCommit();
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" || e.key === "Escape") {
-								e.currentTarget.blur();
-							}
-							if (e.key === "ArrowUp") {
-								e.preventDefault();
-								nudge(1);
-								setDraft(formatDisplay(resolved * factor + step, decimals));
-							}
-							if (e.key === "ArrowDown") {
-								e.preventDefault();
-								nudge(-1);
-								setDraft(formatDisplay(resolved * factor - step, decimals));
-							}
-						}}
-					/>
-				) : (
-					<span
-						className="cursor-ew-resize select-none whitespace-nowrap text-xs font-medium text-sky-400"
-						title="Drag to scrub, click to type"
-						onPointerDown={startScrub}
-					>
-						{display}
-						{suffix ?? ""}
-					</span>
-				)}
-				<div className="flex flex-col">
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`+${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(1)}
-					>
-						<HugeiconsIcon icon={ArrowUp01Icon} size={10} />
-					</button>
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`-${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(-1)}
-					>
-						<HugeiconsIcon icon={ArrowDown01Icon} size={10} />
-					</button>
-				</div>
-			</div>
+		<div className={cn("w-20 shrink-0", className)}>
+			<NumberField
+				icon={iconLabel}
+				suffix={suffix}
+				value={draft.displayValue}
+				dragSensitivity="slow"
+				isDefault={isDefault}
+				onFocus={draft.onFocus}
+				onChange={draft.onChange}
+				onBlur={draft.onBlur}
+				onCancel={draft.onCancel}
+				onScrub={previewFromDisplay}
+				onScrubEnd={onCommit}
+				onReset={onResetModel}
+			/>
 		</div>
 	);
 }
@@ -495,31 +373,38 @@ function Row({
 	);
 }
 
+/**
+ * Twirl-down fx group (W6 R8): was a hand-rolled border/chevron button;
+ * now the same Section/SectionHeader/SectionContent shell every other
+ * properties tab uses, so Transform shares the boxed twirl-down rhythm.
+ * Optional isAnyNonDefault/onResetGroup wire a group-level reset icon into
+ * the header (W6 R3); see the Opacity group below for the one live usage.
+ */
 function FxGroup({
 	title,
+	sectionKey,
+	isAnyNonDefault,
+	onResetGroup,
 	children,
 }: {
 	title: string;
+	sectionKey: string;
+	isAnyNonDefault?: boolean;
+	onResetGroup?: () => void;
 	children: React.ReactNode;
 }) {
-	const [open, setOpen] = useState(true);
 	return (
-		<div className="border-b py-1 last:border-b-0">
-			<button
-				type="button"
-				className="flex w-full items-center gap-1.5 px-1 py-1 text-left"
-				onClick={() => setOpen((o) => !o)}
-			>
-				<HugeiconsIcon
-					icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-					size={14}
-					className="text-muted-foreground"
-				/>
-				<span className="text-[10px] font-bold italic text-primary/80">fx</span>
-				<span className="text-xs font-semibold">{title}</span>
-			</button>
-			{open && <div className="flex flex-col">{children}</div>}
-		</div>
+		<Section collapsible sectionKey={sectionKey} showTopBorder={false}>
+			<SectionHeader isAnyNonDefault={isAnyNonDefault} onResetGroup={onResetGroup}>
+				<span className="text-[10px] font-bold italic text-primary/80 mr-1.5">
+					fx
+				</span>
+				<SectionTitle>{title}</SectionTitle>
+			</SectionHeader>
+			<SectionContent>
+				<SectionFields>{children}</SectionFields>
+			</SectionContent>
+		</Section>
 	);
 }
 
@@ -579,7 +464,7 @@ function SingleRow({
 	return (
 		<Row label={label} stopwatch={<Stopwatch group={kfGroup} label={label} />}>
 			<KfNav group={kfGroup} />
-			<ValueField
+			<PropertyValueField
 				resolved={resolvedNumber}
 				factor={factor}
 				decimals={decimals}
@@ -681,7 +566,7 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 			stopwatch={<Stopwatch group={kfGroup} label="position" />}
 		>
 			<KfNav group={kfGroup} />
-			<ValueField
+			<PropertyValueField
 				resolved={x}
 				factor={1}
 				decimals={1}
@@ -695,7 +580,7 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 					commit();
 				}}
 			/>
-			<ValueField
+			<PropertyValueField
 				resolved={y}
 				factor={1}
 				decimals={1}
@@ -830,7 +715,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 				stopwatch={<Stopwatch group={kfGroup} label="scale" />}
 			>
 				<KfNav group={kfGroup} />
-				<ValueField
+				<PropertyValueField
 					resolved={sy}
 					factor={100}
 					decimals={1}
@@ -847,7 +732,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 			</Row>
 			<Row label="Scale Width">
 				<div className={cn(uniform && "pointer-events-none opacity-40")}>
-					<ValueField
+					<PropertyValueField
 						resolved={sx}
 						factor={100}
 						decimals={1}
@@ -987,6 +872,58 @@ function AudioToolsRow({ ctx }: { ctx: RowContext }) {
 	);
 }
 
+/**
+ * W6 R3 "one usage": the Opacity group's reset icon. Mirrors exactly what
+ * SingleRow computes/does for the same param (resolved value, default,
+ * keyframe-aware reset via useKeyframedParamProperty) so the group-level
+ * reset can never disagree with the row's own per-field reset. Motion/Audio
+ * are multi-row groups, so aggregating their default state would mean lifting
+ * PositionRow/ScaleRows/SingleRow's internals up into the parent, a bigger
+ * refactor than this pass justifies; noted as follow-up (see W6 report).
+ */
+function useOpacityGroupReset({ ctx }: { ctx: RowContext }): {
+	isAnyNonDefault: boolean;
+	onResetGroup: () => void;
+} {
+	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
+	const param = findParam(element, OPACITY);
+	const fallbackParam: ElementParamDefinition =
+		param ??
+		({ key: OPACITY, label: "Opacity", type: "number", default: 1 } as ElementParamDefinition);
+	const baseValue =
+		(param ? readElementParamValue({ element, param }) : null) ??
+		fallbackParam.default;
+	const resolved = resolveAnimationPathValueAtTime({
+		animations: element.animations,
+		propertyPath: OPACITY,
+		localTime,
+		fallbackValue: baseValue,
+	});
+	const animated = useKeyframedParamProperty({
+		param: fallbackParam,
+		trackId,
+		elementId: element.id,
+		animations: element.animations,
+		propertyPath: OPACITY as AnimationPath,
+		localTime,
+		isPlayheadWithinElementRange,
+		resolvedValue: resolved,
+		buildBaseUpdates: ({ value }) =>
+			writeElementParamValue({ element, param: fallbackParam, value }),
+	});
+	const resolvedNumber = typeof resolved === "number" ? resolved : 1;
+	const defaultNumber =
+		typeof fallbackParam.default === "number" ? fallbackParam.default : 1;
+
+	return {
+		isAnyNonDefault: Boolean(param) && resolvedNumber !== defaultNumber,
+		onResetGroup: () => {
+			animated.onPreview(defaultNumber);
+			animated.onCommit();
+		},
+	};
+}
+
 export function EffectControlsTab({
 	element,
 	trackId,
@@ -1004,10 +941,11 @@ export function EffectControlsTab({
 		localTime,
 		isPlayheadWithinElementRange,
 	};
+	const opacityGroupReset = useOpacityGroupReset({ ctx });
 
 	return (
 		<div className="flex flex-col px-2 pt-2">
-			<FxGroup title="Motion">
+			<FxGroup title="Motion" sectionKey="effect-controls:motion">
 				<PositionRow ctx={ctx} />
 				<ScaleRows ctx={ctx} />
 				<SingleRow
@@ -1020,7 +958,12 @@ export function EffectControlsTab({
 					iconLabel="∠"
 				/>
 			</FxGroup>
-			<FxGroup title="Opacity">
+			<FxGroup
+				title="Opacity"
+				sectionKey="effect-controls:opacity"
+				isAnyNonDefault={opacityGroupReset.isAnyNonDefault}
+				onResetGroup={opacityGroupReset.onResetGroup}
+			>
 				<SingleRow
 					ctx={ctx}
 					paramKey={OPACITY}
@@ -1032,7 +975,7 @@ export function EffectControlsTab({
 				/>
 			</FxGroup>
 			{findParam(element, VOLUME) && (
-				<FxGroup title="Audio">
+				<FxGroup title="Audio" sectionKey="effect-controls:audio">
 					<SingleRow
 						ctx={ctx}
 						paramKey={VOLUME}

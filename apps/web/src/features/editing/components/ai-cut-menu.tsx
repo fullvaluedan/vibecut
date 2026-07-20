@@ -14,6 +14,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { NumberField } from "@/components/ui/number-field";
 import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
 import {
@@ -106,14 +107,13 @@ export function AiCutMenu() {
 						<label className="text-sm font-medium" htmlFor="highlight-budget">
 							Target length (seconds) — optional
 						</label>
-						<input
+						<NumberField
 							id="highlight-budget"
-							type="number"
-							min="1"
+							allowExpressions={false}
+							min={1}
 							value={budgetText}
 							onChange={(e) => setBudgetText(e.target.value)}
 							placeholder="e.g. 60 — blank keeps all the good parts"
-							className="border-input w-full rounded-sm border bg-transparent px-2 py-1 text-sm"
 						/>
 					</div>
 					<div className="flex justify-end gap-2 pt-3">

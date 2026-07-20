@@ -867,6 +867,7 @@ function MaskNumberField({
 			onFocus={draft.onFocus}
 			onChange={draft.onChange}
 			onBlur={draft.onBlur}
+			onCancel={draft.onCancel}
 			onScrub={previewFromDisplay}
 			onScrubEnd={onCommit}
 		/>
