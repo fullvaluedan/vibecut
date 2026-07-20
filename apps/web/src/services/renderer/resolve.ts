@@ -36,6 +36,7 @@ import {
 	type ResolvedGraphicNodeState,
 } from "./nodes/graphic-node";
 import { ImageNode, loadImageSource } from "./nodes/image-node";
+import { SolidColorNode } from "./nodes/solid-color-node";
 import { StickerNode, loadStickerSource } from "./nodes/sticker-node";
 import { TextNode, type ResolvedTextNodeState } from "./nodes/text-node";
 import { VideoNode } from "./nodes/video-node";
@@ -79,6 +80,8 @@ async function resolveNode({
 		node.resolved = await resolveVideoNode({ node, context });
 	} else if (node instanceof ImageNode) {
 		node.resolved = await resolveImageNode({ node, context });
+	} else if (node instanceof SolidColorNode) {
+		node.resolved = resolveSolidColorNode({ node, context });
 	} else if (node instanceof StickerNode) {
 		node.resolved = await resolveStickerNode({ node, context });
 	} else if (node instanceof GraphicNode) {
@@ -292,6 +295,28 @@ async function resolveStickerNode({
 		sourceWidth,
 		sourceHeight,
 	};
+}
+
+/**
+ * A Solid has no natural size (see solid-color-node.ts), so it resolves
+ * against the renderer's own dimensions - containScale in resolveVisualState
+ * comes out to exactly 1, so the default (untouched) transform fills the
+ * frame edge to edge, and stays correct even if the project's canvas size
+ * changes later.
+ */
+function resolveSolidColorNode({
+	node,
+	context,
+}: {
+	node: SolidColorNode;
+	context: ResolveContext;
+}): ResolvedVisualNodeState | null {
+	return resolveVisualState({
+		params: node.params,
+		context,
+		sourceWidth: context.renderer.width,
+		sourceHeight: context.renderer.height,
+	});
 }
 
 function resolveGraphicNode({

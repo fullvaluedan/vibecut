@@ -159,6 +159,14 @@ export interface ImageElement extends BaseTimelineElement {
 	hidden?: boolean;
 	effects?: Effect[];
 	masks?: Mask[];
+	/**
+	 * VibeCut (W7): per-instance color override for a solid-color media asset
+	 * (see media/types.ts MediaAsset.solidColor). Undefined means "use the
+	 * asset's own color" - once set, this element's fill is independent of the
+	 * asset and of every other element that shares the same mediaId (deliberate
+	 * anti-Premiere: editing one placed solid never repaints another).
+	 */
+	solidColor?: string;
 }
 
 export interface TextElement extends BaseTimelineElement {

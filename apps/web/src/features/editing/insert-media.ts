@@ -3,11 +3,13 @@
  * audio also separates its audio onto an audio track (waveform visible).
  */
 
+import { AddMediaAssetCommand, BatchCommand } from "@/commands";
 import { InsertElementCommand } from "@/commands/timeline/element/insert-element";
 import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
 import { buildElementFromMedia } from "@/timeline/element-utils";
 import type { EditorCore } from "@/core";
 import type { MediaAsset } from "@/media/types";
+import { buildSolidColorAsset } from "@/media/solid-color";
 import { mediaTimeFromSeconds, type MediaTime } from "@/wasm";
 
 type Placement =
@@ -54,4 +56,50 @@ export function insertMediaAsset({
 	}
 
 	return { elementId, trackId };
+}
+
+/**
+ * W7 "Solid color" bin action: one click both creates the synthetic color
+ * media asset AND places it at the playhead, as a single undoable step (no
+ * creation dialog - mirrors how paste-an-image-from-clipboard batches
+ * AddMediaAssetCommand + InsertElementCommand in use-paste-media.ts).
+ */
+export function insertSolidColorAsset({
+	editor,
+	projectId,
+	canvasSize,
+	color,
+	startTime,
+}: {
+	editor: EditorCore;
+	projectId: string;
+	canvasSize: { width: number; height: number };
+	color?: string;
+	startTime: MediaTime;
+}): { assetId: string; elementId: string | null; trackId: string | null } {
+	const asset = buildSolidColorAsset({ color, canvasSize });
+	const addAssetCommand = new AddMediaAssetCommand({ projectId, asset });
+	const assetId = addAssetCommand.getAssetId();
+
+	const element = buildElementFromMedia({
+		mediaId: assetId,
+		mediaType: asset.type,
+		name: asset.name,
+		duration: DEFAULT_NEW_ELEMENT_DURATION,
+		startTime,
+	});
+	const insertCommand = new InsertElementCommand({
+		element,
+		placement: { mode: "auto" },
+	});
+
+	editor.command.execute({
+		command: new BatchCommand([addAssetCommand, insertCommand]),
+	});
+
+	return {
+		assetId,
+		elementId: insertCommand.getElementId() ?? null,
+		trackId: insertCommand.getTrackId() ?? null,
+	};
 }

@@ -32,6 +32,8 @@ export interface MediaAssetData {
 	codec?: string;
 	/** True for videos with an alpha channel (transparent WebM) — composited via the DOM/ffmpeg path. */
 	hasAlpha?: boolean;
+	/** VibeCut (W7): marks this asset as a synthetic "Solid color" media - a full-frame color fill with no real source content. Value is the fallback hex color used when a placed element has no per-instance override (see timeline/types.ts ImageElement.solidColor). */
+	solidColor?: string;
 }
 
 export type SerializedScene = Omit<TScene, "createdAt" | "updatedAt"> & {
