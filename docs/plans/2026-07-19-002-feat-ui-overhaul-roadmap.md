@@ -45,6 +45,32 @@ Sounds tab, the Effects tab. KEEP: Media, Text, Shapes, Captions, Transcript, Se
 | W8 | 20-minute smoke list distilled from TO-VERIFY, then reconcile (check off confirmed, reopen failures as named bugs) | Haiku draft, Dan executes | 1b | n/a | docs/SMOKE-20MIN.md committed 83bd950c; DAN'S TURN |
 | W9 | Director round 13: final-read recall (ADDENDUM 11's labeled 9-fragment test set; precision 5/5 must hold) + Cancel = one undo | Opus | 3 | Premiere has no equivalent; our own measured bar governs | queued (next build item) |
 
+## HELD, unmerged, needs measurement before it lands (added 2026-07-20)
+
+`worktree-agent-a2dcdcc24f461aa97` (commit `064b51c7`) is COMPLETE and GATED but deliberately NOT
+merged. Two fixes:
+
+- **Keeper-swap near-verbatim gate (safe).** `applyKeeperSwap` re-derived acceptance without the
+  `nearVerbatim` conjunct the initial mapping applies, so swapping which take a PARAPHRASE group
+  keeps silently promoted its rows to auto-checked, defeating the round-7 protection. Interactive
+  path only, invisible to the eval, zero measurement risk.
+- **Swallow-pause OFFERED-vs-AUTO resolution (CHANGES CUT OUTPUT).** Root cause of the long-red
+  `diag-join-the-group` R3 assertion: after widening, overlapping removals were clipped purely by
+  raw start-time order, so an OFFERED recall row (retake/structural/backstop, which one-click apply
+  NEVER executes) could win disputed territory and clip an accepted pacing cut to zero, leaving real
+  dead air in the AUTO output. The fix resolves accepted removals against each other first, freezes
+  that territory, then trims OFFERED rows against it. Diag now green.
+
+**Why held:** the second fix makes the AUTO path cut MORE (diag autoCutSeconds 29.5 -> 32.6, auto
+ops 4 -> 5). Rounds 11 and 12 were entirely about REDUCING auto harm, so this could partially undo
+that win and must be measured on the four-fixture eval before merging. A round-13 eval was already
+in flight when this landed, and the standing rule forbids overlapping an eval with pipeline edits.
+
+**Sequence when picking this up:** merge round 13 first, then merge this branch onto that tip, then
+run ONE `--llm --runs 3` eval and compare AUTO essLost per fixture against ADDENDUM 12's numbers.
+If AUTO essLost rises materially, the tension is real (more correct dead-air cutting vs more
+essential words lost) and belongs in an addendum with Dan's call, not a silent merge.
+
 ## Parked (roadmap, not scheduled)
 
 - HyperFrames/Remotion generation layer (D6). Everything hidden by W2 stays in the codebase;
