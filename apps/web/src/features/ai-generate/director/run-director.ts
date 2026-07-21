@@ -140,6 +140,7 @@ export async function runDirector({
 	onProgress,
 	signal,
 	compressionTarget,
+	onRunStart,
 }: {
 	editor: EditorCore;
 	onProgress?: (detail: string) => void;
@@ -147,10 +148,31 @@ export async function runDirector({
 	/** Compression contract (U3/KTD4): fraction of words to REMOVE (0..0.8). Threaded
 	 * to the plan pass; sourced from the UI later — undefined = today's behavior. */
 	compressionTarget?: number;
+	/**
+	 * Cancel-rollback fix: called synchronously right after the assemble-if-empty
+	 * and chronological-reorder pre-passes below finish mutating the timeline (the
+	 * ONLY mutations this run makes before the Review opens) and before any
+	 * `await`, with `{ mark, guardMark }`. `mark` is the undo-stack height from
+	 * BEFORE either pre-pass ran; `guardMark` is the height right after (equal to
+	 * `mark` when neither pre-pass did anything). A caller rolls back to `mark`
+	 * ONLY if `editor.command.getMark() === guardMark` at cancel time: nothing
+	 * besides this run's own pre-pass has touched the undo stack since
+	 * (the docked Review panel is non-modal, so the user can keep editing while
+	 * the run transcribes/plans, or while the panel sits open; a stale rollback
+	 * must never also undo THEIR edits). `ai-cut-actions.ts`'s catch block uses
+	 * this if cancelled before the review even opens; the same pair rides along
+	 * into the panel (via `openCutPanel`'s `rollbackMark`/`rollbackGuardMark`) for
+	 * a Cancel click from there. Before this fix, Cancel left the pre-pass
+	 * mutations in place with N+1 separate undo entries.
+	 */
+	onRunStart?: (marks: { mark: number; guardMark: number }) => void;
 }): Promise<void> {
 	const abort = () => {
 		if (signal?.aborted) throw new Error("Cancelled");
 	};
+
+	// Snapshot the undo stack BEFORE either pre-pass below (see `onRunStart` above).
+	const rollbackMark = editor.command.getMark();
 
 	// Only pull the whole bin onto the timeline when it's EMPTY. If the user
 	// already placed clips, the Director edits exactly those — it must not drag
@@ -169,6 +191,13 @@ export async function runDirector({
 		toast.info(`Director: put ${reordered} clips in chronological order (by filename time).`);
 	}
 	abort();
+
+	// Both pre-passes above are synchronous (no `await` between or inside them),
+	// so this is still the SAME tick as the `rollbackMark` snapshot - nothing else
+	// could have touched the undo stack yet. Everything after this point is async
+	// (transcription, the LLM passes), where the user CAN interleave real edits.
+	const rollbackGuardMark = editor.command.getMark();
+	onRunStart?.({ mark: rollbackMark, guardMark: rollbackGuardMark });
 
 	// ONE transcription of the full timeline. Silence is no longer pre-cut by an
 	// unreviewed command, so this transcript stays aligned to the timeline the user
@@ -398,5 +427,10 @@ export async function runDirector({
 		// word-guard which sub-floor gaps it swallows.
 		words: words ?? [],
 		protectedSpans: applyProtectedSpans,
+		// So a Cancel click from the review panel can roll back the pre-pass
+		// mutations above in one step, guarded against undoing anything the user
+		// did in the meantime (see `onRunStart` above).
+		rollbackMark,
+		rollbackGuardMark,
 	});
 }

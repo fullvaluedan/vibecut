@@ -268,6 +268,24 @@ interface DirectorPlanState {
 	/** The last failed run (round 12 U3/R4), rendered as a persistent error card in
 	 * the dock. Null when the last run succeeded, was dismissed, or none ran yet. */
 	runError: DirectorRunError | null;
+	/**
+	 * Cancel-rollback fix (U8): the undo-stack mark from before the Director run's
+	 * pre-pass mutations (assemble-if-empty, chronological reorder). The docked
+	 * cut panel's Cancel button rolls the timeline back to this mark in one step,
+	 * so cancelling restores exactly the pre-run state instead of leaving those
+	 * mutations behind. Set only by `openCutPanel` (cut mode); null in
+	 * highlight/assemble mode and cleared by `close`/every new run.
+	 */
+	rollbackMark: number | null;
+	/**
+	 * The safety companion to `rollbackMark` (see `run-director.ts`'s
+	 * `onRunStart`): the undo-stack height right after the pre-pass finished.
+	 * Cancel only rolls back to `rollbackMark` when the undo stack is STILL at
+	 * exactly this height - the docked panel is non-modal, so the user can keep
+	 * editing while the run works or while the panel sits open, and a rollback
+	 * must never also undo THEIR edits.
+	 */
+	rollbackGuardMark: number | null;
 	/** Record a failed run (the catch in ai-cut-actions.ts). `at` is stamped here. */
 	setRunError: (args: { stage: string; message: string }) => void;
 	/** Dismiss the error card (also cleared by every new run and every open*). */
@@ -292,6 +310,11 @@ interface DirectorPlanState {
 		redundancyGroups?: readonly RedundancyReviewGroup[];
 		words?: readonly WordTiming[];
 		protectedSpans?: readonly { startSec: number; endSec: number }[];
+		/** The pre-run undo-stack mark (see `rollbackMark` above); omitted means
+		 * there's nothing to roll back to (Cancel just discards the plan). */
+		rollbackMark?: number | null;
+		/** The safety companion mark (see `rollbackGuardMark` above). */
+		rollbackGuardMark?: number | null;
 	}) => void;
 	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
 	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
@@ -367,6 +390,8 @@ const CLEARED = {
 	totalSec: 0,
 	draft: null,
 	runError: null,
+	rollbackMark: null,
+	rollbackGuardMark: null,
 };
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
@@ -385,7 +410,15 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openCutPanel: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
+	openCutPanel: ({
+		plan,
+		nearTies,
+		redundancyGroups,
+		words,
+		protectedSpans,
+		rollbackMark,
+		rollbackGuardMark,
+	}) =>
 		set({
 			...CLEARED,
 			mode: "cut",
@@ -396,6 +429,8 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
 			dockTab: "director",
+			rollbackMark: rollbackMark ?? null,
+			rollbackGuardMark: rollbackGuardMark ?? null,
 		}),
 	swapRedundancyKeeper: ({ groupId, keeperLineId }) =>
 		set((state) => {

@@ -378,7 +378,8 @@ function Row({
  * now the same Section/SectionHeader/SectionContent shell every other
  * properties tab uses, so Transform shares the boxed twirl-down rhythm.
  * Optional isAnyNonDefault/onResetGroup wire a group-level reset icon into
- * the header (W6 R3); see the Opacity group below for the one live usage.
+ * the header (W6 R3, single-row Opacity; group-reset follow-up, multi-row
+ * Motion/Audio). Every group below uses it.
  */
 function FxGroup({
 	title,
@@ -408,29 +409,27 @@ function FxGroup({
 	);
 }
 
-/** One keyframable scalar property (Rotation, Opacity). */
-function SingleRow({
+/**
+ * Pure resolved-value/default/reset logic for one keyframable scalar property
+ * (Rotation, Opacity, Level). Factored out of the row renderer (W6 group-reset
+ * follow-up) so the parent (`EffectControlsTab`) can call the SAME function to
+ * aggregate a group's "any row non-default" state and build its combined
+ * reset. Identical inputs (ctx + paramKey) always resolve to the identical
+ * value/default, so a group's reset button and `SingleRow`'s own per-row reset
+ * can never disagree about what "default" means for that property.
+ */
+function useSingleValueState({
 	ctx,
 	paramKey,
-	label,
-	factor,
-	decimals,
-	suffix,
-	iconLabel,
 }: {
 	ctx: RowContext;
 	paramKey: string;
-	label: string;
-	factor: number;
-	decimals: number;
-	suffix?: string;
-	iconLabel?: string;
 }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const param = findParam(element, paramKey);
 	const fallbackParam: ElementParamDefinition =
 		param ??
-		({ key: paramKey, label, type: "number", default: 0 } as ElementParamDefinition);
+		({ key: paramKey, label: paramKey, type: "number", default: 0 } as ElementParamDefinition);
 	const baseValue =
 		(param ? readElementParamValue({ element, param }) : null) ??
 		fallbackParam.default;
@@ -453,13 +452,49 @@ function SingleRow({
 			writeElementParamValue({ element, param: fallbackParam, value }),
 	});
 	const resolvedNumber = typeof resolved === "number" ? resolved : 0;
+	const defaultNumber =
+		typeof fallbackParam.default === "number" ? fallbackParam.default : 0;
+
+	return {
+		param,
+		resolvedNumber,
+		defaultNumber,
+		isDefault: !param || resolvedNumber === defaultNumber,
+		onPreview: animated.onPreview,
+		onCommit: animated.onCommit,
+		onReset: () => {
+			animated.onPreview(defaultNumber);
+			animated.onCommit();
+		},
+	};
+}
+
+/** One keyframable scalar property (Rotation, Opacity, Level): renders a row
+ * around `useSingleValueState`'s resolved/default/reset logic. */
+function SingleRow({
+	ctx,
+	paramKey,
+	label,
+	factor,
+	decimals,
+	suffix,
+	iconLabel,
+}: {
+	ctx: RowContext;
+	paramKey: string;
+	label: string;
+	factor: number;
+	decimals: number;
+	suffix?: string;
+	iconLabel?: string;
+}) {
+	const state = useSingleValueState({ ctx, paramKey });
+	const { param, resolvedNumber, isDefault, onPreview, onCommit, onReset } = state;
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [{ path: paramKey, value: resolvedNumber }],
 	});
 	if (!param) return null;
-	const defaultNumber =
-		typeof param.default === "number" ? param.default : 0;
 
 	return (
 		<Row label={label} stopwatch={<Stopwatch group={kfGroup} label={label} />}>
@@ -471,20 +506,22 @@ function SingleRow({
 				suffix={suffix}
 				iconLabel={iconLabel}
 				{...paramRange(param)}
-				isDefault={resolvedNumber === defaultNumber}
-				onPreviewModel={(v) => animated.onPreview(v)}
-				onCommit={animated.onCommit}
-				onResetModel={() => {
-					animated.onPreview(defaultNumber);
-					animated.onCommit();
-				}}
+				isDefault={isDefault}
+				onPreviewModel={(v) => onPreview(v)}
+				onCommit={onCommit}
+				onResetModel={onReset}
 			/>
 		</Row>
 	);
 }
 
-/** Position: X and Y side by side, one stopwatch for both channels. */
-function PositionRow({ ctx }: { ctx: RowContext }) {
+/**
+ * Pure resolved-value/default/reset logic for Position (X + Y). Same lift
+ * rationale as `useSingleValueState` above: the parent's Motion group-reset
+ * aggregates this SAME computation, so it can never disagree with
+ * `PositionRow`'s own per-axis reset about what "default" means.
+ */
+function usePositionState({ ctx }: { ctx: RowContext }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const editor = useEditor();
 	const paramX = findParam(element, POSITION_X);
@@ -505,6 +542,8 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 	};
 	const x = resolve(POSITION_X, paramX);
 	const y = resolve(POSITION_Y, paramY);
+	const defaultX = typeof paramX?.default === "number" ? paramX.default : 0;
+	const defaultY = typeof paramY?.default === "number" ? paramY.default : 0;
 
 	const previewAxis = (
 		param: ElementParamDefinition,
@@ -550,6 +589,42 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 	};
 
 	const commit = () => editor.timeline.commitPreview();
+	const previewX = (value: number) => {
+		if (paramX) previewAxis(paramX, POSITION_X, value);
+	};
+	const previewY = (value: number) => {
+		if (paramY) previewAxis(paramY, POSITION_Y, value);
+	};
+
+	return {
+		paramX,
+		paramY,
+		x,
+		y,
+		defaultX,
+		defaultY,
+		isDefaultX: !paramX || x === defaultX,
+		isDefaultY: !paramY || y === defaultY,
+		isAnyNonDefault:
+			Boolean(paramX && paramY) && (x !== defaultX || y !== defaultY),
+		previewX,
+		previewY,
+		commit,
+		resetX: () => {
+			previewX(defaultX);
+			commit();
+		},
+		resetY: () => {
+			previewY(defaultY);
+			commit();
+		},
+	};
+}
+
+/** Position: X and Y side by side, one stopwatch for both channels. */
+function PositionRow({ ctx }: { ctx: RowContext }) {
+	const pos = usePositionState({ ctx });
+	const { paramX, paramY, x, y, isDefaultX, isDefaultY, previewX, previewY, commit } = pos;
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [
@@ -572,13 +647,10 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 				decimals={1}
 				iconLabel="X"
 				{...paramRange(paramX)}
-				isDefault={x === paramX.default}
-				onPreviewModel={(v) => previewAxis(paramX, POSITION_X, v)}
+				isDefault={isDefaultX}
+				onPreviewModel={previewX}
 				onCommit={commit}
-				onResetModel={() => {
-					previewAxis(paramX, POSITION_X, Number(paramX.default) || 0);
-					commit();
-				}}
+				onResetModel={pos.resetX}
 			/>
 			<PropertyValueField
 				resolved={y}
@@ -586,20 +658,17 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 				decimals={1}
 				iconLabel="Y"
 				{...paramRange(paramY)}
-				isDefault={y === paramY.default}
-				onPreviewModel={(v) => previewAxis(paramY, POSITION_Y, v)}
+				isDefault={isDefaultY}
+				onPreviewModel={previewY}
 				onCommit={commit}
-				onResetModel={() => {
-					previewAxis(paramY, POSITION_Y, Number(paramY.default) || 0);
-					commit();
-				}}
+				onResetModel={pos.resetY}
 			/>
 			<button
 				type="button"
 				title="Center horizontally in frame"
 				className="text-muted-foreground hover:text-foreground px-0.5 text-[10px]"
 				onClick={() => {
-					previewAxis(paramX, POSITION_X, 0);
+					previewX(0);
 					commit();
 				}}
 			>
@@ -610,7 +679,7 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 				title="Center vertically in frame"
 				className="text-muted-foreground hover:text-foreground px-0.5 text-[10px]"
 				onClick={() => {
-					previewAxis(paramY, POSITION_Y, 0);
+					previewY(0);
 					commit();
 				}}
 			>
@@ -621,10 +690,13 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 }
 
 /**
- * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
- * drives both axes; unchecked → separate Scale Height / Scale Width rows.
+ * Pure resolved-value/default/reset logic for Scale (X + Y). Same lift as
+ * `usePositionState` above. The Uniform Scale checkbox stays LOCAL UI state in
+ * `ScaleRows` (it only picks which axis a live scrub drives, never what
+ * "default" means), so it is deliberately NOT part of this shared computation.
+ * A group reset always restores BOTH axes regardless of that toggle.
  */
-function ScaleRows({ ctx }: { ctx: RowContext }) {
+function useScaleState({ ctx }: { ctx: RowContext }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const editor = useEditor();
 	const paramX = findParam(element, SCALE_X);
@@ -645,7 +717,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 	};
 	const sx = resolve(SCALE_X, paramX);
 	const sy = resolve(SCALE_Y, paramY);
-	const [uniform, setUniform] = useState(sx === sy);
+	const defaultScale = typeof paramX?.default === "number" ? paramX.default : 1;
 
 	const previewAxis = (
 		param: ElementParamDefinition,
@@ -697,6 +769,35 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 		});
 	};
 	const commit = () => editor.timeline.commitPreview();
+
+	return {
+		paramX,
+		paramY,
+		sx,
+		sy,
+		defaultScale,
+		isDefaultSx: !paramX || sx === defaultScale,
+		isDefaultSy: !paramY || sy === defaultScale,
+		isAnyNonDefault:
+			Boolean(paramX && paramY) && (sx !== defaultScale || sy !== defaultScale),
+		previewScale,
+		commit,
+		resetBoth: () => {
+			previewScale(defaultScale, "both");
+			commit();
+		},
+	};
+}
+
+/**
+ * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
+ * drives both axes; unchecked → separate Scale Height / Scale Width rows.
+ */
+function ScaleRows({ ctx }: { ctx: RowContext }) {
+	const scaleState = useScaleState({ ctx });
+	const { paramX, paramY, sx, sy, defaultScale, isDefaultSx, isDefaultSy, previewScale, commit } =
+		scaleState;
+	const [uniform, setUniform] = useState(sx === sy);
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [
@@ -706,7 +807,6 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 	});
 
 	if (!paramX || !paramY) return null;
-	const defaultScale = Number(paramX.default) || 1;
 
 	return (
 		<>
@@ -721,7 +821,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 					decimals={1}
 					iconLabel="S"
 					{...paramRange(paramY)}
-					isDefault={uniform ? sx === defaultScale && sy === defaultScale : sy === defaultScale}
+					isDefault={uniform ? isDefaultSx && isDefaultSy : isDefaultSy}
 					onPreviewModel={(v) => previewScale(v, uniform ? "both" : "y")}
 					onCommit={commit}
 					onResetModel={() => {
@@ -738,7 +838,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 						decimals={1}
 						iconLabel="W"
 						{...paramRange(paramX)}
-						isDefault={sx === defaultScale}
+						isDefault={isDefaultSx}
 						onPreviewModel={(v) => previewScale(v, "x")}
 						onCommit={commit}
 						onResetModel={() => {
@@ -872,58 +972,6 @@ function AudioToolsRow({ ctx }: { ctx: RowContext }) {
 	);
 }
 
-/**
- * W6 R3 "one usage": the Opacity group's reset icon. Mirrors exactly what
- * SingleRow computes/does for the same param (resolved value, default,
- * keyframe-aware reset via useKeyframedParamProperty) so the group-level
- * reset can never disagree with the row's own per-field reset. Motion/Audio
- * are multi-row groups, so aggregating their default state would mean lifting
- * PositionRow/ScaleRows/SingleRow's internals up into the parent, a bigger
- * refactor than this pass justifies; noted as follow-up (see W6 report).
- */
-function useOpacityGroupReset({ ctx }: { ctx: RowContext }): {
-	isAnyNonDefault: boolean;
-	onResetGroup: () => void;
-} {
-	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
-	const param = findParam(element, OPACITY);
-	const fallbackParam: ElementParamDefinition =
-		param ??
-		({ key: OPACITY, label: "Opacity", type: "number", default: 1 } as ElementParamDefinition);
-	const baseValue =
-		(param ? readElementParamValue({ element, param }) : null) ??
-		fallbackParam.default;
-	const resolved = resolveAnimationPathValueAtTime({
-		animations: element.animations,
-		propertyPath: OPACITY,
-		localTime,
-		fallbackValue: baseValue,
-	});
-	const animated = useKeyframedParamProperty({
-		param: fallbackParam,
-		trackId,
-		elementId: element.id,
-		animations: element.animations,
-		propertyPath: OPACITY as AnimationPath,
-		localTime,
-		isPlayheadWithinElementRange,
-		resolvedValue: resolved,
-		buildBaseUpdates: ({ value }) =>
-			writeElementParamValue({ element, param: fallbackParam, value }),
-	});
-	const resolvedNumber = typeof resolved === "number" ? resolved : 1;
-	const defaultNumber =
-		typeof fallbackParam.default === "number" ? fallbackParam.default : 1;
-
-	return {
-		isAnyNonDefault: Boolean(param) && resolvedNumber !== defaultNumber,
-		onResetGroup: () => {
-			animated.onPreview(defaultNumber);
-			animated.onCommit();
-		},
-	};
-}
-
 export function EffectControlsTab({
 	element,
 	trackId,
@@ -941,11 +989,51 @@ export function EffectControlsTab({
 		localTime,
 		isPlayheadWithinElementRange,
 	};
-	const opacityGroupReset = useOpacityGroupReset({ ctx });
+	const editor = useEditor();
+
+	// Group-level reset (W6 follow-up): Motion and Audio are MULTI-ROW groups, so
+	// their header reset aggregates each row's OWN resolved/default computation:
+	// usePositionState/useScaleState/useSingleValueState, the SAME hooks the rows
+	// below call to render themselves. So a group's "non-default" flag and its
+	// reset action can never disagree with any individual row's.
+	const positionState = usePositionState({ ctx });
+	const scaleState = useScaleState({ ctx });
+	const rotationState = useSingleValueState({ ctx, paramKey: ROTATE });
+	const opacityState = useSingleValueState({ ctx, paramKey: OPACITY });
+	// Volume only exists on some element types; the hook is still called
+	// unconditionally (Rules of Hooks) and resolves to isDefault=true (no
+	// contribution) when the element has no volume param.
+	const volumeState = useSingleValueState({ ctx, paramKey: VOLUME });
+
+	const motionIsAnyNonDefault =
+		positionState.isAnyNonDefault ||
+		scaleState.isAnyNonDefault ||
+		!rotationState.isDefault;
+	const resetMotionGroup = () => {
+		// Preview every field first, ONE commit last: commitPreview() flushes the
+		// whole accumulated preview overlay as a single TracksSnapshotCommand, so
+		// resetting Position + Scale + Rotation together is one undo step, not three.
+		positionState.previewX(positionState.defaultX);
+		positionState.previewY(positionState.defaultY);
+		scaleState.previewScale(scaleState.defaultScale, "both");
+		rotationState.onPreview(rotationState.defaultNumber);
+		editor.timeline.commitPreview();
+	};
+
+	// Audio's group reset covers Level (the only field with a per-row reset
+	// affordance). Mute is a plain on/off bypass with no reset button of its own,
+	// so it's deliberately left out of "non-default" here: the group flag would
+	// otherwise promise a reset the row itself can't deliver (see PATCHES.md).
+	const audioIsAnyNonDefault = !volumeState.isDefault;
 
 	return (
 		<div className="flex flex-col px-2 pt-2">
-			<FxGroup title="Motion" sectionKey="effect-controls:motion">
+			<FxGroup
+				title="Motion"
+				sectionKey="effect-controls:motion"
+				isAnyNonDefault={motionIsAnyNonDefault}
+				onResetGroup={resetMotionGroup}
+			>
 				<PositionRow ctx={ctx} />
 				<ScaleRows ctx={ctx} />
 				<SingleRow
@@ -961,8 +1049,8 @@ export function EffectControlsTab({
 			<FxGroup
 				title="Opacity"
 				sectionKey="effect-controls:opacity"
-				isAnyNonDefault={opacityGroupReset.isAnyNonDefault}
-				onResetGroup={opacityGroupReset.onResetGroup}
+				isAnyNonDefault={!opacityState.isDefault}
+				onResetGroup={opacityState.onReset}
 			>
 				<SingleRow
 					ctx={ctx}
@@ -975,7 +1063,12 @@ export function EffectControlsTab({
 				/>
 			</FxGroup>
 			{findParam(element, VOLUME) && (
-				<FxGroup title="Audio" sectionKey="effect-controls:audio">
+				<FxGroup
+					title="Audio"
+					sectionKey="effect-controls:audio"
+					isAnyNonDefault={audioIsAnyNonDefault}
+					onResetGroup={volumeState.onReset}
+				>
 					<SingleRow
 						ctx={ctx}
 						paramKey={VOLUME}

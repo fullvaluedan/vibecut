@@ -25,6 +25,15 @@ export class CommandManager {
 	private history: CommandHistoryEntry[] = [];
 	private redoStack: CommandHistoryEntry[] = [];
 	private reactors: Array<() => void> = [];
+	/**
+	 * Total entries ever dropped from the FRONT of `history` by the MAX_HISTORY
+	 * cap below. `getMark`/`rollbackTo` use an absolute, ever-increasing
+	 * sequence number (`trimmedCount + history.length`) instead of a raw array
+	 * index, so a mark taken before a long run stays meaningful even if the cap
+	 * trims the array in between. A raw index would silently go stale and
+	 * `rollbackTo` could under-undo (or no-op) without any signal that it had.
+	 */
+	private trimmedCount = 0;
 
 	constructor(private editor: EditorCore) {}
 
@@ -147,6 +156,45 @@ export class CommandManager {
 	clear(): void {
 		this.history = [];
 		this.redoStack = [];
+		this.trimmedCount = 0;
+	}
+
+	/**
+	 * A snapshot of the current undo-stack height (Director-cancel U8 fix), as an
+	 * absolute sequence number immune to MAX_HISTORY trimming (see
+	 * `trimmedCount`). Pass it to `rollbackTo` later to undo everything pushed
+	 * since, and only that.
+	 */
+	getMark(): number {
+		return this.trimmedCount + this.history.length;
+	}
+
+	/**
+	 * Undo every command pushed after `mark`, in reverse order, and DISCARD them
+	 * (unlike `undo()`, none of them go on the redo stack). For a multi-step
+	 * operation that mutates the timeline before the user gets a chance to
+	 * decide whether to keep it (e.g. the Director's pre-review assemble/reorder
+	 * pre-pass): if the user cancels, this restores EXACTLY the pre-mark state in
+	 * one call and leaves no trace in the history, matching a "cancel means
+	 * nothing happened" model. A no-op once nothing was pushed since the mark
+	 * (the common case when the user cancels before any mutation happened at
+	 * all). If MAX_HISTORY trimmed away entries between the mark and now, this
+	 * rolls back everything still available rather than going stale (see
+	 * `trimmedCount`). Those specific trimmed entries are gone regardless, the
+	 * cap's existing memory-bounding tradeoff, not something this method changes.
+	 */
+	rollbackTo(mark: number): void {
+		const target = Math.max(0, mark - this.trimmedCount);
+		while (this.history.length > target) {
+			const entry = this.history.pop();
+			if (!entry) break;
+			entry.command.undo();
+			if (entry.selectionOverride !== undefined) {
+				this.editor.selection.restoreSnapshot({
+					snapshot: entry.previousSelection,
+				});
+			}
+		}
 	}
 
 	private pushHistory(entry: CommandHistoryEntry): void {
@@ -154,7 +202,9 @@ export class CommandManager {
 		if (this.history.length > MAX_HISTORY) {
 			// Drop the oldest steps — they become non-undoable, which bounds the
 			// retained command/undo state so a long session can't leak unbounded.
-			this.history.splice(0, this.history.length - MAX_HISTORY);
+			const overflow = this.history.length - MAX_HISTORY;
+			this.history.splice(0, overflow);
+			this.trimmedCount += overflow;
 		}
 	}
 

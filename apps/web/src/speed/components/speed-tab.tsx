@@ -125,6 +125,7 @@ export function SpeedTab({
 							}}
 							onChange={speedDraft.onChange}
 							onBlur={speedDraft.onBlur}
+							onCancel={speedDraft.onCancel}
 							onScrub={speedDraft.scrubTo}
 							onScrubEnd={speedDraft.commitScrub}
 							onReset={() =>
