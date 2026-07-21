@@ -1,4 +1,5 @@
 import type { FrameRate } from "opencut-wasm";
+import type { TextStyle } from "@/features/text-styles/types";
 import type { TScene } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
@@ -48,6 +49,13 @@ export interface TProject {
 	settings: TProjectSettings;
 	version: number;
 	timelineViewState?: TTimelineViewState;
+	/**
+	 * VibeCut: named, reusable text looks saved by the creator. Optional so
+	 * every project saved before the feature existed still loads; readers go
+	 * through `readTextStyles` in `features/text-styles/project-styles.ts`,
+	 * which treats a missing list as empty.
+	 */
+	textStyles?: TextStyle[];
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

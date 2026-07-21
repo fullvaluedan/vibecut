@@ -30,6 +30,7 @@ import { SolidColorTab } from "./components/solid-color-tab";
 import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
 import { HyperframesTab } from "@/features/ai-generate/components/hyperframes-tab";
 import { TemplateControlsTab } from "@/features/motion-templates/components/template-controls-tab";
+import { TextStylesSection } from "@/features/text-styles/components/text-styles-section";
 import { MasksTab } from "@/masks/components/masks-tab";
 import { SpeedTab } from "@/speed/components/speed-tab";
 import { GraphicTab } from "@/graphics/components/graphic-tab";
@@ -179,12 +180,15 @@ function buildTextTab({ element }: { element: TextElement }): PropertiesTabDef {
 		label: "Text",
 		icon: <HugeiconsIcon icon={TextFontIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
-				trackId={trackId}
-				paramKeys={TEXT_PARAM_KEYS}
-				sectionKey="text"
-			/>
+			<>
+				<TextStylesSection element={element} trackId={trackId} />
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={TEXT_PARAM_KEYS}
+					sectionKey="text"
+				/>
+			</>
 		),
 	};
 }
