@@ -3,6 +3,7 @@ import type { TextElement } from "@/timeline";
 import type { EffectPass } from "@/effects/types";
 import type { BlendMode, Transform } from "@/rendering";
 import { drawMeasuredTextLayout } from "@/text/primitives";
+import type { TextShadowLike, TextStrokeLike } from "@/text/primitives";
 import type { MeasuredTextElement } from "@/text/measure-element";
 
 export type TextNodeParams = TextElement & {
@@ -21,6 +22,11 @@ export interface ResolvedTextNodeState {
 	backgroundColor: string;
 	effectPasses: EffectPass[][];
 	measuredText: MeasuredTextElement;
+	// U3 (text round): stroke + drop shadow, resolved from element.params.
+	// Both are true no-ops at their inert defaults (see isTextStrokeActive /
+	// isTextShadowActive in text/primitives.ts).
+	stroke: TextStrokeLike;
+	shadow: TextShadowLike;
 }
 
 export class TextNode extends BaseNode<TextNodeParams, ResolvedTextNodeState> {}
@@ -54,6 +60,8 @@ export function renderTextToContext({
 		textColor: resolved.textColor,
 		background: resolved.measuredText.resolvedBackground,
 		backgroundColor: resolved.backgroundColor,
+		stroke: resolved.stroke,
+		shadow: resolved.shadow,
 		textBaseline: baseline,
 	});
 

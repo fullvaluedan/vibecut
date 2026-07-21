@@ -57,6 +57,17 @@ const TEXT_PARAM_KEYS = [
 	"background.offsetX",
 	"background.offsetY",
 ] as const;
+// U3 (text round): stroke + drop shadow, rendered as their own titled Section
+// under the Text tab (see buildTextTab below) rather than folded into the flat
+// list above, so Dan can tell at a glance this is a distinct control group.
+const TEXT_STROKE_SHADOW_PARAM_KEYS = [
+	"strokeColor",
+	"strokeWidth",
+	"shadowColor",
+	"shadowBlur",
+	"shadowOffsetX",
+	"shadowOffsetY",
+] as const;
 
 export type TabContentProps = {
 	trackId: string;
@@ -179,12 +190,21 @@ function buildTextTab({ element }: { element: TextElement }): PropertiesTabDef {
 		label: "Text",
 		icon: <HugeiconsIcon icon={TextFontIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
-				trackId={trackId}
-				paramKeys={TEXT_PARAM_KEYS}
-				sectionKey="text"
-			/>
+			<>
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={TEXT_PARAM_KEYS}
+					sectionKey="text"
+				/>
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={TEXT_STROKE_SHADOW_PARAM_KEYS}
+					sectionKey="text-stroke-shadow"
+					title="Stroke & Shadow"
+				/>
+			</>
 		),
 	};
 }

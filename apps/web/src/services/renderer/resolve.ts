@@ -14,6 +14,8 @@ import {
 } from "@/graphics";
 import {
 	buildTextBackgroundFromElement,
+	buildTextShadowFromElement,
+	buildTextStrokeFromElement,
 	getTextMeasurementContext,
 	measureTextElement,
 } from "@/text/measure-element";
@@ -405,6 +407,11 @@ function resolveTextNode({
 			localTime,
 			ctx: getTextMeasurementContext(),
 		}),
+		// U3 (text round): not keyframed (params/registry.ts marks these
+		// `keyframable: false`), so a plain per-element param read is enough -
+		// no animation-path resolution needed, unlike textColor/backgroundColor.
+		stroke: buildTextStrokeFromElement({ element: node.params }),
+		shadow: buildTextShadowFromElement({ element: node.params }),
 	};
 }
 

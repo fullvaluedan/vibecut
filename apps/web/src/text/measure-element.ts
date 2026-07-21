@@ -14,6 +14,8 @@ import {
 	type TextFontStyle,
 	type TextFontWeight,
 	type TextLayoutParams,
+	type TextShadowLike,
+	type TextStrokeLike,
 } from "./primitives";
 
 export interface ResolvedTextBackground extends TextBackground {
@@ -219,6 +221,58 @@ export function buildTextBackgroundFromElement({
 			params: element.params,
 			key: "background.offsetY",
 			fallback: DEFAULTS.text.background.offsetY,
+		}),
+	};
+}
+
+// U3 (text round): stroke/shadow don't affect layout measurement (unlike the
+// background rect), so unlike buildTextBackgroundFromElement these are pure
+// param reads only - no resolveNumberAtTime keyframe resolution, since the
+// params are declared `keyframable: false` in params/registry.ts.
+export function buildTextStrokeFromElement({
+	element,
+}: {
+	element: TextElement;
+}): TextStrokeLike {
+	return {
+		color: readStringParam({
+			params: element.params,
+			key: "strokeColor",
+			fallback: DEFAULTS.text.stroke.color,
+		}),
+		width: readNumberParam({
+			params: element.params,
+			key: "strokeWidth",
+			fallback: DEFAULTS.text.stroke.width,
+		}),
+	};
+}
+
+export function buildTextShadowFromElement({
+	element,
+}: {
+	element: TextElement;
+}): TextShadowLike {
+	return {
+		color: readStringParam({
+			params: element.params,
+			key: "shadowColor",
+			fallback: DEFAULTS.text.shadow.color,
+		}),
+		blur: readNumberParam({
+			params: element.params,
+			key: "shadowBlur",
+			fallback: DEFAULTS.text.shadow.blur,
+		}),
+		offsetX: readNumberParam({
+			params: element.params,
+			key: "shadowOffsetX",
+			fallback: DEFAULTS.text.shadow.offsetX,
+		}),
+		offsetY: readNumberParam({
+			params: element.params,
+			key: "shadowOffsetY",
+			fallback: DEFAULTS.text.shadow.offsetY,
 		}),
 	};
 }
