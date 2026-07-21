@@ -218,11 +218,27 @@ export function DirectorCutPanel() {
 	};
 
 	// Cancel is review-phase only (round 9: there is no Done, the applied review
-	// PERSISTS until the next AI CUT run replaces it). Discards the un-applied plan.
+	// PERSISTS until the next AI CUT run replaces it). Discards the un-applied
+	// plan AND rolls back any pre-review mutation (the assemble-if-empty /
+	// chronological-reorder pre-pass in run-director.ts) in one step, so Cancel
+	// restores EXACTLY the pre-run timeline (U8 fix, it used to leave that
+	// mutation in place with N+1 separate undo entries). GUARDED: this panel is
+	// docked (non-modal), so the user can keep editing the timeline while it's
+	// open; the rollback only fires if nothing else has touched the undo stack
+	// since the pre-pass finished (rollbackGuardMark), so Cancel can never also
+	// undo the user's own subsequent edits.
 	const handleCancel = () => {
+		const { rollbackMark, rollbackGuardMark } = useDirectorPlanStore.getState();
+		const rolledBack =
+			rollbackMark !== null &&
+			rollbackGuardMark !== null &&
+			editor.command.getMark() === rollbackGuardMark;
+		if (rolledBack) editor.command.rollbackTo(rollbackMark);
 		close();
-		toast.info("Director: review cancelled", {
-			description: "No cuts were applied. Any auto-assembled footage stays (Ctrl+Z to undo).",
+		toast.info("Director: cancelled", {
+			description: rolledBack
+				? "Nothing was changed. Your timeline is exactly as it was before this run."
+				: "The plan was discarded. You made other timeline edits during this run, so Ctrl+Z still walks those back as usual.",
 		});
 	};
 

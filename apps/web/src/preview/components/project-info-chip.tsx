@@ -281,6 +281,7 @@ export function ProjectInfoChip() {
 									onFocus={widthDraft.onFocus}
 									onChange={widthDraft.onChange}
 									onBlur={widthDraft.onBlur}
+									onCancel={widthDraft.onCancel}
 								/>
 								<NumberField
 									value={heightDraft.displayValue}
@@ -289,6 +290,7 @@ export function ProjectInfoChip() {
 									onFocus={heightDraft.onFocus}
 									onChange={heightDraft.onChange}
 									onBlur={heightDraft.onBlur}
+									onCancel={heightDraft.onCancel}
 								/>
 							</div>
 						}

@@ -182,6 +182,76 @@ describe("openCutPanel (docked cut review, U6)", () => {
 	});
 });
 
+describe("rollbackMark / rollbackGuardMark (Director-cancel U8 fix)", () => {
+	const plan: DirectorPlan = { operations: [op({ id: "a", kind: "cut" })] };
+
+	test("openCutPanel carries both marks through", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 7, rollbackGuardMark: 7 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(7);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(7);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("a pre-pass that mutated the timeline reports a higher guard mark", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 2, rollbackGuardMark: 5 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(2);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(5);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("omitting both marks defaults to null (nothing to roll back)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("close() clears both marks", () => {
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 3, rollbackGuardMark: 3 });
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+	});
+
+	test("a later run's marks replace an earlier one's (each run gets its own)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 1, rollbackGuardMark: 1 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(1);
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 9, rollbackGuardMark: 12 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(9);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(12);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("openHighlight / openAssemble leave both marks null (Director cut mode only)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 4, rollbackGuardMark: 4 });
+		useDirectorPlanStore.getState().openHighlight({
+			keeps: [{ startSec: 0, endSec: 1 }],
+			preview: { keptCount: 1, totalCount: 1, keptSec: 1, totalSec: 1 },
+			totalSec: 1,
+		});
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+});
+
 describe("dockTab (R1: persistent Director dock, surface field retired)", () => {
 	const plan: DirectorPlan = { operations: [op({ id: "a", kind: "cut" })] };
 

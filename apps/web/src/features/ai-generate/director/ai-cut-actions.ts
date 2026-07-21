@@ -108,9 +108,21 @@ export async function runDirectorAction({ editor }: { editor: EditorCore }): Pro
 	const controller = beginRun("AI Director");
 	const lastStage = { current: "starting" };
 	const toastId = toast.loading("AI Director...");
+	// Cancel-rollback fix (U8): captured synchronously from runDirector right after
+	// its pre-pass finishes, so a cancel BEFORE the review even opens (the review
+	// panel's own rollbackMark never gets set in that case) can still restore the
+	// timeline to that point. GUARDED the same way the review panel's Cancel is:
+	// only rolls back if nothing besides the pre-pass has touched the undo stack
+	// since (the user can keep editing while the run transcribes/plans).
+	const rollbackMarks: { current: { mark: number; guardMark: number } | null } = {
+		current: null,
+	};
 	try {
 		await runDirector({
 			editor,
+			onRunStart: (marks) => {
+				rollbackMarks.current = marks;
+			},
 			onProgress: (detail) => {
 				lastStage.current = detail;
 				useAiActivityStore.getState().setStage(detail);
@@ -128,6 +140,10 @@ export async function runDirectorAction({ editor }: { editor: EditorCore }): Pro
 	} catch (e) {
 		const message = e instanceof Error ? e.message : String(e);
 		if (message === "Cancelled" || controller.signal.aborted) {
+			const marks = rollbackMarks.current;
+			if (marks && editor.command.getMark() === marks.guardMark) {
+				editor.command.rollbackTo(marks.mark);
+			}
 			toast.info("AI Director stopped", { id: toastId });
 		} else {
 			console.error(`AI Director failed during "${lastStage.current}"`, e);
