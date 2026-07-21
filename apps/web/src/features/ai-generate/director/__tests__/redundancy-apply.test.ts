@@ -449,3 +449,71 @@ describe("round-7 near-verbatim gate (Dan smoke pass 2026-07-17)", () => {
 		expect(cuts[0].defaultAccept).toBe(false);
 	});
 });
+
+describe("round-7 gate holds across a keeper swap (F3 fix, round 12)", () => {
+	// Before this fix `applyKeeperSwap` re-derived acceptance as
+	// `group.confidence >= acceptThreshold` WITHOUT the near-verbatim conjunct,
+	// so swapping which take a paraphrase group keeps silently flipped it to
+	// AUTO. These pin the swap path to the SAME gate the initial mapping uses.
+
+	test("near-verbatim group: swap keeps the AUTO default", () => {
+		const g = group({
+			members: [
+				member({ lineId: "A", startSec: 0, endSec: 4 }),
+				member({ lineId: "B", startSec: 6, endSec: 10 }),
+			],
+			keeperLineId: "B",
+			confidence: 0.8,
+		});
+		const { cuts, groups } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts[0].defaultAccept).toBeUndefined(); // baseline: AUTO
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "A" });
+		expect(swapped.map((c) => c.startSec)).toEqual([6]); // keeper A -> cut B
+		expect(swapped[0].defaultAccept).not.toBe(false); // still AUTO after the swap
+	});
+
+	test("paraphrase-level group: swap keeps the row OFFERED (opt-in), not promoted to AUTO", () => {
+		const g = group({
+			members: [
+				member({
+					lineId: "L7",
+					startSec: 29.92,
+					endSec: 31.58,
+					text: "So I'm going to leave a link in the description.",
+				}),
+				member({
+					lineId: "L12",
+					startSec: 47.9,
+					endSec: 51.36,
+					text: "So I'm going to leave a link in the description, and all you do is hit join group.",
+				}),
+			],
+			keeperLineId: "L12",
+			confidence: 0.8,
+		});
+		const { cuts, groups } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts[0].defaultAccept).toBe(false); // baseline: opt-in (paraphrase)
+		// User swaps to keep the OTHER (earlier) take instead: this must NOT be
+		// read as the user endorsing the whole group as a true retake.
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "L7" });
+		expect(swapped.map((c) => c.startSec)).toEqual([47.9]); // keeper L7 -> cut L12
+		expect(swapped[0].defaultAccept).toBe(false); // stays opt-in, NOT auto-promoted
+		expect(swapped[0].reason).toContain("paraphrased");
+	});
+
+	test("sub-threshold (low-confidence) group: swap keeps the row OFFERED", () => {
+		const g = group({
+			members: [
+				member({ lineId: "A", startSec: 0, endSec: 4 }),
+				member({ lineId: "B", startSec: 6, endSec: 10 }),
+			],
+			keeperLineId: "B",
+			confidence: 0.55, // in [floor 0.5, acceptThreshold 0.7): opt-in regardless of near-verbatim
+		});
+		const { cuts, groups } = mapRedundancyGroups({ groups: [g] });
+		expect(cuts[0].defaultAccept).toBe(false); // baseline: opt-in (sub-threshold)
+		const swapped = applyKeeperSwap({ operations: cuts, group: groups[0], newKeeperLineId: "A" });
+		expect(swapped.map((c) => c.startSec)).toEqual([6]); // keeper A -> cut B
+		expect(swapped[0].defaultAccept).toBe(false); // stays opt-in after the swap
+	});
+});

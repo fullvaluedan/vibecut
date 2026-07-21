@@ -211,9 +211,24 @@ export function applyKeeperSwap({
 	// Preserve the group's accept default across a swap: a sub-threshold (accept-OFF)
 	// group's rebuilt ops must STAY opt-in, or swapping its keeper would silently flip
 	// the whole group to fully accepted (the rebuilt ops get new ids the store's
-	// decision merge can't match, so it would fall back to accepted). Mirrors
-	// `mapRedundancyGroups`'s `group.confidence >= acceptThreshold`.
-	const defaultAccept = group.confidence >= acceptThreshold;
+	// decision merge can't match, so it would fall back to accepted).
+	//
+	// F3 fix (round 12): this must apply the SAME round-7 near-verbatim conjunct
+	// `mapRedundancyGroups` applies at the initial mapping, re-derived against the
+	// NEW keeper. Before this fix the swap path only checked
+	// `group.confidence >= acceptThreshold`, so swapping the keeper of a
+	// paraphrase-level group (a deliberate setup-then-payoff restatement, not a
+	// flub, per `isNearVerbatimGroup`'s doc comment) silently promoted it to
+	// AUTO-checked regardless of confidence. That is exactly the auto-cut the
+	// round-7 gate exists to prevent; a keeper swap is not the user endorsing the
+	// WHOLE group as a true retake, only picking which take reads best.
+	const nearVerbatim = isNearVerbatimGroup({
+		members: group.members,
+		keeperLineId: newKeeperLineId,
+		confidence: group.confidence,
+		reason: group.reason,
+	});
+	const defaultAccept = group.confidence >= acceptThreshold && nearVerbatim;
 	const others = operations.filter((op) => op.groupId !== group.groupId);
 	const rawRebuilt = cutMembersForKeeper({
 		members: group.members,
@@ -225,6 +240,10 @@ export function applyKeeperSwap({
 			confidence: group.confidence,
 			reason: group.reason,
 			defaultAccept,
+			// Same reason-string treatment as the initial mapping: a rebuilt row
+			// that stays opt-in because it is paraphrase-level (not sub-threshold)
+			// should say so, not read as a plain unexplained "Repeat" row.
+			paraphrase: !nearVerbatim,
 		}),
 	);
 	// KTD5 + round 6 U3: run the rebuilt cuts through the SAME placement chain the
