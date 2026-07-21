@@ -324,6 +324,62 @@ const textElementParams: ElementParamDefinition[] = [
 		step: 1,
 		dependencies: [{ param: "background.enabled", equals: true }],
 	},
+	// U3 (text round): stroke + drop shadow. Defaults are fully inert
+	// (strokeWidth 0, shadowBlur 0, zero offsets) so existing projects are
+	// unaffected until Dan turns one of these up. Not keyframable (mirrors
+	// background.enabled/muted): a static per-element look, not an animated one.
+	{
+		key: "strokeColor",
+		label: "Stroke Color",
+		type: "color",
+		default: DEFAULTS.text.stroke.color,
+		keyframable: false,
+	},
+	{
+		key: "strokeWidth",
+		label: "Stroke Width",
+		type: "number",
+		default: DEFAULTS.text.stroke.width,
+		min: 0,
+		max: 40,
+		step: 1,
+		keyframable: false,
+	},
+	{
+		key: "shadowColor",
+		label: "Shadow Color",
+		type: "color",
+		default: DEFAULTS.text.shadow.color,
+		keyframable: false,
+	},
+	{
+		key: "shadowBlur",
+		label: "Shadow Blur",
+		type: "number",
+		default: DEFAULTS.text.shadow.blur,
+		min: 0,
+		max: 60,
+		step: 1,
+		keyframable: false,
+	},
+	{
+		key: "shadowOffsetX",
+		label: "Shadow Offset X",
+		type: "number",
+		default: DEFAULTS.text.shadow.offsetX,
+		min: -100_000,
+		step: 1,
+		keyframable: false,
+	},
+	{
+		key: "shadowOffsetY",
+		label: "Shadow Offset Y",
+		type: "number",
+		default: DEFAULTS.text.shadow.offsetY,
+		min: -100_000,
+		step: 1,
+		keyframable: false,
+	},
 ];
 
 export const elementParamRegistry = new DefinitionRegistry<
