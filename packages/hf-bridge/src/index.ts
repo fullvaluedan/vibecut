@@ -149,4 +149,9 @@ export {
 	type RegistryItemMeta,
 	type RegistryCompositionFile,
 } from "./registry-fetch";
+export {
+	hyperframesVersionToRegistryTag,
+	resolveInstalledHyperframesVersion,
+	resolveRegistryBase,
+} from "./registry-ref";
 export { runDoctor, type DoctorReport } from "./doctor";
