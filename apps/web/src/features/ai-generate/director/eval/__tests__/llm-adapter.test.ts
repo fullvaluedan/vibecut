@@ -159,13 +159,13 @@ describe("createEvalLlmAdapter", () => {
 		expect(seen).toEqual([spans, [{ startSec: 0, endSec: 2 }], undefined]); // forwarded unchanged
 	});
 
-	test("retake is OMITTED by default and with enableRetake false (off mirrors the app)", () => {
+	test("retake is EXPOSED by default (mirrors the shipped app) and omitted only when off", () => {
 		const { planners } = countingPlanners();
 		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: true });
 		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableRetake: false });
 		expect(typeof on.retake).toBe("function");
-		expect(byDefault.retake).toBeUndefined();
+		expect(typeof byDefault.retake).toBe("function");
 		expect(off.retake).toBeUndefined();
 	});
 
@@ -227,13 +227,13 @@ describe("createEvalLlmAdapter", () => {
 		expect(seen[0]).toBe("This creator removes roughly 80% of raw words in the finished cut");
 	});
 
-	test("structural is OMITTED by default and with enableStructural false (off mirrors the app)", () => {
+	test("structural is EXPOSED by default (mirrors the shipped app) and omitted only when off", () => {
 		const { planners } = countingPlanners();
 		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: true });
 		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableStructural: false });
 		expect(typeof on.structural).toBe("function");
-		expect(byDefault.structural).toBeUndefined();
+		expect(typeof byDefault.structural).toBe("function");
 		expect(off.structural).toBeUndefined();
 	});
 
@@ -299,13 +299,13 @@ describe("createEvalLlmAdapter", () => {
 		expect(seen).toEqual([c1, c2]); // forwarded unchanged
 	});
 
-	test("verify is OMITTED by default and with enableVerify false (off mirrors the app)", () => {
+	test("verify is EXPOSED by default (follows the recall passes) and omitted only when off", () => {
 		const { planners } = countingPlanners();
 		const on = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: true });
 		const byDefault = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners });
 		const off = createEvalLlmAdapter({ auth: AUTH, cacheDir, planners, enableVerify: false });
 		expect(typeof on.verify).toBe("function");
-		expect(byDefault.verify).toBeUndefined();
+		expect(typeof byDefault.verify).toBe("function");
 		expect(off.verify).toBeUndefined();
 	});
 });

@@ -38,7 +38,7 @@ import type { ClaudeAuth } from "./types";
  * wording changes bust the cache (the KTD7 discipline, learned the hard way when
  * prompt v2's gate re-run cache-hit v1's verdicts).
  */
-export const VERIFY_PROMPT_VERSION = 3;
+export const VERIFY_PROMPT_VERSION = 6;
 
 /** Which recall pass produced a candidate (fixes which anchors it tightens through). */
 export type VerifyCategory = "retake" | "structural";
@@ -50,9 +50,11 @@ export type VerifyVerdictKind = "keep" | "reject" | "tighten";
  * One OFFERED join-fragment row (round 12 U2/R3): a short run of kept words left
  * stranded between two accepted cuts in the ASSEMBLED result. The final-read side
  * of the verify pass judges each one against the assembled transcript: swallow it
- * (a stranded connective/orphan that breaks flow) or keep it (a complete,
- * deliberate beat). Verdicts key back by `id` (the join op's stable id), never by
- * index - the fragment set is tiny and the id survives the round trip verbatim.
+ * (the viewer loses nothing nameable) or keep it (swallowing would cost the viewer
+ * something specific). Round 13 reframed that criterion from "is it well formed"
+ * to "does it earn its screen time". Verdicts key back by `id` (the join op's
+ * stable id), never by index - the fragment set is tiny and the id survives the
+ * round trip verbatim.
  */
 export interface VerifyJoinFragment {
 	/** The join op's stable id; the verdict echoes it verbatim. */
@@ -242,16 +244,26 @@ function renderVerifyCandidates(
 		.join("\n");
 }
 
-/** Render each join fragment as one J-tagged row carrying its id, span, stranded
- * text, and the kept context on both sides. No `undefined`/`NaN` leaks (numbers
- * guarded, empty text falls back to "-"). */
+/** Render each join fragment as a J-tagged header plus the TWO readings the
+ * final read is actually choosing between: the assembled join WITH the fragment
+ * and the same join WITHOUT it. Round 13: the earlier one-line render made the
+ * model reason about the fragment in isolation ("is this a complete beat?")
+ * when the question is comparative ("does the join read better without it?"),
+ * so the alternative is now spelled out rather than left to be imagined. No
+ * `undefined`/`NaN` leaks (numbers guarded, empty text falls back to "-"). */
 function renderJoinFragments(fragments: readonly VerifyJoinFragment[]): string {
 	return fragments
 		.map((f, i) => {
 			const start = Number.isFinite(f.startSec) ? f.startSec : 0;
 			const end = Number.isFinite(f.endSec) ? f.endSec : 0;
 			const clean = (s: string): string => s.trim().replace(/\s+/g, " ") || "-";
-			return `[J${i} id=${f.id || "-"}] ${start.toFixed(1)}s-${end.toFixed(1)}s stranded: "${clean(f.text)}" | kept before: "${clean(f.contextBefore)}" | kept after: "${clean(f.contextAfter)}"`;
+			const before = clean(f.contextBefore);
+			const after = clean(f.contextAfter);
+			return [
+				`[J${i} id=${f.id || "-"}] ${start.toFixed(1)}s-${end.toFixed(1)}s stranded: "${clean(f.text)}"`,
+				`  keep it   -> ...${before} >>${clean(f.text)}<< ${after}...`,
+				`  swallow   -> ...${before} [CUT] ${after}...`,
+			].join("\n");
 		})
 		.join("\n");
 }
@@ -292,9 +304,18 @@ export function buildVerifyPrompt({
 ASSEMBLED RESULT (the transcript that REMAINS after every accepted cut, in order; " [CUT] " marks where two cuts meet):
 ${assembledTranscript?.trim() || "-"}
 
-JOIN FRAGMENTS: Each row below is a SHORT run of kept words left stranded between two cuts in the assembled result above. For each fragment, read the assembled result around it and judge which version reads BETTER:
-- "swallow": the fragment is a stranded connective or orphan (a dangling "so...", a half thought, a lead-in whose payoff was cut) that breaks the flow of the join - the assembled result reads cleaner with the fragment cut too.
-- "keep": the fragment is a complete, deliberate beat that works on its own - a reaction, a punchline, a transition that lands - and cutting it would hurt the assembled result.
+JOIN FRAGMENTS: Each row below is a SHORT run of 1-4 words left stranded BETWEEN TWO CUTS in the assembled result above - everything on both sides of it is already gone. This is a DIFFERENT question from the candidates above, and the "when torn, keep" rule above does NOT carry over: a stranded fragment survives only if it EARNS ITS SCREEN TIME.
+
+Each row shows you both readings of the join: with the fragment, and with the fragment swallowed too. Compare them and ask what the viewer LOSES by swallowing it. Do NOT ask whether the fragment is well formed, complete, or grammatical - plenty of complete sentences are dead weight between two cuts, and a fragment that survives one is paying for screen time with nothing.
+- "swallow" (the DEFAULT): the viewer loses nothing nameable. Filler, a dangling connective, a half thought, an acknowledgement of material that was cut, a lead-in whose payoff was cut, a stray aside, or a tidy sentence that simply carries no information the assembled result needs. If you cannot name what is lost, the answer is swallow.
+- "keep": swallowing it would cost the viewer something SPECIFIC - a fact they need, a reaction that lands, or a turn the next surviving line depends on. Name that thing to yourself first; if you cannot, it is not a keep.
+
+Three examples of the distinction (illustrations, not rows to judge):
+- stranded "Okay, so." -> swallow: connective tissue pointing at material that is gone.
+- stranded "Let me zoom in on this." -> swallow: a complete sentence, but the zoom it promises was cut, so keeping it makes the join read as a promise the video never pays.
+- stranded "That is the whole trick." -> keep: it names the takeaway of the material that survives on either side, and the next line lands harder because of it.
+
+CONFIDENCE IS LOAD-BEARING, so spend it honestly. A swallow is only ACTED ON above a confidence bar; below it the row is simply offered to the editor. So a swallow you would defend to the creator belongs at 0.85 or above, and a swallow you merely lean toward - anything where the fragment might be the creator's own reaction, aside, or deliberate flourish - belongs at 0.6 or below. Do not spend high confidence on a coin flip: an over-confident swallow deletes material the creator chose, while an under-confident one costs him one click.
 
 ${renderJoinFragments(joinFragments)}
 

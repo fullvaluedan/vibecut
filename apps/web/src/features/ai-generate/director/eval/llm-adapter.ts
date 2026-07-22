@@ -95,18 +95,19 @@ export interface EvalLlmAdapterOptions {
 	signal?: AbortSignal;
 	/** Injectable planners (tests). Defaults to the real hf-bridge ones. */
 	planners?: EvalPlanners;
-	/** Whether the returned adapter exposes the retake pass (U3). The runner passes this
-	 * from its `--retake` flag (default OFF, mirroring the in-app `directorRetake: false`
-	 * default from the round-3 verdict). False OMITS the method so `buildDirectorProposals`'s
-	 * `if (llm.retake)` guard skips the pass entirely. */
+	/** Whether the returned adapter exposes the retake pass (U3). Default ON, mirroring the
+	 * SHIPPED app, which has run the pass unconditionally since f6f3c13c (the runner's
+	 * `--no-retake` supplies the off state). False OMITS the method so
+	 * `buildDirectorProposals`'s `if (llm.retake)` guard skips the pass entirely. */
 	enableRetake?: boolean;
-	/** Whether the returned adapter exposes the structural-drop pass (U2). The runner passes
-	 * this from its `--structural` flag (default OFF, mirroring the in-app default). False
-	 * OMITS the method so `buildDirectorProposals`'s `if (llm.structural)` guard skips it. */
+	/** Whether the returned adapter exposes the structural-drop pass (U2). Default ON,
+	 * mirroring the SHIPPED app (also since f6f3c13c); `--no-structural` supplies the off
+	 * state. False OMITS the method so `buildDirectorProposals`'s `if (llm.structural)`
+	 * guard skips it. */
 	enableStructural?: boolean;
-	/** Whether the returned adapter exposes the verify sub-pass (U2). The runner passes this
-	 * from its verify enablement (default OFF, matching the recall passes and this doc). False
-	 * OMITS the method so `buildDirectorProposals`'s `if (llm.verify)` guard skips it. */
+	/** Whether the returned adapter exposes the verify sub-pass (U2). Default ON, following
+	 * the recall passes (the runner's `--no-verify` supplies the off state). False OMITS the
+	 * method so `buildDirectorProposals`'s `if (llm.verify)` guard skips it. */
 	enableVerify?: boolean;
 	/** Removal-share hint for the STRUCTURAL pass, derived by the runner from the fixture's
 	 * truth ratio when `--structural` is on. When set it OVERRIDES the (compressionTarget-
@@ -236,13 +237,14 @@ export function createEvalLlmAdapter(
 		attempts = 2,
 		signal,
 		planners = DEFAULT_PLANNERS,
-		// Both recall passes default OFF, matching the in-app defaults and the JSDoc
-		// above; the runner always passes explicit values from its flags.
-		enableRetake = false,
-		enableStructural = false,
-		// Verify defaults OFF too, matching its JSDoc above; the runner passes an explicit
-		// value (verify on whenever a recall pass is on).
-		enableVerify = false,
+		// Both recall passes default ON, matching the SHIPPED app and the JSDoc above;
+		// the runner always passes explicit values from its flags (round 13 fidelity fix
+		// - these defaulted OFF while the app ran them, so an adapter built without
+		// explicit flags measured a pipeline the editor does not run).
+		enableRetake = true,
+		enableStructural = true,
+		// Verify defaults ON too, following the recall passes.
+		enableVerify = true,
 		structuralRemovalHint,
 	} = options;
 
