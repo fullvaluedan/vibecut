@@ -21,8 +21,21 @@
  *    remains the word-safety backstop for those edges.
  *  - keep/reorder ops pass through untouched; an empty envelope is a
  *    pass-through; a widen that would invert keeps the original edge pair.
- *  - After widening, removals are clipped in time order so two cuts can never
- *    overlap (same invariant as snapRemovalOps).
+ *  - After widening, removals are clipped so two cuts can never overlap (same
+ *    invariant as snapRemovalOps), but NOT by raw time order alone (round 12):
+ *    every widen walk only looks at words/keepers, never at neighboring ops,
+ *    so two removals on opposite sides of one pause can both widen into the
+ *    same silence and land overlapping. DEFAULT-ACCEPTED removals resolve
+ *    against each other FIRST, in start order, exactly as before this fix
+ *    (byte-identical whenever nothing here is OFFERED). Their territory is
+ *    then frozen; a never-auto-applied OFFERED row (retake/structural/lexical
+ *    backstop) is trimmed against that frozen territory afterward, so a
+ *    recall row a user may never accept can no longer silently erase an
+ *    accepted cut just because it happened to sort earlier by raw start time
+ *    (the join-the-group diagnostic: an OFFERED retake row swallowed the
+ *    accepted pacing cut over a real 3.4s dead pause, leaving nothing AUTO
+ *    over it). OFFERED-vs-OFFERED overlaps still resolve by start order among
+ *    themselves, unchanged.
  *
  * Pure + wasm-free, seconds in and out. `words` must be the CLEAN words
  * (post hallucination-guard) so silence-bleed text never blocks a swallow.
@@ -182,19 +195,67 @@ export function swallowPauseBounds({
 		return { ...op, startSec, endSec };
 	});
 
-	// Non-overlap invariant (same as snapRemovalOps): clip in time order, drop
-	// any removal a predecessor swallowed entirely.
-	const result = [...widened].sort((a, b) => a.startSec - b.startSec);
-	let prevRemovalEnd = Number.NEGATIVE_INFINITY;
-	for (let i = 0; i < result.length; i++) {
-		const op = result[i];
-		if (!isRemoval(op)) {
-			continue;
+	// Non-overlap invariant (same as snapRemovalOps): clip in start order, drop
+	// any removal a predecessor swallowed entirely. Extracted so it can run
+	// TWICE below (round 12): once over accepted-only removals (byte-identical
+	// to the old single pass whenever every removal is accepted), once over
+	// offered-only removals after they have been trimmed against the accepted
+	// result.
+	const clipByStartOrder = (list: DirectorOp[]): DirectorOp[] => {
+		const sorted = [...list].sort((a, b) => a.startSec - b.startSec);
+		let prevEnd = Number.NEGATIVE_INFINITY;
+		for (let i = 0; i < sorted.length; i++) {
+			const op = sorted[i];
+			if (op.startSec < prevEnd) {
+				sorted[i] = { ...op, startSec: Math.min(prevEnd, op.endSec) };
+			}
+			prevEnd = Math.max(prevEnd, sorted[i].endSec);
 		}
-		if (op.startSec < prevRemovalEnd) {
-			result[i] = { ...op, startSec: Math.min(prevRemovalEnd, op.endSec) };
+		return sorted.filter((op) => op.endSec > op.startSec);
+	};
+
+	const nonRemovals = widened.filter((op) => !isRemoval(op));
+	const removals = widened.filter(isRemoval);
+	const isAccepted = (op: DirectorOp): boolean => op.defaultAccept !== false;
+	// Pass 1: DEFAULT-ACCEPTED removals only, resolved exactly like the old
+	// single pass. This is the ENTIRE algorithm whenever nothing here is
+	// OFFERED, so a plan with no retake/structural/backstop rows nearby is
+	// untouched by this change.
+	const acceptedRemovals = clipByStartOrder(removals.filter(isAccepted));
+	// Pass 2: trim each OFFERED removal against the now-frozen accepted
+	// territory before letting offered rows fight over what is left. A row
+	// fully inside an accepted cut disappears (its content is already gone);
+	// one straddling both edges of an accepted cut keeps only the earlier
+	// remainder (conservative, deterministic; this case is not expected to
+	// occur in practice).
+	const trimAgainstAccepted = (op: DirectorOp): DirectorOp => {
+		let startSec = op.startSec;
+		let endSec = op.endSec;
+		for (const acc of acceptedRemovals) {
+			if (acc.startSec >= endSec || startSec >= acc.endSec) {
+				continue; // no overlap with this accepted removal
+			}
+			if (startSec < acc.startSec && endSec <= acc.endSec) {
+				endSec = acc.startSec;
+			} else if (startSec >= acc.startSec && endSec > acc.endSec) {
+				startSec = acc.endSec;
+			} else if (startSec >= acc.startSec && endSec <= acc.endSec) {
+				endSec = startSec; // fully swallowed by an accepted cut
+			} else {
+				endSec = acc.startSec; // straddles both edges: keep the earlier side
+			}
 		}
-		prevRemovalEnd = Math.max(prevRemovalEnd, result[i].endSec);
-	}
-	return result.filter((op) => !isRemoval(op) || op.endSec > op.startSec);
+		return { ...op, startSec, endSec };
+	};
+	const offeredRemovals = removals.filter((op) => !isAccepted(op));
+	const trimmedOffered = offeredRemovals
+		.map(trimAgainstAccepted)
+		.filter((op) => op.endSec > op.startSec);
+	// Pass 3: remaining OFFERED-vs-OFFERED overlaps resolve by start order
+	// among themselves, same rule as before.
+	const finalOffered = clipByStartOrder(trimmedOffered);
+
+	return [...nonRemovals, ...acceptedRemovals, ...finalOffered].sort(
+		(a, b) => a.startSec - b.startSec,
+	);
 }

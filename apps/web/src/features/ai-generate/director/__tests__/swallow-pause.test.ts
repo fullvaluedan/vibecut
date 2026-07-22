@@ -199,6 +199,113 @@ describe("swallowPauseBounds", () => {
 		expect(withoutKeeper[0].endSec).toBeGreaterThan(13); // proves the limit did the work
 	});
 
+	test("round 12: an OFFERED cut widening into a pause never erases the AUTO cut on the other side", () => {
+		// Reproduces the join-the-group diagnostic (R3): a never-auto-applied
+		// OFFERED row (e.g. a retake candidate) sits with its NEAR edge in real
+		// speech (so it never widens on that side) and its FAR edge inside a
+		// long pause, next to an AUTO pacing cut that lives entirely inside the
+		// same pause. Both widen toward the SAME next-word boundary on their
+		// shared side, so the offered cut's far edge and the accepted cut's far
+		// edge land on the identical point, and the offered cut's un-widened
+		// near edge makes it a SUPERSET of the accepted cut's span. Before this
+		// fix, whichever cut sorted first by raw start time won the pause
+		// outright (here the offered one, since it starts earlier at 8.5),
+		// silently deleting the accepted cut. The accepted cut must always
+		// survive with its full widened span; the offered cut must shrink to
+		// stop where the accepted cut's territory begins.
+		const env = envelope(60, LOUD, [10, 20, QUIET]);
+		const words = [
+			{ start: 9, end: 9.9 },
+			{ start: 20.2, end: 21 },
+		];
+		const ops = swallowPauseBounds({
+			ops: [
+				// START (8.5) sits in the loud, non-silent region before the pause:
+				// never widens, only trough-snaps. END (10.5) is inside the pause:
+				// widens forward to the same next-word limit the accepted cut uses.
+				cut(8.5, 10.5, { id: "offered", category: "retake", defaultAccept: false }),
+				// Fully inside the pause: widens on BOTH sides to word +/- handle.
+				cut(15, 16, { id: "auto", category: "pacing" }), // defaultAccept omitted = accepted
+			],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		const auto = ops.find((o) => o.id === "auto")!;
+		const offered = ops.find((o) => o.id === "offered")!;
+		expect(auto).toBeDefined();
+		// The AUTO cut keeps its full word-to-word widened span, untouched by
+		// the offered cut's presence.
+		expect(auto.startSec).toBeCloseTo(9.9 + HANDLE_SEC, 2);
+		expect(auto.endSec).toBeCloseTo(20.0, 2);
+		// The offered cut survives (not silently deleted) but is trimmed back to
+		// where the accepted cut's territory begins, never overlapping it.
+		expect(offered).toBeDefined();
+		expect(offered.endSec).toBeLessThanOrEqual(auto.startSec + 1e-6);
+		expect(offered.startSec).toBeLessThan(offered.endSec);
+		expect(offered.startSec).toBeLessThan(9.5); // near edge stayed put, not widened
+	});
+
+	test("round 12: an OFFERED cut fully swallowed by an AUTO cut's widened span drops out", () => {
+		const env = envelope(60, LOUD, [10, 20, QUIET]);
+		const words = [
+			{ start: 9, end: 9.9 },
+			{ start: 20.2, end: 21 },
+		];
+		const ops = swallowPauseBounds({
+			ops: [
+				cut(13, 14, { id: "offered", category: "retake", defaultAccept: false }),
+				cut(11, 19, { id: "auto", category: "pacing" }),
+			],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		expect(ops.find((o) => o.id === "auto")).toBeDefined();
+		expect(ops.find((o) => o.id === "offered")).toBeUndefined();
+	});
+
+	test("round 12: two ACCEPTED cuts overlapping after widening resolve exactly as before (start order wins)", () => {
+		// Same shape as the pre-existing "two removals widening into the same
+		// pause" test above, pinned explicitly with both cuts accepted: this
+		// fix must not change AUTO-vs-AUTO behavior at all.
+		const env = envelope(30, LOUD, [10, 20, QUIET]);
+		const words = [
+			{ start: 9, end: 9.9 },
+			{ start: 20.2, end: 21 },
+		];
+		const ops = swallowPauseBounds({
+			ops: [cut(11, 13), cut(16, 18)],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].startSec).toBeCloseTo(9.9 + HANDLE_SEC, 2);
+		expect(ops[0].endSec).toBeCloseTo(20.0, 2);
+	});
+
+	test("round 12: two OFFERED cuts overlapping after widening still resolve by start order between themselves", () => {
+		const env = envelope(30, LOUD, [10, 20, QUIET]);
+		const words = [
+			{ start: 9, end: 9.9 },
+			{ start: 20.2, end: 21 },
+		];
+		const ops = swallowPauseBounds({
+			ops: [
+				cut(11, 13, { defaultAccept: false }),
+				cut(16, 18, { defaultAccept: false }),
+			],
+			envelope: env,
+			words,
+			threshold: THRESH,
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops.every((o) => o.defaultAccept === false)).toBe(true);
+		expect(ops[0].startSec).toBeCloseTo(9.9 + HANDLE_SEC, 2);
+		expect(ops[0].endSec).toBeCloseTo(20.0, 2);
+	});
+
 	test("keep and reorder ops pass through untouched", () => {
 		const env = envelope(30, LOUD, [10, 14, QUIET]);
 		const keep: DirectorOp = {
