@@ -573,3 +573,15 @@ cache with zero fresh calls. The single-draw table above plus google's means are
 `diag-join-verdicts.ts` now documents the watchdog trap (an undersized `EVAL_LLM_TIMEOUT_MS`
 makes a whole fixture read as all-offered, indistinguishable from a model that voted keep) so the
 next round does not misread a timeout as a result.
+
+**Postscript (2026-07-22): the held swallow-pause fix, measured and kept.** The correctness branch
+held since 2026-07-20 (accepted removals resolve territory before OFFERED rows, so a never-applied
+recall row can no longer clip an accepted cut to nothing; root cause of the long-red
+diag-join-the-group R3) merged after round 13 and was measured on a runIndex-0 draw against round
+13's own table: AUTO essLost google 10 -> 10, hermes 43 -> 46, how-to-edit 24 -> 24, pokemon
+2 -> 3. Suite +4 words, inside the per-draw noise band (A8: AUTO std ~2-6 words per fixture), with
+the verify draws necessarily fresh (the fix changes the tail preview that verify sees, so its cache
+keys moved). Bought: a real 3.4s dead pause is auto-cut again, the diag gate is green, and the
+keeper-swap hole (paraphrase groups promoted to AUTO after a swap) is closed. Kept on the strength
+of the mechanism plus a within-noise delta; if hermes AUTO essLost drifts upward across future
+3-run means, this postscript is the first suspect to re-examine.
