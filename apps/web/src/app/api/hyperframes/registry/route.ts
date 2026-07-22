@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
+import { resolveRegistryBase } from "@framecut/hf-bridge";
 
 export const runtime = "nodejs";
 
-const REGISTRY_BASE =
-	"https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
 const CACHE_MS = 60 * 60 * 1000;
 
 export interface RegistryAsset {
@@ -33,13 +32,16 @@ async function fetchJson(url: string): Promise<unknown | null> {
 	}
 }
 
-async function enrich(item: {
-	name: string;
-	type: string;
-}): Promise<RegistryAsset> {
+async function enrich(
+	item: {
+		name: string;
+		type: string;
+	},
+	registryBase: string,
+): Promise<RegistryAsset> {
 	const kind = item.type.split(":")[1] ?? item.type;
 	const detail = (await fetchJson(
-		`${REGISTRY_BASE}/${kind}s/${item.name}/registry-item.json`,
+		`${registryBase}/${kind}s/${item.name}/registry-item.json`,
 	)) as {
 		title?: string;
 		description?: string;
@@ -76,19 +78,34 @@ export async function GET() {
 	if (cache && Date.now() - cache.at < CACHE_MS) {
 		return NextResponse.json({ items: cache.items });
 	}
-	const index = (await fetchJson(`${REGISTRY_BASE}/registry.json`)) as {
+	// Resolved from the installed hyperframes engine's version (its release
+	// tag), not `main`. No silent fallback if this throws (e.g. the engine
+	// isn't installed, or its version is unreadable/malformed): that mismatch
+	// is exactly the version-skew bug this route used to have.
+	let registryBase: string;
+	try {
+		registryBase = resolveRegistryBase();
+	} catch (e) {
+		return NextResponse.json({
+			items: [],
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+	const index = (await fetchJson(`${registryBase}/registry.json`)) as {
 		items?: { name: string; type: string }[];
 	} | null;
 	if (!index?.items) {
 		return NextResponse.json({
 			items: [],
-			error: "Could not reach the HyperFrames registry.",
+			error: `Could not reach the HyperFrames registry at tag ref ${registryBase}.`,
 		});
 	}
 	const valid = index.items.filter(
 		(item) => typeof item?.name === "string" && typeof item?.type === "string",
 	);
-	const items = await Promise.all(valid.map(enrich));
+	const items = await Promise.all(
+		valid.map((item) => enrich(item, registryBase)),
+	);
 	cache = { at: Date.now(), items };
 	return NextResponse.json({ items });
 }
