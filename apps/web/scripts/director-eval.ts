@@ -327,12 +327,12 @@ async function runLlmMode({
 	keeperPolicy: KeeperPolicy;
 	/** When true, compute each fixture's compression target from its own truth ratio. */
 	compression: boolean;
-	/** U3 retake-hunt pass, opt-in via `--retake` (mirrors the in-app default OFF per the
-	 * round-3 verdict: match-neutral-at-best, R10 keeps it off by default). */
+	/** U3 retake-hunt pass. Default ON, mirroring the SHIPPED app, which has run it
+	 * unconditionally since f6f3c13c; `--no-retake` turns it off for an A/B. */
 	retake: boolean;
-	/** U2 structural-drop pass, opt-in via `--structural` (default OFF, mirroring the app).
-	 * When on, the pass's removalHint is derived from each fixture's own truth ratio so the
-	 * lever is measured (KTD4). */
+	/** U2 structural-drop pass. Default ON, mirroring the SHIPPED app (also since
+	 * f6f3c13c); `--no-structural` turns it off. When on, the pass's removalHint is
+	 * derived from each fixture's own truth ratio so the lever is measured (KTD4). */
 	structural: boolean;
 	/** U2 verify sub-pass. Follows the recall passes (on whenever retake OR structural is on)
 	 * with a `--no-verify` override; it fires exactly when recall candidates exist (R5). */
@@ -505,13 +505,14 @@ async function main(): Promise<void> {
 	// derives each fixture's target from its own truth ratio. Both cache independently.
 	const keeperPolicy: KeeperPolicy = val("--keeper", "last") === "quality" ? "quality" : "last";
 	const compression = has("--compression");
-	// U3 A/B knobs (defaults mirror the app: retake OFF per the round-3 verdict, clamp ON):
-	// `--retake` enables the retake-hunt pass (`--no-retake` still honored for the off
-	// state); `--no-clamp` disables U2's clamp (its oversized threshold → Infinity, every
-	// plan op passes through) for the U3-only combo.
-	const retake = has("--retake") && !has("--no-retake");
-	// U2 structural-drop pass, opt-in via `--structural` (default OFF, mirroring the app).
-	const structural = has("--structural");
+	// Recall-pass defaults MIRROR THE SHIPPED APP (round 13 fidelity fix): the app has
+	// run retake AND structural unconditionally since f6f3c13c, while these flags stayed
+	// opt-in, so every eval since then measured a pipeline the editor does not run.
+	// Both now default ON; `--no-retake` / `--no-structural` still give the off state for
+	// an A/B. `--retake` / `--structural` remain accepted as explicit no-ops so existing
+	// commands and docs keep working. Clamp is unchanged (ON, `--no-clamp` to disable).
+	const retake = !has("--no-retake");
+	const structural = !has("--no-structural");
 	// U2 verify sub-pass: follows the recall passes (on whenever retake OR structural is on)
 	// with a `--no-verify` override, so it fires exactly when recall candidates exist (R5).
 	const verify = (retake || structural) && !has("--no-verify");

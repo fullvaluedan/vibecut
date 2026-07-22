@@ -451,3 +451,125 @@ Frank."). Measure with the same per-fragment harness; precision at 100% is the t
 metric-invisible by construction and U2 only moves opt-in rows. A per-fragment harness scored
 against Dan's finals was the only instrument that could grade it. Round 11's lesson generalizes:
 pick the instrument that can actually see the lever before declaring a result.
+
+## ADDENDUM 12 (2026-07-22): round 13, the final read earns its screen time, recall 6/14 -> 11/14 at perfect precision
+
+Round 12 shipped the final read provably harmless but timid (ADDENDUM 11): measured
+per-fragment against Dan's finals it swallowed a third of what it should. Round 13's one job
+was to raise that recall without spending precision, and it landed.
+
+**Baseline, re-measured first (VERIFY v3, the shipped round-12 prompt).** The round-12 harness
+was a throwaway; step 1 rebuilt it as a KEPT script, `apps/web/scripts/diag-join-verdicts.ts`
+(future rounds need it). It runs the app's own `buildDirectorProposals` per fixture with retake
++ structural + verify ON at runIndex 0 (mirroring the shipped app), grades every word-bearing
+`join` op's post-verify `defaultAccept` against Dan's finals via `alignTranscripts`, and prints
+the confusion matrix. On the inherited v3 cache:
+
+| VERIFY v3 (before) | swallowed | left offered |
+|---|---|---|
+| Dan CUT the fragment (14) | 6 | 8 |
+| Dan KEPT the fragment (3) | 0 | 3 |
+
+Recall 6/14 (43%), precision 6/6 (100%). This is one fragment better than ADDENDUM 11's
+reported 5/14: the copied v3 cache swallows how-to-edit's "Thank you. Thank" where round 12
+left it offered. Same class of measurement, one draw apart; precision 100% and the three
+deliberate keeps spared, exactly as before.
+
+**The change (VERIFY_PROMPT_VERSION 3 -> 6).** The criterion moved from "is the fragment a
+complete, deliberate beat" to "does it EARN ITS SCREEN TIME in the assembled flow" (swallow is
+the stated default; keep only when swallowing costs the viewer something nameable). Each join
+now renders BOTH readings inline (the assembled seam with the fragment and without it) so the
+model judges the comparison it is actually asked, not the fragment in isolation. The version
+walked 3 -> 6 across three measured drafts:
+
+- v4 (reframe + both-readings): recall 11/14 but precision 11/13. It wrongly swallowed "Let's
+  find out." and "I had some confusion", two of Dan's three deliberate keeps. Recall bought at
+  the cost of the one thing not to lose.
+- v5 (added a hard "payoff survives the join" test to protect the keeps): precision back to 100%
+  but recall collapsed to 8/14. The payoff test is too literal, and how-to-edit's three obvious
+  drops ("Okay. Okay." etc.) went back to offered because their "payoff" was gone by
+  construction. Reverted as a dead end.
+- v6 (reframe + both-readings + an explicit CONFIDENCE-CALIBRATION paragraph): the swallow gate
+  only acts at/above 0.7, so the prompt now tells the model to spend high confidence only on a
+  swallow it would defend to the creator and to sit a coin-flip below the bar. That single
+  paragraph restored precision without touching the recall the reframe won.
+
+| VERIFY v6 (after) | swallowed | left offered |
+|---|---|---|
+| Dan CUT the fragment (14) | 11 | 3 |
+| Dan KEPT the fragment (3) | 0 | 3 |
+
+Recall 11/14 (79%), precision 11/11 (100%). Target was >= 10/14 at 5/5; met, with zero wrong
+swallows and all three deliberate keeps spared.
+
+**Per-fragment, against the 9 the plan named (all Dan CUT, all voted keep in round 12).**
+
+| fragment (fixture) | v3 | v6 | result |
+|---|---|---|---|
+| "Give that a moment." (hermes) | offered | swallow | RECOVERED |
+| "Test." (hermes) | offered | swallow | RECOVERED |
+| "100 to 216" (hermes) | offered | swallow | RECOVERED |
+| "Okay. Okay." (how-to-edit) | offered | swallow | RECOVERED |
+| "Okay, well, model..." (how-to-edit) | offered | swallow | RECOVERED |
+| "Thank you. Thank" (how-to-edit) | swallow | swallow | already swallowed in the v3 cache |
+| "Goodbye, Frank." (hermes) | offered | offered | RESISTED |
+| "Don't change the username." (hermes) | offered | offered | RESISTED |
+| "the loop" (pokemon) | offered | offered | RESISTED |
+
+Six recovered; three resisted. "Goodbye, Frank." is the honest one: v4 DID swallow it, but v4
+also wrongly swallowed "Let's find out." The confidence calibration that fixed the wrong swallow
+also pushed "Goodbye, Frank." back below the gate. That is the precision/recall trade made
+deliberately in the mandated direction: a genuine Dan cut left one click away is cheaper than a
+kept line destroyed. "Don't change the username." and "the loop" the model simply votes keep
+with conviction; they are the residual the next round can chase. The three deliberate keeps
+("and look at that", "Let's find out.", "I had some confusion") stayed offered in v6. Precision
+held at 100%, the mandate's non-negotiable.
+
+**Four-fixture eval (AUTO essLost + OFFERED match adj, defaults now mirror the app).** The r13
+column below is the runIndex-0 draw of all four fixtures from a fully-cache-warm run, plus
+google's completed 3-run means in brackets. The r12 column is ADDENDUM 10/11's numbers.
+
+| fixture | AUTO essLost r12 -> r13 | OFFERED match adj r12 -> r13 |
+|---|---|---|
+| google-omni | 8.0 -> 10 [3-run mean 7.7] | 62.3 -> 64.4 [mean 64.1] |
+| hermes-cloud | 44.3 -> 43 | 78.8 -> 82.4 |
+| how-to-edit | 20.0 -> 24 | 36.7 -> 38.5 |
+| pokemon-tcg | 7.3 -> 2 | 83.5 -> 84.8 |
+| suite | 19.9 -> 19.75 | 65.3 -> 67.5 |
+
+Suite AUTO essLost 19.9 -> 19.75 is flat, inside the "must not rise more than ~3 words
+suite-wide" gate; google's 3-run mean (7.7) sits below both its single draw and r12's 8.0. The
+only fixture up is how-to-edit (+4), which is single-draw noise (AUTO essLost variance is large
+here: google's own 3-run range is 1-12) plus the fidelity confound below.
+
+**Eval-fidelity fix, folded into this round (step 5).** The r12 numbers above were measured with
+the eval's `--retake`/`--structural` flags at their old default OFF, while the shipped app has
+run BOTH unconditionally since f6f3c13c, so every eval since scored a pipeline the editor does
+not run. This round flips those defaults (and verify) to ON in `director-eval.ts` and
+`eval/llm-adapter.ts`, keeps the `--no-retake`/`--no-structural`/`--no-verify` overrides, and
+corrects the stale "mirrors the in-app default OFF" JSDoc. That makes the r12 -> r13 AUTO/OFFERED
+table a CONFOUNDED comparison: it mixes the verify-v6 lever with the fidelity fix (retake +
+structural now contribute ops). The clean instrument for the verify lever is the per-fragment
+harness, run with retake + structural on in BOTH rounds; that is the number to trust for this
+change. The four-fixture table is best read as a NEW baseline for round 14, not a clean delta.
+
+**Why AUTO essLost is safe despite a more aggressive final read.** A join promotion only raises
+AUTO essLost if it wrongly swallows a fragment Dan KEPT, moving kept words into the one-click
+set. The harness measures exactly that and reports 0 wrong swallows (precision 11/11). The
+verify change therefore cannot raise AUTO essLost beyond measurement noise, independent of the
+eval confound above.
+
+**What did not work, honestly.** (1) The payoff-test draft (v5) is a dead end: it protects the
+keeps by collapsing recall, and the confidence-calibration route is strictly better. (2) Three
+fragments still resist, one of them ("Goodbye, Frank.") only recoverable by re-spending the
+precision this round was told to protect, so it stays offered on purpose. (3) The full
+four-fixture `--llm --runs 3` would NOT complete: the fresh runIndex-1/2 verify draws over the
+large hermes and how-to-edit transcripts repeatedly killed the bun process outright (no exit
+code, no JS error, the whole process tree reaped mid-call) under the concurrent claude-code CLI
+load of two other background agents sharing the machine. This is the ADDENDUM-1 stall class made
+worse, an environmental instability, not a code defect: google's fresh draws completed and its
+3-run means are clean, and the runIndex-0 draw of all four fixtures replays from the harness
+cache with zero fresh calls. The single-draw table above plus google's means are what stand;
+`diag-join-verdicts.ts` now documents the watchdog trap (an undersized `EVAL_LLM_TIMEOUT_MS`
+makes a whole fixture read as all-offered, indistinguishable from a model that voted keep) so the
+next round does not misread a timeout as a result.

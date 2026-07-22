@@ -153,19 +153,28 @@ describe("buildVerifyPrompt (final-read block, round 12 U2)", () => {
 		);
 	});
 
-	test("renders each fragment as a J-row with id, span, stranded text, and kept context", () => {
+	test("renders each fragment as a J-row with id, span, stranded text, and BOTH readings", () => {
 		expect(prompt).toContain("[J0 id=join-abc]");
 		expect(prompt).toContain("[J1 id=join-def]");
 		expect(prompt).toContain('stranded: "so..."');
-		expect(prompt).toContain('kept before: "we wrapped the demo"');
-		expect(prompt).toContain('kept after: "lets talk deployment"');
 		expect(prompt).toContain("12.3s-13.1s");
+		// Round 13: the alternative is spelled out, not left to be imagined.
+		expect(prompt).toContain(
+			"keep it   -> ...we wrapped the demo >>so...<< lets talk deployment...",
+		);
+		expect(prompt).toContain(
+			"swallow   -> ...we wrapped the demo [CUT] lets talk deployment...",
+		);
 	});
 
-	test("frames the swallow/keep judgment as better-assembled-read, with confidence", () => {
+	test("frames the swallow/keep judgment as earning screen time, with confidence", () => {
 		expect(prompt).toContain('"swallow"');
-		expect(prompt).toContain("stranded connective or orphan");
-		expect(prompt).toContain("complete, deliberate beat");
+		// Round 13: swallow is the stated default, the criterion is earned screen
+		// time rather than well-formedness, and the confidence field is explicitly
+		// calibrated (it is what the swallow gate reads).
+		expect(prompt).toContain("EARNS ITS SCREEN TIME");
+		expect(prompt).toContain('"swallow" (the DEFAULT)');
+		expect(prompt).toContain("CONFIDENCE IS LOAD-BEARING");
 		expect(prompt).toContain('"confidence": 0..1');
 	});
 
