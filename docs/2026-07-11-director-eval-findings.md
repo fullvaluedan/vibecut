@@ -632,3 +632,71 @@ not `defaultAccepted` for its own category, exactly as any offered row is. Recor
 "P3 demoted N" fact would need a new counts field plus a provenance flag on the op to tell a P3
 demote from a recall offered row (both are just `defaultAccept:false`), i.e. a forced seam; per the
 plan, none was added.
+
+## ADDENDUM 13b (2026-07-24): round 14 measured, the recall ceilings finally move
+
+**Provenance.** U1 (virtual apply + P2 loop) was salvaged from a parked agent worktree with its
+work uncommitted, committed as 27a4865b, merged with tip, and reviewed against the U1 contract.
+U2 is ADDENDUM 13a. Merged tip for the measurement: 18c5f5b6.
+
+**Instrument drift, resolved before measuring.** The first diag-join-verdicts run in the salvage
+worktree read recall 10/16 precision 10/11 against the documented 11/14 at 11/11 and looked like a
+U1 regression. It is not one. A verify agent logged the verify CACHE KEYS under both orderings
+(verify fed withP2 vs fed withStructural) and they are byte-identical per fixture: P2 rows are
+strictly offered, and `collectVerifyCandidates` filters to retake/structural, so P2 cannot reach
+the verify payload in either order. The 11/14 was a property of round-13's cached draw set; the
+swallow-pause merge re-keyed verify payloads, the surviving cache matched only one entry, and a
+FRESH draw flipped the known-borderline "Let's find out." (hermes 2492.7s) to swallow. That draw
+is now the cached baseline (still exactly 1 wrong swallow under v7, per 13a). Ops lesson recorded:
+gate numbers belong to a cached draw set; compare cache keys before crying regression.
+
+**U1 alone, paired single draws (before = tip aacb69ed, after = tip + U1, same cache lineage, so
+the delta is exactly P2's contribution).** AUTO is byte-identical on every fixture, as the U1
+contract requires (P2 adds only review rows). OFFERED cut recall: google-omni 35.3 -> 37.0,
+hermes-cloud 63.2 -> 65.7, how-to-edit 26.5 -> 31.9, pokemon-tcg 59.3 -> 65.2. OFFERED match adj:
+64.2 -> 62.6 / 82.3 -> 77.7 / 38.4 -> 38.3 / 84.7 -> 83.3. P2's added rows skew to paraphrase
+redundancy ("Second pass: possible repeat..."), which buys the recall and costs the match adj.
+
+**U4, the round verdict: four-fixture `--llm --runs 3` at 18c5f5b6 (12/12 draws completed, no
+watchdog kills, EVAL_LLM_TIMEOUT_MS=2400000), means +/- std vs the ADDENDUM-12 r13 column.**
+
+| fixture | OFFERED recall r13 -> r14 | OFFERED match adj r13 -> r14 | AUTO essLost r13 -> r14 |
+|---|---|---|---|
+| google-omni | 35.3 -> 40.5 +/- 1.9 | 64.4 -> 62.8 +/- 0.1 | 10 [mean 7.7] -> 8.0 +/- 5.1 |
+| hermes-cloud | 63.2 -> 66.3 +/- 2.7 | 82.4 -> 77.9 +/- 1.3 | 43 -> 48.0 +/- 2.2 |
+| how-to-edit | 26.5 -> 35.3 +/- 1.9 | 38.5 -> 38.0 +/- 0.7 | 24 -> 20.0 +/- 5.7 |
+| pokemon-tcg | 59.3 -> 67.2 +/- 2.1 | 84.8 -> 83.4 +/- 1.6 | 2 -> 9.7 +/- 6.2 |
+| suite | - | 67.5 -> 65.5 | 19.75 -> 21.4 |
+
+Against the plan's stated success criteria:
+
+1. **OFFERED recall up materially on the ceiling fixtures: MET.** google-omni +5.2pp and
+   how-to-edit +8.8pp (its best number in any round, on the fixture ADDENDUM 8 proved was
+   structurally capped for a single pass). The multi-pass architecture does what it was built for.
+2. **AUTO essLost suite mean not above baseline: HELD, honestly borderline.** 19.75 -> 21.4 is
+   +1.65 words suite-wide, inside the round-11 "~3 words" band, and the per-fixture stds (5.1 /
+   2.2 / 5.7 / 6.2) say single-fixture moves here are draw noise. The one real-looking move is
+   hermes AUTO 43 -> 48 +/- 2.2; it predates nothing (P2 cannot touch AUTO; the v7 harm block can
+   only DEMOTE, never add) so it reads as verify-draw variance plus the r13 single-draw baseline;
+   the next round should watch it.
+3. **Match adj up: NOT MET.** Down ~2 suite-wide. This is the deliberate aggressive-recall trade:
+   P2's paraphrase-redundancy rows are exactly the rows Dan asked to be shown, and the metric
+   prices them as if he applies every one.
+4. **Tiny-cut count down: NOT MEASURABLE YET.** The eval has no tiny-cut counter; the guard's
+   behavior is pinned by unit tests only. TO-VERIFY: instrument cuts-under-0.5s-not-companion in
+   the eval score and read it next round.
+
+**What the OFFERED metric structurally cannot see.** `score.ts` offered mode includes
+`defaultAccept:false` rows, so a P3 demotion (harm revert, micro-cut demote) does not move
+OFFERED essLost at all; its benefit shows only in AUTO (flat) and in the review dock. The eval
+therefore cannot credit the harm net it just shipped. OPEN PRODUCT CALL FOR DAN: in his select-all
+workflow, should rows the final read demoted as harmful stay excluded from select-all (a third
+"flagged" bucket), or is the offered-off default plus the reason text enough? Until that is
+decided, the harm net protects only a reviewer who reads the rows.
+
+**Residuals for round 15.** (1) "Let's find out." stays the one wrong swallow in the verify
+cache; the calibration route from ADDENDUM 12 is still the lever. (2) hermes AUTO 48 +/- 2.2
+watch item. (3) The tiny-cut counter above. (4) P2 paraphrase-redundancy precision: 65-77%
+offered precision on the noisy fixtures says roughly one in three P2 rows is a row Dan would
+reject; a P2-specific confidence gate (the ADDENDUM-12 pattern, applied to the second pass) is
+the obvious next lever if he reports review fatigue.
