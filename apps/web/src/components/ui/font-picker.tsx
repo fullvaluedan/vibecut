@@ -33,6 +33,18 @@ type FontTab = (typeof FONT_TABS)[number]["key"];
 const FAVORITE_FONTS_STORAGE_KEY = "favoriteFontFamilies";
 
 /**
+ * Guard against corrupted localStorage (null, number, object, etc).
+ * Returns a clean array of font family name strings, or empty array if input
+ * is malformed. Exported so the sanitization is unit-testable.
+ */
+export function sanitizeFavorites(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return raw.filter((f) => typeof f === "string");
+	}
+	return [];
+}
+
+/**
  * Pure filter driving both tabs: "all" shows every font name (search-filtered
  * as before); "favorites" first narrows to starred families. Exported so the
  * behavior is unit-testable without rendering the component (this repo's
@@ -98,9 +110,14 @@ export function FontPicker({
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const { atlas, status, fontNames, retry: handleRetry } = useFontAtlas({ open });
 
+	const safeFavorites = useMemo(
+		() => sanitizeFavorites(favorites),
+		[favorites],
+	);
+
 	const filteredFonts = useMemo(
-		() => filterFontsForTab({ fontNames, search, activeTab, favorites }),
-		[fontNames, search, activeTab, favorites],
+		() => filterFontsForTab({ fontNames, search, activeTab, favorites: safeFavorites }),
+		[fontNames, search, activeTab, safeFavorites],
 	);
 
 	const listHeight = Math.min(
@@ -126,7 +143,7 @@ export function FontPicker({
 	const handleToggleFavorite = useCallback(
 		({ family }: { family: string }) => {
 			setFavorites({
-				value: (previous) => toggleFontFavorite({ favorites: previous, family }),
+				value: (previous) => toggleFontFavorite({ favorites: sanitizeFavorites(previous), family }),
 			});
 		},
 		[setFavorites],
@@ -242,7 +259,7 @@ export function FontPicker({
 							atlas,
 							filteredFonts,
 							selectedFont: defaultValue,
-							favorites,
+							favorites: safeFavorites,
 							onFontSelect: handleSelect,
 							onToggleFavorite: handleToggleFavorite,
 						}}

@@ -101,6 +101,41 @@ describe("formatTranscriptCsv", () => {
 		});
 		expect(csv.split("\r\n")[1]).toBe("0.000,1.000,plain text");
 	});
+
+	test("formula trigger = is neutralized with leading apostrophe", () => {
+		const csv = formatTranscriptCsv({
+			segments: [{ start: 0, end: 1, text: "=2+2" }],
+		});
+		expect(csv.split("\r\n")[1]).toBe("0.000,1.000,'=2+2");
+	});
+
+	test("formula trigger - is neutralized with leading apostrophe", () => {
+		const csv = formatTranscriptCsv({
+			segments: [{ start: 0, end: 1, text: "- so anyway" }],
+		});
+		expect(csv.split("\r\n")[1]).toBe("0.000,1.000,'- so anyway");
+	});
+
+	test("formula trigger + is neutralized with leading apostrophe", () => {
+		const csv = formatTranscriptCsv({
+			segments: [{ start: 0, end: 1, text: "+50" }],
+		});
+		expect(csv.split("\r\n")[1]).toBe("0.000,1.000,'+50");
+	});
+
+	test("formula trigger @ is neutralized with leading apostrophe", () => {
+		const csv = formatTranscriptCsv({
+			segments: [{ start: 0, end: 1, text: "@example.com" }],
+		});
+		expect(csv.split("\r\n")[1]).toBe("0.000,1.000,'@example.com");
+	});
+
+	test("formula-triggered field combined with comma is quoted with neutralized apostrophe", () => {
+		const csv = formatTranscriptCsv({
+			segments: [{ start: 0, end: 1, text: "=SUM(1,2)" }],
+		});
+		expect(csv.split("\r\n")[1]).toBe('0.000,1.000,"\'=SUM(1,2)"');
+	});
 });
 
 describe("formatTranscriptSrt", () => {
