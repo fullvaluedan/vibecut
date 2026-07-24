@@ -95,7 +95,8 @@ export function TextStylesSection({
 		setIsNaming(false);
 		setDraftName("");
 		toast.success(`Saved the style "${name}"`, {
-			description: "Font, size, color and background only. Nothing moved.",
+			description:
+				"Font, size, color, background, stroke and shadow. Nothing moved.",
 		});
 	};
 
@@ -235,9 +236,9 @@ export function TextStylesSection({
 							)}
 
 							<p className="text-muted-foreground text-[0.65rem]">
-								A style remembers font, size, weight, color, spacing, alignment
-								and the background box. It never changes your words, where the
-								text sits, or how long it lasts.
+								A style remembers font, size, weight, color, spacing, alignment,
+								the background box, and the stroke and shadow. It never changes
+								your words, where the text sits, or how long it lasts.
 							</p>
 						</>
 					)}

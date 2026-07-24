@@ -2,8 +2,8 @@
  * THE load-bearing rule of this feature: a text style is APPEARANCE ONLY.
  *
  * Captured: everything that decides how the words look (typeface, size,
- * weight, slant, underline, fill color, spacing, alignment, and the whole
- * backer-box group).
+ * weight, slant, underline, fill color, spacing, alignment, the whole
+ * backer-box group, and the stroke/outline and drop-shadow group).
  *
  * Deliberately NOT captured: `content` (the words themselves), every
  * `transform.*` key (position, scale, rotation), `opacity` and `blendMode`
@@ -33,6 +33,12 @@ export const TEXT_STYLE_PARAM_KEYS = [
 	"background.paddingY",
 	"background.offsetX",
 	"background.offsetY",
+	"strokeColor",
+	"strokeWidth",
+	"shadowColor",
+	"shadowBlur",
+	"shadowOffsetX",
+	"shadowOffsetY",
 ] as const;
 
 export type TextStyleParamKey = (typeof TEXT_STYLE_PARAM_KEYS)[number];

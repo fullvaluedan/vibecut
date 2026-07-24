@@ -50,6 +50,12 @@ const STYLED_PARAMS: Record<string, ParamValue> = {
 	"background.paddingY": 16,
 	"background.offsetX": 5,
 	"background.offsetY": -5,
+	strokeColor: "#000000",
+	strokeWidth: 4,
+	shadowColor: "#111111",
+	shadowBlur: 12,
+	shadowOffsetX: 3,
+	shadowOffsetY: -3,
 	"transform.positionX": 300,
 	"transform.positionY": -420,
 	"transform.scaleX": 1.5,
@@ -81,6 +87,12 @@ describe("captureTextStyleParams", () => {
 		expect(captured["background.paddingY"]).toBe(16);
 		expect(captured["background.offsetX"]).toBe(5);
 		expect(captured["background.offsetY"]).toBe(-5);
+		expect(captured.strokeColor).toBe("#000000");
+		expect(captured.strokeWidth).toBe(4);
+		expect(captured.shadowColor).toBe("#111111");
+		expect(captured.shadowBlur).toBe(12);
+		expect(captured.shadowOffsetX).toBe(3);
+		expect(captured.shadowOffsetY).toBe(-3);
 	});
 
 	it("captures the appearance keys and NOTHING else", () => {
@@ -126,6 +138,20 @@ describe("captureTextStyleParams", () => {
 			[...TEXT_STYLE_PARAM_KEYS].sort(),
 		);
 	});
+
+	it("fills the stroke and shadow keys with registry defaults when the element never touched them", () => {
+		const captured = captureTextStyleParams({
+			element: buildElement({ params: { content: "bare", fontSize: 90 } }),
+		});
+		const defaults = getTextStyleParamDefaults();
+
+		expect(captured.strokeColor).toBe(defaults.strokeColor);
+		expect(captured.strokeWidth).toBe(defaults.strokeWidth);
+		expect(captured.shadowColor).toBe(defaults.shadowColor);
+		expect(captured.shadowBlur).toBe(defaults.shadowBlur);
+		expect(captured.shadowOffsetX).toBe(defaults.shadowOffsetX);
+		expect(captured.shadowOffsetY).toBe(defaults.shadowOffsetY);
+	});
 });
 
 describe("buildTextStylePatch", () => {
@@ -155,6 +181,30 @@ describe("buildTextStylePatch", () => {
 		expect(patch.params.fontSize).toBe(48);
 		expect(patch.params.color).toBe("#ff8800");
 		expect(patch.params["background.enabled"]).toBe(true);
+	});
+
+	it("overwrites the target's stroke and shadow params too", () => {
+		const target = buildElement({
+			params: {
+				content: "Chapter two",
+				strokeColor: "#ffffff",
+				strokeWidth: 0,
+				shadowColor: "#ffffff",
+				shadowBlur: 0,
+				shadowOffsetX: 0,
+				shadowOffsetY: 0,
+			},
+		});
+
+		const patch = buildTextStylePatch({ element: target, style });
+
+		expect(patch.params.strokeColor).toBe("#000000");
+		expect(patch.params.strokeWidth).toBe(4);
+		expect(patch.params.shadowColor).toBe("#111111");
+		expect(patch.params.shadowBlur).toBe(12);
+		expect(patch.params.shadowOffsetX).toBe(3);
+		expect(patch.params.shadowOffsetY).toBe(-3);
+		expect(patch.params.content).toBe("Chapter two");
 	});
 
 	it("leaves content, position, scale and rotation exactly as they were", () => {
@@ -246,6 +296,88 @@ describe("buildTextStylePatch", () => {
 	});
 });
 
+describe("a style saved before stroke and shadow were captured (the old 16-key shape) still applies cleanly", () => {
+	// This is exactly what a style record looked like before this fix: no
+	// strokeColor/strokeWidth/shadowColor/shadowBlur/shadowOffsetX/shadowOffsetY
+	// keys at all, because TEXT_STYLE_PARAM_KEYS did not carry them yet.
+	const preFixStyle: TextStyle = {
+		id: "style-old",
+		name: "Old lower third",
+		params: {
+			fontFamily: "Inter",
+			fontSize: 48,
+			fontWeight: "bold",
+			fontStyle: "italic",
+			textDecoration: "underline",
+			color: "#ff8800",
+			letterSpacing: 2,
+			lineHeight: 1.4,
+			textAlign: "left",
+			"background.enabled": true,
+			"background.color": "#101010",
+			"background.cornerRadius": 12,
+			"background.paddingX": 24,
+			"background.paddingY": 16,
+			"background.offsetX": 5,
+			"background.offsetY": -5,
+		},
+		createdAt: "2026-07-21T00:00:00.000Z",
+	};
+
+	it("leaves the target's stroke and shadow params untouched (missing keys leave them alone)", () => {
+		const target = buildElement({
+			params: {
+				content: "keep me",
+				strokeColor: "#123456",
+				strokeWidth: 8,
+				shadowColor: "#abcdef",
+				shadowBlur: 30,
+				shadowOffsetX: 10,
+				shadowOffsetY: -10,
+			},
+		});
+
+		const patch = buildTextStylePatch({ element: target, style: preFixStyle });
+
+		expect(patch.params.strokeColor).toBe("#123456");
+		expect(patch.params.strokeWidth).toBe(8);
+		expect(patch.params.shadowColor).toBe("#abcdef");
+		expect(patch.params.shadowBlur).toBe(30);
+		expect(patch.params.shadowOffsetX).toBe(10);
+		expect(patch.params.shadowOffsetY).toBe(-10);
+	});
+
+	it("still applies every field the old style DID carry", () => {
+		const target = buildElement({ params: { content: "keep me", fontSize: 12 } });
+
+		const patch = buildTextStylePatch({ element: target, style: preFixStyle });
+
+		expect(patch.params.fontFamily).toBe("Inter");
+		expect(patch.params.fontSize).toBe(48);
+		expect(patch.params.color).toBe("#ff8800");
+		expect(patch.params["background.enabled"]).toBe(true);
+		expect(patch.params.content).toBe("keep me");
+	});
+
+	it("normalizes an old 16-key stored record without dropping it, and it has no stroke/shadow keys until re-saved", () => {
+		const reloaded = normalizeTextStyles({
+			raw: [
+				{
+					id: "style-old",
+					name: "Old lower third",
+					params: { color: "#ff8800", fontSize: 48 },
+					createdAt: "2026-07-21T00:00:00.000Z",
+				},
+			],
+		});
+
+		expect(reloaded).toHaveLength(1);
+		expect(reloaded[0].params.color).toBe("#ff8800");
+		expect(reloaded[0].params.strokeColor).toBeUndefined();
+		expect(reloaded[0].params.shadowColor).toBeUndefined();
+	});
+});
+
 describe("project style records", () => {
 	const style: TextStyle = {
 		id: "style-1",
@@ -313,6 +445,8 @@ describe("project style records", () => {
 		expect(reloaded[0].name).toBe("Lower third");
 		expect(reloaded[0].params.color).toBe("#ff8800");
 		expect(reloaded[0].params["background.enabled"]).toBe(true);
+		expect(reloaded[0].params.strokeColor).toBe("#000000");
+		expect(reloaded[0].params.shadowBlur).toBe(12);
 		expect(Object.keys(reloaded[0].params).sort()).toEqual(
 			[...TEXT_STYLE_PARAM_KEYS].sort(),
 		);
