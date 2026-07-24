@@ -31,6 +31,38 @@ export function clampSliderNumberValue({
 	return clamp({ value: snapToStep({ value, step }), min, max });
 }
 
+/**
+ * C4 fix: BOTH halves must show the SAME number for an out-of-range value
+ * (e.g. a timeline trim pushes a motion template's duration outside its
+ * declared durationRange with no clamp of its own). Previously the Slider
+ * read `clampSliderNumberValue(value)` while the NumberField's draft read the
+ * raw `value`, so an out-of-range value displayed two different numbers. One
+ * clamped value now feeds both halves. Exported for a headless unit test
+ * (this repo's `bun test` suite has no DOM).
+ */
+export function resolveSliderNumberPairDisplay({
+	value,
+	min,
+	max,
+	step,
+	maxFractionDigits,
+}: {
+	value: number;
+	min: number;
+	max: number;
+	step: number;
+	maxFractionDigits: number;
+}): { sliderValue: number; numberFieldDisplay: string } {
+	const sliderValue = clampSliderNumberValue({ value, min, max, step });
+	return {
+		sliderValue,
+		numberFieldDisplay: formatNumberForDisplay({
+			value: sliderValue,
+			maxFractionDigits,
+		}),
+	};
+}
+
 interface SliderNumberPairProps {
 	value: number;
 	min: number;
@@ -69,9 +101,18 @@ export function SliderNumberPair({
 	const maxFractionDigits = getFractionDigitsForStep({ step });
 	const clampValue = (nextValue: number) =>
 		clampSliderNumberValue({ value: nextValue, min, max, step });
+	// C4 fix: one clamped value feeds both halves, so an out-of-range `value`
+	// never shows a different number on the Slider than on the NumberField.
+	const { sliderValue, numberFieldDisplay } = resolveSliderNumberPairDisplay({
+		value,
+		min,
+		max,
+		step,
+		maxFractionDigits,
+	});
 
 	const draft = usePropertyDraft({
-		displayValue: formatNumberForDisplay({ value, maxFractionDigits }),
+		displayValue: numberFieldDisplay,
 		parse: (input) => {
 			const parsed = parseFloat(input);
 			if (Number.isNaN(parsed)) return null;
@@ -89,7 +130,7 @@ export function SliderNumberPair({
 				max={max}
 				step={step}
 				disabled={disabled}
-				value={[clampValue(value)]}
+				value={[sliderValue]}
 				onValueChange={([nextValue]) => onPreview(clampValue(nextValue))}
 				onValueCommit={() => onCommit()}
 			/>

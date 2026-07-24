@@ -91,6 +91,60 @@ function paramRange(param: ElementParamDefinition): {
 	};
 }
 
+export interface ParamResetField {
+	param: ElementParamDefinition;
+	path: AnimationPath;
+	value: number;
+}
+
+/**
+ * C1 fix: composes several param writes onto ONE evolving element instead of
+ * each starting fresh from the ORIGINAL element. `writeElementParamValue`
+ * returns a FULL TimelineElement (not a small patch), and
+ * `TimelineManager.previewElements` merges a new update shallowly onto the
+ * existing overlay (`{...existingOverlay, ...elementUpdates}`) - so a second
+ * full-element update completely clobbers the top-level keys (like `params`)
+ * the first write touched. Threading the previous write's result in as the
+ * base for the next write keeps every field's change in the SAME object, so
+ * a caller can preview all of them with one `previewElements` call. Exported
+ * for a headless unit test (this repo's `bun test` suite has no DOM).
+ */
+export function composeParamWrites({
+	element,
+	fields,
+	localTime,
+	isPlayheadWithinElementRange,
+}: {
+	element: TimelineElement;
+	fields: readonly ParamResetField[];
+	localTime: MediaTime;
+	isPlayheadWithinElementRange: boolean;
+}): TimelineElement {
+	let working = element;
+	for (const { param, path, value } of fields) {
+		const animatedChannel =
+			hasKeyframesForPath({
+				animations: working.animations,
+				propertyPath: path,
+			}) && isPlayheadWithinElementRange;
+		working = animatedChannel
+			? {
+					...working,
+					animations: upsertPathKeyframe({
+						animations: working.animations,
+						propertyPath: path,
+						time: localTime,
+						value,
+						channelLayout: getParamChannelLayout({ param }),
+						coerceValue: ({ value: next }) =>
+							coerceParamValue({ param, value: next }),
+					}),
+				}
+			: writeElementParamValue({ element: working, param, value });
+	}
+	return working;
+}
+
 /**
  * Premiere keyframe model for one property (or an X/Y pair sharing one
  * stopwatch). The stopwatch turns animation on/off — OFF removes every
@@ -469,8 +523,14 @@ function useSingleValueState({
 	};
 }
 
-/** One keyframable scalar property (Rotation, Opacity, Level): renders a row
- * around `useSingleValueState`'s resolved/default/reset logic. */
+/**
+ * One keyframable scalar property (Rotation, Opacity, Level): renders a row
+ * around `useSingleValueState`'s resolved/default/reset logic. C2 fix: the
+ * PARENT calls `useSingleValueState` once and passes the result down as
+ * `state`, instead of this row calling the identical hook again with the
+ * same ctx (the parent already resolves it for the group-reset aggregate,
+ * so every param was resolved twice per render on the drag-scrub hot path).
+ */
 function SingleRow({
 	ctx,
 	paramKey,
@@ -479,6 +539,7 @@ function SingleRow({
 	decimals,
 	suffix,
 	iconLabel,
+	state,
 }: {
 	ctx: RowContext;
 	paramKey: string;
@@ -487,8 +548,8 @@ function SingleRow({
 	decimals: number;
 	suffix?: string;
 	iconLabel?: string;
+	state: ReturnType<typeof useSingleValueState>;
 }) {
-	const state = useSingleValueState({ ctx, paramKey });
 	const { param, resolvedNumber, isDefault, onPreview, onCommit, onReset } = state;
 	const kfGroup = useKfGroup({
 		ctx,
@@ -621,9 +682,19 @@ function usePositionState({ ctx }: { ctx: RowContext }) {
 	};
 }
 
-/** Position: X and Y side by side, one stopwatch for both channels. */
-function PositionRow({ ctx }: { ctx: RowContext }) {
-	const pos = usePositionState({ ctx });
+/**
+ * Position: X and Y side by side, one stopwatch for both channels. C2 fix:
+ * the parent calls `usePositionState` once and passes the SAME result down
+ * as `state` (see `SingleRow`'s comment for why).
+ */
+function PositionRow({
+	ctx,
+	state,
+}: {
+	ctx: RowContext;
+	state: ReturnType<typeof usePositionState>;
+}) {
+	const pos = state;
 	const { paramX, paramY, x, y, isDefaultX, isDefaultY, previewX, previewY, commit } = pos;
 	const kfGroup = useKfGroup({
 		ctx,
@@ -792,9 +863,17 @@ function useScaleState({ ctx }: { ctx: RowContext }) {
 /**
  * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
  * drives both axes; unchecked → separate Scale Height / Scale Width rows.
+ * C2 fix: the parent calls `useScaleState` once and passes the SAME result
+ * down as `state` (see `SingleRow`'s comment for why).
  */
-function ScaleRows({ ctx }: { ctx: RowContext }) {
-	const scaleState = useScaleState({ ctx });
+function ScaleRows({
+	ctx,
+	state,
+}: {
+	ctx: RowContext;
+	state: ReturnType<typeof useScaleState>;
+}) {
+	const scaleState = state;
 	const { paramX, paramY, sx, sy, defaultScale, isDefaultSx, isDefaultSy, previewScale, commit } =
 		scaleState;
 	const [uniform, setUniform] = useState(sx === sy);
@@ -1010,13 +1089,58 @@ export function EffectControlsTab({
 		scaleState.isAnyNonDefault ||
 		!rotationState.isDefault;
 	const resetMotionGroup = () => {
-		// Preview every field first, ONE commit last: commitPreview() flushes the
-		// whole accumulated preview overlay as a single TracksSnapshotCommand, so
-		// resetting Position + Scale + Rotation together is one undo step, not three.
-		positionState.previewX(positionState.defaultX);
-		positionState.previewY(positionState.defaultY);
-		scaleState.previewScale(scaleState.defaultScale, "both");
-		rotationState.onPreview(rotationState.defaultNumber);
+		// C1 fix: calling previewX/previewY/previewScale/rotation.onPreview
+		// separately each built a FULL element patch from the ORIGINAL element,
+		// and previewElements' shallow overlay merge let each call clobber the
+		// previous field's reset - only the LAST call (Rotation) ever survived.
+		// composeParamWrites threads every write through the SAME evolving
+		// element, so one previewElements call carries Position + Scale +
+		// Rotation together, then ONE commit lands it as one undo step.
+		const fields: ParamResetField[] = [];
+		if (positionState.paramX) {
+			fields.push({
+				param: positionState.paramX,
+				path: POSITION_X,
+				value: positionState.defaultX,
+			});
+		}
+		if (positionState.paramY) {
+			fields.push({
+				param: positionState.paramY,
+				path: POSITION_Y,
+				value: positionState.defaultY,
+			});
+		}
+		if (scaleState.paramX) {
+			fields.push({
+				param: scaleState.paramX,
+				path: SCALE_X,
+				value: scaleState.defaultScale,
+			});
+		}
+		if (scaleState.paramY) {
+			fields.push({
+				param: scaleState.paramY,
+				path: SCALE_Y,
+				value: scaleState.defaultScale,
+			});
+		}
+		if (rotationState.param) {
+			fields.push({
+				param: rotationState.param,
+				path: ROTATE,
+				value: rotationState.defaultNumber,
+			});
+		}
+		const working = composeParamWrites({
+			element,
+			fields,
+			localTime,
+			isPlayheadWithinElementRange,
+		});
+		editor.timeline.previewElements({
+			updates: [{ trackId, elementId: element.id, updates: working }],
+		});
 		editor.timeline.commitPreview();
 	};
 
@@ -1034,8 +1158,8 @@ export function EffectControlsTab({
 				isAnyNonDefault={motionIsAnyNonDefault}
 				onResetGroup={resetMotionGroup}
 			>
-				<PositionRow ctx={ctx} />
-				<ScaleRows ctx={ctx} />
+				<PositionRow ctx={ctx} state={positionState} />
+				<ScaleRows ctx={ctx} state={scaleState} />
 				<SingleRow
 					ctx={ctx}
 					paramKey={ROTATE}
@@ -1044,6 +1168,7 @@ export function EffectControlsTab({
 					decimals={1}
 					suffix="°"
 					iconLabel="∠"
+					state={rotationState}
 				/>
 			</FxGroup>
 			<FxGroup
@@ -1060,6 +1185,7 @@ export function EffectControlsTab({
 					decimals={0}
 					suffix="%"
 					iconLabel="O"
+					state={opacityState}
 				/>
 			</FxGroup>
 			{findParam(element, VOLUME) && (
@@ -1077,6 +1203,7 @@ export function EffectControlsTab({
 						decimals={1}
 						suffix=" dB"
 						iconLabel="♪"
+						state={volumeState}
 					/>
 					<MuteRow ctx={ctx} />
 					<AudioToolsRow ctx={ctx} />

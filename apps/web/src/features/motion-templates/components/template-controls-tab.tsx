@@ -78,8 +78,20 @@ export function TemplateControlsTab({
 	}, [marker, template, accentSeed]);
 	const [variables, setVariables] =
 		useState<TemplateVariables>(initialVariables);
+	// C4 fix: a timeline trim can push element.duration outside the template's
+	// declared durationRange (trims never clamp to it). Seed the field already
+	// clamped so the tab opens showing a value consistent with what the
+	// Duration slider can express, instead of one only the number half could
+	// show.
+	const rawDurationSec = element.duration / TICKS_PER_SECOND;
+	const seededDurationSec = template
+		? Math.min(
+				template.durationRange.max,
+				Math.max(template.durationRange.min, rawDurationSec),
+			)
+		: rawDurationSec;
 	const [durationSec, setDurationSec] = useState(
-		Number((element.duration / TICKS_PER_SECOND).toFixed(2)),
+		Number(seededDurationSec.toFixed(2)),
 	);
 	const [scale, setScale] = useState(element.motionTemplate?.scale ?? 1);
 	// The shared SliderNumberPair splits every edit into onPreview (may fire
