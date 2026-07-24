@@ -86,6 +86,13 @@ function NudgeFramesField({
 		}
 	};
 
+	// C3 fix: a proper cancel path (revert the draft to the committed value)
+	// instead of relying on NumberField's legacy commit-on-blur fallback, so
+	// Escape here reverts like every other NumberField consumer.
+	const cancel = () => {
+		setDraft(String(value));
+	};
+
 	return (
 		<NumberField
 			value={draft}
@@ -95,6 +102,7 @@ function NudgeFramesField({
 			allowExpressions={false}
 			onChange={(event) => setDraft(event.target.value)}
 			onBlur={commit}
+			onCancel={cancel}
 		/>
 	);
 }

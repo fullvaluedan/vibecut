@@ -40,6 +40,24 @@ export function getScrubPrecisionMultiplier({
 	return 1;
 }
 
+/**
+ * C3 fix: Escape must only suppress the blur that follows it (skipping the
+ * normal onBlur-commit path) when the consumer actually wired an `onCancel` -
+ * a real revert path that puts a value back. Without `onCancel`, suppressing
+ * the commit anyway stranded the field on an uncommitted draft forever (the
+ * Settings nudge-frames field: `onBlur={commit}`, no `onCancel`, `key={value}`
+ * so nothing ever remounts it and re-seeds the draft). Legacy consumers with
+ * no `onCancel` keep the old commit-on-blur behavior instead. Exported for a
+ * headless unit test (this repo's `bun test` suite has no DOM).
+ */
+export function shouldSuppressBlurCommitOnEscape({
+	hasOnCancel,
+}: {
+	hasOnCancel: boolean;
+}): boolean {
+	return hasOnCancel;
+}
+
 type ScrubRange = {
 	from: number;
 	to: number;
@@ -280,8 +298,14 @@ function NumberField({
 					event.currentTarget.blur();
 				} else if (event.key === "Escape") {
 					// Escape reverts: run the distinct cancel path, then blur
-					// WITHOUT letting that blur also commit.
-					isCancellingRef.current = true;
+					// WITHOUT letting that blur also commit - but only when there is
+					// an onCancel to actually do the reverting (C3 fix). With no
+					// onCancel, suppressing the blur commit anyway would strand the
+					// field on an uncommitted draft, so it falls back to the legacy
+					// commit-on-blur behavior instead.
+					if (shouldSuppressBlurCommitOnEscape({ hasOnCancel: Boolean(onCancel) })) {
+						isCancellingRef.current = true;
+					}
 					onCancel?.();
 					event.currentTarget.blur();
 				}
