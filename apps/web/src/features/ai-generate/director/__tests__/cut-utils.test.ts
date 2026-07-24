@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mergeDetectedCuts, normalizeWord, stripWordsFromRemoval } from "../cut-utils";
+import {
+	mergeAcceptedRemovalSpans,
+	mergeDetectedCuts,
+	normalizeWord,
+	stripWordsFromRemoval,
+} from "../cut-utils";
 import type { DirectorOp } from "@framecut/hf-bridge";
 
 const op = (
@@ -36,6 +41,45 @@ describe("mergeDetectedCuts", () => {
 			extraOps: [op({ startSec: 4, endSec: 4.2, id: "z" })],
 		});
 		expect(merged).toHaveLength(2);
+	});
+});
+
+describe("mergeAcceptedRemovalSpans", () => {
+	test("merges overlapping and edge-touching accepted removals into one span", () => {
+		const merged = mergeAcceptedRemovalSpans([
+			op({ startSec: 0, endSec: 5 }),
+			op({ startSec: 4, endSec: 8 }), // overlaps the first
+			op({ startSec: 8, endSec: 10 }), // touches the previous edge
+		]);
+		expect(merged).toEqual([{ startSec: 0, endSec: 10 }]);
+	});
+
+	test("keeps disjoint accepted removals separate and start-sorted", () => {
+		const merged = mergeAcceptedRemovalSpans([
+			op({ startSec: 10, endSec: 15 }),
+			op({ startSec: 0, endSec: 5 }),
+		]);
+		expect(merged).toEqual([
+			{ startSec: 0, endSec: 5 },
+			{ startSec: 10, endSec: 15 },
+		]);
+	});
+
+	test("excludes opt-in rows and non-removal ops", () => {
+		const merged = mergeAcceptedRemovalSpans([
+			op({ startSec: 0, endSec: 5, defaultAccept: false }), // OFFERED: excluded
+			op({ startSec: 6, endSec: 8, op: "keep" }), // non-removal: excluded
+			op({ startSec: 10, endSec: 12 }), // accepted removal: kept
+			op({ startSec: 20, endSec: 22, op: "take_select" }), // accepted removal: kept
+		]);
+		expect(merged).toEqual([
+			{ startSec: 10, endSec: 12 },
+			{ startSec: 20, endSec: 22 },
+		]);
+	});
+
+	test("empty in, empty out", () => {
+		expect(mergeAcceptedRemovalSpans([])).toEqual([]);
 	});
 });
 

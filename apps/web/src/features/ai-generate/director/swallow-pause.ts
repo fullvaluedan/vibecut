@@ -45,6 +45,7 @@ import type { DirectorOp } from "@framecut/hf-bridge";
 import { ENERGY_WINDOW_SEC } from "./audio-features";
 import { DEFAULT_SNAP_SEARCH_SEC, nearestLowEnergyTime } from "./snap-cut";
 import { SILENCE_RMS_CEILING } from "./hallucination-guard";
+import { stableCutId } from "./cut-utils";
 
 /** Room tone left between a widened cut edge and the neighboring word
  * (mirrors remove-silences PADDING_SEC). */
@@ -222,34 +223,59 @@ export function swallowPauseBounds({
 	// OFFERED, so a plan with no retake/structural/backstop rows nearby is
 	// untouched by this change.
 	const acceptedRemovals = clipByStartOrder(removals.filter(isAccepted));
-	// Pass 2: trim each OFFERED removal against the now-frozen accepted
-	// territory before letting offered rows fight over what is left. A row
-	// fully inside an accepted cut disappears (its content is already gone);
-	// one straddling both edges of an accepted cut keeps only the earlier
-	// remainder (conservative, deterministic; this case is not expected to
-	// occur in practice).
-	const trimAgainstAccepted = (op: DirectorOp): DirectorOp => {
-		let startSec = op.startSec;
-		let endSec = op.endSec;
+	// Pass 2: SUBTRACT the now-frozen accepted territory from each OFFERED
+	// removal before letting offered rows fight over what is left. The accepted
+	// islands are disjoint and start-sorted (clipByStartOrder above), so one
+	// offered interval can survive as ZERO sub-spans (fully covered by accepted
+	// cuts), ONE (untouched, or trimmed on a side), or MANY (it spanned the GAPS
+	// between two or more accepted islands: offered [3,20] minus accepted [0,5]
+	// and [10,15] leaves BOTH [5,10] and [15,20]). The old single-span return
+	// could not express that many-survivor answer and silently discarded every
+	// remainder past the first, erasing a survivor that overlapped nothing.
+	// Each surviving sub-span is a clone of the offered op. A single untouched or
+	// single-side-trimmed survivor keeps the original id (byte-identical to the
+	// pre-fix behavior); a multi-span result re-keys every clone on its own
+	// coordinates so the ids stay deterministic AND distinct (mirrors
+	// stableCutId's coordinate keying; the `.s<hash>` suffix keeps the original
+	// id family so id-prefix consumers still recognize it).
+	const subtractAccepted = (op: DirectorOp): DirectorOp[] => {
+		const survivors: { startSec: number; endSec: number }[] = [];
+		let cursor = op.startSec;
 		for (const acc of acceptedRemovals) {
-			if (acc.startSec >= endSec || startSec >= acc.endSec) {
-				continue; // no overlap with this accepted removal
+			if (acc.endSec <= cursor) continue; // entirely behind the cursor
+			if (acc.startSec >= op.endSec) break; // past the offered interval
+			if (acc.startSec > cursor) {
+				survivors.push({ startSec: cursor, endSec: Math.min(acc.startSec, op.endSec) });
 			}
-			if (startSec < acc.startSec && endSec <= acc.endSec) {
-				endSec = acc.startSec;
-			} else if (startSec >= acc.startSec && endSec > acc.endSec) {
-				startSec = acc.endSec;
-			} else if (startSec >= acc.startSec && endSec <= acc.endSec) {
-				endSec = startSec; // fully swallowed by an accepted cut
-			} else {
-				endSec = acc.startSec; // straddles both edges: keep the earlier side
-			}
+			cursor = Math.max(cursor, acc.endSec);
+			if (cursor >= op.endSec) break;
 		}
-		return { ...op, startSec, endSec };
+		if (cursor < op.endSec) {
+			survivors.push({ startSec: cursor, endSec: op.endSec });
+		}
+		const kept = survivors.filter((s) => s.endSec > s.startSec);
+		if (
+			kept.length === 1 &&
+			kept[0].startSec === op.startSec &&
+			kept[0].endSec === op.endSec
+		) {
+			return [op]; // nothing accepted touched this interval: unchanged
+		}
+		if (kept.length <= 1) {
+			// Zero survivors (fully swallowed) or a single-side trim: same id as
+			// the old single-span path emitted.
+			return kept.map((s) => ({ ...op, startSec: s.startSec, endSec: s.endSec }));
+		}
+		return kept.map((s) => ({
+			...op,
+			id: `${op.id}.s${stableCutId(`${s.startSec.toFixed(3)}:${s.endSec.toFixed(3)}`)}`,
+			startSec: s.startSec,
+			endSec: s.endSec,
+		}));
 	};
 	const offeredRemovals = removals.filter((op) => !isAccepted(op));
 	const trimmedOffered = offeredRemovals
-		.map(trimAgainstAccepted)
+		.flatMap(subtractAccepted)
 		.filter((op) => op.endSec > op.startSec);
 	// Pass 3: remaining OFFERED-vs-OFFERED overlaps resolve by start order
 	// among themselves, same rule as before.

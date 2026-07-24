@@ -1047,6 +1047,11 @@ export async function buildDirectorProposals(
 	// fragment-less run is byte-identical to the pre-verify pipeline.
 	let verified = withStructural;
 	let joinVerdicts: VerifyJoinVerdict[] = [];
+	// Hoisted so the REAL assembly pass below can REUSE it whenever verify changed
+	// nothing (round-12 B2): the preview is a pure run of the SAME chain on
+	// `withStructural`, so re-running it on an unchanged `verified` would burn the
+	// six-stage chain for a byte-identical result.
+	let preview: ReturnType<typeof assembleFinalCut> | undefined;
 	if (llm.verify) {
 		const verifyWords: RetakeWord[] = words.map((w) => ({
 			text: w.text,
@@ -1060,8 +1065,11 @@ export async function buildDirectorProposals(
 		});
 		// Final-read preview (round 12 U2/KTD4): run the pure assembly tail once on
 		// the pre-verify ops to materialize the ASSEMBLED result and the join
-		// fragments it strands - the questions the extended verify prompt asks.
-		const preview = assembleFinalCut(withStructural);
+		// fragments it strands - the questions the extended verify prompt asks. The
+		// preview MUST run here (not behind the candidate/fragment gate below):
+		// the join fragments are DERIVED from it, so it is what tells us whether
+		// any fragment exists at all.
+		preview = assembleFinalCut(withStructural);
 		const joinFragments = collectJoinFragments({
 			ops: preview.operations,
 			joinOps: preview.joinCuts,
@@ -1108,8 +1116,14 @@ export async function buildDirectorProposals(
 	}
 	// The REAL assembly pass: the post-verify ops through the same deterministic
 	// tail the preview ran (byte-identical to the pre-U2 inline chain when verify
-	// is absent or judged nothing).
-	const { operations, trimmed, joinCuts } = assembleFinalCut(verified);
+	// is absent or judged nothing). When verify changed nothing - `verified` is
+	// still the SAME reference as `withStructural` (nothing to verify, or verify
+	// threw / was skipped) - the preview already ran this exact pure chain on this
+	// exact input, so REUSE it instead of recomputing the whole six-stage chain
+	// (round-12 B2). `applyVerifyVerdicts` always returns a fresh array, so a
+	// real verdict makes `verified !== withStructural` and forces the recompute.
+	const { operations, trimmed, joinCuts } =
+		preview && verified === withStructural ? preview : assembleFinalCut(verified);
 	// Final-read promotion (round 12 U2/R3): a confident "swallow" verdict flips
 	// its OFFERED join row to checked; "keep", low confidence, an unknown id, or a
 	// failed verify leave every row exactly as detected (fail-open).
