@@ -27,6 +27,8 @@ import type {
 	VerifyCandidate,
 	VerifyJoinFragment,
 	VerifyJoinVerdict,
+	VerifyHarmCandidate,
+	VerifyHarmVerdict,
 	VerifyVerdict,
 } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
@@ -72,6 +74,8 @@ import {
 	applyVerifyVerdicts,
 	collectVerifyCandidates,
 } from "./verify-apply";
+import { applyHarmVerdicts, collectHarmCandidates } from "./p3-final-read";
+import { applyFragmentationGuard, classifyFragmentation } from "./fragmentation-guard";
 import {
 	buildAssembledTranscript,
 	collectJoinFragments,
@@ -212,10 +216,18 @@ export interface DirectorVerifyRequest {
 	/** OFFERED join-fragment rows the final read adjudicates: op id, stranded
 	 * text, span, and the kept context each side (round 12 U2/R3). */
 	joinFragments?: VerifyJoinFragment[];
+	/** DEFAULT-ACCEPTED cuts the P3 final read harm/texture-reviews (round 14 U2):
+	 * op id, removed text, span, and the kept context each side. Rides the payload,
+	 * so the eval cache busts when the candidate set changes. */
+	harmCandidates?: VerifyHarmCandidate[];
 	taste?: string;
 }
 export interface DirectorVerifyResponse {
-	plan?: { verdicts?: VerifyVerdict[]; joinVerdicts?: VerifyJoinVerdict[] };
+	plan?: {
+		verdicts?: VerifyVerdict[];
+		joinVerdicts?: VerifyJoinVerdict[];
+		harmVerdicts?: VerifyHarmVerdict[];
+	};
 }
 
 /**
@@ -1201,6 +1213,11 @@ export async function buildDirectorProposals(
 	// fragment-less run is byte-identical to the pre-verify pipeline.
 	let verified = withP2;
 	let joinVerdicts: VerifyJoinVerdict[] = [];
+	// P3 final read (round 14 U2): the harm/texture verdicts the verify v7 pass
+	// returns over the DEFAULT-ACCEPTED cuts, and the fragmentation guard's
+	// borderline flags the verify call texture-judges. Both are hoisted so the
+	// deterministic guard + harm demote below run whether or not verify fired.
+	let harmVerdicts: VerifyHarmVerdict[] = [];
 	// Hoisted so the REAL assembly pass below can REUSE it whenever verify changed
 	// nothing (round-12 B2): the preview is a pure run of the SAME chain on
 	// `withP2`, so re-running it on an unchanged `verified` would burn the
@@ -1229,8 +1246,28 @@ export async function buildDirectorProposals(
 			joinOps: preview.joinCuts,
 			words,
 		});
-		if (verifyCandidates.length > 0 || joinFragments.length > 0) {
-			onProgress?.("Verifying proposed cuts...");
+		// P3 duties (b) revert-harmful and (c) texture (round 14 U2): the fragmentation
+		// guard classifies the assembled preview (join AUTO slivers included, so a micro
+		// abutting a real cut reads as a companion) and hands its BORDERLINE micro-cuts,
+		// plus the substantial default-accepted cuts, to the SAME verify call. Harm
+		// candidates target default-accepted removals, which no recall/join verdict
+		// moves, so building them off the preview is stable through verdict application.
+		const previewForGuard = [...preview.operations, ...preview.joinCuts];
+		const fragBorderline = classifyFragmentation({
+			ops: previewForGuard,
+			words,
+		}).borderlineIds;
+		const harmCandidates = collectHarmCandidates({
+			ops: preview.operations,
+			words,
+			borderlineIds: fragBorderline,
+		});
+		if (
+			verifyCandidates.length > 0 ||
+			joinFragments.length > 0 ||
+			harmCandidates.length > 0
+		) {
+			onProgress?.("Final read: verifying the assembled cut...");
 			try {
 				const vData = await llm.verify({
 					candidates: verifyCandidates,
@@ -1248,6 +1285,7 @@ export async function buildDirectorProposals(
 								}),
 							}
 						: {}),
+					...(harmCandidates.length > 0 ? { harmCandidates } : {}),
 					taste: taste || undefined,
 				});
 				const verdicts = Array.isArray(vData?.plan?.verdicts)
@@ -1261,9 +1299,13 @@ export async function buildDirectorProposals(
 				joinVerdicts = Array.isArray(vData?.plan?.joinVerdicts)
 					? vData.plan.joinVerdicts
 					: [];
+				harmVerdicts = Array.isArray(vData?.plan?.harmVerdicts)
+					? vData.plan.harmVerdicts
+					: [];
 			} catch {
-				// route error / degraded: candidates pass through unverified and every
-				// join row stays OFFERED (R4 fail-open, never fail the run)
+				// route error / degraded: candidates pass through unverified, every join
+				// row stays OFFERED, and no harm demote fires - the deterministic
+				// fragmentation guard below still runs (R4 fail-open, never fail the run).
 			}
 			abort();
 		}
@@ -1287,10 +1329,45 @@ export async function buildDirectorProposals(
 			: joinCuts;
 	// Appended then re-sorted by start (the pinned op-list invariant); with zero
 	// joins the list is byte-identical to the join-less pipeline.
-	const finalOperations =
+	const mergedOperations =
 		adjudicatedJoins.length > 0
 			? [...operations, ...adjudicatedJoins].sort((a, b) => a.startSec - b.startSec)
 			: operations;
+	// P3 final read (round 14 U2), applied to the WHOLE final op list in two steps,
+	// both of which only ever DEMOTE or MERGE (never delete a row):
+	//  1. Harm/texture revert: a confident v7 "revert" verdict demotes its
+	//     default-accepted cut to offered-off, so Dan's select-all no longer ships a
+	//     cut that breaks the read. When verify was absent or failed, harmVerdicts is
+	//     empty and this is a no-op (the deterministic guard still runs - the degrade
+	//     path is the guard alone, never a failed run).
+	//  2. Fragmentation guard: the deterministic pre-pass merges wordless-breath
+	//     stutter gaps into their neighbor cut and demotes isolated word-bearing
+	//     micro-cuts, leaving the borderline ones (already texture-judged in step 1).
+	const harmReverted = applyHarmVerdicts({
+		ops: mergedOperations,
+		verdicts: harmVerdicts,
+	});
+	const fragGuard = applyFragmentationGuard({ ops: harmReverted, words });
+	const finalOperations = fragGuard.operations;
+	const p3DemotedCount =
+		harmReverted.filter((op) => op.defaultAccept === false).length -
+		mergedOperations.filter((op) => op.defaultAccept === false).length +
+		fragGuard.demotedIds.length;
+	if (p3DemotedCount > 0 || fragGuard.mergedIds.length > 0) {
+		const bits: string[] = [];
+		if (p3DemotedCount > 0)
+			bits.push(
+				`offered ${p3DemotedCount} cut${p3DemotedCount === 1 ? "" : "s"} for review`,
+			);
+		if (fragGuard.mergedIds.length > 0)
+			bits.push(
+				`tidied ${fragGuard.mergedIds.length} stutter${fragGuard.mergedIds.length === 1 ? "" : "s"}`,
+			);
+		onNotice?.({
+			kind: "info",
+			message: `Director final read: ${bits.join(" and ")}.`,
+		});
+	}
 	// Spans the APPLY-time coalescer must never swallow (review F5): every plan-time
 	// keeper (a word-free protected pause has no word-guard protection at apply) plus
 	// each cut justify reverted just above (re-swallowing it would re-create the exact

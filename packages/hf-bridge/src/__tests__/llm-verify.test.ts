@@ -428,6 +428,7 @@ describe("sanitizeVerifyPlan (join verdicts, round 12 U2)", () => {
 		).toEqual({
 			verdicts: [],
 			joinVerdicts: [{ id: "join-abc", verdict: "swallow", confidence: 0.8 }],
+			harmVerdicts: [],
 		});
 	});
 
@@ -445,6 +446,115 @@ describe("sanitizeVerifyPlan (join verdicts, round 12 U2)", () => {
 	});
 });
 
+describe("buildVerifyPrompt (harm/texture block, round 14 U2)", () => {
+	const harmA = {
+		id: "cut-abc",
+		startSec: 30.0,
+		endSec: 33.0,
+		removedText: "the whole middle of the point",
+		contextBefore: "so the reason this matters",
+		contextAfter: "and that is why we ship it",
+		texture: false,
+	};
+	const harmB = {
+		id: "cut-def",
+		startSec: 44.0,
+		endSec: 44.3,
+		removedText: "uh",
+		contextBefore: "hit the button",
+		contextAfter: "next step",
+		texture: true,
+	};
+	const prompt = buildVerifyPrompt({
+		candidates: [retakeC],
+		lines: LINES,
+		harmCandidates: [harmA, harmB],
+	});
+
+	test("renders each candidate id, the shipped seam, and the micro-cut tag", () => {
+		expect(prompt).toContain("[H0 id=cut-abc]");
+		expect(prompt).toContain("[H1 id=cut-def]");
+		expect(prompt).toContain("(micro-cut)");
+		expect(prompt).toContain("[CUT]");
+		expect(prompt).toContain("DEFAULT-ACCEPTED CUTS");
+	});
+
+	test("extends the JSON instruction with a harmVerdicts example", () => {
+		expect(prompt).toContain('"harmVerdicts":[{"id":"cut-abc","verdict":"keep","confidence":0.9}');
+	});
+
+	test("without harm candidates there is no harm block or hint", () => {
+		const bare = buildVerifyPrompt({ candidates: [retakeC], lines: LINES });
+		expect(bare).not.toContain("DEFAULT-ACCEPTED CUTS");
+		expect(bare).not.toContain("harmVerdicts");
+	});
+});
+
+describe("sanitizeVerifyPlan (harm verdicts, round 14 U2)", () => {
+	const harmA = {
+		id: "cut-abc",
+		startSec: 30,
+		endSec: 33,
+		removedText: "x",
+		contextBefore: "a",
+		contextAfter: "b",
+		texture: false,
+	};
+	const harmB = { ...harmA, id: "cut-def" };
+	const args = {
+		candidates: [retakeC],
+		lines: LINES,
+		words: WORDS,
+		harmCandidates: [harmA, harmB],
+	};
+
+	test("well-formed keep/revert verdicts pass through with clamped confidence", () => {
+		const plan = sanitizeVerifyPlan({
+			raw: {
+				verdicts: [],
+				harmVerdicts: [
+					{ id: "cut-abc", verdict: "revert", confidence: 0.9 },
+					{ id: "cut-def", verdict: "keep", confidence: 1.4 }, // clamps to 1
+				],
+			},
+			...args,
+		});
+		expect(plan.harmVerdicts).toEqual([
+			{ id: "cut-abc", verdict: "revert", confidence: 0.9 },
+			{ id: "cut-def", verdict: "keep", confidence: 1 },
+		]);
+	});
+
+	test("unknown id, unknown verdict, bad confidence, and duplicates are dropped", () => {
+		const plan = sanitizeVerifyPlan({
+			raw: {
+				verdicts: [],
+				harmVerdicts: [
+					{ id: "cut-zzz", verdict: "revert", confidence: 0.9 }, // not sent
+					{ id: "cut-abc", verdict: "maybe", confidence: 0.9 }, // unknown verdict
+					{ id: "cut-abc", verdict: "revert", confidence: Number.NaN }, // non-finite
+					{ id: "cut-def", verdict: "keep", confidence: 0.6 }, // valid, first for its id
+					{ id: "cut-def", verdict: "revert", confidence: 0.9 }, // duplicate id
+				],
+			},
+			...args,
+		});
+		expect(plan.harmVerdicts).toEqual([
+			{ id: "cut-def", verdict: "keep", confidence: 0.6 },
+		]);
+	});
+
+	test("a malformed or absent harmVerdicts array yields zero harm verdicts", () => {
+		expect(
+			sanitizeVerifyPlan({ raw: { verdicts: [] }, ...args }).harmVerdicts,
+		).toEqual([]);
+		expect(
+			sanitizeVerifyPlan({ raw: { verdicts: [], harmVerdicts: "nope" }, ...args })
+				.harmVerdicts,
+		).toEqual([]);
+	});
+});
+
 describe("planVerify fail-open (R4)", () => {
 	// A custom endpoint that would REJECT fast if dispatched - proves the empty-
 	// candidates guard returns BEFORE any LLM call (a live call would fetch this host).
@@ -457,7 +567,10 @@ describe("planVerify fail-open (R4)", () => {
 	test("empty candidates AND empty fragments -> empty verdicts WITHOUT invoking the LLM", async () => {
 		await expect(
 			planVerify({ candidates: [], lines: LINES, words: WORDS, auth: NO_CALL_AUTH }),
-		).resolves.toEqual({ plan: { verdicts: [], joinVerdicts: [] }, usage: null });
+		).resolves.toEqual({
+			plan: { verdicts: [], joinVerdicts: [], harmVerdicts: [] },
+			usage: null,
+		});
 		await expect(
 			planVerify({
 				candidates: [],
@@ -466,7 +579,10 @@ describe("planVerify fail-open (R4)", () => {
 				joinFragments: [],
 				auth: NO_CALL_AUTH,
 			}),
-		).resolves.toEqual({ plan: { verdicts: [], joinVerdicts: [] }, usage: null });
+		).resolves.toEqual({
+			plan: { verdicts: [], joinVerdicts: [], harmVerdicts: [] },
+			usage: null,
+		});
 	});
 
 	test("join fragments ALONE fire the pass (round 12 U2: the call is attempted)", async () => {

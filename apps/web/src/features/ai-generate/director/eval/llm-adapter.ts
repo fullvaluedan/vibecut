@@ -437,6 +437,7 @@ export function createEvalLlmAdapter(
 								words: input.words,
 								assembledTranscript: input.assembledTranscript,
 								joinFragments: input.joinFragments,
+								harmCandidates: input.harmCandidates,
 								taste: input.taste,
 								auth,
 							});

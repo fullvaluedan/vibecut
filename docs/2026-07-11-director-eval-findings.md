@@ -585,3 +585,50 @@ keys moved). Bought: a real 3.4s dead pause is auto-cut again, the diag gate is 
 keeper-swap hole (paraphrase groups promoted to AUTO after a swap) is closed. Kept on the strength
 of the mechanism plus a within-noise delta; if hermes AUTO essLost drifts upward across future
 3-run means, this postscript is the first suspect to re-examine.
+
+## ADDENDUM 13a (2026-07-24): round 14 U2, P3 final read (revert-harmful + fragmentation guard), VERIFY v6 -> v7
+
+Round 14 adds the third pass Dan asked for: a final read over the assembled result of P1+P2 that
+is the REAL safety net, because he select-alls and applies everything (Applied 208 of 208). Three
+duties, built so the deterministic half never depends on the LLM half:
+
+- **(a) Last recall sweep** is unchanged: the verify pass still promotes confident join-fragment
+  swallows (round 12/13 machinery, join wording preserved verbatim so its precision does not move).
+- **(b) Revert-harmful** is a new v7 verdict path. The verify call now also receives the
+  DEFAULT-ACCEPTED content cuts (substantial removals, plus the guard's borderline micro-cuts) with
+  the assembled seam each leaves, and returns keep/revert per id. A confident "revert" (>= 0.8)
+  DEMOTES the cut to offered-off with a reason; it NEVER deletes the row (the ADDENDUM-12 mandate: a
+  destroyed kept line costs far more than an extra review row). The deterministic silence/dead-air/
+  disfluency categories are exempt from harm review - they remove non-speech ground truth and cannot
+  sever a sentence, so the 24s dead-air tail is never a revert candidate. Lives in
+  `p3-final-read.ts` (`collectHarmCandidates`/`applyHarmVerdicts`).
+- **(c) Fragmentation guard** is a new DETERMINISTIC pure module, `fragmentation-guard.ts`, for
+  Dan's "randomly tiny cuts that aren't helpful". It classifies each default-accepted micro removal
+  (< 0.5s, not a trusted disfluency/join category): a COMPANION of a real cut is left alone; a
+  wordless breath gap to a neighbor is MERGED (bridging only silence); an isolated word-bearing chop
+  is DEMOTED to offered-off; a near-a-real-cut word-gap case is BORDERLINE and handed to the v7
+  texture review rather than silently dropped. Its own bun tests pin every branch; thresholds are
+  named, documented constants.
+
+Wiring (`build-director-proposals.ts`): P3 runs after the existing verify stage, on the WHOLE final
+op list. A P3 LLM failure degrades to the deterministic guard alone (harm verdicts empty, the guard
+still merges/demotes) - it never fails the run. `VERIFY_PROMPT_VERSION` bumped 6 -> 7 (the harm
+block is added AFTER the join block, join wording untouched). No new DirectorOpCategory (a demote
+reuses the op's original category), so the five-piece category checklist does not apply; the new
+verdict kinds (harm keep/revert) carry their own type + schema + sanitizer + apply + docs.
+
+**Gate 5 (diag-join-verdicts, FRESH v7 draws, runIndex 0).** The v7 bump re-keys every verify draw,
+so these are new draws and the historical 11/14 does not bind; precision does. Result: precision
+9/10 (1 wrong swallow), and that one wrong swallow is the SAME pre-existing "Let's find out."
+(hermes, 2492.7s) the v6 cache already carried - the join wording did not become more aggressive on
+kept lines. Recall 9/16 on this fresh draw (fragment set differs from v6's 14; recall is
+non-binding here). The other two deliberate keeps ("and look at that", "I had some confusion") stay
+offered. diag-join-the-group: ASSERTIONS PASSED, merged AUTO 29.1s in band. Suites 1748 (apps/web) /
+210 (hf-bridge) / tsc clean.
+
+**Run ledger (taste v2):** left untouched on purpose. A P3 demote is already recorded by the
+existing per-category tallies - it lands as a `defaultAccept:false` row, counted in `proposed` but
+not `defaultAccepted` for its own category, exactly as any offered row is. Recording a SEPARATE
+"P3 demoted N" fact would need a new counts field plus a provenance flag on the op to tell a P3
+demote from a recall offered row (both are just `defaultAccept:false`), i.e. a forced seam; per the
+plan, none was added.
