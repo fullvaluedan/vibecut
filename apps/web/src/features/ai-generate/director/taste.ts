@@ -1,5 +1,5 @@
 /**
- * Director taste module (U6 + Round-2 U4) — the self-learning seed.
+ * Director taste module (U6 + Round-2 U4) - the self-learning seed.
  *
  * The Review modal's per-op accept/reject decisions are the ground-truth signal:
  * this module aggregates them per CUT CATEGORY (duplicate / filler / pacing /
@@ -7,12 +7,31 @@
  * a compact plain-language note injected into the next Director prompt. Learning
  * per category (not just per op kind) lets it distinguish "this editor keeps
  * fillers" from "rejects tangent cuts". Device-local (localStorage), no network
- * I/O, clearable in Settings → AI. Mirrors `preference-store.ts`.
+ * I/O, clearable in Settings -> AI. Mirrors `preference-store.ts`.
+ *
+ * Taste v2 (U3, run ledger): the tallies above are session/device-local and
+ * reset on a new browser profile. `run-ledger.ts` rides the PROJECT instead (an
+ * append-capped history of past runs), so it is now the source of truth for the
+ * category list/labels and op-category resolution (both imported below).
+ * This module has no editor/project access of its own (it must stay safe to
+ * import from anywhere, including code that mocks `@/core` for unrelated unit
+ * tests - a real, observed conflict during this round), so the ledger's
+ * compact per-project note is PUSHED in rather than pulled: `ledgerNote` is a
+ * plain string field, kept in sync by `DirectorDockShell` (the one
+ * always-mounted place with a live `useEditor` subscription) via
+ * `setLedgerNote`. `buildDirectorTasteNote` just joins it onto the legacy
+ * per-decision note, at the SAME injection seam every existing caller already
+ * uses (a zero-arg call - the public API here is unchanged).
  */
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DirectorOpCategory, DirectorOpKind } from "@framecut/hf-bridge";
+import {
+	CATEGORY_LABEL,
+	DIRECTOR_OP_CATEGORIES,
+	resolveDirectorOpCategory,
+} from "./run-ledger";
 
 /** One reviewed op outcome. `category` is the op's explicit category when set. */
 export interface ReviewDecision {
@@ -34,59 +53,18 @@ const MIN_SAMPLES = 2;
 /** ...and the accept/reject share crosses this fraction. */
 const SIGNAL_THRESHOLD = 0.5;
 
-const CATEGORIES: readonly DirectorOpCategory[] = [
-	"duplicate",
-	"filler",
-	"pacing",
-	"reorder",
-	"take",
-	"llm",
-	"vision",
-	"repeat",
-	"deadair",
-	"noise",
-	"redundancy",
-	"context",
-	"retake",
-	"structural",
-	"speculation",
-	"join",
-];
-const CATEGORY_LABEL: Record<DirectorOpCategory, string> = {
-	duplicate: "duplicate-word cuts",
-	filler: "filler cuts",
-	pacing: "pacing cuts",
-	reorder: "reorders",
-	take: "take selections",
-	llm: "cuts",
-	vision: "vision-based cuts",
-	repeat: "repeated-phrase cuts",
-	deadair: "dead-air cuts",
-	noise: "noise-fragment cuts",
-	redundancy: "redundancy cuts",
-	context: "out-of-context cuts",
-	retake: "retake cuts",
-	structural: "structural section drops",
-	speculation: "trailing-speculation cuts",
-	join: "Join cleanup",
-};
+/** Taste v2: the category list and labels now live in `run-ledger.ts` (the
+ * source of truth both modules read from - see the file docstring). */
+const CATEGORIES = DIRECTOR_OP_CATEGORIES;
 
 /**
  * The taste category for a reviewed op: its explicit category, else derived from
  * the op kind (raw LLM ops). `keep` is informational and carries no signal (null).
+ * Delegates to `run-ledger.ts`'s `resolveDirectorOpCategory` so an op buckets
+ * identically here and in the run ledger.
  */
 function resolveCategory({ op, category }: ReviewDecision): DirectorOpCategory | null {
-	if (category) return category;
-	switch (op) {
-		case "take_select":
-			return "take";
-		case "reorder":
-			return "reorder";
-		case "cut":
-			return "llm";
-		default:
-			return null; // keep
-	}
+	return resolveDirectorOpCategory({ op, category });
 }
 
 /** Pure: fold a batch of decisions onto the existing stats (immutably). */
@@ -133,9 +111,19 @@ export function deriveTasteNote(stats: DirectorTasteStats): string {
 interface DirectorTasteState {
 	selfLearningEnabled: boolean;
 	opStats: DirectorTasteStats;
+	/**
+	 * Taste v2: the run ledger's compact per-project note, pushed in by
+	 * `DirectorDockShell` whenever the active project's ledger changes (project
+	 * load, apply, or a post-apply revision). NOT persisted here - it is
+	 * derived from the project, so a stale copy in this browser's localStorage
+	 * would be actively wrong the next time a different project opens.
+	 */
+	ledgerNote: string;
 	setSelfLearningEnabled: (enabled: boolean) => void;
 	/** Record the Review modal's decisions when a plan is applied. */
 	noteReviewDecisions: (decisions: readonly ReviewDecision[]) => void;
+	/** Push the run ledger's current note in (see `ledgerNote` above). */
+	setLedgerNote: (note: string) => void;
 	/** The note injected into the next Director prompt ("" when disabled/empty). */
 	buildDirectorTasteNote: () => string;
 	clearTaste: () => void;
@@ -146,13 +134,24 @@ export const useDirectorTasteStore = create<DirectorTasteState>()(
 		(set, get) => ({
 			selfLearningEnabled: true,
 			opStats: {},
+			ledgerNote: "",
 			setSelfLearningEnabled: (enabled) => set({ selfLearningEnabled: enabled }),
 			noteReviewDecisions: (decisions) =>
 				set((state) => ({
 					opStats: aggregateDecisions({ stats: state.opStats, decisions }),
 				})),
+			setLedgerNote: (note) => set({ ledgerNote: note }),
+			// Taste v2: joins the legacy per-decision note (device-local, this
+			// browser's opStats) with the run ledger's per-project note (durable,
+			// kept in sync via setLedgerNote - see the file docstring). Still a
+			// zero-arg call, so every existing caller (run-director.ts,
+			// run-highlight.ts, run-assemble.ts) picks this up unchanged.
 			buildDirectorTasteNote: () =>
-				get().selfLearningEnabled ? deriveTasteNote(get().opStats) : "",
+				get().selfLearningEnabled
+					? [deriveTasteNote(get().opStats), get().ledgerNote]
+							.filter(Boolean)
+							.join(" ")
+					: "",
 			clearTaste: () => set({ opStats: {} }),
 		}),
 		{

@@ -12,6 +12,7 @@ import type { NearTieNote } from "./redundancy";
 import type { HighlightPreview } from "./highlight-preview";
 import type { AssemblyDraft, DraftSpan } from "./assembly-draft";
 import { applyKeeperSwap, type RedundancyReviewGroup } from "./redundancy-apply";
+import { startRunRecord, type RunLedgerRecord } from "./run-ledger";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
@@ -257,6 +258,16 @@ interface DirectorPlanState {
 	protectedSpans: { startSec: number; endSec: number }[];
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
+	/**
+	 * Run ledger (taste v2, U3): the proposal snapshot for the CURRENT cut
+	 * review, captured by `openCutPanel` before any user decision exists
+	 * (what the pipeline proposed + what defaulted on, per category). Null
+	 * outside "cut" mode. `director-cut-panel.tsx`'s apply folds the user's
+	 * final decisions onto this and persists the result onto the project
+	 * (the store itself has no editor/project access, so it only prepares
+	 * the data - see `run-ledger.ts`).
+	 */
+	pendingRunRecord: RunLedgerRecord | null;
 	/** Redundancy groups (keeper + all takes) backing the review's swap-to-alternate (U5b). */
 	redundancyGroups: RedundancyReviewGroup[];
 	/** Highlight mode: the keep rows, the preview stats, and the timeline length. */
@@ -392,6 +403,7 @@ const CLEARED = {
 	runError: null,
 	rollbackMark: null,
 	rollbackGuardMark: null,
+	pendingRunRecord: null,
 };
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
@@ -431,6 +443,11 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			dockTab: "director",
 			rollbackMark: rollbackMark ?? null,
 			rollbackGuardMark: rollbackGuardMark ?? null,
+			// Run ledger (taste v2): snapshot what THIS plan proposes before any
+			// user decision exists, so the record reflects the pipeline's offer
+			// even if the user later swaps a redundancy keeper (which rebuilds
+			// some ops under new ids).
+			pendingRunRecord: startRunRecord({ operations: plan.operations }),
 		}),
 	swapRedundancyKeeper: ({ groupId, keeperLineId }) =>
 		set((state) => {
