@@ -176,6 +176,24 @@ async function planViaApiKeySchema(
  * expiry the child is killed and the plan call rejects with a plain message. */
 const CLAUDE_CLI_KILL_TIMEOUT_MS = 300_000;
 
+/** Pure branch decision for the kill timer below, split out so it is
+ * unit-testable without actually spawning anything. On Windows the CLI runs
+ * through `shell: true` (resolveClaude in renderer.ts needs the shell to
+ * resolve the bare `claude` command's `.cmd` shim via PATHEXT), which means
+ * the spawned pid is cmd.exe, not the real claude/node process underneath
+ * it. A plain `child.kill()` only reaps that cmd.exe wrapper and orphans the
+ * real process, which keeps running the hung call. So on Windows we walk and
+ * kill the whole process tree by pid instead. */
+export function shouldTaskkillOnTimeout({
+	platform,
+	pid,
+}: {
+	platform: NodeJS.Platform;
+	pid: number | undefined;
+}): boolean {
+	return platform === "win32" && pid != null;
+}
+
 function planViaClaudeCode(
 	prompt: string,
 ): Promise<{ raw: unknown; usage: TokenUsage | null }> {
@@ -188,9 +206,10 @@ function planViaClaudeCode(
 		});
 		let out = "";
 		let err = "";
-		// Kill timer (round 12 U3/R4): reject FIRST (so the caller fails with the
-		// real reason, not a generic exit-code message from the kill's close event),
-		// then kill the child. `timedOut` makes the close handler a no-op after.
+		// Kill timer (round 12 U3/R4, tree-kill added later): reject FIRST (so
+		// the caller fails with the real reason, not a generic exit-code message
+		// from the kill's close event), then kill the child. `timedOut` makes the
+		// close handler a no-op after.
 		let timedOut = false;
 		const killTimer = setTimeout(() => {
 			timedOut = true;
@@ -199,7 +218,20 @@ function planViaClaudeCode(
 					`The claude CLI did not respond within ${CLAUDE_CLI_KILL_TIMEOUT_MS / 60_000} minutes and was stopped. Check that the CLI works (run \`claude\` in a terminal), or switch Settings -> AI to an Anthropic API key.`,
 				),
 			);
-			child.kill();
+			if (shouldTaskkillOnTimeout({ platform: process.platform, pid: child.pid })) {
+				// Fire-and-forget: we already rejected above, so this is best-effort
+				// cleanup and must never itself throw or reject anything.
+				try {
+					spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]).on(
+						"error",
+						() => {},
+					);
+				} catch {
+					child.kill();
+				}
+			} else {
+				child.kill();
+			}
 		}, CLAUDE_CLI_KILL_TIMEOUT_MS);
 		child.stdout.on("data", (d) => (out += d.toString()));
 		child.stderr.on("data", (d) => (err += d.toString()));
