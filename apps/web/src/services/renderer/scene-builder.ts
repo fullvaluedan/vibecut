@@ -231,6 +231,35 @@ function buildBlurBackgroundNodes({
 			continue;
 		}
 
+		// A Solid has no decodable source - its file/url are the 1x1 gray
+		// placeholder SVG (see media/solid-color.ts). Blurring a flat color is that
+		// same flat color, so the backdrop is just the solid's color filling the
+		// frame. Route it to a full-frame SolidColorNode (identity transform, so it
+		// covers the frame regardless of the foreground's own transform) instead of
+		// decoding the placeholder into a uniform gray backdrop. Mirrors the solid
+		// guard on the foreground path in buildTrackNodes.
+		if (
+			element.type === "image" &&
+			mediaAsset.type === "image" &&
+			isSolidColorAsset({ asset: mediaAsset })
+		) {
+			nodes.push(
+				new SolidColorNode({
+					color: resolveSolidElementColor({ element, mediaAsset }),
+					duration: element.duration,
+					timeOffset: element.startTime,
+					trimStart: element.trimStart,
+					trimEnd: element.trimEnd,
+					transform: buildTransformFromParams({ params: {} }),
+					opacity: 1,
+					blendMode: "normal",
+					effects: [],
+					masks: [],
+				}),
+			);
+			continue;
+		}
+
 		nodes.push(
 			new BlurBackgroundNode({
 				mediaId: mediaAsset.id,
