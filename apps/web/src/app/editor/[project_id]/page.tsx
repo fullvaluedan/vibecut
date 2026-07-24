@@ -7,7 +7,7 @@ import {
 	ResizableHandle,
 } from "@/components/ui/resizable";
 import { AssetsPanel } from "@/components/editor/panels/assets";
-import { PropertiesPanel } from "@/components/editor/panels/properties";
+import { DirectorDockShell } from "@/features/ai-generate/director/components/director-dock-shell";
 import { Timeline } from "@/timeline/components";
 import { PreviewPanel } from "@/preview/components";
 import { EditorHeader } from "@/components/editor/editor-header";
@@ -72,7 +72,7 @@ function DegradedRendererBanner() {
 
 	return (
 		<div className="bg-accent border-b h-9 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-			<span>For the best experience, open OpenCut in Chrome.</span>
+			<span>For the best experience, open VibeCut in Chrome.</span>
 			<Button
 				variant="text"
 				size="icon"
@@ -202,7 +202,7 @@ function EditorLayout() {
 						className="min-w-0"
 					>
 						<MaximizablePanel id="properties">
-							<PropertiesPanel />
+							<DirectorDockShell />
 						</MaximizablePanel>
 					</ResizablePanel>
 				</ResizablePanelGroup>

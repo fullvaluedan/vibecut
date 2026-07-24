@@ -13,22 +13,28 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
-import type { EditorCore } from "@/core";
+import { mediaTimeFromSeconds } from "@/wasm";
 import { applyDirectorPlan } from "../apply-plan";
 import {
-	isBatchControllable,
-	isReactorSuppressed,
+	ensureAppliedLockReactor,
 	reviseAppliedPlan,
 	toggleAbPreview,
-	withReactorSuppressed,
 } from "../applied-plan";
 import {
 	selectApplyGuardSpans,
 	selectFilteredOps,
 	useDirectorPlanStore,
+	type OpDecisions,
 	type ReviewRowFilter,
 } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
+import {
+	appendRunRecord,
+	readRunLedger,
+	recordApplyDecisions,
+	recordPostApplyRevisions,
+	type RunLedgerRecord,
+} from "../run-ledger";
 import { describeReviewOp, formatTimecode, formatTimeRange } from "../review-format";
 
 const ROW_FILTERS: { id: ReviewRowFilter; label: string }[] = [
@@ -37,29 +43,6 @@ const ROW_FILTERS: { id: ReviewRowFilter; label: string }[] = [
 	{ id: "optin", label: "Opt-in" },
 	{ id: "rejected", label: "Rejected" },
 ];
-
-// Register (once per editor) a command reactor that LOCKS the applied phase the
-// moment an external edit or redo moves the Director batch off the controllable
-// stack top. Suppressed during our own revise/A-B so those never self-lock. A
-// manual Ctrl+Z (undo does not fire reactors) is caught instead by the guard inside
-// reviseAppliedPlan/toggleAbPreview on the next interaction, which refuses to touch
-// the moved batch and locks then. Either way the user never loses work.
-const reactorRegistered = new WeakSet<object>();
-function ensureAppliedReactor(editor: EditorCore): void {
-	if (reactorRegistered.has(editor)) return;
-	reactorRegistered.add(editor);
-	editor.command.registerReactor(() => {
-		if (isReactorSuppressed()) return;
-		const s = useDirectorPlanStore.getState();
-		if (s.phase !== "applied") return;
-		const controllable = isBatchControllable(editor, {
-			appliedBatch: s.appliedBatch,
-			appliedHasBatch: s.appliedHasBatch,
-			abShowing: s.abShowing,
-		});
-		if (!controllable) s.lockApplied();
-	});
-}
 
 export function DirectorCutPanel() {
 	const editor = useEditor();
@@ -72,6 +55,8 @@ export function DirectorCutPanel() {
 	const redundancyGroups = useDirectorPlanStore((s) => s.redundancyGroups);
 	const swapRedundancyKeeper = useDirectorPlanStore((s) => s.swapRedundancyKeeper);
 	const phase = useDirectorPlanStore((s) => s.phase);
+	const seekPreRollSec = useDirectorPlanStore((s) => s.seekPreRollSec);
+	const setSeekPreRollSec = useDirectorPlanStore((s) => s.setSeekPreRollSec);
 	const abShowing = useDirectorPlanStore((s) => s.abShowing);
 	const appliedHasBatch = useDirectorPlanStore((s) => s.appliedHasBatch);
 	const markApplied = useDirectorPlanStore((s) => s.markApplied);
@@ -81,7 +66,7 @@ export function DirectorCutPanel() {
 
 	// Register the applied-phase safety reactor once for this editor.
 	useEffect(() => {
-		ensureAppliedReactor(editor);
+		ensureAppliedLockReactor(editor);
 	}, [editor]);
 
 	if (!plan) return null;
@@ -122,6 +107,17 @@ export function DirectorCutPanel() {
 		}
 	}
 
+	// Jump the playhead to just before a cut and play, so the transition INTO the
+	// cut is watchable (round 9). Lead-in comes from the slider (1-10s).
+	const previewCut = (startSec: number) => {
+		editor.playback.seek({
+			time: mediaTimeFromSeconds({
+				seconds: Math.max(0, startSec - seekPreRollSec),
+			}),
+		});
+		editor.playback.play();
+	};
+
 	const fpsFloat = (): number => {
 		const fps = editor.project.getActive().settings.fps;
 		return fps.denominator > 0 && fps.numerator > 0
@@ -154,19 +150,68 @@ export function DirectorCutPanel() {
 		} as const;
 	};
 
+	// Run ledger (taste v2): the project write helper shared by apply (a fresh
+	// record) and a post-apply revision (an update to the latest record).
+	// `updater` gets the CURRENT project ledger fresh (never a stale closure -
+	// this panel is docked and long-lived) and returns the next one; a no-op
+	// updater (same array reference back, e.g. nothing actually reversed) skips
+	// the project write entirely.
+	const persistRunLedger = (
+		updater: (ledger: RunLedgerRecord[]) => RunLedgerRecord[],
+	) => {
+		const project = editor.project.getActive();
+		const currentLedger = readRunLedger({ project });
+		const nextLedger = updater(currentLedger);
+		if (nextLedger === currentLedger) return;
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				runLedger: nextLedger,
+				metadata: { ...project.metadata, updatedAt: new Date() },
+			},
+		});
+		editor.save.markDirty();
+	};
+
+	// A row un-checked AFTER it was already applied (the round-9 persistent
+	// review makes this observable) is a stronger "the Director over-cut here"
+	// signal than a pre-apply toggle, so the run ledger tracks it separately.
+	// `before` is the decisions snapshot from immediately before the toggle
+	// that triggered this.
+	const recordLedgerRevisions = (before: OpDecisions) => {
+		const after = useDirectorPlanStore.getState().decisions;
+		persistRunLedger((ledger) =>
+			recordPostApplyRevisions({ ledger, operations: ops, before, after }),
+		);
+	};
+
 	// First apply from the review phase: run the plan, seed taste once, and stay open
 	// in the applied phase (U8). The plan + decisions persist so rows stay revisable.
 	const apply = () => {
 		const args = resolveApplyArgs();
 		if (!args) return;
 		const result = applyDirectorPlan(args);
+		const decisionsAtApply = useDirectorPlanStore.getState().decisions;
 		useDirectorTasteStore.getState().noteReviewDecisions(
 			ops.map((op) => ({
 				op: op.op,
 				category: op.category,
-				accepted: Boolean(useDirectorPlanStore.getState().decisions[op.id]),
+				accepted: Boolean(decisionsAtApply[op.id]),
 			})),
 		);
+		// Run ledger (taste v2): fold the apply-time decisions onto the proposal
+		// snapshot `openCutPanel` captured, then persist it onto the project so
+		// the signal survives closing VibeCut (taste.ts's opStats above are
+		// session/device-local; this is per-project and durable).
+		const pendingRunRecord = useDirectorPlanStore.getState().pendingRunRecord;
+		if (pendingRunRecord) {
+			const record = recordApplyDecisions({
+				record: pendingRunRecord,
+				operations: ops,
+				decisions: decisionsAtApply,
+			});
+			persistRunLedger((ledger) => appendRunRecord({ ledger, record }));
+		}
 		markApplied({ batch: result.appliedCommand });
 		if (result.cuts === 0 && result.reorders === 0) {
 			toast.info("Director: nothing applied");
@@ -202,20 +247,30 @@ export function DirectorCutPanel() {
 	};
 
 	// A row toggle revises live once applied; before apply it just records the choice.
-	// In the locked phase revise is disabled (the checkbox is disabled too).
+	// In the locked phase revise is disabled (the checkbox is disabled too). A toggle
+	// that starts already-applied is a post-apply revision (run ledger, taste v2):
+	// snapshot decisions BEFORE the flip so recordLedgerRevisions can tell an
+	// un-check apart from a re-check.
 	const handleToggle = (id: string) => {
+		const wasApplied = phase === "applied";
+		const before = decisions;
 		toggle(id);
 		if (useDirectorPlanStore.getState().phase === "applied") revise();
+		if (wasApplied) recordLedgerRevisions(before);
 	};
 
 	// Bulk select/deselect the currently FILTERED visible rows only (U8 fix: never
-	// flips hidden rows), then revise live if applied.
+	// flips hidden rows), then revise live if applied. Same post-apply-revision
+	// tracking as handleToggle above.
 	const handleSetAll = (accepted: boolean) => {
+		const wasApplied = phase === "applied";
+		const before = decisions;
 		setAll(
 			accepted,
 			visibleOps.map((op) => op.id),
 		);
 		if (useDirectorPlanStore.getState().phase === "applied") revise();
+		if (wasApplied) recordLedgerRevisions(before);
 	};
 
 	// A/B: undo/redo the batch to preview the timeline without vs with the cuts.
@@ -229,50 +284,44 @@ export function DirectorCutPanel() {
 		setAbShowing(outcome.showing);
 	};
 
-	// Dismiss is the ONLY thing that clears the plan (U8). If mid A/B "without" AND the
-	// batch is still controllable, redo first so the applied cuts (not the previewed
-	// original) are what stays; in the locked phase we must not touch the moved stack.
-	const handleDismiss = () => {
-		const s = useDirectorPlanStore.getState();
-		if (s.phase === "applied" || s.phase === "applied-locked") {
-			if (
-				s.phase === "applied" &&
-				s.appliedHasBatch &&
-				s.abShowing === "without" &&
-				isBatchControllable(editor, revisableState())
-			) {
-				withReactorSuppressed(() => editor.command.redo());
-			}
-			close();
-			toast.info("Director: review closed", {
-				description: "Applied cuts stay on the timeline (Ctrl+Z to undo).",
-			});
-			return;
-		}
+	// Cancel is review-phase only (round 9: there is no Done, the applied review
+	// PERSISTS until the next AI CUT run replaces it). Discards the un-applied
+	// plan AND rolls back any pre-review mutation (the assemble-if-empty /
+	// chronological-reorder pre-pass in run-director.ts) in one step, so Cancel
+	// restores EXACTLY the pre-run timeline (U8 fix, it used to leave that
+	// mutation in place with N+1 separate undo entries). GUARDED: this panel is
+	// docked (non-modal), so the user can keep editing the timeline while it's
+	// open; the rollback only fires if nothing else has touched the undo stack
+	// since the pre-pass finished (rollbackGuardMark), so Cancel can never also
+	// undo the user's own subsequent edits.
+	const handleCancel = () => {
+		const { rollbackMark, rollbackGuardMark } = useDirectorPlanStore.getState();
+		const rolledBack =
+			rollbackMark !== null &&
+			rollbackGuardMark !== null &&
+			editor.command.getMark() === rollbackGuardMark;
+		if (rolledBack) editor.command.rollbackTo(rollbackMark);
 		close();
-		toast.info("Director: review cancelled", {
-			description: "No cuts were applied. Any auto-assembled footage stays (Ctrl+Z to undo).",
+		toast.info("Director: cancelled", {
+			description: rolledBack
+				? "Nothing was changed. Your timeline is exactly as it was before this run."
+				: "The plan was discarded. You made other timeline edits during this run, so Ctrl+Z still walks those back as usual.",
 		});
 	};
 
 	return (
 		<div className="panel bg-background flex h-full flex-col overflow-hidden rounded-sm border">
 			<div className="border-b p-3">
-				<div className="flex items-center justify-between">
-					<h2 className="text-sm font-semibold">
-						Director&apos;s cut &middot;{" "}
-						{locked ? "applied (locked)" : applied ? "applied" : "review"}
-					</h2>
-					<Button variant="ghost" size="sm" onClick={handleDismiss}>
-						Done
-					</Button>
-				</div>
+				<h2 className="text-sm font-semibold">
+					Director&apos;s cut &middot;{" "}
+					{locked ? "applied (locked)" : applied ? "applied" : "review"}
+				</h2>
 				<p className="text-muted-foreground text-xs">
 					{locked
 						? "This cut is now part of your timeline (you edited or undid since applying). Reopen AI CUT to recut. Ctrl+Z still works."
 						: applied
-							? "Applied. Toggle any row to revise the cut in place, or A/B the original. Ctrl+Z restores everything."
-							: "Review each proposed change and apply the ones you want. Ctrl+Z restores everything."}
+							? "Applied. Toggle any row to revise the cut in place, or A/B the original. Click a timestamp to play into that cut. Ctrl+Z restores everything."
+							: "Review each proposed change and apply the ones you want. Click a timestamp to play into that cut. Ctrl+Z restores everything."}
 				</p>
 			</div>
 
@@ -322,6 +371,21 @@ export function DirectorCutPanel() {
 							</Button>
 						))}
 					</div>
+					<div className="flex items-center gap-2 px-3 pt-2">
+						<span className="text-muted-foreground shrink-0 text-xs">
+							Lead-in {seekPreRollSec}s
+						</span>
+						<input
+							type="range"
+							min={1}
+							max={10}
+							step={1}
+							value={seekPreRollSec}
+							aria-label="Seconds played before a cut when a timestamp is clicked"
+							className="min-w-0 flex-1"
+							onChange={(e) => setSeekPreRollSec(Number(e.target.value))}
+						/>
+					</div>
 					<div className="flex-1 space-y-1 overflow-y-auto p-2">
 						{visibleOps.length === 0 ? (
 							<p className="text-muted-foreground px-1 py-2 text-xs">
@@ -358,9 +422,19 @@ export function DirectorCutPanel() {
 													{display.categoryBadge}
 												</span>
 											) : null}
-											<span className="text-muted-foreground mr-2 text-xs">
+											<button
+												type="button"
+												title={`Play from ${seekPreRollSec}s before this cut`}
+												className="text-muted-foreground hover:text-foreground mr-2 cursor-pointer text-xs underline decoration-dotted underline-offset-2"
+												onClick={(e) => {
+													// A button inside the row label: never toggle the checkbox.
+													e.preventDefault();
+													e.stopPropagation();
+													previewCut(op.startSec);
+												}}
+											>
 												{formatTimeRange({ startSec: op.startSec, endSec: op.endSec })}
-											</span>
+											</button>
 											{op.reason}
 											{display.rejectedHint ? (
 												<span className="ml-2 text-xs font-medium text-amber-600 dark:text-amber-500">
@@ -425,19 +499,16 @@ export function DirectorCutPanel() {
 			)}
 
 			{applied ? (
-				<div className="flex items-center justify-between gap-2 border-t p-3">
+				<div className="flex items-center gap-2 border-t p-3">
 					<span className="text-muted-foreground text-xs">
 						{locked
 								? "Cut locked into the timeline"
-								: `Applied ${acceptedCount} of ${ops.length}${abShowing === "without" ? " · previewing original" : ""}`}
+								: `Applied ${acceptedCount} of ${ops.length}${abShowing === "without" ? " · previewing original" : ""} · stays open, a new AI CUT run replaces it`}
 					</span>
-					<Button size="sm" onClick={handleDismiss}>
-						Done
-					</Button>
 				</div>
 			) : (
 				<div className="flex justify-end gap-2 border-t p-3">
-					<Button variant="ghost" size="sm" onClick={handleDismiss}>
+					<Button variant="ghost" size="sm" onClick={handleCancel}>
 						Cancel
 					</Button>
 					<Button size="sm" onClick={apply} disabled={ops.length === 0}>

@@ -10,7 +10,6 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import Link from "next/link";
-import { RenameProjectDialog } from "@/project/components/rename-project-dialog";
 import { DeleteProjectDialog } from "@/project/components/delete-project-dialog";
 import { useRouter } from "next/navigation";
 import { FaDiscord } from "react-icons/fa6";
@@ -21,7 +20,11 @@ import { DEFAULT_LOGO_URL } from "@/site/brand";
 import { SOCIAL_LINKS } from "@/site/social";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
-import { CommandIcon, Logout05Icon } from "@hugeicons/core-free-icons";
+import {
+	CommandIcon,
+	Delete02Icon,
+	Logout05Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ShortcutsDialog } from "@/actions/components/shortcuts-dialog";
 import Image from "next/image";
@@ -45,7 +48,7 @@ export function EditorHeader() {
 
 function ProjectDropdown() {
 	const [openDialog, setOpenDialog] = useState<
-		"delete" | "rename" | "shortcuts" | null
+		"delete" | "shortcuts" | null
 	>(null);
 	const [isExiting, setIsExiting] = useState(false);
 	const router = useRouter();
@@ -64,28 +67,6 @@ function ProjectDropdown() {
 		} finally {
 			editor.project.closeProject();
 			router.push("/projects");
-		}
-	};
-
-	const handleSaveProjectName = async (newName: string) => {
-		if (
-			activeProject &&
-			newName.trim() &&
-			newName !== activeProject.metadata.name
-		) {
-			try {
-				await editor.project.renameProject({
-					id: activeProject.metadata.id,
-					name: newName.trim(),
-				});
-			} catch (error) {
-				toast.error("Failed to rename project", {
-					description:
-						error instanceof Error ? error.message : "Please try again",
-				});
-			} finally {
-				setOpenDialog(null);
-			}
 		}
 	};
 
@@ -148,14 +129,18 @@ function ProjectDropdown() {
 							Discord
 						</Link>
 					</DropdownMenuItem>
+
+					<DropdownMenuSeparator />
+
+					<DropdownMenuItem
+						variant="destructive"
+						onClick={() => setOpenDialog("delete")}
+						icon={<HugeiconsIcon icon={Delete02Icon} />}
+					>
+						Delete project
+					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
-			<RenameProjectDialog
-				isOpen={openDialog === "rename"}
-				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "rename" : null)}
-				onConfirm={(newName) => handleSaveProjectName(newName)}
-				projectName={activeProject?.metadata.name || ""}
-			/>
 			<DeleteProjectDialog
 				isOpen={openDialog === "delete"}
 				onOpenChange={(isOpen) => setOpenDialog(isOpen ? "delete" : null)}

@@ -13,6 +13,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { AssistantPrompt } from "./assistant-prompt";
+import { HIDE_ASSISTANT_PROMPT } from "@/features/editing/surface-flags";
 import { Slider } from "@/components/ui/slider";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Separator } from "@/components/ui/separator";
@@ -25,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { PREVIEW_ZOOM_PRESETS } from "@/preview/zoom";
 import { usePreviewViewport } from "./preview-viewport";
-import { GridPopover } from "./guide-popover";
+import { ProjectInfoChip } from "./project-info-chip";
 import { usePreviewStore } from "@/preview/preview-store";
 import type { MediaTime } from "@/wasm";
 
@@ -43,23 +44,17 @@ export function PreviewToolbar({
 				<PlaybackSpeedSlider />
 			</div>
 			<div className="justify-self-end flex w-full items-center justify-end gap-2.5">
-				<AssistantPrompt />
+				{/* Assistant prompt box hidden per roadmap D4/D6; code stays. */}
+				{!HIDE_ASSISTANT_PROMPT && (
+					<>
+						<AssistantPrompt />
+						<Separator orientation="vertical" className="h-4" />
+					</>
+				)}
+				<ProjectInfoChip />
 				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
-				{/* v0.4.0 */}
-				{/* <GridPopover>
-					<Button
-						variant={activeGuideDefinition ? "secondary" : "text"}
-						size="icon"
-					>
-						{activeGuideDefinition ? (
-							activeGuideDefinition.renderTriggerIcon()
-						) : (
-							<HugeiconsIcon icon={GridTableIcon} />
-						)}
-					</Button>
-				</GridPopover> */}
 				<Button
 					variant="text"
 					aria-label="Toggle fullscreen"

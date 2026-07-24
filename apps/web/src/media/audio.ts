@@ -7,7 +7,12 @@ import type {
 } from "@/timeline";
 import { shouldMaintainPitch } from "@/retime/rate";
 import type { MediaAsset } from "@/media/types";
-import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
+import {
+	applyAudioMasteringToBuffer,
+	applyGainToAudioBuffer,
+	getAudioBufferPeak,
+	masterGainForPeak,
+} from "@/media/audio-mastering";
 import type { AudioCapableElement } from "@/timeline/audio-state";
 import {
 	hasAnimatedVolume,
@@ -23,7 +28,18 @@ import { Input, ALL_FORMATS, BlobSource, AudioBufferSink } from "mediabunny";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { StreamingLinearResampler } from "./streaming-resampler";
-import { timelineAudioFrameCount } from "./timeline-audio-size";
+import {
+	timelineAudioFrameCount,
+	chunkFrameCount,
+	shouldChunkTimelineAudio,
+} from "./timeline-audio-size";
+import {
+	planChunkWindows,
+	mixElementIntoWindow,
+	elementOverlapsWindow,
+	type ChunkWindow,
+	type WindowMixElement,
+} from "./export-chunk-mixer";
 import {
 	computeRmsBuckets,
 	type SampleBucket,
@@ -31,6 +47,56 @@ import {
 
 const MAX_AUDIO_CHANNELS = 2;
 const EXPORT_SAMPLE_RATE = 44100;
+/** Export mixes to stereo; the analysis/transcription path mixes to mono. */
+const EXPORT_OUTPUT_CHANNELS = 2;
+/** Window length for the chunked export mix. Bounds peak memory to one window
+ * (60s stereo @ 44.1kHz is about 21 MB) regardless of timeline length. */
+const EXPORT_CHUNK_SECONDS = 60;
+/**
+ * Below this the whole timeline is mixed in one `AudioBuffer` (the original,
+ * byte-identical path). Above it, the export mixes in `EXPORT_CHUNK_SECONDS`
+ * windows so a long timeline never hits the `createBuffer` wall (about 459 MB
+ * stereo @ 44.1kHz). 192 MB is roughly a 9 min stereo export - comfortably
+ * below the wall, so every short timeline keeps the exact original behavior.
+ */
+const SINGLE_MIX_MAX_BYTES = 192 * 1024 * 1024;
+
+/** Sample rate + channel count the export encoder must be configured with. */
+export const EXPORT_AUDIO_STREAM = {
+	sampleRate: EXPORT_SAMPLE_RATE,
+	numberOfChannels: EXPORT_OUTPUT_CHANNELS,
+} as const;
+
+export interface TimelineAudioChunk {
+	/** Mastered PCM for this window, ready to hand to the encoder. */
+	buffer: AudioBuffer;
+	/** 0-based window position (for progress / diagnostics). */
+	index: number;
+	/** Total window count in this mixdown. */
+	total: number;
+}
+
+/**
+ * Whether a timeline of this `duration` (ticks) would overflow the safe
+ * single-buffer mix size and must be mixed in windows. Pure decision so the
+ * renderer can pick the path without importing the sizing constants.
+ */
+export function timelineAudioNeedsChunking({
+	duration,
+}: {
+	duration: number;
+}): boolean {
+	const frameCount = timelineAudioFrameCount({
+		durationTicks: duration,
+		sampleRate: EXPORT_SAMPLE_RATE,
+		ticksPerSecond: TICKS_PER_SECOND,
+	});
+	return shouldChunkTimelineAudio({
+		frameCount,
+		channels: EXPORT_OUTPUT_CHANNELS,
+		maxBytes: SINGLE_MIX_MAX_BYTES,
+	});
+}
 
 export interface CollectedAudioElement {
 	timelineElement: AudioCapableElement;
@@ -844,6 +910,221 @@ export async function createTimelineAudioBuffer({
 	return mastered;
 }
 
+interface PreparedChunkMixElement {
+	windowElement: WindowMixElement;
+}
+
+/**
+ * Decodes each element once and pre-renders any pitch-maintained retime, so the
+ * chunk loop below can mix every window without re-rendering. Mirrors the
+ * per-element preparation inside `createTimelineAudioBuffer`; the difference is
+ * only WHERE the samples land (a bounded window vs the whole buffer).
+ */
+async function prepareChunkMixElements({
+	audioElements,
+	context,
+	sampleRate,
+}: {
+	audioElements: CollectedAudioElement[];
+	context: AudioContext;
+	sampleRate: number;
+}): Promise<PreparedChunkMixElement[]> {
+	const prepared: PreparedChunkMixElement[] = [];
+	for (const element of audioElements) {
+		// Muted elements are skipped from the mix (same as the single-buffer path).
+		if (element.muted) continue;
+
+		const renderedBuffer = shouldMaintainPitch({
+			rate: element.retime?.rate ?? 1,
+			maintainPitch: element.retime?.maintainPitch,
+		})
+			? await renderRetimedBuffer({
+					audioContext: context,
+					sourceBuffer: element.buffer,
+					trimStart: element.trimStart,
+					clipDuration: element.duration,
+					retime: element.retime,
+					maintainPitch: true,
+				})
+			: undefined;
+
+		prepared.push({
+			windowElement: buildWindowMixElement({
+				element,
+				buffer: renderedBuffer ?? element.buffer,
+				trimStart: renderedBuffer ? 0 : element.trimStart,
+				retime: renderedBuffer ? undefined : element.retime,
+				sampleRate,
+			}),
+		});
+	}
+	return prepared;
+}
+
+/**
+ * Mixes every element that overlaps ONE window into a single bounded buffer.
+ * Deterministic and pure of any global state, so calling it twice for the same
+ * window (the peak-scan pass then the emit pass below) yields identical samples.
+ */
+function mixChunkWindow({
+	window,
+	prepared,
+	context,
+	outputChannels,
+	sampleRate,
+}: {
+	window: ChunkWindow;
+	prepared: PreparedChunkMixElement[];
+	context: AudioContext;
+	outputChannels: number;
+	sampleRate: number;
+}): AudioBuffer {
+	// One bounded allocation per window - never the whole timeline.
+	const chunkBuffer = context.createBuffer(
+		outputChannels,
+		window.frameCount,
+		sampleRate,
+	);
+	const windowChannels = Array.from(
+		{ length: outputChannels },
+		(_, channel) => chunkBuffer.getChannelData(channel),
+	);
+
+	for (const { windowElement } of prepared) {
+		if (
+			!elementOverlapsWindow({
+				element: windowElement,
+				windowStartFrame: window.startFrame,
+				windowFrameCount: window.frameCount,
+			})
+		) {
+			continue;
+		}
+		mixElementIntoWindow({
+			element: windowElement,
+			windowChannels,
+			windowStartFrame: window.startFrame,
+			windowFrameCount: window.frameCount,
+		});
+	}
+
+	return chunkBuffer;
+}
+
+/**
+ * Chunked replacement for `createTimelineAudioBuffer` that never allocates the
+ * whole-timeline buffer. It mixes the timeline in `EXPORT_CHUNK_SECONDS`
+ * windows and yields each mastered window in order, so the encoder can consume
+ * them sequentially and peak memory stays flat regardless of timeline length.
+ * This is what removes the long-video `createBuffer` wall.
+ *
+ * Mastering is ONE decision for the whole timeline, not per window. The mix is
+ * scanned once to find the loudest sample across every window (the peak-scan
+ * pass); if it stays under the headroom ceiling the master limiter is a
+ * pass-through, so the emit pass yields byte-identical samples to the
+ * single-buffer path. If it clips, ONE gain scalar (derived from that global
+ * peak) is applied uniformly to every window, so the loudness is equal on both
+ * sides of every window seam. This replaces an earlier per-window limiter whose
+ * attack/release state reset at each seam and stepped the gain on a clipping
+ * mix. Mixing is deterministic and cheap next to the one-time decode, so the
+ * two passes re-mix rather than hold every window in memory (which is the whole
+ * point of chunking).
+ */
+export async function* createTimelineAudioChunks({
+	tracks,
+	mediaAssets,
+	duration,
+	sampleRate = EXPORT_SAMPLE_RATE,
+	outputChannels = EXPORT_OUTPUT_CHANNELS,
+	chunkSeconds = EXPORT_CHUNK_SECONDS,
+	audioContext,
+	onProgress,
+}: {
+	tracks: SceneTracks;
+	mediaAssets: MediaAsset[];
+	duration: number;
+	sampleRate?: number;
+	outputChannels?: number;
+	chunkSeconds?: number;
+	audioContext?: AudioContext;
+	/** Fires 0..1 across decode -> mix, so the export bar moves during this stage. */
+	onProgress?: (fraction: number) => void;
+}): AsyncGenerator<TimelineAudioChunk, void, unknown> {
+	const ownsContext = !audioContext;
+	const context = audioContext ?? createAudioContext({ sampleRate });
+
+	try {
+		// Decoding every asset is the slow part - give it most of the bar.
+		const audioElements = await collectAudioElements({
+			tracks,
+			mediaAssets,
+			audioContext: context,
+			onDecodeProgress: (fraction) => onProgress?.(fraction * 0.6),
+		});
+		if (audioElements.length === 0) return;
+
+		const prepared = await prepareChunkMixElements({
+			audioElements,
+			context,
+			sampleRate,
+		});
+		if (prepared.length === 0) return;
+
+		const outputLength = timelineAudioFrameCount({
+			durationTicks: duration,
+			sampleRate,
+			ticksPerSecond: TICKS_PER_SECOND,
+		});
+		const windows = planChunkWindows({
+			totalFrames: outputLength,
+			chunkFrames: chunkFrameCount({ sampleRate, chunkSeconds }),
+		});
+
+		// Pass 1 - peak scan: find the loudest sample across the WHOLE timeline so
+		// mastering can be one seam-free decision (the single-buffer path masters
+		// the whole mix at once). Buffers are discarded here so peak memory stays
+		// one window.
+		let globalPeak = 0;
+		for (const window of windows) {
+			const chunkBuffer = mixChunkWindow({
+				window,
+				prepared,
+				context,
+				outputChannels,
+				sampleRate,
+			});
+			const peak = getAudioBufferPeak({ audioBuffer: chunkBuffer });
+			if (peak > globalPeak) globalPeak = peak;
+			// The peak scan spans 0.6 -> 0.8 of the audio stage.
+			onProgress?.(0.6 + ((window.index + 1) / windows.length) * 0.2);
+		}
+
+		// One scalar for every window: 1 (true pass-through) when the mix never
+		// clips, else the normalization that brings the global peak to the ceiling.
+		const masterGain = masterGainForPeak({ peak: globalPeak });
+
+		// Pass 2 - emit: re-mix each window and apply the SINGLE global gain, so
+		// the gain is identical on both sides of every seam.
+		for (const window of windows) {
+			const chunkBuffer = mixChunkWindow({
+				window,
+				prepared,
+				context,
+				outputChannels,
+				sampleRate,
+			});
+			applyGainToAudioBuffer({ audioBuffer: chunkBuffer, gain: masterGain });
+
+			// The emit pass spans 0.8 -> 1.0 of the audio stage.
+			onProgress?.(0.8 + ((window.index + 1) / windows.length) * 0.2);
+
+			yield { buffer: chunkBuffer, index: window.index, total: windows.length };
+		}
+	} finally {
+		if (ownsContext) void context.close();
+	}
+}
+
 function collectPeakRange({
 	buffer,
 	count,
@@ -970,6 +1251,55 @@ export function extractRmsRange({
 	});
 }
 
+/**
+ * Builds the injectable, dependency-free view of one element the pure window
+ * mixer consumes. Keeps ONE copy of the placement / interpolation / gain math
+ * so the single-buffer path and the chunked path always agree. `trimStart` and
+ * `retime` are already resolved by the caller (a pitch-maintained element is
+ * pre-rendered, so its effective trim is 0 and retime is undefined).
+ */
+function buildWindowMixElement({
+	element,
+	buffer,
+	trimStart,
+	retime,
+	sampleRate,
+}: {
+	element: CollectedAudioElement;
+	buffer: AudioBuffer;
+	trimStart: number;
+	retime?: RetimeConfig;
+	sampleRate: number;
+}): WindowMixElement {
+	const outputStartSample = Math.floor(element.startTime * sampleRate);
+	const renderedLength = Math.ceil(element.duration * sampleRate);
+	const sourceChannels = Array.from(
+		{ length: buffer.numberOfChannels },
+		(_, channel) => buffer.getChannelData(channel),
+	);
+	const sourceSampleRate = buffer.sampleRate;
+	const timelineElement = element.timelineElement;
+	const animated = hasAnimatedVolume({ element: timelineElement });
+	const constantGain = element.volume;
+
+	return {
+		sourceChannels,
+		outputStartSample,
+		renderedLength,
+		outputSampleRate: sampleRate,
+		sourceIndexAt: (clipTime) =>
+			(trimStart + getSourceTimeAtClipTime({ clipTime, retime })) *
+			sourceSampleRate,
+		gainAt: animated
+			? (clipTime) =>
+					resolveEffectiveAudioGain({
+						element: timelineElement,
+						localTime: clipTime,
+					})
+			: () => constantGain,
+	};
+}
+
 function mixAudioChannels({
 	element,
 	buffer,
@@ -987,42 +1317,22 @@ function mixAudioChannels({
 	outputLength: number;
 	sampleRate: number;
 }): void {
-	const { startTime, duration: elementDuration } = element;
-
-	const outputStartSample = Math.floor(startTime * sampleRate);
-	const renderedLength = Math.ceil(elementDuration * sampleRate);
-
-	// Follow the output buffer's channel count: 2 for export (stereo), 1 for the
-	// mono analysis path. A source channel beyond the output folds to the last.
-	const outputChannels = outputBuffer.numberOfChannels;
-	for (let channel = 0; channel < outputChannels; channel++) {
-		const outputData = outputBuffer.getChannelData(channel);
-		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
-		const sourceData = buffer.getChannelData(sourceChannel);
-
-		for (let i = 0; i < renderedLength; i++) {
-			const outputIndex = outputStartSample + i;
-			if (outputIndex >= outputLength) break;
-
-			const clipTime = i / sampleRate;
-			const sourceTime =
-				trimStart + getSourceTimeAtClipTime({ clipTime, retime });
-			const sourceIndex = sourceTime * buffer.sampleRate;
-			if (sourceIndex >= sourceData.length) break;
-
-			const lowerIndex = Math.floor(sourceIndex);
-			const upperIndex = Math.min(sourceData.length - 1, lowerIndex + 1);
-			const fraction = sourceIndex - lowerIndex;
-			const gain = hasAnimatedVolume({ element: element.timelineElement })
-				? resolveEffectiveAudioGain({
-						element: element.timelineElement,
-						localTime: clipTime,
-					})
-				: element.volume;
-			outputData[outputIndex] +=
-				(sourceData[lowerIndex] * (1 - fraction) +
-					sourceData[upperIndex] * fraction) *
-				gain;
-		}
-	}
+	// The whole timeline is a single window [0, outputLength). Follow the output
+	// buffer's channel count: 2 for export (stereo), 1 for the mono analysis path.
+	const windowChannels = Array.from(
+		{ length: outputBuffer.numberOfChannels },
+		(_, channel) => outputBuffer.getChannelData(channel),
+	);
+	mixElementIntoWindow({
+		element: buildWindowMixElement({
+			element,
+			buffer,
+			trimStart,
+			retime,
+			sampleRate,
+		}),
+		windowChannels,
+		windowStartFrame: 0,
+		windowFrameCount: outputLength,
+	});
 }

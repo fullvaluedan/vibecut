@@ -2,7 +2,6 @@ import type { ElementType } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
-	ArrowRightDoubleIcon,
 	ClosedCaptionIcon,
 	Folder03Icon,
 	Note01Icon,
@@ -10,12 +9,15 @@ import {
 	MagicWand05Icon,
 	TextIcon,
 	Settings01Icon,
-	SlidersHorizontalIcon,
 	ColorsIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import { OcShapesIcon } from "@/components/icons";
+import { HIDDEN_ASSET_TABS } from "@/features/editing/surface-flags";
 
+// Dead surfaces removed (menu IA audit): "transitions" and "adjustment" were
+// permanent "coming soon" placeholder views with no functionality behind
+// them and no code path that ever selected them.
 export const TAB_KEYS = [
 	"media",
 	"hyperframes",
@@ -23,14 +25,35 @@ export const TAB_KEYS = [
 	"text",
 	"shapes",
 	"effects",
-	"transitions",
 	"captions",
 	"transcript",
-	"adjustment",
 	"settings",
 ] as const;
 
 export type Tab = (typeof TAB_KEYS)[number];
+
+/**
+ * Tabs actually shown in the tab rail (hidden-list panels excluded per
+ * `surface-flags.ts`). Everything else in this file - `tabs`, the store's
+ * `activeTab` - still covers the full `TAB_KEYS` set; only rendering and the
+ * fallback below are aware of the hidden list.
+ */
+export const VISIBLE_TAB_KEYS = TAB_KEYS.filter(
+	(key) => !HIDDEN_ASSET_TABS.includes(key),
+);
+
+export const DEFAULT_TAB: Tab = "media";
+
+/**
+ * A visible tab is the only valid active tab; anything else (hidden,
+ * removed, or corrupt from storage) falls back to Media instead. Used
+ * both by `setActiveTab` and by the persist `merge` below, so an invalid
+ * tab can never become active whether it is set at runtime or restored
+ * from a previous session's storage.
+ */
+export function resolveActiveTab(tab: Tab): Tab {
+	return VISIBLE_TAB_KEYS.includes(tab as any) ? tab : DEFAULT_TAB;
+}
 
 const createHugeiconsIcon =
 	({ icon }: { icon: IconSvgElement }) =>
@@ -65,10 +88,6 @@ export const tabs = {
 		icon: createHugeiconsIcon({ icon: MagicWand05Icon }),
 		label: "Effects",
 	},
-	transitions: {
-		icon: createHugeiconsIcon({ icon: ArrowRightDoubleIcon }),
-		label: "Transitions",
-	},
 	captions: {
 		icon: createHugeiconsIcon({ icon: ClosedCaptionIcon }),
 		label: "Captions",
@@ -76,10 +95,6 @@ export const tabs = {
 	transcript: {
 		icon: createHugeiconsIcon({ icon: Note01Icon }),
 		label: "Transcript",
-	},
-	adjustment: {
-		icon: createHugeiconsIcon({ icon: SlidersHorizontalIcon }),
-		label: "Adjustment",
 	},
 	settings: {
 		icon: createHugeiconsIcon({ icon: Settings01Icon }),
@@ -109,14 +124,30 @@ interface AssetsPanelStore {
 	setMediaSort: (args: { key: MediaSortKey; order: MediaSortOrder }) => void;
 }
 
+/**
+ * A hidden tab (from a stale session, or a version of the app where it was
+ * still visible) is never restored as-is - every persisted value is run
+ * through the same `resolveActiveTab` fallback used at runtime, so a reload
+ * never lands on a blank hidden panel. Named + exported (rather than inlined
+ * in the `persist` config below) so it is directly unit-testable.
+ */
+export function mergeAssetsPanelState(
+	persistedState: unknown,
+	currentState: AssetsPanelStore,
+): AssetsPanelStore {
+	const persisted = persistedState as Partial<AssetsPanelStore> | undefined;
+	const merged = { ...currentState, ...persisted };
+	return { ...merged, activeTab: resolveActiveTab(merged.activeTab) };
+}
+
 export const useAssetsPanelStore = create<AssetsPanelStore>()(
 	persist(
 		(set) => ({
-			activeTab: "media",
-			setActiveTab: (tab) => set({ activeTab: tab }),
+			activeTab: DEFAULT_TAB,
+			setActiveTab: (tab) => set({ activeTab: resolveActiveTab(tab) }),
 			highlightMediaId: null,
 			requestRevealMedia: (mediaId) =>
-				set({ activeTab: "media", highlightMediaId: mediaId }),
+				set({ activeTab: DEFAULT_TAB, highlightMediaId: mediaId }),
 			clearHighlight: () => set({ highlightMediaId: null }),
 			mediaViewMode: "grid",
 			setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
@@ -127,7 +158,9 @@ export const useAssetsPanelStore = create<AssetsPanelStore>()(
 		}),
 		{
 			name: "assets-panel",
+			merge: mergeAssetsPanelState,
 			partialize: (state) => ({
+				activeTab: state.activeTab,
 				mediaViewMode: state.mediaViewMode,
 				mediaSortBy: state.mediaSortBy,
 				mediaSortOrder: state.mediaSortOrder,

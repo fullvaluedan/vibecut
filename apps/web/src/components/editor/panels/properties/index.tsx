@@ -16,11 +16,9 @@ import { getMotionTemplate } from "@/features/motion-templates/templates";
 import type { TimelineElement, TimelineTrack } from "@/timeline";
 import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
-import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
-import { DirectorPanel } from "@/features/ai-generate/director/components/director-panel";
-import { DirectorCutPanel } from "@/features/ai-generate/director/components/director-cut-panel";
 import { useVariantPickerStore } from "@/features/ai-generate/components/variant-picker-dialog";
 import { HyperframesDraftsPanel } from "@/features/ai-generate/components/hyperframes-drafts-panel";
+import { HIDE_HYPERFRAMES_DRAFTS_PANEL } from "@/features/editing/surface-flags";
 
 type ElementWithTrack = { track: TimelineTrack; element: TimelineElement };
 
@@ -67,25 +65,16 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
-	const assembleSurface = useDirectorPlanStore((s) => s.surface);
-	const assembleMode = useDirectorPlanStore((s) => s.mode);
-	const assembleDraft = useDirectorPlanStore((s) => s.draft);
-	const cutPlan = useDirectorPlanStore((s) => s.plan);
-	const hasHfDrafts = useVariantPickerStore(
+	// HyperFrames drafts panel takeover is parked (roadmap D6); code stays,
+	// the empty inspector just never routes to it.
+	const hasHfDraftsRaw = useVariantPickerStore(
 		(s) => (s.versions?.length ?? 0) > 0,
 	);
+	const hasHfDrafts = HIDE_HYPERFRAMES_DRAFTS_PANEL ? false : hasHfDraftsRaw;
 
-	// Auto-assemble review takes over the whole inspector while a draft is active.
-	if (assembleSurface === "panel" && assembleMode === "assemble" && assembleDraft) {
-		return <DirectorPanel />;
-	}
-
-	// The docked cut review (U6) takes over the inspector the same way, so it stays
-	// open + editable while the user works and survives deselecting all clips.
-	if (assembleSurface === "panel" && assembleMode === "cut" && cutPlan) {
-		return <DirectorCutPanel />;
-	}
-
+	// The Director review (cut/assemble/highlight) no longer takes over this panel
+	// (R1): it lives in its own "Director" tab of the dock shell, always reachable
+	// alongside Properties instead of only while a review is active.
 	if (selectedElements.length === 0) {
 		// HyperFrames version drafts exist BEFORE any clip is placed, so nothing is
 		// selected to review them from — dock them in the empty inspector so they're

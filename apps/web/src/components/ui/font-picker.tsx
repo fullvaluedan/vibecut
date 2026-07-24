@@ -13,18 +13,75 @@ import { loadFullFont } from "@/fonts/google-fonts";
 import { SYSTEM_FONTS } from "@/fonts/system-fonts";
 import type { FontAtlas, FontAtlasEntry } from "@/fonts/types";
 import { useFontAtlas } from "@/fonts/use-font-atlas";
+import { useLocalStorage } from "@/services/storage/use-local-storage";
 import { cn } from "@/utils/ui";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown, Search, Star } from "lucide-react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { TextIcon } from "@hugeicons/core-free-icons";
 
+// U4 (text round): "My fonts" was dead UI (custom font upload is descoped, so
+// the tab never had anything of its own to show) and has been removed.
+// Favorites is now real: starred fonts persist locally and the tab filters to
+// them (see filterFontsForTab).
 const FONT_TABS = [
 	{ key: "all", label: "All fonts" },
-	{ key: "my-fonts", label: "My fonts" },
 	{ key: "favorites", label: "Favorites" },
 ] as const;
 
 type FontTab = (typeof FONT_TABS)[number]["key"];
+
+const FAVORITE_FONTS_STORAGE_KEY = "favoriteFontFamilies";
+
+/**
+ * Guard against corrupted localStorage (null, number, object, etc).
+ * Returns a clean array of font family name strings, or empty array if input
+ * is malformed. Exported so the sanitization is unit-testable.
+ */
+export function sanitizeFavorites(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return raw.filter((f) => typeof f === "string");
+	}
+	return [];
+}
+
+/**
+ * Pure filter driving both tabs: "all" shows every font name (search-filtered
+ * as before); "favorites" first narrows to starred families. Exported so the
+ * behavior is unit-testable without rendering the component (this repo's
+ * `bun test` has no DOM).
+ */
+export function filterFontsForTab({
+	fontNames,
+	search,
+	activeTab,
+	favorites,
+}: {
+	fontNames: readonly string[];
+	search: string;
+	activeTab: FontTab;
+	favorites: readonly string[];
+}): string[] {
+	const scoped =
+		activeTab === "favorites"
+			? fontNames.filter((name) => favorites.includes(name))
+			: [...fontNames];
+	if (!search) return scoped;
+	const query = search.toLowerCase();
+	return scoped.filter((name) => name.toLowerCase().includes(query));
+}
+
+/** Pure add/remove round-trip: stars if absent, unstars if present. */
+export function toggleFontFavorite({
+	favorites,
+	family,
+}: {
+	favorites: readonly string[];
+	family: string;
+}): string[] {
+	return favorites.includes(family)
+		? favorites.filter((name) => name !== family)
+		: [...favorites, family];
+}
 
 const ROW_HEIGHT = 40;
 const PREVIEW_SCALE = 0.8;
@@ -46,14 +103,22 @@ export function FontPicker({
 	const [open, setOpen] = useState(false);
 	const [search, setSearch] = useState("");
 	const [activeTab, setActiveTab] = useState<FontTab>("all");
+	const [favorites, setFavorites] = useLocalStorage<string[]>({
+		key: FAVORITE_FONTS_STORAGE_KEY,
+		defaultValue: [],
+	});
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const { atlas, status, fontNames, retry: handleRetry } = useFontAtlas({ open });
 
-	const filteredFonts = useMemo(() => {
-		if (!search) return fontNames;
-		const query = search.toLowerCase();
-		return fontNames.filter((name) => name.toLowerCase().includes(query));
-	}, [fontNames, search]);
+	const safeFavorites = useMemo(
+		() => sanitizeFavorites(favorites),
+		[favorites],
+	);
+
+	const filteredFonts = useMemo(
+		() => filterFontsForTab({ fontNames, search, activeTab, favorites: safeFavorites }),
+		[fontNames, search, activeTab, safeFavorites],
+	);
 
 	const listHeight = Math.min(
 		MAX_LIST_HEIGHT,
@@ -73,6 +138,15 @@ export function FontPicker({
 			setOpen(false);
 		},
 		[onValueChange],
+	);
+
+	const handleToggleFavorite = useCallback(
+		({ family }: { family: string }) => {
+			setFavorites({
+				value: (previous) => toggleFontFavorite({ favorites: sanitizeFavorites(previous), family }),
+			});
+		},
+		[setFavorites],
 	);
 
 	useEffect(() => {
@@ -160,6 +234,15 @@ export function FontPicker({
 					</div>
 				)}
 				{status === "idle" &&
+					activeTab === "favorites" &&
+					favorites.length === 0 && (
+						<div className="py-6 px-4 text-center text-sm text-muted-foreground">
+							No favorite fonts yet. Click the star next to a font to add it
+							here.
+						</div>
+					)}
+				{status === "idle" &&
+					!(activeTab === "favorites" && favorites.length === 0) &&
 					fontNames.length > 0 &&
 					filteredFonts.length === 0 && (
 						<div className="py-6 text-center text-sm text-muted-foreground">
@@ -176,7 +259,9 @@ export function FontPicker({
 							atlas,
 							filteredFonts,
 							selectedFont: defaultValue,
+							favorites: safeFavorites,
 							onFontSelect: handleSelect,
+							onToggleFavorite: handleToggleFavorite,
 						}}
 						style={{ height: listHeight, width: LIST_WIDTH }}
 					/>
@@ -211,7 +296,9 @@ type FontRowProps = {
 	atlas: FontAtlas;
 	filteredFonts: string[];
 	selectedFont: string | undefined;
+	favorites: readonly string[];
 	onFontSelect: (params: { family: string }) => void;
+	onToggleFavorite: (params: { family: string }) => void;
 };
 
 function FontRow({
@@ -220,39 +307,68 @@ function FontRow({
 	atlas,
 	filteredFonts,
 	selectedFont,
+	favorites,
 	onFontSelect,
+	onToggleFavorite,
 }: RowComponentProps<FontRowProps>) {
 	const fontName = filteredFonts[index];
 	const entry = atlas.fonts[fontName];
 	const isSelected = fontName === selectedFont;
 	const isSystemFont = SYSTEM_FONTS.has(fontName);
+	const isFavorite = favorites.includes(fontName);
 
+	// A star toggle sits inside the same row as the font-select control, so
+	// the row itself can no longer be a single <button> (nested buttons are
+	// invalid HTML) - it's a div with two sibling buttons instead.
 	return (
-		<button
-			type="button"
+		<div
 			style={style as CSSProperties}
 			className={cn(
-				"flex w-full cursor-pointer items-center gap-2 px-3 outline-hidden hover:bg-popover-hover",
+				"flex w-full items-center gap-1 pl-3 pr-2",
 				isSelected && "bg-popover-hover",
 			)}
-			onClick={() => onFontSelect({ family: fontName })}
-			onKeyDown={(event) => {
-				if (event.key === "Enter" || event.key === " ") {
-					event.preventDefault();
-					onFontSelect({ family: fontName });
-				}
-			}}
-			aria-label={fontName}
 		>
-			<div className="min-w-0 overflow-hidden">
-				{isSystemFont ? (
-					<span className="text-xl text-foreground/85" style={{ fontFamily: fontName }}>
-						{fontName}
-					</span>
-				) : (
-					<FontSpritePreview entry={entry} />
+			<button
+				type="button"
+				className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 outline-hidden hover:bg-popover-hover"
+				onClick={() => onFontSelect({ family: fontName })}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						event.preventDefault();
+						onFontSelect({ family: fontName });
+					}
+				}}
+				aria-label={fontName}
+			>
+				<div className="min-w-0 overflow-hidden">
+					{isSystemFont ? (
+						<span className="text-xl text-foreground/85" style={{ fontFamily: fontName }}>
+							{fontName}
+						</span>
+					) : (
+						<FontSpritePreview entry={entry} />
+					)}
+				</div>
+			</button>
+			<button
+				type="button"
+				className={cn(
+					"shrink-0 rounded p-1 text-muted-foreground hover:text-foreground",
+					isFavorite && "text-yellow-400 hover:text-yellow-300",
 				)}
-			</div>
-		</button>
+				aria-label={
+					isFavorite
+						? `Remove ${fontName} from favorites`
+						: `Add ${fontName} to favorites`
+				}
+				aria-pressed={isFavorite}
+				onClick={(event) => {
+					event.stopPropagation();
+					onToggleFavorite({ family: fontName });
+				}}
+			>
+				<Star className="size-3.5" fill={isFavorite ? "currentColor" : "none"} />
+			</button>
+		</div>
 	);
 }

@@ -21,6 +21,9 @@ export {
 	planMultimodal,
 	planDirector,
 	planDirectorVision,
+	stableOpId,
+	DIRECTOR_PROMPT_VERSION,
+	DIRECTOR_P2_PROMPT_VERSION,
 	buildDirectorVisionPrompt,
 	buildDirectorVisionBlocks,
 	MAX_MULTIMODAL_IMAGES,
@@ -65,6 +68,49 @@ export {
 	type ContextPlan,
 } from "./llm-context";
 export {
+	planRetake,
+	buildRetakePrompt,
+	renderRetakeCatalog,
+	sanitizeRetakePlan,
+	groupWordsIntoLines,
+	markHandledLines,
+	mergeRetakeCuts,
+	RETAKE_MAX_CHARS,
+	HANDLED_LINE_COVER_FRACTION,
+	RETAKE_PROMPT_VERSION,
+	type RetakeWord,
+	type RetakeLine,
+	type RetakeCut,
+	type RetakePlan,
+	type RetakeHandledSpan,
+} from "./llm-retake";
+export {
+	planStructural,
+	buildStructuralPrompt,
+	renderStructuralCatalog,
+	sanitizeStructuralPlan,
+	markHandledStructuralLines,
+	STRUCTURAL_PROMPT_VERSION,
+	type StructuralDrop,
+	type StructuralPlan,
+	type StructuralHandledSpan,
+} from "./llm-structural";
+export {
+	planVerify,
+	buildVerifyPrompt,
+	sanitizeVerifyPlan,
+	VERIFY_PROMPT_VERSION,
+	type VerifyCandidate,
+	type VerifyVerdict,
+	type VerifyPlan,
+	type VerifyJoinFragment,
+	type VerifyJoinVerdict,
+	type VerifyJoinVerdictKind,
+	type VerifyHarmCandidate,
+	type VerifyHarmVerdict,
+	type VerifyHarmVerdictKind,
+} from "./llm-verify";
+export {
 	resolveReferencedOps,
 	sanitizeReferencedPlan,
 	type ReferenceLine,
@@ -107,4 +153,9 @@ export {
 	type RegistryItemMeta,
 	type RegistryCompositionFile,
 } from "./registry-fetch";
+export {
+	hyperframesVersionToRegistryTag,
+	resolveInstalledHyperframesVersion,
+	resolveRegistryBase,
+} from "./registry-ref";
 export { runDoctor, type DoctorReport } from "./doctor";

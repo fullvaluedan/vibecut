@@ -28,6 +28,21 @@ const defaultTextBackground = {
 	offsetY: 0,
 };
 
+// U3 (text round): stroke + drop shadow on plain text. Both default to fully
+// inert values (zero width / zero blur / zero offsets) so an existing project
+// that has never touched these fields renders byte-identically to before.
+const defaultTextStroke = {
+	color: "#000000",
+	width: 0,
+};
+
+const defaultTextShadow = {
+	color: "#000000",
+	blur: 0,
+	offsetX: 0,
+	offsetY: 0,
+};
+
 const defaultTextElement: Omit<TextElement, "id"> = {
 	type: "text",
 	name: "Text",
@@ -53,6 +68,12 @@ const defaultTextElement: Omit<TextElement, "id"> = {
 		"background.paddingY": defaultTextBackground.paddingY,
 		"background.offsetX": defaultTextBackground.offsetX,
 		"background.offsetY": defaultTextBackground.offsetY,
+		strokeColor: defaultTextStroke.color,
+		strokeWidth: defaultTextStroke.width,
+		shadowColor: defaultTextShadow.color,
+		shadowBlur: defaultTextShadow.blur,
+		shadowOffsetX: defaultTextShadow.offsetX,
+		shadowOffsetY: defaultTextShadow.offsetY,
 		"transform.positionX": defaultTransform.position.x,
 		"transform.positionY": defaultTransform.position.y,
 		"transform.scaleX": defaultTransform.scaleX,
@@ -80,6 +101,8 @@ export const DEFAULTS = {
 		letterSpacing: defaultTextLetterSpacing,
 		lineHeight: defaultTextLineHeight,
 		background: defaultTextBackground,
+		stroke: defaultTextStroke,
+		shadow: defaultTextShadow,
 		element: defaultTextElement,
 	},
 	timeline: {

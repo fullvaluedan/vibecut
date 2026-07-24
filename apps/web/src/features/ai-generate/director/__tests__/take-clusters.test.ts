@@ -8,13 +8,15 @@ function feat({
 	endSec,
 	loudnessRelative,
 	fillerCandidate = false,
+	wordCount = 8,
 }: {
 	startSec: number;
 	endSec: number;
 	loudnessRelative: number;
 	fillerCandidate?: boolean;
+	wordCount?: number;
 }): SpeechFeatures {
-	return { startSec, endSec, energy: 0, loudnessRelative, wpm: 120, wordCount: 8, fillerCandidate };
+	return { startSec, endSec, energy: 0, loudnessRelative, wpm: 120, wordCount, fillerCandidate };
 }
 
 describe("buildTakeClusters", () => {
@@ -152,5 +154,84 @@ describe("buildTakeClusters", () => {
 				features: [feat({ startSec: 0, endSec: 1, loudnessRelative: 0.5 })],
 			}),
 		).toHaveLength(0);
+	});
+});
+
+describe("buildTakeClusters keeperPolicy (KTD3/U2)", () => {
+	const LINE = "today we ship the brand new editor";
+
+	test('policy "quality" keeps the clean take over a LATER cutoff-flubbed take', () => {
+		const assetTranscripts: AssetTranscript[] = [
+			{ assetId: "a", segments: [{ start: 0, end: 3, text: LINE, sourceStartSec: 0 }] },
+			// The later take is cut off (trailing dash) — keep-last would keep this flub.
+			{ assetId: "b", segments: [{ start: 3, end: 6, text: `${LINE}-`, sourceStartSec: 0 }] },
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.6 }),
+			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.6 }),
+		];
+		const quality = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "quality" });
+		expect(quality[0].members[quality[0].keeperIndex].assetId).toBe("a"); // clean earlier take
+
+		const last = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "last" });
+		expect(last[0].members[last[0].keeperIndex].assetId).toBe("b"); // keep-last: the flub
+	});
+
+	test('policy "last" is the default and byte-identical to omitting it (regression pin)', () => {
+		const assetTranscripts: AssetTranscript[] = [
+			{ assetId: "a", segments: [{ start: 0, end: 3, text: LINE, sourceStartSec: 0 }] },
+			{ assetId: "b", segments: [{ start: 3, end: 6, text: `${LINE}-`, sourceStartSec: 0 }] },
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.6 }),
+			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.6 }),
+		];
+		const explicit = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "last" });
+		const implicit = buildTakeClusters({ assetTranscripts, features });
+		expect(explicit).toEqual(implicit);
+		expect(implicit[0].keeperIndex).toBe(implicit[0].members.length - 1);
+	});
+
+	test('policy "quality" prefers the non-filler take even when the filler take is later', () => {
+		const assetTranscripts: AssetTranscript[] = [
+			{ assetId: "a", segments: [{ start: 0, end: 3, text: LINE, sourceStartSec: 0 }] },
+			{ assetId: "b", segments: [{ start: 3, end: 6, text: LINE, sourceStartSec: 0 }] },
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.6 }), // clean
+			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.6, fillerCandidate: true }), // later, filler
+		];
+		const quality = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "quality" });
+		expect(quality[0].members[quality[0].keeperIndex].assetId).toBe("a");
+	});
+
+	test("all takes flubbed (all cutoff): quality falls back to keep-last", () => {
+		const assetTranscripts: AssetTranscript[] = [
+			{ assetId: "a", segments: [{ start: 0, end: 3, text: `${LINE}-`, sourceStartSec: 0 }] },
+			{ assetId: "b", segments: [{ start: 3, end: 6, text: `${LINE}-`, sourceStartSec: 0 }] },
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.6 }),
+			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.6 }),
+		];
+		const quality = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "quality" });
+		expect(quality[0].keeperIndex).toBe(quality[0].members.length - 1); // latest
+	});
+
+	test('policy "quality" penalizes a rambling take far from the cluster wordCount norm', () => {
+		const assetTranscripts: AssetTranscript[] = [
+			{ assetId: "a", segments: [{ start: 0, end: 3, text: LINE, sourceStartSec: 0 }] },
+			{ assetId: "b", segments: [{ start: 3, end: 6, text: LINE, sourceStartSec: 0 }] },
+			// A far-later take rambles (double the words) — off the norm, penalized.
+			{ assetId: "c", segments: [{ start: 6, end: 12, text: LINE, sourceStartSec: 0 }] },
+		];
+		const features = [
+			feat({ startSec: 0, endSec: 3, loudnessRelative: 0.6, wordCount: 8 }),
+			feat({ startSec: 3, endSec: 6, loudnessRelative: 0.6, wordCount: 8 }),
+			feat({ startSec: 6, endSec: 12, loudnessRelative: 0.6, wordCount: 20 }),
+		];
+		const quality = buildTakeClusters({ assetTranscripts, features, keeperPolicy: "quality" });
+		// Median wordCount is 8; the 20-word take deviates and loses to a clean 8-word one.
+		expect(quality[0].members[quality[0].keeperIndex].assetId).not.toBe("c");
 	});
 });

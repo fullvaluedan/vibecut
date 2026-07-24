@@ -40,9 +40,14 @@ mock.module("@/commands/timeline/track/consolidate-adjacent-clips", () => ({
 }));
 mock.module("@/commands/batch-command", () => ({ BatchCommand: FakeBatchCommand }));
 
-const { reviseAppliedPlan, toggleAbPreview, isBatchControllable } = await import(
-	"../applied-plan"
-);
+const {
+	reviseAppliedPlan,
+	reviseAppliedHighlightPlan,
+	toggleAbPreview,
+	isBatchControllable,
+	ensureAppliedLockReactor,
+} = await import("../applied-plan");
+const { useDirectorPlanStore } = await import("../director-plan-store");
 
 const op = (
 	o: Partial<DirectorOp> & Pick<DirectorOp, "op" | "startSec" | "endSec">,
@@ -58,11 +63,18 @@ function makeStubEditor() {
 	const live: unknown[] = [];
 	const redo: unknown[] = [];
 	const log: string[] = [];
+	// Reactors fire on execute/redo (never undo), mirroring the real CommandManager,
+	// and is what `ensureAppliedLockReactor` relies on to catch an external edit.
+	const reactors: Array<() => void> = [];
+	const runReactors = () => {
+		for (const r of reactors) r();
+	};
 	const command = {
 		execute: ({ command }: { command: unknown }) => {
 			log.push("execute");
 			live.push(command);
 			redo.length = 0;
+			runReactors();
 		},
 		undo: () => {
 			log.push("undo");
@@ -73,9 +85,13 @@ function makeStubEditor() {
 			log.push("redo");
 			const c = redo.pop();
 			if (c !== undefined) live.push(c);
+			runReactors();
 		},
 		peekUndoCommand: () => (live.length ? live[live.length - 1] : null),
 		peekRedoCommand: () => (redo.length ? redo[redo.length - 1] : null),
+		registerReactor: (fn: () => void) => {
+			reactors.push(fn);
+		},
 	};
 	return {
 		log,
@@ -251,5 +267,117 @@ describe("toggleAbPreview", () => {
 		});
 		expect(outcome.status).toBe("locked");
 		expect(editor.log).toEqual([]); // did not undo the user's edit
+	});
+});
+
+describe("reviseAppliedHighlightPlan (R1: the Highlight sibling of reviseAppliedPlan)", () => {
+	/** Apply once through the highlight revise path (state = nothing applied yet). */
+	function applyHighlightOnce() {
+		const editor = makeStubEditor();
+		const first = reviseAppliedHighlightPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			keeps: [{ startSec: 2, endSec: 5 }],
+			totalSec: 10,
+		});
+		if (first.status !== "revised") throw new Error("expected revised");
+		editor.log.length = 0;
+		return { editor, batch: first.result.appliedCommand };
+	}
+
+	test("a revise is exactly (undo batch, new batch) when the batch is the controllable top", () => {
+		const { editor, batch } = applyHighlightOnce();
+		const outcome = reviseAppliedHighlightPlan({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "with" },
+			keeps: [{ startSec: 0, endSec: 4 }],
+			totalSec: 10,
+		});
+		expect(outcome.status).toBe("revised");
+		expect(editor.log).toEqual(["undo", "execute"]);
+		expect(editor.timeline()).toHaveLength(1); // still one batch over the original
+	});
+
+	test("does NOT undo when no batch is applied (never pops the prior step)", () => {
+		const editor = makeStubEditor();
+		const outcome = reviseAppliedHighlightPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			keeps: [{ startSec: 2, endSec: 5 }],
+			totalSec: 10,
+		});
+		expect(outcome.status).toBe("revised");
+		expect(editor.log).toEqual(["execute"]);
+	});
+
+	test("guarded: an intervening manual command makes revise a no-op lock", () => {
+		const { editor, batch } = applyHighlightOnce();
+		editor.command.execute({ command: "user-edit" });
+		editor.log.length = 0;
+		const outcome = reviseAppliedHighlightPlan({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "with" },
+			keeps: [{ startSec: 0, endSec: 4 }],
+			totalSec: 10,
+		});
+		expect(outcome.status).toBe("locked");
+		expect(editor.log).toEqual([]); // did not touch the stack
+	});
+});
+
+describe("ensureAppliedLockReactor (shared applied-lock reactor, R1)", () => {
+	const plan = { operations: [] };
+
+	test("locks the applied phase when an external edit moves the batch off the controllable top", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		const editor = makeStubEditor();
+		ensureAppliedLockReactor(editor as never);
+		// Registering twice for the same editor must not double-register (WeakSet dedup).
+		ensureAppliedLockReactor(editor as never);
+
+		const first = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		if (first.status !== "revised") throw new Error("expected revised");
+		useDirectorPlanStore.getState().markApplied({ batch: first.result.appliedCommand });
+		expect(useDirectorPlanStore.getState().phase).toBe("applied");
+
+		// An external (non-suppressed) command moves the batch off the undo-top.
+		editor.command.execute({ command: "user-edit" });
+
+		expect(useDirectorPlanStore.getState().phase).toBe("applied-locked");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("does not self-lock while our own revise runs (reactor suppressed)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		const editor = makeStubEditor();
+		ensureAppliedLockReactor(editor as never);
+
+		const first = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		if (first.status !== "revised") throw new Error("expected revised");
+		useDirectorPlanStore.getState().markApplied({ batch: first.result.appliedCommand });
+
+		// A revise undoes + re-executes under withReactorSuppressed; must not self-lock.
+		const outcome = reviseAppliedPlan({
+			editor: editor as never,
+			state: {
+				appliedBatch: first.result.appliedCommand,
+				appliedHasBatch: true,
+				abShowing: "with",
+			},
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		expect(outcome.status).toBe("revised");
+		expect(useDirectorPlanStore.getState().phase).toBe("applied"); // not locked
+		useDirectorPlanStore.getState().close();
 	});
 });

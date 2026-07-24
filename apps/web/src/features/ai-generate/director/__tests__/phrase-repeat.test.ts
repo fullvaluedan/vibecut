@@ -86,4 +86,124 @@ describe("detectPhraseRepeatCuts", () => {
 		expect(ops).toHaveLength(2);
 		expect(ops.map((o) => o.startSec)).toEqual([0, 3]); // first two cut, last kept
 	});
+
+	// Round 6 U4: the whole-segment similarity gate.
+
+	/** Segments derived from phrase() words: one segment per [text, startSec]. */
+	function segs(
+		...entries: [string, number, number][]
+	): { text: string; start: number; end: number }[] {
+		return entries.map(([text, start, end]) => ({ text, start, end }));
+	}
+
+	test("live false positive: 'We are going to' across different sentences demotes", () => {
+		const a = "we are going to build it and walk you through that process";
+		const b = "before we do that we are going to showcase the process because i need your help";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 10 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4.8], [b, 10, 16.4]),
+		});
+		expect(ops.length).toBeGreaterThanOrEqual(1);
+		for (const op of ops) {
+			expect(op.defaultAccept).toBe(false);
+			expect(op.reason).toContain("DIFFERENT sentence");
+		}
+	});
+
+	test("live false positive: 'You do not have to' across different sentences demotes", () => {
+		const a = "you do not have to link to your google profile";
+		const b = "you do not have to subscribe and you can join the group still";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 6 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4], [b, 6, 11.2]),
+		});
+		expect(ops.length).toBeGreaterThanOrEqual(1);
+		for (const op of ops) {
+			expect(op.defaultAccept).toBe(false);
+		}
+	});
+
+	test("a true retake (near-identical segments) keeps its AUTO default", () => {
+		const a = "so we grab the config file and restart the server";
+		const b = "so we grab the config file and restart the server now";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 6 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 4], [b, 6, 10.4]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBeUndefined();
+		expect(ops[0].startSec).toBe(0); // earlier occurrence cut, later kept
+	});
+
+	test("without segments the legacy behavior is unchanged (no demotion)", () => {
+		const a = "we are going to build it and walk you through that process";
+		const b = "before we do that we are going to showcase the process because i need your help";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 10 })];
+		const ops = detectPhraseRepeatCuts({ words });
+		for (const op of ops) {
+			expect(op.defaultAccept).toBeUndefined();
+		}
+	});
+
+	test("an occurrence whose midpoint falls outside every segment demotes (unconfirmed)", () => {
+		const a = "this is the main point";
+		const words = [
+			...phrase({ text: a, startSec: 0 }),
+			...phrase({ text: a, startSec: 3 }),
+		];
+		// Segments cover neither occurrence midpoint.
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs(["unrelated", 50, 55]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+	});
+
+	// Round 11: the same-segment vacuity hole in the U4 gate. When one segment holds
+	// BOTH occurrences the similarity test compares it with itself and returns 1.0,
+	// so it proves nothing and the row must not start checked.
+
+	/** hermes 14:41 verbatim: a mid-sentence stumble Dan KEPT. */
+	const stumble = "we are going to start this up we are going to launch a small instance";
+
+	test("both occurrences inside ONE segment demotes (the self-comparison is vacuous)", () => {
+		const words = phrase({ text: stumble, startSec: 0 }); // 15 words, 0.0-6.0
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([stumble, 0, 6]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBe(false);
+		expect(ops[0].reason).toContain("INSIDE one sentence");
+		// Still PRODUCED, so review recall is unchanged: only the AUTO default moves.
+		expect(ops[0].category).toBe("repeat");
+		expect(ops[0].startSec).toBeCloseTo(0, 3); // earlier occurrence, as before
+	});
+
+	test("the same words split across two near-identical segments stay AUTO", () => {
+		// Same stumble text, but the two occurrences land in DISTINCT segments whose
+		// whole texts are near-identical: that is the real retake the U4 gate exists
+		// to auto-accept, and round 11 must not disturb it.
+		const a = "we are going to start this up";
+		const b = "we are going to start this up now";
+		const words = [...phrase({ text: a, startSec: 0 }), ...phrase({ text: b, startSec: 6 })];
+		const ops = detectPhraseRepeatCuts({
+			words,
+			segments: segs([a, 0, 2.8], [b, 6, 9.2]),
+		});
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBeUndefined();
+		expect(ops[0].reason).toContain("near-identical takes");
+	});
+
+	test("an EMPTY segments array keeps the legacy AUTO default (no same-segment demotion)", () => {
+		const words = phrase({ text: stumble, startSec: 0 });
+		const ops = detectPhraseRepeatCuts({ words, segments: [] });
+		expect(ops).toHaveLength(1);
+		expect(ops[0].defaultAccept).toBeUndefined();
+	});
 });

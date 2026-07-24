@@ -6,10 +6,13 @@
  * Mirrors the registry route's kind convention: kind = type.split(":")[1], and
  * items live under `${base}/${kind}s/${name}/`. No CLI/wasm import → bun-testable
  * with a mock registryBase.
+ *
+ * The default `registryBase` (when a caller doesn't override it) resolves to
+ * the git tag matching the installed `hyperframes` engine version, not
+ * `main`. See registry-ref.ts for why.
  */
 
-const REGISTRY_BASE =
-	"https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
+import { resolveRegistryBase } from "./registry-ref";
 
 /** Registry item kinds VibeCut understands (drives the `${kind}s/` directory). */
 export const KNOWN_REGISTRY_KINDS = ["block", "example", "component"] as const;
@@ -86,7 +89,7 @@ async function fetchOk(url: string): Promise<Response> {
 export async function fetchRegistryComposition({
 	name,
 	type,
-	registryBase = REGISTRY_BASE,
+	registryBase = resolveRegistryBase(),
 }: {
 	name: string;
 	type: string;

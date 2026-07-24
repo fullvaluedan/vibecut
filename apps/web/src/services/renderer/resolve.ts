@@ -14,6 +14,8 @@ import {
 } from "@/graphics";
 import {
 	buildTextBackgroundFromElement,
+	buildTextShadowFromElement,
+	buildTextStrokeFromElement,
 	getTextMeasurementContext,
 	measureTextElement,
 } from "@/text/measure-element";
@@ -36,6 +38,7 @@ import {
 	type ResolvedGraphicNodeState,
 } from "./nodes/graphic-node";
 import { ImageNode, loadImageSource } from "./nodes/image-node";
+import { SolidColorNode } from "./nodes/solid-color-node";
 import { StickerNode, loadStickerSource } from "./nodes/sticker-node";
 import { TextNode, type ResolvedTextNodeState } from "./nodes/text-node";
 import { VideoNode } from "./nodes/video-node";
@@ -79,6 +82,8 @@ async function resolveNode({
 		node.resolved = await resolveVideoNode({ node, context });
 	} else if (node instanceof ImageNode) {
 		node.resolved = await resolveImageNode({ node, context });
+	} else if (node instanceof SolidColorNode) {
+		node.resolved = resolveSolidColorNode({ node, context });
 	} else if (node instanceof StickerNode) {
 		node.resolved = await resolveStickerNode({ node, context });
 	} else if (node instanceof GraphicNode) {
@@ -294,6 +299,28 @@ async function resolveStickerNode({
 	};
 }
 
+/**
+ * A Solid has no natural size (see solid-color-node.ts), so it resolves
+ * against the renderer's own dimensions - containScale in resolveVisualState
+ * comes out to exactly 1, so the default (untouched) transform fills the
+ * frame edge to edge, and stays correct even if the project's canvas size
+ * changes later.
+ */
+function resolveSolidColorNode({
+	node,
+	context,
+}: {
+	node: SolidColorNode;
+	context: ResolveContext;
+}): ResolvedVisualNodeState | null {
+	return resolveVisualState({
+		params: node.params,
+		context,
+		sourceWidth: context.renderer.width,
+		sourceHeight: context.renderer.height,
+	});
+}
+
 function resolveGraphicNode({
 	node,
 	context,
@@ -380,6 +407,11 @@ function resolveTextNode({
 			localTime,
 			ctx: getTextMeasurementContext(),
 		}),
+		// U3 (text round): not keyframed (params/registry.ts marks these
+		// `keyframable: false`), so a plain per-element param read is enough -
+		// no animation-path resolution needed, unlike textColor/backgroundColor.
+		stroke: buildTextStrokeFromElement({ element: node.params }),
+		shadow: buildTextShadowFromElement({ element: node.params }),
 	};
 }
 

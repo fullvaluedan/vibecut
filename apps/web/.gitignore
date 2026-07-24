@@ -12,3 +12,7 @@
 next-env.d.ts
 
 *.tsbuildinfo
+# Golden-footage eval fixtures (Dan's transcripts stay local)
+eval-fixtures/
+# Prompt-hash cache for the eval's LLM passes (re-scoring is free + byte-stable)
+.eval-cache/

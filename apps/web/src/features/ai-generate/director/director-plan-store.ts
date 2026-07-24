@@ -1,7 +1,7 @@
 /**
- * State for the Director Review modal (U4): the proposed plan + the user's per-op
- * accept/reject decisions + open state. The decision logic is pure (testable);
- * the zustand store is a thin wrapper the modal subscribes to.
+ * State for the Director review (U4): the proposed plan + the user's per-op
+ * accept/reject decisions. The decision logic is pure (testable); the zustand
+ * store is a thin wrapper the persistent Director dock panels subscribe to.
  */
 
 import { create } from "zustand";
@@ -12,9 +12,26 @@ import type { NearTieNote } from "./redundancy";
 import type { HighlightPreview } from "./highlight-preview";
 import type { AssemblyDraft, DraftSpan } from "./assembly-draft";
 import { applyKeeperSwap, type RedundancyReviewGroup } from "./redundancy-apply";
+import { startRunRecord, type RunLedgerRecord } from "./run-ledger";
 
 /** Map of op id -> accepted. Absent or true means accepted (default). */
 export type OpDecisions = Record<string, boolean>;
+
+/**
+ * A failed Director run (round 12 U3/R4). Before this, a failure showed only a
+ * 15-second toast and the dock reverted to idle, so a user who looked away saw
+ * nothing, ever. The dock now renders this record as a persistent error card
+ * (stage + plain-language message + Retry) until a new run starts, a run
+ * completes, or the user dismisses it.
+ */
+export interface DirectorRunError {
+	/** The progress stage the run died in (e.g. "Transcribing..."). */
+	stage: string;
+	/** Plain-language failure message (never a raw stack trace). */
+	message: string;
+	/** When it failed (epoch ms), so the card can say when. */
+	at: number;
+}
 
 /** One keep span shown as a row in Highlight mode (accept = keep, reject = drop). */
 export interface HighlightKeepRow {
@@ -188,10 +205,17 @@ export function selectApplyGuardSpans({
 }
 
 interface DirectorPlanState {
-	open: boolean;
-	/** "modal" = the cut/highlight review dialog; "panel" = the assemble review in the right inspector. */
-	surface: "modal" | "panel";
-	/** "cut"/"highlight" = the modal review; "assemble" = the right-panel auto-assemble review. */
+	/**
+	 * Which tab of the persistent Director dock is focused (R1/KTD1). The dock's
+	 * visibility is no longer gated on a transient `surface` flag: "properties" and
+	 * "director" are both always mounted, and this just picks which one shows. Every
+	 * `open*` call below re-asserts "director" on run completion, and every AI CUT
+	 * action click does the same immediately (see `ai-cut-actions.ts`); while a run
+	 * is in flight and the user has switched away, the dock shell shows a badge
+	 * instead of forcing focus back.
+	 */
+	dockTab: "properties" | "director";
+	/** "cut"/"highlight" = the docked review; "assemble" = the docked auto-assemble review. */
 	mode: "cut" | "highlight" | "assemble";
 	/**
 	 * Cut-review lifecycle (U8). "review" = proposing, nothing applied yet. "applied"
@@ -234,6 +258,16 @@ interface DirectorPlanState {
 	protectedSpans: { startSec: number; endSec: number }[];
 	/** Near-tie clusters with no decisive keeper — informational, for manual resolution (U7). */
 	nearTies: NearTieNote[];
+	/**
+	 * Run ledger (taste v2, U3): the proposal snapshot for the CURRENT cut
+	 * review, captured by `openCutPanel` before any user decision exists
+	 * (what the pipeline proposed + what defaulted on, per category). Null
+	 * outside "cut" mode. `director-cut-panel.tsx`'s apply folds the user's
+	 * final decisions onto this and persists the result onto the project
+	 * (the store itself has no editor/project access, so it only prepares
+	 * the data - see `run-ledger.ts`).
+	 */
+	pendingRunRecord: RunLedgerRecord | null;
 	/** Redundancy groups (keeper + all takes) backing the review's swap-to-alternate (U5b). */
 	redundancyGroups: RedundancyReviewGroup[];
 	/** Highlight mode: the keep rows, the preview stats, and the timeline length. */
@@ -242,25 +276,44 @@ interface DirectorPlanState {
 	totalSec: number;
 	/** Assemble mode: the editable rough-cut draft (ordered spans + swap alternates). */
 	draft: AssemblyDraft | null;
-	/** Open the auto-assemble REVIEW in the right panel with a fresh draft. */
+	/** The last failed run (round 12 U3/R4), rendered as a persistent error card in
+	 * the dock. Null when the last run succeeded, was dismissed, or none ran yet. */
+	runError: DirectorRunError | null;
+	/**
+	 * Cancel-rollback fix (U8): the undo-stack mark from before the Director run's
+	 * pre-pass mutations (assemble-if-empty, chronological reorder). The docked
+	 * cut panel's Cancel button rolls the timeline back to this mark in one step,
+	 * so cancelling restores exactly the pre-run state instead of leaving those
+	 * mutations behind. Set only by `openCutPanel` (cut mode); null in
+	 * highlight/assemble mode and cleared by `close`/every new run.
+	 */
+	rollbackMark: number | null;
+	/**
+	 * The safety companion to `rollbackMark` (see `run-director.ts`'s
+	 * `onRunStart`): the undo-stack height right after the pre-pass finished.
+	 * Cancel only rolls back to `rollbackMark` when the undo stack is STILL at
+	 * exactly this height - the docked panel is non-modal, so the user can keep
+	 * editing while the run works or while the panel sits open, and a rollback
+	 * must never also undo THEIR edits.
+	 */
+	rollbackGuardMark: number | null;
+	/** Record a failed run (the catch in ai-cut-actions.ts). `at` is stamped here. */
+	setRunError: (args: { stage: string; message: string }) => void;
+	/** Dismiss the error card (also cleared by every new run and every open*). */
+	clearRunError: () => void;
+	/** Focus a dock tab directly (the tab header click handler). */
+	setDockTab: (tab: "properties" | "director") => void;
+	/** Open the auto-assemble REVIEW, docked (auto-focuses the Director tab). */
 	openAssemble: (args: { draft: AssemblyDraft }) => void;
 	/** Replace the draft's spans (after a drop / re-include / swap) — the panel re-projects the timeline. */
 	applyDraftEdit: (spans: DraftSpan[]) => void;
 	/** Close the assemble panel, leaving the assembled cut on the timeline. */
 	closeAssemble: () => void;
-	/** Open the cut-review modal with a fresh plan (all ops accepted) + any near-tie notes + redundancy groups. */
-	openWith: (args: {
-		plan: DirectorPlan;
-		nearTies?: readonly NearTieNote[];
-		redundancyGroups?: readonly RedundancyReviewGroup[];
-		words?: readonly WordTiming[];
-		protectedSpans?: readonly { startSec: number; endSec: number }[];
-	}) => void;
 	/**
-	 * Dock the cut review in the right panel (U6): same fresh-plan state as `openWith`
-	 * but `surface:'panel'` + `open:false` so it takes over the inspector (like the
-	 * assemble panel) instead of popping the modal — persistent + editable while the
-	 * user works, surviving deselection.
+	 * Dock the cut review (U6): a fresh plan (all ops accepted) + any near-tie
+	 * notes + redundancy groups, rendered inside the persistent Director dock.
+	 * Persistent + editable while the user works, surviving deselection.
+	 * Auto-focuses the Director dock tab (R1).
 	 */
 	openCutPanel: (args: {
 		plan: DirectorPlan;
@@ -268,10 +321,20 @@ interface DirectorPlanState {
 		redundancyGroups?: readonly RedundancyReviewGroup[];
 		words?: readonly WordTiming[];
 		protectedSpans?: readonly { startSec: number; endSec: number }[];
+		/** The pre-run undo-stack mark (see `rollbackMark` above); omitted means
+		 * there's nothing to roll back to (Cancel just discards the plan). */
+		rollbackMark?: number | null;
+		/** The safety companion mark (see `rollbackGuardMark` above). */
+		rollbackGuardMark?: number | null;
 	}) => void;
 	/** Swap a redundancy group's keeper: rebuild that group's cut ops for the chosen take (U5b). */
 	swapRedundancyKeeper: (args: { groupId: string; keeperLineId: string }) => void;
-	/** Open the Highlight modal (KTD9): keep rows accepted by default, with preview + totalSec. */
+	/**
+	 * Open the Highlight review, docked (R1: the highlight modal is retired). This
+	 * populates the persistent Director dock the same way `openCutPanel` does,
+	 * instead of popping a modal). Keep rows accepted by default, with preview +
+	 * totalSec. Auto-focuses the Director dock tab.
+	 */
 	openHighlight: (args: {
 		keeps: readonly { startSec: number; endSec: number; text?: string }[];
 		preview: HighlightPreview;
@@ -308,11 +371,19 @@ interface DirectorPlanState {
 	lockApplied: () => void;
 	/** Close and clear. The ONLY thing that discards an applied plan (U8). */
 	close: () => void;
+	/**
+	 * Seconds of lead-in when a review row jumps the playhead (round 9): a click
+	 * seeks to (cut start - this) so the transition INTO the cut is watchable.
+	 * Session preference: lives OUTSIDE the CLEARED reset, so open/close/new-run
+	 * cycles preserve it.
+	 */
+	seekPreRollSec: number;
+	/** Set the jump lead-in, clamped to the slider's 1-10s band. */
+	setSeekPreRollSec: (sec: number) => void;
 }
 
 const CLEARED = {
-	open: false,
-	surface: "modal" as const,
+	dockTab: "properties" as const,
 	mode: "cut" as const,
 	phase: "review" as const,
 	abShowing: "with" as const,
@@ -329,24 +400,39 @@ const CLEARED = {
 	preview: null,
 	totalSec: 0,
 	draft: null,
+	runError: null,
+	rollbackMark: null,
+	rollbackGuardMark: null,
+	pendingRunRecord: null,
 };
 
 export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 	...CLEARED,
-	// `open` stays FALSE — the panel keys off surface/mode/draft, not `open`, so
-	// the still-mounted modal DirectorReviewDialog (which renders on `open`) does
-	// NOT pop a spurious "nothing to change" dialog over the assemble panel.
+	seekPreRollSec: 1,
+	setSeekPreRollSec: (sec) =>
+		set({ seekPreRollSec: Math.max(1, Math.min(10, Math.round(sec))) }),
+	setRunError: ({ stage, message }) =>
+		set({ runError: { stage, message, at: Date.now() } }),
+	clearRunError: () => set({ runError: null }),
+	setDockTab: (tab) => set({ dockTab: tab }),
 	openAssemble: ({ draft }) =>
-		set({ ...CLEARED, surface: "panel", mode: "assemble", draft }),
+		set({ ...CLEARED, mode: "assemble", draft, dockTab: "director" }),
 	applyDraftEdit: (spans) =>
 		set((state) =>
 			state.draft ? { draft: { ...state.draft, spans } } : {},
 		),
 	closeAssemble: () => set({ ...CLEARED }),
-	openWith: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
+	openCutPanel: ({
+		plan,
+		nearTies,
+		redundancyGroups,
+		words,
+		protectedSpans,
+		rollbackMark,
+		rollbackGuardMark,
+	}) =>
 		set({
 			...CLEARED,
-			open: true,
 			mode: "cut",
 			plan,
 			decisions: initDecisions(plan),
@@ -354,20 +440,14 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 			protectedSpans: [...(protectedSpans ?? [])],
 			nearTies: [...(nearTies ?? [])],
 			redundancyGroups: [...(redundancyGroups ?? [])],
-		}),
-	// `open` stays FALSE — the panel keys off surface/mode/plan, not `open`, so the
-	// still-mounted modal DirectorReviewDialog does NOT also pop over the docked panel.
-	openCutPanel: ({ plan, nearTies, redundancyGroups, words, protectedSpans }) =>
-		set({
-			...CLEARED,
-			surface: "panel",
-			mode: "cut",
-			plan,
-			decisions: initDecisions(plan),
-			words: [...(words ?? [])],
-			protectedSpans: [...(protectedSpans ?? [])],
-			nearTies: [...(nearTies ?? [])],
-			redundancyGroups: [...(redundancyGroups ?? [])],
+			dockTab: "director",
+			rollbackMark: rollbackMark ?? null,
+			rollbackGuardMark: rollbackGuardMark ?? null,
+			// Run ledger (taste v2): snapshot what THIS plan proposes before any
+			// user decision exists, so the record reflects the pipeline's offer
+			// even if the user later swaps a redundancy keeper (which rebuilds
+			// some ops under new ids).
+			pendingRunRecord: startRunRecord({ operations: plan.operations }),
 		}),
 	swapRedundancyKeeper: ({ groupId, keeperLineId }) =>
 		set((state) => {
@@ -378,6 +458,10 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 				operations: state.plan.operations,
 				group,
 				newKeeperLineId: keeperLineId,
+				// KTD5: word-refine the rebuilt cuts so a swapped keeper's edges land on
+				// word gaps like the main chain (the store has words but not the envelope,
+				// so energy-snap is skipped here — refinement still removes mid-word landings).
+				words: state.words,
 			});
 			// Surviving ops keep their decision; a rebuilt op (new id, no prior decision)
 			// falls back to its OWN accept default so a sub-threshold (accept-OFF) group
@@ -397,7 +481,16 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		const rows = initKeepRows(keeps);
 		const decisions: OpDecisions = {};
 		for (const row of rows) decisions[row.id] = true;
-		set({ ...CLEARED, open: true, mode: "highlight", keeps: rows, decisions, preview, totalSec });
+		// Docks the same way `openCutPanel` does (R1: the highlight modal is retired).
+		set({
+			...CLEARED,
+			mode: "highlight",
+			keeps: rows,
+			decisions,
+			preview,
+			totalSec,
+			dockTab: "director",
+		});
 	},
 	toggle: (id) =>
 		set((state) => {
@@ -457,3 +550,11 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set((state) => (state.phase === "applied" ? { phase: "applied-locked" } : {})),
 	close: () => set({ ...CLEARED }),
 }));
+
+// Dev convenience (mirrors window.__vibeEditor in core/index.ts): lets console
+// sessions and automated smoke checks drive the review dock directly.
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+	(
+		window as unknown as { __directorPlanStore?: typeof useDirectorPlanStore }
+	).__directorPlanStore = useDirectorPlanStore;
+}

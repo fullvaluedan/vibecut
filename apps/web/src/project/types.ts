@@ -1,4 +1,6 @@
 import type { FrameRate } from "opencut-wasm";
+import type { TextStyle } from "@/features/text-styles/types";
+import type { RunLedgerRecord } from "@/features/ai-generate/director/run-ledger";
 import type { TScene } from "@/timeline/types";
 import type { MediaTime } from "@/wasm";
 
@@ -48,6 +50,22 @@ export interface TProject {
 	settings: TProjectSettings;
 	version: number;
 	timelineViewState?: TTimelineViewState;
+	/**
+	 * VibeCut: named, reusable text looks saved by the creator. Optional so
+	 * every project saved before the feature existed still loads; readers go
+	 * through `readTextStyles` in `features/text-styles/project-styles.ts`,
+	 * which treats a missing list as empty.
+	 */
+	textStyles?: TextStyle[];
+	/**
+	 * VibeCut: the Director's per-project run ledger (taste v2) - an append-
+	 * capped history of past "cut" review runs, feeding compact per-category
+	 * notes back into the Director prompt. Optional so every project saved
+	 * before this feature still loads; readers go through `readRunLedger` in
+	 * `features/ai-generate/director/run-ledger.ts`, which treats a missing
+	 * list as empty.
+	 */
+	runLedger?: RunLedgerRecord[];
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

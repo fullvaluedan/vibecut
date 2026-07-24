@@ -7,11 +7,13 @@ import { TextNode } from "./nodes/text-node";
 import { StickerNode } from "./nodes/sticker-node";
 import { GraphicNode } from "./nodes/graphic-node";
 import { ColorNode } from "./nodes/color-node";
+import { SolidColorNode } from "./nodes/solid-color-node";
 import { BlurBackgroundNode } from "./nodes/blur-background-node";
 import { EffectLayerNode } from "./nodes/effect-layer-node";
 import type { AnyBaseNode } from "./nodes/base-node";
 import type { TBackground, TCanvasSize } from "@/project/types";
 import { DEFAULT_BACKGROUND_BLUR_INTENSITY } from "@/background/blur";
+import { isSolidColorAsset, resolveSolidElementColor } from "@/media/solid-color";
 import {
 	buildTransformFromParams,
 	readBlendModeFromParams,
@@ -96,7 +98,30 @@ function buildTrackNodes({
 						}),
 					);
 				}
-				if (element.type === "image" && mediaAsset.type === "image") {
+				if (
+					element.type === "image" &&
+					mediaAsset.type === "image" &&
+					isSolidColorAsset({ asset: mediaAsset })
+				) {
+					// A Solid paints a flat fill instead of decoding mediaAsset.url; see
+					// media/solid-color.ts for why the placeholder file/url above still
+					// have to exist even though they're unused here.
+					nodes.push(
+						new SolidColorNode({
+							color: resolveSolidElementColor({ element, mediaAsset }),
+							duration: element.duration,
+							timeOffset: element.startTime,
+							trimStart: element.trimStart,
+							trimEnd: element.trimEnd,
+							transform: buildTransformFromParams({ params: element.params }),
+							animations: element.animations,
+							opacity: readOpacityFromParams({ params: element.params }),
+							blendMode: readBlendModeFromParams({ params: element.params }),
+							effects: element.effects ?? [],
+							masks: element.masks ?? [],
+						}),
+					);
+				} else if (element.type === "image" && mediaAsset.type === "image") {
 					nodes.push(
 						new ImageNode({
 							url: mediaAsset.url,
@@ -203,6 +228,35 @@ function buildBlurBackgroundNodes({
 			!mediaAsset?.url ||
 			(mediaAsset.type !== "video" && mediaAsset.type !== "image")
 		) {
+			continue;
+		}
+
+		// A Solid has no decodable source - its file/url are the 1x1 gray
+		// placeholder SVG (see media/solid-color.ts). Blurring a flat color is that
+		// same flat color, so the backdrop is just the solid's color filling the
+		// frame. Route it to a full-frame SolidColorNode (identity transform, so it
+		// covers the frame regardless of the foreground's own transform) instead of
+		// decoding the placeholder into a uniform gray backdrop. Mirrors the solid
+		// guard on the foreground path in buildTrackNodes.
+		if (
+			element.type === "image" &&
+			mediaAsset.type === "image" &&
+			isSolidColorAsset({ asset: mediaAsset })
+		) {
+			nodes.push(
+				new SolidColorNode({
+					color: resolveSolidElementColor({ element, mediaAsset }),
+					duration: element.duration,
+					timeOffset: element.startTime,
+					trimStart: element.trimStart,
+					trimEnd: element.trimEnd,
+					transform: buildTransformFromParams({ params: {} }),
+					opacity: 1,
+					blendMode: "normal",
+					effects: [],
+					masks: [],
+				}),
+			);
 			continue;
 		}
 

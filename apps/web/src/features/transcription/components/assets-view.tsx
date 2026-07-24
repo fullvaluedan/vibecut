@@ -14,6 +14,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+	DropdownMenu,
+	DropdownMenuCheckboxItem,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { MoreVerticalIcon } from "@hugeicons/core-free-icons";
 import { useEditor } from "@/editor/use-editor";
 import {
 	computeTimelineAudioHash,
@@ -30,7 +44,14 @@ import type {
 import { deleteTranscriptSelection } from "@/features/transcription/delete-transcript-selection";
 import { remapTranscriptTimestamps } from "@/features/transcription/remap-transcript-timestamps";
 import { formatTranscriptText } from "@/features/transcription/format-transcript-text";
+import {
+	formatTranscriptCsv,
+	formatTranscriptSrt,
+	formatTranscriptTxt,
+} from "@/features/transcription/export-transcript";
+import { findActiveTranscriptIndex } from "@/features/transcription/find-active-transcript-index";
 import { downloadBuffer } from "@/export";
+import { mediaTimeFromSeconds, mediaTimeToSeconds, type MediaTime } from "@/wasm";
 import { TranscriptText } from "./transcript-text";
 
 type LoadState =
@@ -48,6 +69,23 @@ function safeAudioHash(editor: Parameters<typeof computeTimelineAudioHash>[0]): 
 	}
 }
 
+/** Shared by the Export kebab's three formats (W4/R1) - format, then download. */
+function downloadText({
+	text,
+	filename,
+	mimeType,
+}: {
+	text: string;
+	filename: string;
+	mimeType: string;
+}): void {
+	downloadBuffer({
+		buffer: new TextEncoder().encode(text).buffer as ArrayBuffer,
+		filename,
+		mimeType,
+	});
+}
+
 export function TranscriptView() {
 	const editor = useEditor();
 	const [load, setLoad] = useState<LoadState>({
@@ -63,6 +101,14 @@ export function TranscriptView() {
 	);
 	const [stale, setStale] = useState(false);
 	const [copied, setCopied] = useState(false);
+	// W4/R1: TXT export toggle (speakers omitted - TranscriptionResult has no
+	// speaker labels, so there is nothing to toggle there).
+	const [includeTimecodes, setIncludeTimecodes] = useState(true);
+	// W4/R3: live search text - highlights/dims in TranscriptText, never filters
+	// the underlying items array (that would break ripple-delete's index math).
+	const [searchQuery, setSearchQuery] = useState("");
+	// W4/R2: the word/segment playing right now, from the live playhead.
+	const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
 	const abortRef = useRef<AbortController | null>(null);
 	// Ignore responses from a superseded load (mount race or manual refresh).
@@ -157,6 +203,39 @@ export function TranscriptView() {
 		return () => abortRef.current?.abort();
 	}, [loadTranscript]);
 
+	// W4/R2: highlight the word/segment playing right now. Subscribes to BOTH
+	// playback updates (during play) and seeks (scrub/click-a-word/undo), same
+	// pair use-timeline-playhead.ts subscribes to for the ruler. Re-renders
+	// only when the ACTIVE INDEX changes (not every animation frame), and the
+	// binary search in findActiveTranscriptIndex keeps each check cheap even on
+	// a long, word-level transcript.
+	const activeIndexRef = useRef<number | null>(null);
+	useEffect(() => {
+		const update = (time: MediaTime) => {
+			const timeSec = mediaTimeToSeconds({ time });
+			const next = findActiveTranscriptIndex({ items, timeSec });
+			if (next !== activeIndexRef.current) {
+				activeIndexRef.current = next;
+				setActiveIndex(next);
+			}
+		};
+		update(editor.playback.getCurrentTime());
+		const unsubscribeUpdate = editor.playback.onUpdate(update);
+		const unsubscribeSeek = editor.playback.onSeek(update);
+		return () => {
+			unsubscribeUpdate();
+			unsubscribeSeek();
+		};
+	}, [editor, items]);
+
+	// W4/R2: click-a-word seeks the playhead.
+	const handleSeek = useCallback(
+		(seconds: number) => {
+			editor.playback.seek({ time: mediaTimeFromSeconds({ seconds }) });
+		},
+		[editor],
+	);
+
 	const handleDelete = useCallback(() => {
 		// Blocked while the timeline has moved under us (undo/redo/manual edit);
 		// the user must Refresh so the local coords match the live timeline again.
@@ -209,12 +288,30 @@ export function TranscriptView() {
 			});
 	}, [segments]);
 
-	const handleExport = useCallback(() => {
-		const text = formatTranscriptText({ segments });
-		downloadBuffer({
-			buffer: new TextEncoder().encode(text).buffer as ArrayBuffer,
+	// W4/R1: the Export kebab's three formats. Each just formats + downloads;
+	// the actual serializers live in export-transcript.ts (pure, unit tested)
+	// and subtitles/srt.ts (the shared SRT writer).
+	const handleExportTxt = useCallback(() => {
+		downloadText({
+			text: formatTranscriptTxt({ segments, includeTimecodes }),
 			filename: "transcript.txt",
 			mimeType: "text/plain",
+		});
+	}, [segments, includeTimecodes]);
+
+	const handleExportSrt = useCallback(() => {
+		downloadText({
+			text: formatTranscriptSrt({ segments }),
+			filename: "transcript.srt",
+			mimeType: "application/x-subrip",
+		});
+	}, [segments]);
+
+	const handleExportCsv = useCallback(() => {
+		downloadText({
+			text: formatTranscriptCsv({ segments }),
+			filename: "transcript.csv",
+			mimeType: "text/csv",
 		});
 	}, [segments]);
 
@@ -234,15 +331,45 @@ export function TranscriptView() {
 						>
 							{copied ? "Copied!" : "Copy"}
 						</Button>
-						<Button
-							type="button"
-							size="sm"
-							variant="text"
-							disabled={segments.length === 0}
-							onClick={handleExport}
-						>
-							Export
-						</Button>
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<Button
+									type="button"
+									size="icon"
+									variant="text"
+									disabled={segments.length === 0}
+									aria-label="Export transcript"
+									title="Export transcript"
+								>
+									<HugeiconsIcon icon={MoreVerticalIcon} size={16} />
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuSub>
+									<DropdownMenuSubTrigger>
+										Export as .txt
+									</DropdownMenuSubTrigger>
+									<DropdownMenuSubContent>
+										<DropdownMenuCheckboxItem
+											checked={includeTimecodes}
+											onCheckedChange={setIncludeTimecodes}
+										>
+											Include timecodes
+										</DropdownMenuCheckboxItem>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem onClick={handleExportTxt}>
+											Download .txt
+										</DropdownMenuItem>
+									</DropdownMenuSubContent>
+								</DropdownMenuSub>
+								<DropdownMenuItem onClick={handleExportSrt}>
+									Export as .srt
+								</DropdownMenuItem>
+								<DropdownMenuItem onClick={handleExportCsv}>
+									Export as .csv
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
 						<Button
 							type="button"
 							size="sm"
@@ -291,6 +418,18 @@ export function TranscriptView() {
 			)}
 			{load.status === "ready" && (
 				<div className="flex h-full flex-col">
+					<div className="border-b px-4 py-2">
+						<Input
+							size="sm"
+							placeholder="Search transcript"
+							value={searchQuery}
+							onChange={({ currentTarget }) =>
+								setSearchQuery(currentTarget.value)
+							}
+							showClearIcon
+							onClear={() => setSearchQuery("")}
+						/>
+					</div>
 					{stale && (
 						<div
 							className={
@@ -321,6 +460,9 @@ export function TranscriptView() {
 						onSelectionChange={setSelection}
 						onDeleteSelection={handleDelete}
 						removedIndices={removedIndices}
+						onSeek={handleSeek}
+						activeIndex={activeIndex}
+						query={searchQuery}
 					/>
 				</div>
 			)}

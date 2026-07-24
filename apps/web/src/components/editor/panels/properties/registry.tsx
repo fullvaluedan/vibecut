@@ -21,17 +21,21 @@ import {
 	MusicNote03Icon,
 	MagicWand05Icon,
 	DashboardSpeed02Icon,
+	ColorPickerIcon,
 } from "@hugeicons/core-free-icons";
 import { ElementParamsTab } from "./components/element-params-tab";
 import { EffectControlsTab } from "./components/effect-controls-tab";
 import { AudioSyncSection } from "./components/audio-sync-section";
+import { SolidColorTab } from "./components/solid-color-tab";
 import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
 import { HyperframesTab } from "@/features/ai-generate/components/hyperframes-tab";
 import { TemplateControlsTab } from "@/features/motion-templates/components/template-controls-tab";
+import { TextStylesSection } from "@/features/text-styles/components/text-styles-section";
 import { MasksTab } from "@/masks/components/masks-tab";
 import { SpeedTab } from "@/speed/components/speed-tab";
 import { GraphicTab } from "@/graphics/components/graphic-tab";
 import { OcShapesIcon } from "@/components/icons";
+import { isSolidColorAsset } from "@/media/solid-color";
 
 const BLENDING_PARAM_KEYS = ["opacity", "blendMode"] as const;
 const AUDIO_PARAM_KEYS = ["volume", "muted"] as const;
@@ -53,6 +57,17 @@ const TEXT_PARAM_KEYS = [
 	"background.paddingY",
 	"background.offsetX",
 	"background.offsetY",
+] as const;
+// U3 (text round): stroke + drop shadow, rendered as their own titled Section
+// under the Text tab (see buildTextTab below) rather than folded into the flat
+// list above, so Dan can tell at a glance this is a distinct control group.
+const TEXT_STROKE_SHADOW_PARAM_KEYS = [
+	"strokeColor",
+	"strokeWidth",
+	"shadowColor",
+	"shadowBlur",
+	"shadowOffsetX",
+	"shadowOffsetY",
 ] as const;
 
 export type TabContentProps = {
@@ -176,12 +191,22 @@ function buildTextTab({ element }: { element: TextElement }): PropertiesTabDef {
 		label: "Text",
 		icon: <HugeiconsIcon icon={TextFontIcon} size={16} />,
 		content: ({ trackId }) => (
-			<ElementParamsTab
-				element={element}
-				trackId={trackId}
-				paramKeys={TEXT_PARAM_KEYS}
-				sectionKey="text"
-			/>
+			<>
+				<TextStylesSection element={element} trackId={trackId} />
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={TEXT_PARAM_KEYS}
+					sectionKey="text"
+				/>
+				<ElementParamsTab
+					element={element}
+					trackId={trackId}
+					paramKeys={TEXT_STROKE_SHADOW_PARAM_KEYS}
+					sectionKey="text-stroke-shadow"
+					title="Stroke & Shadow"
+				/>
+			</>
 		),
 	};
 }
@@ -284,14 +309,35 @@ function getVideoConfig({
 	};
 }
 
-function getImageConfig({
+function buildSolidColorTab({
 	element,
+	mediaAsset,
 }: {
 	element: ImageElement;
-}): ElementPropertiesConfig {
+	mediaAsset: MediaAsset | undefined;
+}): PropertiesTabDef {
 	return {
-		defaultTab: "transform",
+		id: "color",
+		label: "Color",
+		icon: <HugeiconsIcon icon={ColorPickerIcon} size={16} />,
+		content: ({ trackId }) => (
+			<SolidColorTab element={element} trackId={trackId} mediaAsset={mediaAsset} />
+		),
+	};
+}
+
+function getImageConfig({
+	element,
+	mediaAsset,
+}: {
+	element: ImageElement;
+	mediaAsset: MediaAsset | undefined;
+}): ElementPropertiesConfig {
+	const isSolid = isSolidColorAsset({ asset: mediaAsset });
+	return {
+		defaultTab: isSolid ? "color" : "transform",
 		tabs: [
+			...(isSolid ? [buildSolidColorTab({ element, mediaAsset })] : []),
 			buildTransformTab({ element }),
 			buildBlendingTab({ element }),
 			buildMasksTab({ element }),
@@ -368,8 +414,10 @@ export function getPropertiesConfig({
 			const mediaAsset = mediaAssets.find((a) => a.id === element.mediaId);
 			return getVideoConfig({ element, mediaAsset });
 		}
-		case "image":
-			return getImageConfig({ element });
+		case "image": {
+			const mediaAsset = mediaAssets.find((a) => a.id === element.mediaId);
+			return getImageConfig({ element, mediaAsset });
+		}
 		case "sticker":
 			return getStickerConfig({ element });
 		case "graphic":

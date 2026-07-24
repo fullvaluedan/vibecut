@@ -7,7 +7,7 @@
  * row, Scale gets a Uniform Scale checkbox like Premiere's Motion effect.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
 	getKeyframeAtTime,
 	hasKeyframesForPath,
@@ -17,6 +17,15 @@ import {
 import type { AnimationPath } from "@/animation/types";
 import { useElementPlayhead } from "@/components/editor/panels/properties/hooks/use-element-playhead";
 import { useKeyframedParamProperty } from "@/components/editor/panels/properties/hooks/use-keyframed-param-property";
+import { usePropertyDraft } from "@/components/editor/panels/properties/hooks/use-property-draft";
+import { NumberField } from "@/components/ui/number-field";
+import {
+	Section,
+	SectionContent,
+	SectionFields,
+	SectionHeader,
+	SectionTitle,
+} from "@/components/section";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -38,13 +47,11 @@ import {
 } from "@/params/registry";
 import type { TimelineElement, VisualElement } from "@/timeline";
 import type { MediaTime } from "@/wasm";
+import { formatNumberForDisplay } from "@/utils/math";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-	ArrowDown01Icon,
 	ArrowLeft01Icon,
 	ArrowRight01Icon,
-	ArrowTurnBackwardIcon,
-	ArrowUp01Icon,
 	KeyframeIcon,
 	StopWatchIcon,
 } from "@hugeicons/core-free-icons";
@@ -58,9 +65,6 @@ const ROTATE = "transform.rotate";
 const OPACITY = "opacity";
 const VOLUME = "volume";
 const MUTED = "muted";
-
-/** Pixels of horizontal drag per display-unit step while scrubbing. */
-const SCRUB_PX_PER_STEP = 2;
 
 interface RowContext {
 	element: VisualElement;
@@ -76,10 +80,6 @@ function findParam(
 	return getElementParams({ element }).find((p) => p.key === key) ?? null;
 }
 
-function formatDisplay(value: number, decimals: number): string {
-	return value.toFixed(decimals);
-}
-
 function paramRange(param: ElementParamDefinition): {
 	minModel?: number;
 	maxModel?: number;
@@ -89,6 +89,60 @@ function paramRange(param: ElementParamDefinition): {
 		minModel: typeof candidate.min === "number" ? candidate.min : undefined,
 		maxModel: typeof candidate.max === "number" ? candidate.max : undefined,
 	};
+}
+
+export interface ParamResetField {
+	param: ElementParamDefinition;
+	path: AnimationPath;
+	value: number;
+}
+
+/**
+ * C1 fix: composes several param writes onto ONE evolving element instead of
+ * each starting fresh from the ORIGINAL element. `writeElementParamValue`
+ * returns a FULL TimelineElement (not a small patch), and
+ * `TimelineManager.previewElements` merges a new update shallowly onto the
+ * existing overlay (`{...existingOverlay, ...elementUpdates}`) - so a second
+ * full-element update completely clobbers the top-level keys (like `params`)
+ * the first write touched. Threading the previous write's result in as the
+ * base for the next write keeps every field's change in the SAME object, so
+ * a caller can preview all of them with one `previewElements` call. Exported
+ * for a headless unit test (this repo's `bun test` suite has no DOM).
+ */
+export function composeParamWrites({
+	element,
+	fields,
+	localTime,
+	isPlayheadWithinElementRange,
+}: {
+	element: TimelineElement;
+	fields: readonly ParamResetField[];
+	localTime: MediaTime;
+	isPlayheadWithinElementRange: boolean;
+}): TimelineElement {
+	let working = element;
+	for (const { param, path, value } of fields) {
+		const animatedChannel =
+			hasKeyframesForPath({
+				animations: working.animations,
+				propertyPath: path,
+			}) && isPlayheadWithinElementRange;
+		working = animatedChannel
+			? {
+					...working,
+					animations: upsertPathKeyframe({
+						animations: working.animations,
+						propertyPath: path,
+						time: localTime,
+						value,
+						channelLayout: getParamChannelLayout({ param }),
+						coerceValue: ({ value: next }) =>
+							coerceParamValue({ param, value: next }),
+					}),
+				}
+			: writeElementParamValue({ element: working, param, value });
+	}
+	return working;
 }
 
 /**
@@ -265,25 +319,28 @@ function KfNav({ group }: { group: KfGroup }) {
 }
 
 /**
- * Premiere-style value control. The blue number itself is the drag surface:
- * click-and-hold then drag left/right to scrub (pointer-locked), release
- * without moving to type an exact value. Tiny ▲/▼ arrows nudge by one step.
- * Values display in scaled units (e.g. scale 1.0 → 100.0); writes convert
- * back to model units and clamp to the param's range.
+ * Row value control (W6 R1): the SAME NumberField the rest of the app uses
+ * (Transform's old hand-rolled scrubbable number, with its hardcoded
+ * text-sky-400 and disabled+dimmed reset, is retired). Wired the same way
+ * property-param-field.tsx wires it: usePropertyDraft for typing/commit,
+ * onScrub for the drag handle, onReset+isDefault for NumberField's own
+ * hidden-at-default reset convention. Values display in scaled units (e.g.
+ * scale 1.0 → 100.0); writes convert back to model units and clamp to the
+ * param's range, same math as before, just funneled through NumberField.
  */
-function ValueField({
+function PropertyValueField({
 	resolved,
 	factor,
 	decimals,
 	suffix,
 	iconLabel,
 	isDefault,
-	step = 1,
 	minModel,
 	maxModel,
 	onPreviewModel,
 	onCommit,
 	onResetModel,
+	className,
 }: {
 	resolved: number;
 	factor: number;
@@ -291,182 +348,57 @@ function ValueField({
 	suffix?: string;
 	iconLabel?: string;
 	isDefault: boolean;
-	/** Increment per arrow click / per few px of drag, in DISPLAY units. */
-	step?: number;
 	minModel?: number;
 	maxModel?: number;
 	onPreviewModel: (modelValue: number) => void;
 	onCommit: () => void;
 	onResetModel?: () => void;
+	className?: string;
 }) {
-	const [editing, setEditing] = useState(false);
-	const [draft, setDraft] = useState("");
-	// Live readout while dragging: previews don't flow back into `resolved`
-	// until commit, so the scrub keeps its own display text.
-	const [scrubText, setScrubText] = useState<string | null>(null);
-	const inputRef = useRef<HTMLInputElement>(null);
-	const display = scrubText ?? formatDisplay(resolved * factor, decimals);
+	const displayValue = resolved * factor;
 
-	useEffect(() => {
-		if (editing) {
-			inputRef.current?.focus();
-			inputRef.current?.select();
-		}
-	}, [editing]);
-
-	const clampModel = (value: number) => {
-		let next = value;
-		if (minModel !== undefined) next = Math.max(minModel, next);
-		if (maxModel !== undefined) next = Math.min(maxModel, next);
+	const clampDisplayValue = (nextDisplayValue: number) => {
+		let next = nextDisplayValue;
+		if (minModel !== undefined) next = Math.max(minModel * factor, next);
+		if (maxModel !== undefined) next = Math.min(maxModel * factor, next);
 		return next;
 	};
-	/** Previews the clamped value and returns it in display units. */
-	const previewDisplay = (displayValue: number): number => {
-		const clampedModel = clampModel(displayValue / factor);
-		onPreviewModel(clampedModel);
-		return clampedModel * factor;
+
+	/** Clamps in display units, writes the model-unit value. */
+	const previewFromDisplay = (nextDisplayValue: number) => {
+		onPreviewModel(clampDisplayValue(nextDisplayValue) / factor);
 	};
 
-	const nudge = (direction: 1 | -1) => {
-		previewDisplay(resolved * factor + direction * step);
-		onCommit();
-	};
-
-	const startScrub = (event: React.PointerEvent<HTMLElement>) => {
-		if (event.button !== 0 || editing) return;
-		event.preventDefault();
-		const surface = event.currentTarget;
-		const startDisplay = resolved * factor;
-		let cumulative = 0;
-		let scrubbing = false;
-
-		const onMove = (move: PointerEvent) => {
-			cumulative += move.movementX;
-			if (!scrubbing && Math.abs(cumulative) >= 3) {
-				scrubbing = true;
-				// Pointer CAPTURE, not pointer lock: Chromium leaves the cursor
-				// invisible after exitPointerLock until the next click.
-				try {
-					surface.setPointerCapture(event.pointerId);
-				} catch {
-					// capture is best-effort
-				}
-				document.body.style.cursor = "ew-resize";
-			}
-			if (scrubbing) {
-				const shown = previewDisplay(
-					startDisplay + (cumulative / SCRUB_PX_PER_STEP) * step,
-				);
-				// Don't let the drag distance pile up past a min/max bound —
-				// otherwise the value "sticks" until you drag all the way back.
-				const cumulativeAtShown =
-					((shown - startDisplay) / step) * SCRUB_PX_PER_STEP;
-				if (Math.abs(cumulative - cumulativeAtShown) > SCRUB_PX_PER_STEP) {
-					cumulative = cumulativeAtShown;
-				}
-				setScrubText(formatDisplay(shown, decimals));
-			}
-		};
-		const onUp = () => {
-			document.removeEventListener("pointermove", onMove);
-			document.removeEventListener("pointerup", onUp);
-			document.body.style.cursor = "";
-			setScrubText(null);
-			if (scrubbing) {
-				onCommit();
-			} else {
-				// A plain click: switch to typing with the value pre-selected.
-				setDraft(display);
-				setEditing(true);
-			}
-		};
-		document.addEventListener("pointermove", onMove);
-		document.addEventListener("pointerup", onUp);
-	};
+	const draft = usePropertyDraft({
+		displayValue: formatNumberForDisplay({
+			value: displayValue,
+			fractionDigits: decimals,
+		}),
+		parse: (input) => {
+			const parsed = parseFloat(input);
+			if (Number.isNaN(parsed)) return null;
+			return clampDisplayValue(parsed);
+		},
+		onPreview: previewFromDisplay,
+		onCommit,
+	});
 
 	return (
-		<div className="flex items-center gap-0.5">
-			{onResetModel && (
-				<button
-					type="button"
-					title={isDefault ? "Already at default" : "Reset to default"}
-					disabled={isDefault}
-					className={cn(
-						"text-muted-foreground hover:text-foreground",
-						isDefault && "cursor-default opacity-25 hover:text-muted-foreground",
-					)}
-					onClick={onResetModel}
-				>
-					<HugeiconsIcon icon={ArrowTurnBackwardIcon} size={11} />
-				</button>
-			)}
-			<div className="bg-foreground/5 hover:bg-foreground/10 flex h-6 min-w-[76px] items-center justify-end gap-1 rounded px-1.5">
-				{iconLabel && (
-					<span className="text-muted-foreground select-none text-[10px]">
-						{iconLabel}
-					</span>
-				)}
-				{editing ? (
-					<input
-						ref={inputRef}
-						value={draft}
-						className="w-full min-w-0 bg-transparent text-right text-xs font-medium text-sky-400 outline-none"
-						onChange={(e) => {
-							setDraft(e.target.value);
-							const parsed = parseFloat(e.target.value);
-							if (Number.isFinite(parsed)) previewDisplay(parsed);
-						}}
-						onBlur={() => {
-							setEditing(false);
-							onCommit();
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" || e.key === "Escape") {
-								e.currentTarget.blur();
-							}
-							if (e.key === "ArrowUp") {
-								e.preventDefault();
-								nudge(1);
-								setDraft(formatDisplay(resolved * factor + step, decimals));
-							}
-							if (e.key === "ArrowDown") {
-								e.preventDefault();
-								nudge(-1);
-								setDraft(formatDisplay(resolved * factor - step, decimals));
-							}
-						}}
-					/>
-				) : (
-					<span
-						className="cursor-ew-resize select-none whitespace-nowrap text-xs font-medium text-sky-400"
-						title="Drag to scrub, click to type"
-						onPointerDown={startScrub}
-					>
-						{display}
-						{suffix ?? ""}
-					</span>
-				)}
-				<div className="flex flex-col">
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`+${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(1)}
-					>
-						<HugeiconsIcon icon={ArrowUp01Icon} size={10} />
-					</button>
-					<button
-						type="button"
-						tabIndex={-1}
-						title={`-${step}`}
-						className="text-muted-foreground hover:text-sky-400 flex h-[11px] items-center"
-						onClick={() => nudge(-1)}
-					>
-						<HugeiconsIcon icon={ArrowDown01Icon} size={10} />
-					</button>
-				</div>
-			</div>
+		<div className={cn("w-20 shrink-0", className)}>
+			<NumberField
+				icon={iconLabel}
+				suffix={suffix}
+				value={draft.displayValue}
+				dragSensitivity="slow"
+				isDefault={isDefault}
+				onFocus={draft.onFocus}
+				onChange={draft.onChange}
+				onBlur={draft.onBlur}
+				onCancel={draft.onCancel}
+				onScrub={previewFromDisplay}
+				onScrubEnd={onCommit}
+				onReset={onResetModel}
+			/>
 		</div>
 	);
 }
@@ -495,57 +427,63 @@ function Row({
 	);
 }
 
+/**
+ * Twirl-down fx group (W6 R8): was a hand-rolled border/chevron button;
+ * now the same Section/SectionHeader/SectionContent shell every other
+ * properties tab uses, so Transform shares the boxed twirl-down rhythm.
+ * Optional isAnyNonDefault/onResetGroup wire a group-level reset icon into
+ * the header (W6 R3, single-row Opacity; group-reset follow-up, multi-row
+ * Motion/Audio). Every group below uses it.
+ */
 function FxGroup({
 	title,
+	sectionKey,
+	isAnyNonDefault,
+	onResetGroup,
 	children,
 }: {
 	title: string;
+	sectionKey: string;
+	isAnyNonDefault?: boolean;
+	onResetGroup?: () => void;
 	children: React.ReactNode;
 }) {
-	const [open, setOpen] = useState(true);
 	return (
-		<div className="border-b py-1 last:border-b-0">
-			<button
-				type="button"
-				className="flex w-full items-center gap-1.5 px-1 py-1 text-left"
-				onClick={() => setOpen((o) => !o)}
-			>
-				<HugeiconsIcon
-					icon={open ? ArrowDown01Icon : ArrowRight01Icon}
-					size={14}
-					className="text-muted-foreground"
-				/>
-				<span className="text-[10px] font-bold italic text-primary/80">fx</span>
-				<span className="text-xs font-semibold">{title}</span>
-			</button>
-			{open && <div className="flex flex-col">{children}</div>}
-		</div>
+		<Section collapsible sectionKey={sectionKey} showTopBorder={false}>
+			<SectionHeader isAnyNonDefault={isAnyNonDefault} onResetGroup={onResetGroup}>
+				<span className="text-[10px] font-bold italic text-primary/80 mr-1.5">
+					fx
+				</span>
+				<SectionTitle>{title}</SectionTitle>
+			</SectionHeader>
+			<SectionContent>
+				<SectionFields>{children}</SectionFields>
+			</SectionContent>
+		</Section>
 	);
 }
 
-/** One keyframable scalar property (Rotation, Opacity). */
-function SingleRow({
+/**
+ * Pure resolved-value/default/reset logic for one keyframable scalar property
+ * (Rotation, Opacity, Level). Factored out of the row renderer (W6 group-reset
+ * follow-up) so the parent (`EffectControlsTab`) can call the SAME function to
+ * aggregate a group's "any row non-default" state and build its combined
+ * reset. Identical inputs (ctx + paramKey) always resolve to the identical
+ * value/default, so a group's reset button and `SingleRow`'s own per-row reset
+ * can never disagree about what "default" means for that property.
+ */
+function useSingleValueState({
 	ctx,
 	paramKey,
-	label,
-	factor,
-	decimals,
-	suffix,
-	iconLabel,
 }: {
 	ctx: RowContext;
 	paramKey: string;
-	label: string;
-	factor: number;
-	decimals: number;
-	suffix?: string;
-	iconLabel?: string;
 }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const param = findParam(element, paramKey);
 	const fallbackParam: ElementParamDefinition =
 		param ??
-		({ key: paramKey, label, type: "number", default: 0 } as ElementParamDefinition);
+		({ key: paramKey, label: paramKey, type: "number", default: 0 } as ElementParamDefinition);
 	const baseValue =
 		(param ? readElementParamValue({ element, param }) : null) ??
 		fallbackParam.default;
@@ -568,38 +506,83 @@ function SingleRow({
 			writeElementParamValue({ element, param: fallbackParam, value }),
 	});
 	const resolvedNumber = typeof resolved === "number" ? resolved : 0;
+	const defaultNumber =
+		typeof fallbackParam.default === "number" ? fallbackParam.default : 0;
+
+	return {
+		param,
+		resolvedNumber,
+		defaultNumber,
+		isDefault: !param || resolvedNumber === defaultNumber,
+		onPreview: animated.onPreview,
+		onCommit: animated.onCommit,
+		onReset: () => {
+			animated.onPreview(defaultNumber);
+			animated.onCommit();
+		},
+	};
+}
+
+/**
+ * One keyframable scalar property (Rotation, Opacity, Level): renders a row
+ * around `useSingleValueState`'s resolved/default/reset logic. C2 fix: the
+ * PARENT calls `useSingleValueState` once and passes the result down as
+ * `state`, instead of this row calling the identical hook again with the
+ * same ctx (the parent already resolves it for the group-reset aggregate,
+ * so every param was resolved twice per render on the drag-scrub hot path).
+ */
+function SingleRow({
+	ctx,
+	paramKey,
+	label,
+	factor,
+	decimals,
+	suffix,
+	iconLabel,
+	state,
+}: {
+	ctx: RowContext;
+	paramKey: string;
+	label: string;
+	factor: number;
+	decimals: number;
+	suffix?: string;
+	iconLabel?: string;
+	state: ReturnType<typeof useSingleValueState>;
+}) {
+	const { param, resolvedNumber, isDefault, onPreview, onCommit, onReset } = state;
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [{ path: paramKey, value: resolvedNumber }],
 	});
 	if (!param) return null;
-	const defaultNumber =
-		typeof param.default === "number" ? param.default : 0;
 
 	return (
 		<Row label={label} stopwatch={<Stopwatch group={kfGroup} label={label} />}>
 			<KfNav group={kfGroup} />
-			<ValueField
+			<PropertyValueField
 				resolved={resolvedNumber}
 				factor={factor}
 				decimals={decimals}
 				suffix={suffix}
 				iconLabel={iconLabel}
 				{...paramRange(param)}
-				isDefault={resolvedNumber === defaultNumber}
-				onPreviewModel={(v) => animated.onPreview(v)}
-				onCommit={animated.onCommit}
-				onResetModel={() => {
-					animated.onPreview(defaultNumber);
-					animated.onCommit();
-				}}
+				isDefault={isDefault}
+				onPreviewModel={(v) => onPreview(v)}
+				onCommit={onCommit}
+				onResetModel={onReset}
 			/>
 		</Row>
 	);
 }
 
-/** Position: X and Y side by side, one stopwatch for both channels. */
-function PositionRow({ ctx }: { ctx: RowContext }) {
+/**
+ * Pure resolved-value/default/reset logic for Position (X + Y). Same lift
+ * rationale as `useSingleValueState` above: the parent's Motion group-reset
+ * aggregates this SAME computation, so it can never disagree with
+ * `PositionRow`'s own per-axis reset about what "default" means.
+ */
+function usePositionState({ ctx }: { ctx: RowContext }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const editor = useEditor();
 	const paramX = findParam(element, POSITION_X);
@@ -620,6 +603,8 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 	};
 	const x = resolve(POSITION_X, paramX);
 	const y = resolve(POSITION_Y, paramY);
+	const defaultX = typeof paramX?.default === "number" ? paramX.default : 0;
+	const defaultY = typeof paramY?.default === "number" ? paramY.default : 0;
 
 	const previewAxis = (
 		param: ElementParamDefinition,
@@ -665,6 +650,52 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 	};
 
 	const commit = () => editor.timeline.commitPreview();
+	const previewX = (value: number) => {
+		if (paramX) previewAxis(paramX, POSITION_X, value);
+	};
+	const previewY = (value: number) => {
+		if (paramY) previewAxis(paramY, POSITION_Y, value);
+	};
+
+	return {
+		paramX,
+		paramY,
+		x,
+		y,
+		defaultX,
+		defaultY,
+		isDefaultX: !paramX || x === defaultX,
+		isDefaultY: !paramY || y === defaultY,
+		isAnyNonDefault:
+			Boolean(paramX && paramY) && (x !== defaultX || y !== defaultY),
+		previewX,
+		previewY,
+		commit,
+		resetX: () => {
+			previewX(defaultX);
+			commit();
+		},
+		resetY: () => {
+			previewY(defaultY);
+			commit();
+		},
+	};
+}
+
+/**
+ * Position: X and Y side by side, one stopwatch for both channels. C2 fix:
+ * the parent calls `usePositionState` once and passes the SAME result down
+ * as `state` (see `SingleRow`'s comment for why).
+ */
+function PositionRow({
+	ctx,
+	state,
+}: {
+	ctx: RowContext;
+	state: ReturnType<typeof usePositionState>;
+}) {
+	const pos = state;
+	const { paramX, paramY, x, y, isDefaultX, isDefaultY, previewX, previewY, commit } = pos;
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [
@@ -681,40 +712,34 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 			stopwatch={<Stopwatch group={kfGroup} label="position" />}
 		>
 			<KfNav group={kfGroup} />
-			<ValueField
+			<PropertyValueField
 				resolved={x}
 				factor={1}
 				decimals={1}
 				iconLabel="X"
 				{...paramRange(paramX)}
-				isDefault={x === paramX.default}
-				onPreviewModel={(v) => previewAxis(paramX, POSITION_X, v)}
+				isDefault={isDefaultX}
+				onPreviewModel={previewX}
 				onCommit={commit}
-				onResetModel={() => {
-					previewAxis(paramX, POSITION_X, Number(paramX.default) || 0);
-					commit();
-				}}
+				onResetModel={pos.resetX}
 			/>
-			<ValueField
+			<PropertyValueField
 				resolved={y}
 				factor={1}
 				decimals={1}
 				iconLabel="Y"
 				{...paramRange(paramY)}
-				isDefault={y === paramY.default}
-				onPreviewModel={(v) => previewAxis(paramY, POSITION_Y, v)}
+				isDefault={isDefaultY}
+				onPreviewModel={previewY}
 				onCommit={commit}
-				onResetModel={() => {
-					previewAxis(paramY, POSITION_Y, Number(paramY.default) || 0);
-					commit();
-				}}
+				onResetModel={pos.resetY}
 			/>
 			<button
 				type="button"
 				title="Center horizontally in frame"
 				className="text-muted-foreground hover:text-foreground px-0.5 text-[10px]"
 				onClick={() => {
-					previewAxis(paramX, POSITION_X, 0);
+					previewX(0);
 					commit();
 				}}
 			>
@@ -725,7 +750,7 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 				title="Center vertically in frame"
 				className="text-muted-foreground hover:text-foreground px-0.5 text-[10px]"
 				onClick={() => {
-					previewAxis(paramY, POSITION_Y, 0);
+					previewY(0);
 					commit();
 				}}
 			>
@@ -736,10 +761,13 @@ function PositionRow({ ctx }: { ctx: RowContext }) {
 }
 
 /**
- * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
- * drives both axes; unchecked → separate Scale Height / Scale Width rows.
+ * Pure resolved-value/default/reset logic for Scale (X + Y). Same lift as
+ * `usePositionState` above. The Uniform Scale checkbox stays LOCAL UI state in
+ * `ScaleRows` (it only picks which axis a live scrub drives, never what
+ * "default" means), so it is deliberately NOT part of this shared computation.
+ * A group reset always restores BOTH axes regardless of that toggle.
  */
-function ScaleRows({ ctx }: { ctx: RowContext }) {
+function useScaleState({ ctx }: { ctx: RowContext }) {
 	const { element, trackId, localTime, isPlayheadWithinElementRange } = ctx;
 	const editor = useEditor();
 	const paramX = findParam(element, SCALE_X);
@@ -760,7 +788,7 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 	};
 	const sx = resolve(SCALE_X, paramX);
 	const sy = resolve(SCALE_Y, paramY);
-	const [uniform, setUniform] = useState(sx === sy);
+	const defaultScale = typeof paramX?.default === "number" ? paramX.default : 1;
 
 	const previewAxis = (
 		param: ElementParamDefinition,
@@ -812,6 +840,43 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 		});
 	};
 	const commit = () => editor.timeline.commitPreview();
+
+	return {
+		paramX,
+		paramY,
+		sx,
+		sy,
+		defaultScale,
+		isDefaultSx: !paramX || sx === defaultScale,
+		isDefaultSy: !paramY || sy === defaultScale,
+		isAnyNonDefault:
+			Boolean(paramX && paramY) && (sx !== defaultScale || sy !== defaultScale),
+		previewScale,
+		commit,
+		resetBoth: () => {
+			previewScale(defaultScale, "both");
+			commit();
+		},
+	};
+}
+
+/**
+ * Scale with Premiere's Uniform Scale behavior: checked → one "Scale" value
+ * drives both axes; unchecked → separate Scale Height / Scale Width rows.
+ * C2 fix: the parent calls `useScaleState` once and passes the SAME result
+ * down as `state` (see `SingleRow`'s comment for why).
+ */
+function ScaleRows({
+	ctx,
+	state,
+}: {
+	ctx: RowContext;
+	state: ReturnType<typeof useScaleState>;
+}) {
+	const scaleState = state;
+	const { paramX, paramY, sx, sy, defaultScale, isDefaultSx, isDefaultSy, previewScale, commit } =
+		scaleState;
+	const [uniform, setUniform] = useState(sx === sy);
 	const kfGroup = useKfGroup({
 		ctx,
 		entries: [
@@ -821,7 +886,6 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 	});
 
 	if (!paramX || !paramY) return null;
-	const defaultScale = Number(paramX.default) || 1;
 
 	return (
 		<>
@@ -830,13 +894,13 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 				stopwatch={<Stopwatch group={kfGroup} label="scale" />}
 			>
 				<KfNav group={kfGroup} />
-				<ValueField
+				<PropertyValueField
 					resolved={sy}
 					factor={100}
 					decimals={1}
 					iconLabel="S"
 					{...paramRange(paramY)}
-					isDefault={uniform ? sx === defaultScale && sy === defaultScale : sy === defaultScale}
+					isDefault={uniform ? isDefaultSx && isDefaultSy : isDefaultSy}
 					onPreviewModel={(v) => previewScale(v, uniform ? "both" : "y")}
 					onCommit={commit}
 					onResetModel={() => {
@@ -847,13 +911,13 @@ function ScaleRows({ ctx }: { ctx: RowContext }) {
 			</Row>
 			<Row label="Scale Width">
 				<div className={cn(uniform && "pointer-events-none opacity-40")}>
-					<ValueField
+					<PropertyValueField
 						resolved={sx}
 						factor={100}
 						decimals={1}
 						iconLabel="W"
 						{...paramRange(paramX)}
-						isDefault={sx === defaultScale}
+						isDefault={isDefaultSx}
 						onPreviewModel={(v) => previewScale(v, "x")}
 						onCommit={commit}
 						onResetModel={() => {
@@ -1004,12 +1068,98 @@ export function EffectControlsTab({
 		localTime,
 		isPlayheadWithinElementRange,
 	};
+	const editor = useEditor();
+
+	// Group-level reset (W6 follow-up): Motion and Audio are MULTI-ROW groups, so
+	// their header reset aggregates each row's OWN resolved/default computation:
+	// usePositionState/useScaleState/useSingleValueState, the SAME hooks the rows
+	// below call to render themselves. So a group's "non-default" flag and its
+	// reset action can never disagree with any individual row's.
+	const positionState = usePositionState({ ctx });
+	const scaleState = useScaleState({ ctx });
+	const rotationState = useSingleValueState({ ctx, paramKey: ROTATE });
+	const opacityState = useSingleValueState({ ctx, paramKey: OPACITY });
+	// Volume only exists on some element types; the hook is still called
+	// unconditionally (Rules of Hooks) and resolves to isDefault=true (no
+	// contribution) when the element has no volume param.
+	const volumeState = useSingleValueState({ ctx, paramKey: VOLUME });
+
+	const motionIsAnyNonDefault =
+		positionState.isAnyNonDefault ||
+		scaleState.isAnyNonDefault ||
+		!rotationState.isDefault;
+	const resetMotionGroup = () => {
+		// C1 fix: calling previewX/previewY/previewScale/rotation.onPreview
+		// separately each built a FULL element patch from the ORIGINAL element,
+		// and previewElements' shallow overlay merge let each call clobber the
+		// previous field's reset - only the LAST call (Rotation) ever survived.
+		// composeParamWrites threads every write through the SAME evolving
+		// element, so one previewElements call carries Position + Scale +
+		// Rotation together, then ONE commit lands it as one undo step.
+		const fields: ParamResetField[] = [];
+		if (positionState.paramX) {
+			fields.push({
+				param: positionState.paramX,
+				path: POSITION_X,
+				value: positionState.defaultX,
+			});
+		}
+		if (positionState.paramY) {
+			fields.push({
+				param: positionState.paramY,
+				path: POSITION_Y,
+				value: positionState.defaultY,
+			});
+		}
+		if (scaleState.paramX) {
+			fields.push({
+				param: scaleState.paramX,
+				path: SCALE_X,
+				value: scaleState.defaultScale,
+			});
+		}
+		if (scaleState.paramY) {
+			fields.push({
+				param: scaleState.paramY,
+				path: SCALE_Y,
+				value: scaleState.defaultScale,
+			});
+		}
+		if (rotationState.param) {
+			fields.push({
+				param: rotationState.param,
+				path: ROTATE,
+				value: rotationState.defaultNumber,
+			});
+		}
+		const working = composeParamWrites({
+			element,
+			fields,
+			localTime,
+			isPlayheadWithinElementRange,
+		});
+		editor.timeline.previewElements({
+			updates: [{ trackId, elementId: element.id, updates: working }],
+		});
+		editor.timeline.commitPreview();
+	};
+
+	// Audio's group reset covers Level (the only field with a per-row reset
+	// affordance). Mute is a plain on/off bypass with no reset button of its own,
+	// so it's deliberately left out of "non-default" here: the group flag would
+	// otherwise promise a reset the row itself can't deliver (see PATCHES.md).
+	const audioIsAnyNonDefault = !volumeState.isDefault;
 
 	return (
 		<div className="flex flex-col px-2 pt-2">
-			<FxGroup title="Motion">
-				<PositionRow ctx={ctx} />
-				<ScaleRows ctx={ctx} />
+			<FxGroup
+				title="Motion"
+				sectionKey="effect-controls:motion"
+				isAnyNonDefault={motionIsAnyNonDefault}
+				onResetGroup={resetMotionGroup}
+			>
+				<PositionRow ctx={ctx} state={positionState} />
+				<ScaleRows ctx={ctx} state={scaleState} />
 				<SingleRow
 					ctx={ctx}
 					paramKey={ROTATE}
@@ -1018,9 +1168,15 @@ export function EffectControlsTab({
 					decimals={1}
 					suffix="°"
 					iconLabel="∠"
+					state={rotationState}
 				/>
 			</FxGroup>
-			<FxGroup title="Opacity">
+			<FxGroup
+				title="Opacity"
+				sectionKey="effect-controls:opacity"
+				isAnyNonDefault={!opacityState.isDefault}
+				onResetGroup={opacityState.onReset}
+			>
 				<SingleRow
 					ctx={ctx}
 					paramKey={OPACITY}
@@ -1029,10 +1185,16 @@ export function EffectControlsTab({
 					decimals={0}
 					suffix="%"
 					iconLabel="O"
+					state={opacityState}
 				/>
 			</FxGroup>
 			{findParam(element, VOLUME) && (
-				<FxGroup title="Audio">
+				<FxGroup
+					title="Audio"
+					sectionKey="effect-controls:audio"
+					isAnyNonDefault={audioIsAnyNonDefault}
+					onResetGroup={volumeState.onReset}
+				>
 					<SingleRow
 						ctx={ctx}
 						paramKey={VOLUME}
@@ -1041,6 +1203,7 @@ export function EffectControlsTab({
 						decimals={1}
 						suffix=" dB"
 						iconLabel="♪"
+						state={volumeState}
 					/>
 					<MuteRow ctx={ctx} />
 					<AudioToolsRow ctx={ctx} />

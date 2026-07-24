@@ -35,7 +35,6 @@ import {
 	AudioWave01Icon,
 	Bookmark02Icon,
 	Delete02Icon,
-	SnowIcon,
 	ScissorIcon,
 	MagnetIcon,
 	SearchAddIcon,
@@ -55,6 +54,7 @@ import { PopoverTrigger } from "@/components/ui/popover";
 import { useGraphEditorController } from "./graph-editor/use-controller";
 import { RunHyperframesButton } from "@/features/ai-generate/components/run-hyperframes-button";
 import { AiCutMenu } from "@/features/editing/components/ai-cut-menu";
+import { HIDE_RUN_HYPERFRAMES_CLUSTER } from "@/features/editing/surface-flags";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
 import { CloseGapsCommand } from "@/commands/timeline/track/close-gaps";
 import { toast } from "sonner";
@@ -216,13 +216,6 @@ function ToolbarLeftSection() {
 				/>
 
 				<ToolbarButton
-					icon={<HugeiconsIcon icon={SnowIcon} />}
-					tooltip="Freeze frame (coming soon)"
-					disabled={true}
-					onClick={({ event: _event }) => {}}
-				/>
-
-				<ToolbarButton
 					icon={<HugeiconsIcon icon={Layers01Icon} />}
 					tooltip="Nest selection into a new sequence"
 					disabled={selectedElements.length === 0}
@@ -294,7 +287,7 @@ function SceneSelector() {
 				<SplitButtonLeft>{currentScene?.name || "No Scene"}</SplitButtonLeft>
 				<SplitButtonSeparator />
 				<ScenesView>
-					<SplitButtonRight onClick={() => {}}>
+					<SplitButtonRight>
 						<HugeiconsIcon icon={Layers01Icon} className="size-4" />
 					</SplitButtonRight>
 				</ScenesView>
@@ -332,7 +325,8 @@ function ToolbarRightSection({
 
 	return (
 		<div className="flex items-center gap-1">
-			<RunHyperframesButton />
+			{/* RUN HYPERFRAMES cluster parked (roadmap D6); code stays, just hidden. */}
+			{!HIDE_RUN_HYPERFRAMES_CLUSTER && <RunHyperframesButton />}
 			<AiCutMenu />
 
 			<div className="bg-border mx-1 h-6 w-px" />

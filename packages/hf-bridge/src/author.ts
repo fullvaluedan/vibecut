@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
 import { resolveClaude } from "./renderer";
+import { stableOpId } from "./stable-op-id";
 import type {
 	ClaudeAuth,
 	EffectPlan,
@@ -169,6 +170,30 @@ async function planViaApiKeySchema(
 	return { raw: extractJson(text), usage };
 }
 
+/** Kill leash for the claude-code CLI spawn (round 12 U3/R4): a wedged CLI (a
+ * hung network call, a login prompt waiting on a terminal that isn't there)
+ * previously kept the child - and the whole Director run - alive forever. On
+ * expiry the child is killed and the plan call rejects with a plain message. */
+const CLAUDE_CLI_KILL_TIMEOUT_MS = 300_000;
+
+/** Pure branch decision for the kill timer below, split out so it is
+ * unit-testable without actually spawning anything. On Windows the CLI runs
+ * through `shell: true` (resolveClaude in renderer.ts needs the shell to
+ * resolve the bare `claude` command's `.cmd` shim via PATHEXT), which means
+ * the spawned pid is cmd.exe, not the real claude/node process underneath
+ * it. A plain `child.kill()` only reaps that cmd.exe wrapper and orphans the
+ * real process, which keeps running the hung call. So on Windows we walk and
+ * kill the whole process tree by pid instead. */
+export function shouldTaskkillOnTimeout({
+	platform,
+	pid,
+}: {
+	platform: NodeJS.Platform;
+	pid: number | undefined;
+}): boolean {
+	return platform === "win32" && pid != null;
+}
+
 function planViaClaudeCode(
 	prompt: string,
 ): Promise<{ raw: unknown; usage: TokenUsage | null }> {
@@ -181,10 +206,42 @@ function planViaClaudeCode(
 		});
 		let out = "";
 		let err = "";
+		// Kill timer (round 12 U3/R4, tree-kill added later): reject FIRST (so
+		// the caller fails with the real reason, not a generic exit-code message
+		// from the kill's close event), then kill the child. `timedOut` makes the
+		// close handler a no-op after.
+		let timedOut = false;
+		const killTimer = setTimeout(() => {
+			timedOut = true;
+			reject(
+				new Error(
+					`The claude CLI did not respond within ${CLAUDE_CLI_KILL_TIMEOUT_MS / 60_000} minutes and was stopped. Check that the CLI works (run \`claude\` in a terminal), or switch Settings -> AI to an Anthropic API key.`,
+				),
+			);
+			if (shouldTaskkillOnTimeout({ platform: process.platform, pid: child.pid })) {
+				// Fire-and-forget: we already rejected above, so this is best-effort
+				// cleanup and must never itself throw or reject anything.
+				try {
+					spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]).on(
+						"error",
+						() => {},
+					);
+				} catch {
+					child.kill();
+				}
+			} else {
+				child.kill();
+			}
+		}, CLAUDE_CLI_KILL_TIMEOUT_MS);
 		child.stdout.on("data", (d) => (out += d.toString()));
 		child.stderr.on("data", (d) => (err += d.toString()));
-		child.on("error", reject);
+		child.on("error", (e) => {
+			clearTimeout(killTimer);
+			reject(e);
+		});
 		child.on("close", (code) => {
+			clearTimeout(killTimer);
+			if (timedOut) return; // already rejected; this close came from the kill
 			// claude-code `--output-format json` reports API/auth errors in the STDOUT
 			// JSON (`is_error` / `api_error_status` / `result`) — typically with a
 			// NON-zero exit and EMPTY stderr. Parse stdout FIRST so we surface the real
@@ -397,7 +454,11 @@ export type DirectorOpCategory =
 	| "deadair"
 	| "noise"
 	| "redundancy"
-	| "context";
+	| "context"
+	| "retake"
+	| "structural"
+	| "speculation"
+	| "join";
 
 /** One reviewed operation. `cut`/`take_select` REMOVE [startSec,endSec); `reorder` MOVES it to `targetStartSec`; `keep` is informational. */
 export interface DirectorOp {
@@ -478,6 +539,7 @@ const DIRECTOR_SCHEMA = {
 					reason: { type: "string" },
 					confidence: { type: "number" },
 					targetStartSec: { type: "number" },
+					kind: { type: "string", enum: ["speculation"] },
 				},
 				required: ["op", "startSec", "endSec", "reason", "confidence"],
 				additionalProperties: false,
@@ -488,20 +550,10 @@ const DIRECTOR_SCHEMA = {
 	additionalProperties: false,
 } as const;
 
-/** Deterministic id for an op (djb2 over its identity fields) so re-planning the same output is stable. */
-function stableOpId(op: {
-	op: string;
-	startSec: number;
-	endSec: number;
-	targetStartSec?: number;
-}): string {
-	const key = `${op.op}|${op.startSec}|${op.endSec}|${op.targetStartSec ?? ""}`;
-	let h = 5381;
-	for (let i = 0; i < key.length; i++) {
-		h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
-	}
-	return `op_${h.toString(36)}`;
-}
+/** Re-export the deterministic op-id hash for the barrel. The implementation lives
+ * in ./stable-op-id (a dependency-free leaf) so client code can import it without
+ * pulling this module's node:child_process graph. Used internally at planOps below. */
+export { stableOpId };
 
 /**
  * Render the per-segment signal table the planner reasons over (pipe-escaped).
@@ -548,11 +600,38 @@ export function renderAssetCatalog(catalog: readonly DirectorAssetSummary[]): st
 	return `ASSET CATALOG (the source clips assembled into this timeline):\n${lines.join("\n")}`;
 }
 
+/** Clamp a compression target to the sane band (fraction of words to REMOVE). A
+ * value at/above 0.8 would license gutting the video; below 0 is meaningless. */
+export const MAX_COMPRESSION_TARGET = 0.8;
+export function clampCompressionTarget(target: number): number {
+	return Math.max(0, Math.min(MAX_COMPRESSION_TARGET, target));
+}
+
+/**
+ * Version of the Director plan prompt below. The eval cache keys on pass INPUT
+ * only, so ANY wording change here must bump this constant; it rides the eval
+ * payload (the VERIFY_PROMPT_VERSION precedent) or the eval silently replays
+ * stale cached plans. v2: trailing-speculation tagging (round 9) - coherent
+ * trailing musing arrives as "kind":"speculation" and is kept by default.
+ */
+export const DIRECTOR_PROMPT_VERSION = 2;
+
+/**
+ * Version of the SECOND-PASS preamble below (round 14 U1). The multi-pass Director
+ * re-reads the ASSEMBLED result of its own first cut and hunts residual dead weight
+ * / repeats; that re-read reuses this plan pass with an extra preamble, so a wording
+ * change to the preamble must bump THIS constant (the eval threads it into the plan
+ * cache key alongside DIRECTOR_PROMPT_VERSION, the VERIFY_PROMPT_VERSION precedent).
+ * The base prompt below is shared, so DIRECTOR_PROMPT_VERSION still governs it. */
+export const DIRECTOR_P2_PROMPT_VERSION = 1;
+
 export function buildDirectorPrompt({
 	segments,
 	totalSec,
 	taste,
 	catalog,
+	compressionTarget,
+	secondPass,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
@@ -560,6 +639,13 @@ export function buildDirectorPrompt({
 	taste?: string;
 	/** Per-clip summary block; rendered only for multi-clip input. */
 	catalog?: readonly DirectorAssetSummary[];
+	/** Fraction of words this creator typically REMOVES (0..0.8). When present, the
+	 * prompt gains an explicit compression contract; absent = byte-identical prompt. */
+	compressionTarget?: number;
+	/** Round 14 U1: when true this is the SECOND cut, reading the already-tightened
+	 * assembled result. Prepends a preamble that reframes the task as hunting the
+	 * dead weight / repeats the first cut left behind. Absent = byte-identical prompt. */
+	secondPass?: boolean;
 }): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
 	const hasImportance = segments.some((s) => s.importance !== undefined);
@@ -574,10 +660,27 @@ export function buildDirectorPrompt({
 	const keepRule = hasImportance
 		? `\n- Emit "keep" ops on the genuinely LOAD-BEARING spans — the thesis, the payoff, a landed joke, a surprising or pivotal line — ESPECIALLY ones the imp score underrates (a quiet but important moment imp can't detect). A "keep" op protects that span from removal; it never deletes anything.`
 		: "";
-	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
+	// Compression contract (U3/KTD4): when the caller supplies a measured removal
+	// ratio, license whole-tangent/section drops at that aggressiveness. Conditional
+	// and appended beside the taste note — absent field ⇒ byte-identical prompt.
+	const compressionBlock =
+		compressionTarget !== undefined && Number.isFinite(compressionTarget)
+			? `\nCOMPRESSION TARGET: This creator's finished cuts remove roughly ${Math.round(
+					clampCompressionTarget(compressionTarget) * 100,
+				)}% of the raw spoken words. Match that ruthlessness: drop WHOLE tangents, abandoned threads, and entire low-value sections that don't serve the core point — not just word-level trims. Aim near that removal ratio rather than a timid handful of cuts. The editor reviews every cut and restores anything you over-reached, so UNDER-cutting (leaving the video bloated) wastes their time more than over-cutting.\n`
+			: "";
+	// Second-pass preamble (round 14 U1): this is the SECOND read, over the result
+	// of the first cut already applied. The transcript below is what the video reads
+	// like now - shorter and cleaner - so far-apart repeats have become adjacent and
+	// leftover dead weight stands out. The task is the residue the first pass missed,
+	// not a fresh full edit. Absent field => byte-identical prompt (DIRECTOR_PROMPT_VERSION).
+	const secondPassBlock = secondPass
+		? `SECOND PASS - you are re-reading a cut that has ALREADY been tightened once. The signal table below is the ASSEMBLED result: the silences, fillers, and obvious repeats the first pass caught are GONE, and the remaining lines now sit next to each other. Your job is the residue the first pass missed: repeats or restatements that only became adjacent once the material between them was cut, dead weight and tangents that now stand out against the tighter cut, and any stalling the first read left in. Do NOT re-cut what is already tight - propose only genuine remaining removals. Finding nothing more is a fine answer (return an empty operations list).\n\n`
+		: "";
+	return `${secondPassBlock}You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
-- "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness.
+- "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness. TRAILING SPECULATION EXCEPTION: when the speaker muses about implications, predictions, or future plans AFTER the point has already landed, AND that musing is coherent (complete deliberate sentences, not fumbling), still emit the cut but add "kind":"speculation" - this editor deliberately keeps that style, so tagged cuts are offered unchecked instead of auto-applied. Incoherent rambling, abandoned threads, and trailing dead time are plain cuts, never "speculation".
 - "take_select": ONLY when two DIFFERENT source clips (different src in the table) cover the SAME scripted line - the transcript text must be NEAR-IDENTICAL, not merely the same topic. Keep the stronger take (higher loudness, steadier wpm, fewer fillers); the op's [startSec,endSec) is the WEAKER take to REMOVE. If the wording differs or you are not sure they are the same line, do NOT take_select - a wrong merge deletes real content. Single-take footage has nothing to take_select - that is fine.
 - "reorder": move a strong hook line earlier - [startSec,endSec) is the span to move and targetStartSec is where it should land. Use sparingly, only for a clear hook-to-front win.
 - "keep": optionally mark a load-bearing span you deliberately kept.
@@ -589,8 +692,8 @@ Rules:
 
 SIGNAL TABLE:
 ${renderSignalTable(segments)}
-${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
-Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only)}, ...]}.`;
+${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}${compressionBlock}
+Respond with ONLY JSON: {"operations":[{"op","startSec","endSec","reason","confidence","targetStartSec"(reorder only),"kind"(coherent trailing speculation only)}, ...]}.`;
 }
 
 /**
@@ -635,6 +738,11 @@ export function sanitizeDirectorPlan(raw: unknown, totalSec: number): DirectorPl
 				? Math.max(0, Math.min(1, confidence))
 				: 0.5,
 			...(targetStartSec !== undefined ? { targetStartSec } : {}),
+			// Prompt v2: a coherent trailing-speculation cut is categorized and
+			// surfaced as an unchecked opt-in row (this editor keeps that style).
+			...(op === "cut" && it.kind === "speculation"
+				? { category: "speculation" as const, defaultAccept: false }
+				: {}),
 		});
 	}
 
@@ -668,15 +776,22 @@ export async function planDirector({
 	totalSec,
 	taste,
 	catalog,
+	compressionTarget,
+	secondPass,
 	auth,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
 	taste?: string;
 	catalog?: readonly DirectorAssetSummary[];
+	/** Fraction of words to REMOVE (0..0.8); adds the compression contract (U3). */
+	compressionTarget?: number;
+	/** Round 14 U1: this is the second cut, reading the assembled result (adds the
+	 * second-pass preamble). Absent = the ordinary first-pass prompt. */
+	secondPass?: boolean;
 	auth: ClaudeAuth;
 }): Promise<{ plan: DirectorPlan; usage: TokenUsage | null }> {
-	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog });
+	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog, compressionTarget, secondPass });
 	const { raw, usage } = await planJson({ prompt, auth, schema: DIRECTOR_SCHEMA });
 	return { plan: sanitizeDirectorPlan(raw, totalSec), usage };
 }

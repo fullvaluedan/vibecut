@@ -9,17 +9,20 @@
  * but a coherent rebuild always wins.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	Section,
 	SectionContent,
+	SectionField,
+	SectionFields,
 	SectionHeader,
 	SectionTitle,
 } from "@/components/section";
 import { Button } from "@/components/ui/button";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { Input } from "@/components/ui/input";
+import { SliderNumberPair } from "@/components/ui/slider-number-pair";
 import {
 	Select,
 	SelectContent,
@@ -39,6 +42,11 @@ import { UpdateElementsCommand } from "@/commands/timeline/element/update-elemen
 import type { TextElement } from "@/timeline";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { loadFonts } from "@/fonts/google-fonts";
+
+const SCALE_MIN = 0.2;
+const SCALE_MAX = 4;
+/** Two decimals: the same precision the duration seed already rounded to. */
+const NUMBER_STEP = 0.01;
 
 export function TemplateControlsTab({
 	element,
@@ -70,10 +78,29 @@ export function TemplateControlsTab({
 	}, [marker, template, accentSeed]);
 	const [variables, setVariables] =
 		useState<TemplateVariables>(initialVariables);
+	// C4 fix: a timeline trim can push element.duration outside the template's
+	// declared durationRange (trims never clamp to it). Seed the field already
+	// clamped so the tab opens showing a value consistent with what the
+	// Duration slider can express, instead of one only the number half could
+	// show.
+	const rawDurationSec = element.duration / TICKS_PER_SECOND;
+	const seededDurationSec = template
+		? Math.min(
+				template.durationRange.max,
+				Math.max(template.durationRange.min, rawDurationSec),
+			)
+		: rawDurationSec;
 	const [durationSec, setDurationSec] = useState(
-		Number((element.duration / TICKS_PER_SECOND).toFixed(2)),
+		Number(seededDurationSec.toFixed(2)),
 	);
 	const [scale, setScale] = useState(element.motionTemplate?.scale ?? 1);
+	// The shared SliderNumberPair splits every edit into onPreview (may fire
+	// many times per drag or keystroke) and onCommit (no arguments). React
+	// state alone is not enough here because usePropertyDraft can preview and
+	// commit inside the SAME tick, so these refs carry the latest previewed
+	// value into the commit that follows.
+	const durationRef = useRef(durationSec);
+	const scaleRef = useRef(scale);
 
 	if (!marker || !template) {
 		return (
@@ -138,20 +165,30 @@ export function TemplateControlsTab({
 		setVariables(next);
 		// A picked Google font must be fetched before it renders in the preview.
 		if (key === "font" && value) void loadFonts({ families: [value] });
-		apply(next, durationSec);
+		apply(next, durationRef.current, scaleRef.current);
 	};
 
-	const commitDuration = (value: number) => {
+	/** Slider drag / typing: move the readout only, no undo entry yet. */
+	const previewDuration = (value: number) => {
 		const range = template.durationRange;
 		const clamped = Math.max(range.min, Math.min(range.max, value));
+		durationRef.current = clamped;
 		setDurationSec(clamped);
-		apply(variables, clamped);
 	};
 
-	const commitScale = (value: number) => {
-		const clamped = Math.max(0.2, Math.min(4, value));
+	/** Release / Enter / blur: one rebuild, one undo step (unchanged). */
+	const commitDuration = () => {
+		apply(variables, durationRef.current, scaleRef.current);
+	};
+
+	const previewScale = (value: number) => {
+		const clamped = Math.max(SCALE_MIN, Math.min(SCALE_MAX, value));
+		scaleRef.current = clamped;
 		setScale(clamped);
-		apply(variables, durationSec, clamped);
+	};
+
+	const commitScale = () => {
+		apply(variables, durationRef.current, scaleRef.current);
 	};
 
 	const detach = () => {
@@ -181,65 +218,60 @@ export function TemplateControlsTab({
 				<SectionHeader>
 					<SectionTitle className="flex-1">{template.name}</SectionTitle>
 				</SectionHeader>
-				<SectionContent className="flex flex-col gap-2.5 px-3 pb-3">
-					{template.fields.map((field) => {
-						const raw = variables[field.key];
-						const value = typeof raw === "string" ? raw : "";
-						if (field.type === "color") {
+				<SectionContent>
+					<SectionFields>
+						{template.fields.map((field) => {
+							const raw = variables[field.key];
+							const value = typeof raw === "string" ? raw : "";
+							if (field.type === "color") {
+								return (
+									<SectionField key={field.key} label={field.label}>
+										<ColorPicker
+											value={(value || accentFallback)
+												.replace(/^#/, "")
+												.toUpperCase()}
+											onChangeEnd={(hex) =>
+												commitVariable(field.key, `#${hex.replace(/^#/, "")}`)
+											}
+										/>
+									</SectionField>
+								);
+							}
+							if (field.type === "enum" && field.options) {
+								const current = value || field.options[0].value;
+								return (
+									<SectionField key={field.key} label={field.label}>
+										<Select
+											value={current}
+											onValueChange={(next) => commitVariable(field.key, next)}
+										>
+											<SelectTrigger className="w-full">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												{field.options.map((o) => (
+													<SelectItem key={o.value} value={o.value}>
+														{o.label}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</SectionField>
+								);
+							}
 							return (
-								<label
+								<TextField
 									key={field.key}
-									className="flex items-center justify-between gap-2 text-xs"
-								>
-									<span className="text-muted-foreground">{field.label}</span>
-									<ColorPicker
-										className="size-6 rounded border"
-										value={(value || accentFallback).replace(/^#/, "")}
-										onChangeEnd={(hex) =>
-											commitVariable(field.key, `#${hex.replace(/^#/, "")}`)
-										}
-									/>
-								</label>
+									label={field.label}
+									value={value}
+									onChange={(next) =>
+										setVariables((prev) => ({ ...prev, [field.key]: next }))
+									}
+									onCommit={(next) => commitVariable(field.key, next)}
+								/>
 							);
-						}
-						if (field.type === "enum" && field.options) {
-							const current = value || field.options[0].value;
-							return (
-								<label
-									key={field.key}
-									className="flex items-center justify-between gap-2 text-xs"
-								>
-									<span className="text-muted-foreground">{field.label}</span>
-									<Select
-										value={current}
-										onValueChange={(next) => commitVariable(field.key, next)}
-									>
-										<SelectTrigger className="h-7 w-36">
-											<SelectValue />
-										</SelectTrigger>
-										<SelectContent>
-											{field.options.map((o) => (
-												<SelectItem key={o.value} value={o.value}>
-													{o.label}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
-								</label>
-							);
-						}
-						return (
-							<TextField
-								key={field.key}
-								label={field.label}
-								value={value}
-								onChange={(next) =>
-									setVariables((prev) => ({ ...prev, [field.key]: next }))
-								}
-								onCommit={(next) => commitVariable(field.key, next)}
-							/>
-						);
-					})}
+						})}
+					</SectionFields>
 				</SectionContent>
 			</Section>
 
@@ -247,20 +279,23 @@ export function TemplateControlsTab({
 				<SectionHeader>
 					<SectionTitle className="flex-1">Size</SectionTitle>
 				</SectionHeader>
-				<SectionContent className="flex flex-col gap-1.5 px-3 pb-3">
-					<div className="flex items-center justify-between gap-2">
-						<span className="text-muted-foreground text-xs">Scale (×)</span>
-						<NumberField
-							key={`scale-${scale}`}
-							value={scale}
-							min={0.2}
-							max={4}
-							onCommit={commitScale}
-						/>
-					</div>
-					<p className="text-muted-foreground text-[0.65rem]">
-						Resizes the whole template — 1 = default, 0.5 = half, 2 = double.
-					</p>
+				<SectionContent>
+					<SectionFields>
+						<SectionField label="Scale (×)">
+							<SliderNumberPair
+								icon="S"
+								value={scale}
+								min={SCALE_MIN}
+								max={SCALE_MAX}
+								step={NUMBER_STEP}
+								onPreview={previewScale}
+								onCommit={commitScale}
+							/>
+						</SectionField>
+						<p className="text-muted-foreground text-[0.65rem]">
+							Resizes the whole template. 1 = default, 0.5 = half, 2 = double.
+						</p>
+					</SectionFields>
 				</SectionContent>
 			</Section>
 
@@ -268,15 +303,20 @@ export function TemplateControlsTab({
 				<SectionHeader>
 					<SectionTitle className="flex-1">Timing</SectionTitle>
 				</SectionHeader>
-				<SectionContent className="flex items-center justify-between gap-2 px-3 pb-3">
-					<span className="text-muted-foreground text-xs">Duration (sec)</span>
-					<NumberField
-						key={durationSec}
-						value={durationSec}
-						min={template.durationRange.min}
-						max={template.durationRange.max}
-						onCommit={commitDuration}
-					/>
+				<SectionContent>
+					<SectionFields>
+						<SectionField label="Duration (sec)">
+							<SliderNumberPair
+								icon="D"
+								value={durationSec}
+								min={template.durationRange.min}
+								max={template.durationRange.max}
+								step={NUMBER_STEP}
+								onPreview={previewDuration}
+								onCommit={commitDuration}
+							/>
+						</SectionField>
+					</SectionFields>
 				</SectionContent>
 			</Section>
 
@@ -294,7 +334,11 @@ export function TemplateControlsTab({
 	);
 }
 
-/** Text input: live local echo, commits to the timeline on blur / Enter. */
+/**
+ * Text input: live local echo, commits to the timeline on blur / Enter,
+ * reverts to the pre-edit text on Escape. Escape-reverts matches the shared
+ * NumberField contract, so every field in this tab now cancels the same way.
+ */
 function TextField({
 	label,
 	value,
@@ -306,48 +350,33 @@ function TextField({
 	onChange: (value: string) => void;
 	onCommit: (value: string) => void;
 }) {
+	const preEditRef = useRef(value);
+	const isCancellingRef = useRef(false);
 	return (
-		<label className="flex flex-col gap-1 text-xs">
-			<span className="text-muted-foreground">{label}</span>
+		<SectionField label={label}>
 			<Input
 				value={value}
+				onFocus={() => {
+					preEditRef.current = value;
+				}}
 				onChange={(e) => onChange(e.target.value)}
-				onBlur={(e) => onCommit(e.target.value)}
+				onBlur={(e) => {
+					if (isCancellingRef.current) {
+						isCancellingRef.current = false;
+						return;
+					}
+					onCommit(e.target.value);
+				}}
 				onKeyDown={(e) => {
-					if (e.key === "Enter") e.currentTarget.blur();
+					if (e.key === "Enter") {
+						e.currentTarget.blur();
+					} else if (e.key === "Escape") {
+						isCancellingRef.current = true;
+						onChange(preEditRef.current);
+						e.currentTarget.blur();
+					}
 				}}
 			/>
-		</label>
-	);
-}
-
-function NumberField({
-	value,
-	min,
-	max,
-	onCommit,
-}: {
-	value: number;
-	min: number;
-	max: number;
-	onCommit: (value: number) => void;
-}) {
-	const [draft, setDraft] = useState(String(value));
-	return (
-		<Input
-			className="h-7 w-20 text-right"
-			value={draft}
-			onChange={(e) => setDraft(e.target.value)}
-			onBlur={() => {
-				const parsed = Number(draft);
-				if (Number.isFinite(parsed)) onCommit(parsed);
-				else setDraft(String(value));
-			}}
-			onKeyDown={(e) => {
-				if (e.key === "Enter") e.currentTarget.blur();
-			}}
-			inputMode="decimal"
-			placeholder={`${min}-${max}`}
-		/>
+		</SectionField>
 	);
 }

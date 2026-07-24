@@ -1,7 +1,13 @@
 "use client";
 
 import { resolveAnimationPathValueAtTime } from "@/animation";
-import { Section, SectionContent, SectionFields } from "@/components/section";
+import {
+	Section,
+	SectionContent,
+	SectionFields,
+	SectionHeader,
+	SectionTitle,
+} from "@/components/section";
 import { useElementPlayhead } from "@/components/editor/panels/properties/hooks/use-element-playhead";
 import { useKeyframedParamProperty } from "@/components/editor/panels/properties/hooks/use-keyframed-param-property";
 import { PropertyParamField } from "@/components/editor/panels/properties/components/property-param-field";
@@ -20,11 +26,21 @@ export function ElementParamsTab({
 	trackId,
 	paramKeys,
 	sectionKey,
+	title,
 }: {
 	element: TimelineElement;
 	trackId: string;
 	paramKeys?: readonly string[];
 	sectionKey: string;
+	/**
+	 * U3 (text round): optional group header. Omitted, this renders exactly as
+	 * before (a bare Section, no header) - existing callers (Blending, Audio,
+	 * the main Text param list) are unaffected. Passed, it renders a collapsible
+	 * twirl-down Section/SectionHeader/SectionTitle shell (same shape as
+	 * effect-controls-tab.tsx's FxGroup) so a second param group can sit under
+	 * the same tab with its own label, e.g. Text's new "Stroke & Shadow".
+	 */
+	title?: string;
 }) {
 	const { localTime, isPlayheadWithinElementRange } = useElementPlayhead({
 		startTime: element.startTime,
@@ -35,25 +51,42 @@ export function ElementParamsTab({
 	);
 	const baseValues = buildValues({ element, params });
 
+	const fields = (
+		<SectionFields>
+			{params
+				.filter((param) => isVisible({ param, values: baseValues }))
+				.map((param) => (
+					<ElementParamField
+						key={param.key}
+						element={element}
+						trackId={trackId}
+						param={param}
+						baseValue={baseValues[param.key] ?? param.default}
+						localTime={localTime}
+						isPlayheadWithinElementRange={isPlayheadWithinElementRange}
+					/>
+				))}
+		</SectionFields>
+	);
+
+	if (title) {
+		return (
+			<Section
+				collapsible
+				sectionKey={`${element.id}:${sectionKey}`}
+				showTopBorder={false}
+			>
+				<SectionHeader>
+					<SectionTitle>{title}</SectionTitle>
+				</SectionHeader>
+				<SectionContent className="pt-4">{fields}</SectionContent>
+			</Section>
+		);
+	}
+
 	return (
 		<Section sectionKey={`${element.id}:${sectionKey}`}>
-			<SectionContent className="pt-4">
-				<SectionFields>
-					{params
-						.filter((param) => isVisible({ param, values: baseValues }))
-						.map((param) => (
-							<ElementParamField
-								key={param.key}
-								element={element}
-								trackId={trackId}
-								param={param}
-								baseValue={baseValues[param.key] ?? param.default}
-								localTime={localTime}
-								isPlayheadWithinElementRange={isPlayheadWithinElementRange}
-							/>
-						))}
-				</SectionFields>
-			</SectionContent>
+			<SectionContent className="pt-4">{fields}</SectionContent>
 		</Section>
 	);
 }

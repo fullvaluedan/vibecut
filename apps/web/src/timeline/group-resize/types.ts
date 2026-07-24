@@ -35,3 +35,19 @@ export interface ComputeResizeArgs {
 	deltaTime: MediaTime;
 	fps: FrameRate;
 }
+
+export interface ComputeLinkedResizeArgs {
+	/** The grabbed clip first, then its linked partners (never a multi-select). */
+	members: GroupResizeMember[];
+	side: ResizeSide;
+	deltaTime: MediaTime;
+	fps: FrameRate;
+	/**
+	 * Ripple trim (right handle with ripple editing ON): downstream clips shift
+	 * with the commit, so a shrink is floored by the cross-track headroom the
+	 * caller computed via `computeRippleShrinkFloor` (`null` = unbounded). The
+	 * caller also lifts shifting neighbors' bounds on the members themselves
+	 * (`liftShiftingNeighborBounds`); the source-extent ceiling always stays.
+	 */
+	rippleTrim?: { shrinkFloorDelta: MediaTime | null };
+}
