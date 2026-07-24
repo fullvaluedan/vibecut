@@ -22,6 +22,22 @@ Expect: Force a failure mid-run (kill network, or force an error some other way)
 Expect: In the review list, your coherent trailing musings show as unchecked "Speculation" rows (kept by default), mid-flow "um/uh" fillers start unchecked while fillers next to a real pause start checked, and clicking a row's timestamp jumps 1 second before the cut and plays. Does each default match what you would have picked?
 - [ ]
 
+**16. Second-pass stage label shows in run feedback (round 14)**
+Expect: Run AI CUT on a real talking-head clip. In the run-feedback toast sequence, watch for "Second pass: reading the assembled cut..." followed by "Final read: verifying the assembled cut...". Both stage labels should appear in the feedback as the run progresses.
+- [ ]
+
+**17. Second-pass rows show as unchecked offered rows (round 14)**
+Expect: In the review dock after a full Director run, look for rows whose reason begins with "Second pass:". These should be displayed as UNCHECKED offered rows (defaultAccept:false), not auto-checked.
+- [ ]
+
+**18. Clicking the timeline during playback pauses at the click point (round 14)**
+Expect: Start playback on a clip. While playing, click the timeline ruler at a different point. Playback should PAUSE immediately, and the playhead should stay at the point you clicked, not jump elsewhere. (Bookmark-marker clicks and keyboard seeks still seek without pausing; this applies only to direct timeline ruler clicks.)
+- [ ]
+
+**19. Short barely-edited clip skips second-pass stage (round 14)**
+Expect: Run AI CUT on a very short clip or a clip with minimal edits needed (few cuts proposed). If the second pass has nothing new to find, the run should skip the second-pass stage entirely and go straight to final read. No "Second pass: ..." label should appear in the feedback for clips where P2 proposes zero new changes.
+- [ ]
+
 ## The timeline
 
 **6. Linked-clip extend gesture**

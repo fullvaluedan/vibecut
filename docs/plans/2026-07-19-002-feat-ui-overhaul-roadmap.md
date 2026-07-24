@@ -44,6 +44,10 @@ Sounds tab, the Effects tab. KEEP: Media, Text, Shapes, Captions, Transcript, Se
 | W7 | Solids: first-class solid-color layer (full-frame color matte), one click/drag from the Media bin | Sonnet | 1b, after research | Premiere's Color Matte / Legacy "Solid" | MERGED d819efc3 (export render of a solid = live-verify) |
 | W8 | 20-minute smoke list distilled from TO-VERIFY, then reconcile (check off confirmed, reopen failures as named bugs) | Haiku draft, Dan executes | 1b | n/a | docs/SMOKE-20MIN.md committed 83bd950c; DAN'S TURN |
 | W9 | Director round 13: final-read recall (ADDENDUM 11's labeled 9-fragment test set; precision 5/5 must hold) + Cancel = one undo | Opus | 3 | Premiere has no equivalent; our own measured bar governs | queued (next build item) |
+| U0 | Pause-on-timeline-click (round 14) | Sonnet | 1, NOW | Premiere timeline feedback during playback | MERGED 8adad3e6 (timeline click pauses, playhead stays at clicked point) |
+| U1 | Multi-pass core: virtual apply + P2 second cut (round 14) | Opus | 1, NOW | 3-pass architecture per Dan's directive | MERGED 8adad3e6 (OFFERED recall google +5.2pp, how-to-edit +8.8pp) |
+| U2 | P3 final-read v2: revert-harmful + fragmentation guard (round 14) | Opus | 1, NOW | Safe cuts via final verification + micro-cut merging | MERGED 8adad3e6 (harm-revert demotion + deterministic fragmentation guard) |
+| U3 | Per-project run ledger feeding taste notes v2 (round 14) | Sonnet | 1, NOW | Learning across runs per category | MERGED 8adad3e6 (per-pass/per-category outcome stats injected to prompts) |
 
 ## HELD, unmerged, needs measurement before it lands (added 2026-07-20)
 
@@ -70,6 +74,11 @@ in flight when this landed, and the standing rule forbids overlapping an eval wi
 run ONE `--llm --runs 3` eval and compare AUTO essLost per fixture against ADDENDUM 12's numbers.
 If AUTO essLost rises materially, the tension is real (more correct dead-air cutting vs more
 essential words lost) and belongs in an addendum with Dan's call, not a silent merge.
+
+## Backlog (round 15+ follow-ups from round 14 measurement)
+
+- Instrument tiny-cut counter in eval score (ADDENDUM 13b): the fragmentation guard's behavior is pinned by unit tests but the eval cannot measure cuts-under-0.5s-not-companion; add the counter to score.ts for next measurement.
+- P2 confidence gate if Dan reports review fatigue (ADDENDUM 13b): second-pass paraphrase-redundancy rows have 65-77% offered precision across noisy fixtures (roughly one in three rejected by Dan); if review load becomes an issue, apply per-pass confidence floor following the ADDENDUM-12 pattern.
 
 ## Parked (roadmap, not scheduled)
 
