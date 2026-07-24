@@ -45,13 +45,14 @@ export const VISIBLE_TAB_KEYS = TAB_KEYS.filter(
 export const DEFAULT_TAB: Tab = "media";
 
 /**
- * A hidden tab is never a valid active tab; fall back to Media instead. Used
- * both by `setActiveTab` and by the persist `merge` below, so a hidden tab
- * can never become active whether it is set at runtime or restored from a
- * previous session's storage.
+ * A visible tab is the only valid active tab; anything else (hidden,
+ * removed, or corrupt from storage) falls back to Media instead. Used
+ * both by `setActiveTab` and by the persist `merge` below, so an invalid
+ * tab can never become active whether it is set at runtime or restored
+ * from a previous session's storage.
  */
 export function resolveActiveTab(tab: Tab): Tab {
-	return HIDDEN_ASSET_TABS.includes(tab) ? DEFAULT_TAB : tab;
+	return VISIBLE_TAB_KEYS.includes(tab as any) ? tab : DEFAULT_TAB;
 }
 
 const createHugeiconsIcon =

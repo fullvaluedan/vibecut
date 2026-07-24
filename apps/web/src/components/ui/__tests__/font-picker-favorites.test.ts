@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	filterFontsForTab,
 	toggleFontFavorite,
+	sanitizeFavorites,
 } from "@/components/ui/font-picker";
 
 /**
@@ -14,6 +15,36 @@ import {
  */
 
 const FONT_NAMES = ["Arial", "Georgia", "Roboto", "Verdana"];
+
+describe("sanitizeFavorites", () => {
+	test("a clean string array passes through unchanged", () => {
+		const clean = ["Arial", "Georgia"];
+		expect(sanitizeFavorites(clean)).toEqual(clean);
+	});
+
+	test("an array with non-string entries filters them out", () => {
+		expect(sanitizeFavorites(["Arial", null, "Georgia", 42])).toEqual([
+			"Arial",
+			"Georgia",
+		]);
+	});
+
+	test("a null value returns an empty array", () => {
+		expect(sanitizeFavorites(null)).toEqual([]);
+	});
+
+	test("a number returns an empty array", () => {
+		expect(sanitizeFavorites(123)).toEqual([]);
+	});
+
+	test("an object returns an empty array", () => {
+		expect(sanitizeFavorites({ fonts: ["Arial"] })).toEqual([]);
+	});
+
+	test("an empty array stays empty", () => {
+		expect(sanitizeFavorites([])).toEqual([]);
+	});
+});
 
 describe("filterFontsForTab", () => {
 	test("'all' tab returns every font name, ignoring favorites", () => {

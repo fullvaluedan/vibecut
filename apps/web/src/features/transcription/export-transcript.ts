@@ -31,12 +31,16 @@ export function formatTranscriptTxt({
 		.join("\n");
 }
 
-/** Quote a CSV field only when it needs it (comma, quote, or newline); double any internal quotes. */
+/** Quote a CSV field only when it needs it (comma, quote, or newline); double any internal quotes. Neutralize formula triggers (=, +, -, @) with a leading apostrophe to prevent formula execution in Excel/Sheets. */
 function csvField(value: string): string {
-	if (/[",\r\n]/.test(value)) {
-		return `"${value.replace(/"/g, '""')}"`;
+	let escaped = value;
+	if (/^[=+\-@]/.test(escaped)) {
+		escaped = `'${escaped}`;
 	}
-	return value;
+	if (/[",\r\n]/.test(escaped)) {
+		return `"${escaped.replace(/"/g, '""')}"`;
+	}
+	return escaped;
 }
 
 /** Seconds -> fixed 3-decimal string ("65.300"), sortable/parseable in a spreadsheet. */

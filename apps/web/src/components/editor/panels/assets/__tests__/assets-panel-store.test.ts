@@ -82,6 +82,16 @@ describe("assets panel store guard rail: a hidden active tab falls back to Media
 		}
 	});
 
+	test("a removed tab (not in TAB_KEYS or VISIBLE_TAB_KEYS) returns DEFAULT_TAB", () => {
+		expect(resolveActiveTab("transitions" as Tab)).toBe(DEFAULT_TAB);
+		expect(resolveActiveTab("adjustment" as Tab)).toBe(DEFAULT_TAB);
+	});
+
+	test("a garbage string (corrupted localStorage) returns DEFAULT_TAB", () => {
+		expect(resolveActiveTab("some-random-tab-123" as Tab)).toBe(DEFAULT_TAB);
+		expect(resolveActiveTab("" as Tab)).toBe(DEFAULT_TAB);
+	});
+
 	test("setActiveTab never lands on a hidden tab", () => {
 		for (const hidden of HIDDEN_ASSET_TABS) {
 			useAssetsPanelStore.getState().setActiveTab(hidden);
