@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildDirectorProposals,
 	type DirectorLlmAdapter,
+	type DirectorPlanRequest,
 	type DirectorRetakeRequest,
 	type DirectorVerifyRequest,
 	type DirectorVerifyResponse,
 } from "../build-director-proposals";
+import { SECOND_PASS_REASON_PREFIX } from "../virtual-timeline";
 import type { DirectorOp, RetakeCut, StructuralDrop } from "@framecut/hf-bridge";
 import type { TranscriptionWord } from "@/transcription/types";
 import type { SpeechFeatures } from "../types";
@@ -744,6 +746,182 @@ describe("buildDirectorProposals + final read (round 12 U2)", () => {
 				},
 			}),
 		});
+		expect(thrown.operations).toEqual(baseline.operations);
+	});
+});
+
+/**
+ * Round 14 U1: the SECOND cut (P2). After the full first-pass op set forms, the
+ * default-accepted removals are virtually applied and the LLM plan (with the
+ * second-pass preamble) + redundancy passes re-read the assembled result; findings
+ * map back to source, drop where they overlap P1 territory, and fold in as OFFERED
+ * rows. Early exit when the first cut removed too little to be worth re-reading.
+ */
+describe("buildDirectorProposals + second cut / P2 (round 14 U1)", () => {
+	// 36 words at 0.3s spacing -> ~10.8s total, enough headroom for a >=5s P1 AUTO cut
+	// (which clears the P2 early-exit floor). No fillers/duplicates so the ONLY AUTO
+	// removal is the injected plan cut - a clean measure of what engages P2.
+	const LONG =
+		"one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa";
+	// clampOversizedSpanSec Infinity keeps this wide AUTO cut from being demoted to an
+	// OFFERED row for lack of deterministic evidence, so P1's default-accepted removal
+	// is a real 6s and P2 engages. The span sits INSIDE segment A (split at 34), so it
+	// never engulfs the tiny segment-boundary emphasis-pause keeper that would drop it.
+	const p1BigCut: DirectorOp = {
+		id: "p1-big",
+		op: "cut",
+		startSec: 1,
+		endSec: 7,
+		reason: "long dead stretch",
+		confidence: 0.9,
+	};
+	// FLAT delivery features (quiet, too-fast) so no segment crosses the importance
+	// PROTECT_FLOOR - a protected segment would veto the wide plan cut in the merge and
+	// P1 would remove nothing, starving P2 (mirrors the round-12 flatInput helper).
+	const longInput = (words: TranscriptionWord[]) => {
+		const base = baseInput(words, 34);
+		return {
+			...base,
+			features: base.features.map((f) => ({
+				...f,
+				loudnessRelative: 0.2,
+				wpm: 300,
+			})),
+			clampOversizedSpanSec: Infinity,
+		};
+	};
+
+	test("P2 engages after a large first cut, adding an OFFERED second-cut row", async () => {
+		const words = mkWords(LONG);
+		let sawSecondPass = false;
+		const result = await buildDirectorProposals({
+			...longInput(words),
+			llm: stubLlm({
+				async plan(req: DirectorPlanRequest) {
+					if (req.secondPass) {
+						sawSecondPass = true;
+						// A residual cut in ASSEMBLED coords, BEFORE the P1 removal, so it
+						// maps to fresh source territory [0.3,0.9] the first cut never touched.
+						return {
+							plan: {
+								operations: [
+									{
+										id: "p2-raw",
+										op: "cut",
+										startSec: 0.3,
+										endSec: 0.9,
+										reason: "residual filler run",
+										confidence: 0.9,
+									},
+								],
+							},
+						};
+					}
+					return { plan: { operations: [p1BigCut] } };
+				},
+			}),
+		});
+		// The P2 plan call happened, and it carried the second-pass flag.
+		expect(sawSecondPass).toBe(true);
+		// A second-cut row is present, reason-prefixed and OFFERED (never AUTO in U1).
+		const p2Rows = result.operations.filter((o) =>
+			(o.reason ?? "").startsWith(SECOND_PASS_REASON_PREFIX),
+		);
+		expect(p2Rows.length).toBeGreaterThan(0);
+		expect(p2Rows.every((o) => o.defaultAccept === false)).toBe(true);
+		// The P1 AUTO cut is untouched and still AUTO (the second cut never disturbs it).
+		expect(
+			result.operations.some(
+				(o) =>
+					o.op === "cut" &&
+					o.defaultAccept !== false &&
+					o.startSec < 3 &&
+					o.endSec > 5,
+			),
+		).toBe(true);
+	});
+
+	test("the P2 plan pass receives secondPass=true and the assembled total duration", async () => {
+		const words = mkWords(LONG);
+		let p2Req: DirectorPlanRequest | undefined;
+		await buildDirectorProposals({
+			...longInput(words),
+			llm: stubLlm({
+				async plan(req: DirectorPlanRequest) {
+					if (req.secondPass) p2Req = req;
+					return {
+						plan: { operations: req.secondPass ? [] : [p1BigCut] },
+					};
+				},
+			}),
+		});
+		expect(p2Req).toBeDefined();
+		expect(p2Req!.secondPass).toBe(true);
+		// The assembled timeline is shorter than the source by the removed 6s, so the
+		// P2 plan reasons over the compressed duration, not the raw one.
+		expect(p2Req!.totalSec).toBeLessThan(words[words.length - 1].end);
+	});
+
+	test("P2 is skipped entirely when the first cut removed too little (early exit)", async () => {
+		// The short sentence's only AUTO removals are a filler + a doubled word (well
+		// under the 5s floor), so the P2 LLM calls never happen.
+		const words = mkWords(
+			"so um lets deploy the the project and now we verify the logs",
+		);
+		let p2Calls = 0;
+		const result = await buildDirectorProposals({
+			...baseInput(words, 7),
+			llm: stubLlm({
+				async plan(req: DirectorPlanRequest) {
+					if (req.secondPass) {
+						p2Calls++;
+						return {
+							plan: {
+								operations: [
+									{
+										id: "p2",
+										op: "cut",
+										startSec: 0.6,
+										endSec: 1.2,
+										reason: "residual",
+										confidence: 0.9,
+									},
+								],
+							},
+						};
+					}
+					return { plan: { operations: [] } };
+				},
+			}),
+		});
+		expect(p2Calls).toBe(0);
+		expect(
+			result.operations.some((o) =>
+				(o.reason ?? "").startsWith(SECOND_PASS_REASON_PREFIX),
+			),
+		).toBe(false);
+	});
+
+	test("a thrown P2 plan pass is fail-open: the run keeps exactly its first-pass ops", async () => {
+		const words = mkWords(LONG);
+		const baseline = await buildDirectorProposals({
+			...longInput(words),
+			llm: stubLlm({
+				async plan(req: DirectorPlanRequest) {
+					return { plan: { operations: req.secondPass ? [] : [p1BigCut] } };
+				},
+			}),
+		});
+		const thrown = await buildDirectorProposals({
+			...longInput(words),
+			llm: stubLlm({
+				async plan(req: DirectorPlanRequest) {
+					if (req.secondPass) throw new Error("route 500");
+					return { plan: { operations: [p1BigCut] } };
+				},
+			}),
+		});
+		// A P2 route error contributes nothing; the op list matches the empty-P2 run.
 		expect(thrown.operations).toEqual(baseline.operations);
 	});
 });

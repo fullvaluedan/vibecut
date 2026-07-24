@@ -29,6 +29,7 @@ import {
 	planStructural,
 	planVerify,
 	DIRECTOR_PROMPT_VERSION,
+	DIRECTOR_P2_PROMPT_VERSION,
 	RETAKE_PROMPT_VERSION,
 	STRUCTURAL_PROMPT_VERSION,
 	VERIFY_PROMPT_VERSION,
@@ -275,7 +276,18 @@ export function createEvalLlmAdapter(
 			// DIRECTOR_PROMPT_VERSION rides the payload (the VERIFY precedent): a prompt
 			// WORDING change has no input-shape footprint, and without the version the
 			// eval would silently replay stale cached plans across prompt revisions.
-			return cachedCall("plan", { ...input, promptVersion: DIRECTOR_PROMPT_VERSION }, async () => {
+			// The SECOND-PASS preamble (round 14 U1) has its OWN version, folded in only
+			// when `secondPass` is set, so a P2 preamble wording change busts P2's cache
+			// without disturbing the first-pass cache key (`input.secondPass` also rides
+			// the hashed payload, so a P1 call and a P2 call never collide).
+			return cachedCall(
+				"plan",
+				{
+					...input,
+					promptVersion: DIRECTOR_PROMPT_VERSION,
+					...(input.secondPass ? { p2PromptVersion: DIRECTOR_P2_PROMPT_VERSION } : {}),
+				},
+				async () => {
 				if (input.frames && input.frames.length > 0) {
 					const { plan, usage, degraded } = await planners.vision({
 						segments: input.segments,
@@ -297,6 +309,9 @@ export function createEvalLlmAdapter(
 					// gains the block. The cache key already hashes the full input payload,
 					// so a target change forces a fresh live call (never a stale response).
 					compressionTarget: input.compressionTarget,
+					// Round 14 U1: the second-pass preamble, threaded to the planner so the
+					// assembled re-read gets the reframed prompt. Absent for the first pass.
+					secondPass: input.secondPass,
 					auth,
 				});
 				return { plan, usage: usage ?? undefined, degraded: false };

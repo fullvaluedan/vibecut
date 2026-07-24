@@ -23,6 +23,7 @@ export {
 	planDirectorVision,
 	stableOpId,
 	DIRECTOR_PROMPT_VERSION,
+	DIRECTOR_P2_PROMPT_VERSION,
 	buildDirectorVisionPrompt,
 	buildDirectorVisionBlocks,
 	MAX_MULTIMODAL_IMAGES,
