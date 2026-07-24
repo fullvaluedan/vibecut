@@ -11,6 +11,7 @@ import {
 	createTimelineAudioBuffer,
 	createTimelineAudioChunks,
 	timelineAudioNeedsChunking,
+	timelineHasAudio,
 	EXPORT_AUDIO_STREAM,
 } from "@/media/audio";
 import { formatTimecode } from "opencut-wasm";
@@ -187,7 +188,16 @@ export class RendererManager {
 
 			let audioBuffer: AudioBuffer | null = null;
 			let audioChunks: AudioChunkStream | undefined;
-			if (includeAudio) {
+			// A timeline with no audio elements (or every audio element muted) must
+			// not declare an audio track: the chunked path yields zero windows yet
+			// the encoder would still write an empty (zero-sample) trak, and the
+			// single-buffer path would embed a silent track. Skip the audio track
+			// entirely so a silent export is a clean video-only file - the same
+			// result a no-audio timeline already produced. `timelineHasAudio` reuses
+			// the exact audible-candidate + not-muted filters the mix itself applies.
+			const hasAudibleAudio =
+				!!includeAudio && timelineHasAudio({ tracks, mediaAssets });
+			if (hasAudibleAudio) {
 				onProgress?.({ progress: 0.01 });
 				if (timelineAudioNeedsChunking({ duration })) {
 					// Long timeline: stream the mix to the encoder in bounded windows

@@ -7,7 +7,12 @@ import type {
 } from "@/timeline";
 import { shouldMaintainPitch } from "@/retime/rate";
 import type { MediaAsset } from "@/media/types";
-import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
+import {
+	applyAudioMasteringToBuffer,
+	applyGainToAudioBuffer,
+	getAudioBufferPeak,
+	masterGainForPeak,
+} from "@/media/audio-mastering";
 import type { AudioCapableElement } from "@/timeline/audio-state";
 import {
 	hasAnimatedVolume,
@@ -32,6 +37,7 @@ import {
 	planChunkWindows,
 	mixElementIntoWindow,
 	elementOverlapsWindow,
+	type ChunkWindow,
 	type WindowMixElement,
 } from "./export-chunk-mixer";
 import {
@@ -956,17 +962,73 @@ async function prepareChunkMixElements({
 }
 
 /**
+ * Mixes every element that overlaps ONE window into a single bounded buffer.
+ * Deterministic and pure of any global state, so calling it twice for the same
+ * window (the peak-scan pass then the emit pass below) yields identical samples.
+ */
+function mixChunkWindow({
+	window,
+	prepared,
+	context,
+	outputChannels,
+	sampleRate,
+}: {
+	window: ChunkWindow;
+	prepared: PreparedChunkMixElement[];
+	context: AudioContext;
+	outputChannels: number;
+	sampleRate: number;
+}): AudioBuffer {
+	// One bounded allocation per window - never the whole timeline.
+	const chunkBuffer = context.createBuffer(
+		outputChannels,
+		window.frameCount,
+		sampleRate,
+	);
+	const windowChannels = Array.from(
+		{ length: outputChannels },
+		(_, channel) => chunkBuffer.getChannelData(channel),
+	);
+
+	for (const { windowElement } of prepared) {
+		if (
+			!elementOverlapsWindow({
+				element: windowElement,
+				windowStartFrame: window.startFrame,
+				windowFrameCount: window.frameCount,
+			})
+		) {
+			continue;
+		}
+		mixElementIntoWindow({
+			element: windowElement,
+			windowChannels,
+			windowStartFrame: window.startFrame,
+			windowFrameCount: window.frameCount,
+		});
+	}
+
+	return chunkBuffer;
+}
+
+/**
  * Chunked replacement for `createTimelineAudioBuffer` that never allocates the
  * whole-timeline buffer. It mixes the timeline in `EXPORT_CHUNK_SECONDS`
  * windows and yields each mastered window in order, so the encoder can consume
  * them sequentially and peak memory stays flat regardless of timeline length.
  * This is what removes the long-video `createBuffer` wall.
  *
- * Mastering is applied per window. In the common case (the mix never clips) the
- * limiter is a pass-through, so a chunked export sounds identical to the
- * single-buffer path; on a clipping mix the per-window limiter can differ very
- * slightly at a window seam. That only affects timelines long enough to be
- * chunked, which previously failed to export at all.
+ * Mastering is ONE decision for the whole timeline, not per window. The mix is
+ * scanned once to find the loudest sample across every window (the peak-scan
+ * pass); if it stays under the headroom ceiling the master limiter is a
+ * pass-through, so the emit pass yields byte-identical samples to the
+ * single-buffer path. If it clips, ONE gain scalar (derived from that global
+ * peak) is applied uniformly to every window, so the loudness is equal on both
+ * sides of every window seam. This replaces an earlier per-window limiter whose
+ * attack/release state reset at each seam and stepped the gain on a clipping
+ * mix. Mixing is deterministic and cheap next to the one-time decode, so the
+ * two passes re-mix rather than hold every window in memory (which is the whole
+ * point of chunking).
  */
 export async function* createTimelineAudioChunks({
 	tracks,
@@ -1018,44 +1080,45 @@ export async function* createTimelineAudioChunks({
 			chunkFrames: chunkFrameCount({ sampleRate, chunkSeconds }),
 		});
 
+		// Pass 1 - peak scan: find the loudest sample across the WHOLE timeline so
+		// mastering can be one seam-free decision (the single-buffer path masters
+		// the whole mix at once). Buffers are discarded here so peak memory stays
+		// one window.
+		let globalPeak = 0;
 		for (const window of windows) {
-			// One bounded allocation per window - never the whole timeline.
-			const chunkBuffer = context.createBuffer(
+			const chunkBuffer = mixChunkWindow({
+				window,
+				prepared,
+				context,
 				outputChannels,
-				window.frameCount,
 				sampleRate,
-			);
-			const windowChannels = Array.from(
-				{ length: outputChannels },
-				(_, channel) => chunkBuffer.getChannelData(channel),
-			);
-
-			for (const { windowElement } of prepared) {
-				if (
-					!elementOverlapsWindow({
-						element: windowElement,
-						windowStartFrame: window.startFrame,
-						windowFrameCount: window.frameCount,
-					})
-				) {
-					continue;
-				}
-				mixElementIntoWindow({
-					element: windowElement,
-					windowChannels,
-					windowStartFrame: window.startFrame,
-					windowFrameCount: window.frameCount,
-				});
-			}
-
-			const mastered = await applyAudioMasteringToBuffer({
-				audioBuffer: chunkBuffer,
 			});
+			const peak = getAudioBufferPeak({ audioBuffer: chunkBuffer });
+			if (peak > globalPeak) globalPeak = peak;
+			// The peak scan spans 0.6 -> 0.8 of the audio stage.
+			onProgress?.(0.6 + ((window.index + 1) / windows.length) * 0.2);
+		}
 
-			// Mixing spans 0.6 -> 1.0 of the audio stage.
-			onProgress?.(0.6 + ((window.index + 1) / windows.length) * 0.4);
+		// One scalar for every window: 1 (true pass-through) when the mix never
+		// clips, else the normalization that brings the global peak to the ceiling.
+		const masterGain = masterGainForPeak({ peak: globalPeak });
 
-			yield { buffer: mastered, index: window.index, total: windows.length };
+		// Pass 2 - emit: re-mix each window and apply the SINGLE global gain, so
+		// the gain is identical on both sides of every seam.
+		for (const window of windows) {
+			const chunkBuffer = mixChunkWindow({
+				window,
+				prepared,
+				context,
+				outputChannels,
+				sampleRate,
+			});
+			applyGainToAudioBuffer({ audioBuffer: chunkBuffer, gain: masterGain });
+
+			// The emit pass spans 0.8 -> 1.0 of the audio stage.
+			onProgress?.(0.8 + ((window.index + 1) / windows.length) * 0.2);
+
+			yield { buffer: chunkBuffer, index: window.index, total: windows.length };
 		}
 	} finally {
 		if (ownsContext) void context.close();

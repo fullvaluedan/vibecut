@@ -3,7 +3,7 @@ const MASTER_LIMITER_KNEE_DB = 0;
 const MASTER_LIMITER_RATIO = 20;
 const MASTER_LIMITER_ATTACK_SECONDS = 0.001;
 const MASTER_LIMITER_RELEASE_SECONDS = 0.12;
-const MASTER_OUTPUT_HEADROOM = 0.98;
+export const MASTER_OUTPUT_HEADROOM = 0.98;
 
 export function getAudioBufferPeak({
 	audioBuffer,
@@ -82,6 +82,38 @@ export async function applyAudioMasteringToBuffer({
 		maxPeak: MASTER_OUTPUT_HEADROOM,
 	});
 	return renderedBuffer;
+}
+
+/**
+ * The single, seam-free master gain the chunked export applies uniformly to
+ * every 60s window. `peak` is the loudest sample across the WHOLE timeline.
+ * Below the headroom ceiling the master limiter is a pass-through, so the
+ * chunked mix must be too (gain 1, byte-identical to the single-buffer path);
+ * above it, one scalar brings the loudest sample down to the ceiling. Because
+ * it is the same scalar for every window, the gain is identical on both sides
+ * of every window seam - unlike a per-window compressor, whose attack/release
+ * state resets at each seam and steps the loudness.
+ */
+export function masterGainForPeak({ peak }: { peak: number }): number {
+	return peak > MASTER_OUTPUT_HEADROOM ? MASTER_OUTPUT_HEADROOM / peak : 1;
+}
+
+/** Multiply every sample of every channel by `gain`, in place. A gain of 1 is a
+ * no-op (the sub-threshold pass-through case), so it skips the whole scan. */
+export function applyGainToAudioBuffer({
+	audioBuffer,
+	gain,
+}: {
+	audioBuffer: AudioBuffer;
+	gain: number;
+}): void {
+	if (gain === 1) return;
+	for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+		const channelData = audioBuffer.getChannelData(channel);
+		for (let index = 0; index < channelData.length; index++) {
+			channelData[index] *= gain;
+		}
+	}
 }
 
 function clampAudioBufferPeak({
