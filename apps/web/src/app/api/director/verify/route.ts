@@ -5,6 +5,7 @@ import {
 	type RetakeWord,
 	type VerifyCandidate,
 	type VerifyJoinFragment,
+	type VerifyHarmCandidate,
 } from "@framecut/hf-bridge";
 import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
 
@@ -155,6 +156,43 @@ function parseJoinFragments(raw: unknown): VerifyJoinFragment[] {
 }
 
 /**
+ * Parse the wire `harmCandidates` array into typed `VerifyHarmCandidate[]`, dropping
+ * any malformed entry (round 14 U2/P3). OPTIONAL on the wire, like `joinFragments`:
+ * absent or not-an-array degrades to an empty list, so the harm/texture review is an
+ * enhancement on top of the damage review, never a reason to fail the pass.
+ */
+function parseHarmCandidates(raw: unknown): VerifyHarmCandidate[] {
+	if (!Array.isArray(raw)) return [];
+	const out: VerifyHarmCandidate[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const it: Record<string, unknown> = entry;
+		if (
+			typeof it.id === "string" &&
+			it.id.length > 0 &&
+			typeof it.startSec === "number" &&
+			Number.isFinite(it.startSec) &&
+			typeof it.endSec === "number" &&
+			Number.isFinite(it.endSec) &&
+			typeof it.removedText === "string" &&
+			typeof it.contextBefore === "string" &&
+			typeof it.contextAfter === "string"
+		) {
+			out.push({
+				id: it.id,
+				startSec: it.startSec,
+				endSec: it.endSec,
+				removedText: it.removedText,
+				contextBefore: it.contextBefore,
+				contextAfter: it.contextAfter,
+				texture: it.texture === true,
+			});
+		}
+	}
+	return out;
+}
+
+/**
  * The dedicated verify endpoint (U3): every recall-pass candidate (category
  * `retake`/`structural`) plus BOTH resolution catalogs (lines and words) in; a
  * sanitized, index-keyed `VerifyPlan` (keep/reject/tighten verdicts) + token usage
@@ -195,6 +233,9 @@ export async function POST(req: NextRequest) {
 		typeof body?.assembledTranscript === "string"
 			? body.assembledTranscript
 			: undefined;
+	// Harm/texture review inputs (round 14 U2/P3): OPTIONAL on the wire like the
+	// final-read inputs above.
+	const harmCandidates = parseHarmCandidates(body?.harmCandidates);
 
 	try {
 		const { plan, usage } = await planVerify({
@@ -204,6 +245,7 @@ export async function POST(req: NextRequest) {
 			taste,
 			assembledTranscript,
 			joinFragments,
+			harmCandidates,
 			auth,
 		});
 		return NextResponse.json({ plan, usage });
@@ -214,7 +256,7 @@ export async function POST(req: NextRequest) {
 		// stay OFFERED).
 		console.error("Verify planning failed:", e instanceof Error ? e.message : e);
 		return NextResponse.json({
-			plan: { verdicts: [], joinVerdicts: [] },
+			plan: { verdicts: [], joinVerdicts: [], harmVerdicts: [] },
 			usage: null,
 			degraded: true,
 		});

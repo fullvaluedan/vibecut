@@ -38,7 +38,7 @@ import type { ClaudeAuth } from "./types";
  * wording changes bust the cache (the KTD7 discipline, learned the hard way when
  * prompt v2's gate re-run cache-hit v1's verdicts).
  */
-export const VERIFY_PROMPT_VERSION = 6;
+export const VERIFY_PROMPT_VERSION = 7;
 
 /** Which recall pass produced a candidate (fixes which anchors it tightens through). */
 export type VerifyCategory = "retake" | "structural";
@@ -81,6 +81,46 @@ export interface VerifyJoinVerdict {
 }
 
 /**
+ * One DEFAULT-ACCEPTED cut handed to the final read's harm/texture review (round
+ * 14 U2 / P3, verify v7). Dan select-alls and applies everything, so a cut that
+ * survives to this list SHIPS unless the final read pulls it back. Two failure
+ * modes are checked against the assembled seam it leaves:
+ *  - HARM: removing this span leaves the surrounding kept text broken - a severed
+ *    sentence, an orphaned referent, or a point the next kept line still leans on.
+ *  - TEXTURE: it is one of the deterministic guard's BORDERLINE micro-cuts - a tiny
+ *    chop beside a real edit that could read as a stutter rather than an edit.
+ * The verdict either keeps the cut (the default) or REVERTS it, which only ever
+ * DEMOTES the row to offered (never deletes it). Verdicts key back by `id`.
+ */
+export interface VerifyHarmCandidate {
+	/** The cut op's stable id; the verdict echoes it verbatim. */
+	id: string;
+	startSec: number;
+	endSec: number;
+	/** The transcript words this cut REMOVES (what shipping it deletes). */
+	removedText: string;
+	/** Up to ~12 KEPT words immediately before the cut (assembled order). */
+	contextBefore: string;
+	/** Up to ~12 KEPT words immediately after the cut (assembled order). */
+	contextAfter: string;
+	/** True when the deterministic guard flagged this as a borderline micro-cut
+	 * (a texture question), false for a substantial cut (a harm question). Renders
+	 * a different one-line framing; the verdict contract is identical. */
+	texture: boolean;
+}
+
+/** The two verdicts the final read can return for a harm/texture candidate. */
+export type VerifyHarmVerdictKind = "keep" | "revert";
+
+/** One harm/texture verdict, keyed back to its candidate by `id`. */
+export interface VerifyHarmVerdict {
+	id: string;
+	verdict: VerifyHarmVerdictKind;
+	/** Model confidence 0..1 (clamped by the sanitizer). */
+	confidence: number;
+}
+
+/**
  * One recall-pass candidate handed to the verifier. Carries its resolved seconds
  * span (for the prompt) AND its own reference anchors so a tighten can narrow it: a
  * retake candidate carries a word-index range (`startWord`..`endWord`), a structural
@@ -114,6 +154,9 @@ export interface VerifyPlan {
 	/** Per-fragment final-read verdicts (round 12 U2). Empty when no fragments
 	 * were sent or the response carried none/malformed ones (fail-open). */
 	joinVerdicts: VerifyJoinVerdict[];
+	/** Per-cut harm/texture verdicts (round 14 U2). Empty when no harm candidates
+	 * were sent or the response carried none/malformed ones (fail-open). */
+	harmVerdicts: VerifyHarmVerdict[];
 }
 
 const VERIFY_SCHEMA = {
@@ -136,6 +179,19 @@ const VERIFY_SCHEMA = {
 			},
 		},
 		joinVerdicts: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					id: { type: "string" },
+					verdict: { type: "string" },
+					confidence: { type: "number" },
+				},
+				required: ["id", "verdict", "confidence"],
+				additionalProperties: false,
+			},
+		},
+		harmVerdicts: {
 			type: "array",
 			items: {
 				type: "object",
@@ -268,6 +324,30 @@ function renderJoinFragments(fragments: readonly VerifyJoinFragment[]): string {
 		.join("\n");
 }
 
+/** Render each harm/texture candidate as an H-tagged header plus the assembled
+ * seam it leaves: the kept text before the cut, the removed text, and the kept
+ * text after. The model judges the seam WITHOUT the removed text (that is what
+ * ships), so the "shipped" line spells out exactly the join the viewer would read.
+ * A texture candidate is tagged so the model reads it as a micro-cut stutter
+ * question rather than a load-bearing-removal question. No `undefined`/`NaN` leaks
+ * (numbers guarded, empty text falls back to "-"). */
+function renderHarmCandidates(candidates: readonly VerifyHarmCandidate[]): string {
+	return candidates
+		.map((c, i) => {
+			const start = Number.isFinite(c.startSec) ? c.startSec : 0;
+			const end = Number.isFinite(c.endSec) ? c.endSec : 0;
+			const clean = (s: string): string => s.trim().replace(/\s+/g, " ") || "-";
+			const before = clean(c.contextBefore);
+			const after = clean(c.contextAfter);
+			const kind = c.texture ? "micro-cut" : "cut";
+			return [
+				`[H${i} id=${c.id || "-"}] (${kind}) ${start.toFixed(1)}s-${end.toFixed(1)}s removes: "${clean(c.removedText)}"`,
+				`  shipped -> ...${before} [CUT] ${after}...`,
+			].join("\n");
+		})
+		.join("\n");
+}
+
 /** Render the full transcript line catalog (context the verifier judges against). No
  * `undefined`/`NaN` leaks (timings are numbers, text falls back to "-"). */
 function renderVerifyLineCatalog(lines: readonly RedundancyLine[]): string {
@@ -286,6 +366,7 @@ export function buildVerifyPrompt({
 	taste,
 	assembledTranscript,
 	joinFragments = [],
+	harmCandidates = [],
 }: {
 	candidates: readonly VerifyCandidate[];
 	lines: readonly RedundancyLine[];
@@ -295,6 +376,8 @@ export function buildVerifyPrompt({
 	assembledTranscript?: string;
 	/** OFFERED join-fragment rows the final read adjudicates (round 12 U2/R3). */
 	joinFragments?: readonly VerifyJoinFragment[];
+	/** DEFAULT-ACCEPTED cuts the final read harm/texture-reviews (round 14 U2). */
+	harmCandidates?: readonly VerifyHarmCandidate[];
 }): string {
 	// Final-read block (round 12 U2/R3): rendered only when join fragments exist,
 	// so a candidates-only call keeps the lean damage-review prompt.
@@ -326,6 +409,31 @@ Return one entry per fragment in "joinVerdicts": {"id": the fragment's id string
 		joinFragments.length > 0
 			? `,"joinVerdicts":[{"id":"join-abc","verdict":"swallow","confidence":0.9}, ...]`
 			: "";
+	// Harm/texture block (round 14 U2/P3): rendered only when harm candidates exist.
+	// This is a THIRD, separate question from the candidates and the join fragments -
+	// it never reframes either - and its bar is deliberately high: Dan applies every
+	// default-accepted cut, so a reverted cut is one he WANTED gone that now needs a
+	// click, while a missed harmful cut ships a broken read. Revert is the exception,
+	// keep is the rule.
+	const harmBlock =
+		harmCandidates.length > 0
+			? `
+DEFAULT-ACCEPTED CUTS (these will SHIP as-is unless you pull one back): Each row below is a cut the pipeline is about to apply by default. Read the "shipped" line - the assembled join the viewer is left with once the removed words are gone - and decide whether that join survives.
+- "keep" (the DEFAULT, and the answer for almost every row): the shipped join reads cleanly. The removed material was dead weight, a whole self-contained aside, or a clean repeat, and what remains on both sides still stands on its own. If you cannot name a specific way the join is BROKEN, keep.
+- "revert": removing this span visibly DAMAGES the read - it severs a sentence mid-thought, orphans a pronoun or referent whose antecedent was in the removed text, or guts a point the very next kept line depends on. A "revert" does NOT delete anything; it only moves the cut to an offered row for the editor to reconsider. Reserve it for a join that is wrong at its CORE, not one that merely reads a little abruptly - an abrupt-but-intact join is a "keep".
+For a "micro-cut" row the question is texture, not damage: is this tiny removal a helpful tightening, or a random stutter chopping a word or two out of live speech for no reason? Revert only the stutters; a micro-cut that tidies a real disfluency is a "keep".
+
+CONFIDENCE IS LOAD-BEARING: a revert is only ACTED ON above a high bar, so a revert you would defend to the creator belongs at 0.8 or above, and anything you merely lean toward belongs below it (the cut then simply stays, as it would have anyway). Do not spend high confidence on a coin flip.
+
+${renderHarmCandidates(harmCandidates)}
+
+Return one entry per row in "harmVerdicts": {"id": the row's id string EXACTLY as shown, "verdict": "keep" or "revert", "confidence": 0..1}.
+`
+			: "";
+	const harmJsonHint =
+		harmCandidates.length > 0
+			? `,"harmVerdicts":[{"id":"cut-abc","verdict":"keep","confidence":0.9}, ...]`
+			: "";
 	return `You are a precision EDITOR reviewing a list of PROPOSED CUTS before they reach the timeline. Each proposed cut was already found by an earlier recall pass that hunted aggressively for removable material. Your job is DAMAGE REVIEW, not taste: decide, for each proposed span, whether removing it would harm the finished video.
 
 For EACH candidate below, return exactly one verdict:
@@ -341,11 +449,11 @@ A tighten narrows through the candidate's OWN reference anchors: a retake candid
 
 CANDIDATES:
 ${candidates.length > 0 ? renderVerifyCandidates(candidates, lines) : "(none this run - only the join fragments below need verdicts)"}
-${joinBlock}
+${joinBlock}${harmBlock}
 TRANSCRIPT (full line catalog, for context):
 ${renderVerifyLineCatalog(lines)}
 ${taste ? `\nEDITOR TASTE (learned from this user's past reviews - respect it):\n${taste}\n` : ""}
-Respond with ONLY JSON: {"verdicts":[{"index":0,"verdict":"keep"},{"index":1,"verdict":"reject"},{"index":2,"verdict":"tighten","startWord":342,"endWord":348}, ...]${joinJsonHint}} - "index" is the C-number of the candidate (0-based), "verdict" is keep, reject, or tighten, and a tighten adds startWord/endWord (retake) or startLineId/endLineId (structural) strictly inside that candidate's span.`;
+Respond with ONLY JSON: {"verdicts":[{"index":0,"verdict":"keep"},{"index":1,"verdict":"reject"},{"index":2,"verdict":"tighten","startWord":342,"endWord":348}, ...]${joinJsonHint}${harmJsonHint}} - "index" is the C-number of the candidate (0-based), "verdict" is keep, reject, or tighten, and a tighten adds startWord/endWord (retake) or startLineId/endLineId (structural) strictly inside that candidate's span.`;
 }
 
 /** True when a resolved span is a proper SHRINK of the candidate's span: positive
@@ -399,6 +507,42 @@ function sanitizeJoinVerdicts({
 }
 
 /**
+ * Clean the raw `harmVerdicts` array into id-keyed cut verdicts (round 14 U2).
+ * Same discipline as `sanitizeJoinVerdicts`: drops any entry whose id is not a
+ * string, does not match a SENT harm candidate, repeats an already-seen id (first
+ * well-formed one wins), carries an unknown verdict kind, or has a non-finite
+ * confidence; confidence clamps to [0, 1]. A malformed or absent array yields zero
+ * harm verdicts (fail-open). Never throws. Pure.
+ */
+function sanitizeHarmVerdicts({
+	raw,
+	harmCandidates,
+}: {
+	raw: unknown;
+	harmCandidates: readonly VerifyHarmCandidate[];
+}): VerifyHarmVerdict[] {
+	if (!Array.isArray(raw) || harmCandidates.length === 0) return [];
+	const sentIds = new Set(harmCandidates.map((c) => c.id));
+	const seen = new Set<string>();
+	const out: VerifyHarmVerdict[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const e = entry as Record<string, unknown>;
+		if (typeof e.id !== "string" || !sentIds.has(e.id)) continue;
+		if (e.verdict !== "keep" && e.verdict !== "revert") continue;
+		if (typeof e.confidence !== "number" || !Number.isFinite(e.confidence)) continue;
+		if (seen.has(e.id)) continue; // duplicate id: first well-formed one wins
+		seen.add(e.id);
+		out.push({
+			id: e.id,
+			verdict: e.verdict,
+			confidence: Math.min(1, Math.max(0, e.confidence)),
+		});
+	}
+	return out;
+}
+
+/**
  * Clean a raw verify response into index-keyed verdicts. Drops entries with an
  * unknown/duplicate/non-integer index or an unknown verdict string. Each tighten
  * resolves INDIVIDUALLY (a single-op resolver call) against a catalog built from BOTH
@@ -414,29 +558,35 @@ export function sanitizeVerifyPlan({
 	lines,
 	words,
 	joinFragments = [],
+	harmCandidates = [],
 }: {
 	raw: unknown;
 	candidates: readonly VerifyCandidate[];
 	lines: readonly RedundancyLine[];
 	words: readonly ReferenceWord[];
 	joinFragments?: readonly VerifyJoinFragment[];
+	harmCandidates?: readonly VerifyHarmCandidate[];
 }): VerifyPlan {
 	let value: unknown = raw;
 	if (typeof value === "string") {
 		try {
 			value = JSON.parse(value);
 		} catch {
-			return { verdicts: [], joinVerdicts: [] };
+			return { verdicts: [], joinVerdicts: [], harmVerdicts: [] };
 		}
 	}
 	if (typeof value !== "object" || value === null)
-		return { verdicts: [], joinVerdicts: [] };
+		return { verdicts: [], joinVerdicts: [], harmVerdicts: [] };
 	const joinVerdicts = sanitizeJoinVerdicts({
 		raw: (value as Record<string, unknown>).joinVerdicts,
 		joinFragments,
 	});
+	const harmVerdicts = sanitizeHarmVerdicts({
+		raw: (value as Record<string, unknown>).harmVerdicts,
+		harmCandidates,
+	});
 	const arr = (value as Record<string, unknown>).verdicts;
-	if (!Array.isArray(arr)) return { verdicts: [], joinVerdicts };
+	if (!Array.isArray(arr)) return { verdicts: [], joinVerdicts, harmVerdicts };
 
 	const catalog: ReferenceCatalog = {
 		lines: lines.map((l) => ({
@@ -489,7 +639,7 @@ export function sanitizeVerifyPlan({
 			verdicts.push({ index, verdict: "keep" });
 		}
 	}
-	return { verdicts, joinVerdicts };
+	return { verdicts, joinVerdicts, harmVerdicts };
 }
 
 /**
@@ -507,6 +657,7 @@ export async function planVerify({
 	taste,
 	assembledTranscript,
 	joinFragments = [],
+	harmCandidates = [],
 	auth,
 }: {
 	candidates: readonly VerifyCandidate[];
@@ -517,21 +668,40 @@ export async function planVerify({
 	assembledTranscript?: string;
 	/** OFFERED join-fragment rows the final read adjudicates (round 12 U2). */
 	joinFragments?: readonly VerifyJoinFragment[];
+	/** DEFAULT-ACCEPTED cuts the final read harm/texture-reviews (round 14 U2). */
+	harmCandidates?: readonly VerifyHarmCandidate[];
 	auth: ClaudeAuth;
 }): Promise<{ plan: VerifyPlan; usage: TokenUsage | null }> {
-	// R4: nothing to verify at all -> the LLM is never invoked (guard first).
-	if (candidates.length === 0 && joinFragments.length === 0)
-		return { plan: { verdicts: [], joinVerdicts: [] }, usage: null };
+	// R4: nothing to verify at all -> the LLM is never invoked (guard first). Round 14
+	// U2: harm candidates alone are enough to fire the pass (the final read must run
+	// when the only thing to judge is whether the assembled cut damaged the read).
+	if (
+		candidates.length === 0 &&
+		joinFragments.length === 0 &&
+		harmCandidates.length === 0
+	)
+		return {
+			plan: { verdicts: [], joinVerdicts: [], harmVerdicts: [] },
+			usage: null,
+		};
 	const prompt = buildVerifyPrompt({
 		candidates,
 		lines,
 		taste,
 		assembledTranscript,
 		joinFragments,
+		harmCandidates,
 	});
 	const { raw, usage } = await planJson({ prompt, auth, schema: VERIFY_SCHEMA });
 	return {
-		plan: sanitizeVerifyPlan({ raw, candidates, lines, words, joinFragments }),
+		plan: sanitizeVerifyPlan({
+			raw,
+			candidates,
+			lines,
+			words,
+			joinFragments,
+			harmCandidates,
+		}),
 		usage,
 	};
 }
