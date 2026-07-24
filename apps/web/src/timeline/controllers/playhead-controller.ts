@@ -51,6 +51,7 @@ export interface PlayheadConfig {
 	getSceneTracks: () => SceneTracks;
 	getSceneBookmarks: () => Bookmark[];
 	seek: (time: MediaTime) => void;
+	pause: () => void;
 	setScrubbing: (isScrubbing: boolean) => void;
 	setTimelineViewState: (viewState: {
 		zoomLevel: number;
@@ -90,6 +91,27 @@ function pixelToTime({
 		),
 	);
 	return mediaTime({ ticks: Math.round(seconds * TICKS_PER_SECOND) });
+}
+
+/**
+ * Premiere-style timeline seeking: interacting with the timeline during
+ * playback pauses instead of seeking-and-continuing. Pausing before the seek
+ * (rather than after) means a mid-scrub pause never gets raced by the
+ * playback clock's own rAF tick. A no-op when already paused.
+ */
+export function pauseThenSeek({
+	isPlaying,
+	pause,
+	seek,
+	time,
+}: {
+	isPlaying: boolean;
+	pause: () => void;
+	seek: (time: MediaTime) => void;
+	time: MediaTime;
+}): void {
+	if (isPlaying) pause();
+	seek(time);
 }
 
 // --- Controller ---
@@ -280,7 +302,12 @@ export class PlayheadController {
 		if (this.session.kind === "scrubbing") {
 			this.session.currentTime = time;
 		}
-		this.config.seek(time);
+		pauseThenSeek({
+			isPlaying: this.config.getIsPlaying(),
+			pause: this.config.pause,
+			seek: this.config.seek,
+			time,
+		});
 		this.lastMouseClientX = event.clientX;
 	}
 
@@ -299,7 +326,12 @@ export class PlayheadController {
 		this.config.setScrubbing(false);
 
 		if (session.currentTime !== null) {
-			this.config.seek(session.currentTime);
+			pauseThenSeek({
+				isPlaying: this.config.getIsPlaying(),
+				pause: this.config.pause,
+				seek: this.config.seek,
+				time: session.currentTime,
+			});
 			this.config.setTimelineViewState({
 				zoomLevel: this.config.zoomLevel,
 				scrollLeft: this.config.getTracksScrollEl()?.scrollLeft ?? 0,
