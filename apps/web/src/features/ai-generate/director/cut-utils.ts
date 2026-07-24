@@ -144,6 +144,42 @@ export function spansOverlap(
 }
 
 /**
+ * Merge the DEFAULT-ACCEPTED removal spans (cut/take_select with `defaultAccept`
+ * absent or true) into sorted, non-overlapping regions, so one covered region
+ * reads as ONE cut: overlapping or edge-touching spans coalesce. Opt-in
+ * (`defaultAccept: false`) rows are excluded entirely - they are review
+ * questions, not applied cuts.
+ *
+ * The single source of the "what the assembled result actually removes"
+ * derivation, shared by the join-texture layer and the assembled-transcript
+ * builder so the two can never drift (KTD1). NOTE: swallow-pause.ts runs a
+ * DIFFERENT accepted-removal pass (`clipByStartOrder`) that CLIPS overlapping
+ * ops while PRESERVING op identity, rather than merging spans and discarding it;
+ * those semantics differ deliberately, so that pass does not use this helper.
+ */
+export function mergeAcceptedRemovalSpans(
+	ops: readonly DirectorOp[],
+): { startSec: number; endSec: number }[] {
+	const spans = ops
+		.filter(
+			(op) =>
+				(op.op === "cut" || op.op === "take_select") && op.defaultAccept !== false,
+		)
+		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
+		.sort((a, b) => a.startSec - b.startSec);
+	const merged: { startSec: number; endSec: number }[] = [];
+	for (const span of spans) {
+		const last = merged[merged.length - 1];
+		if (last && span.startSec <= last.endSec) {
+			last.endSec = Math.max(last.endSec, span.endSec);
+		} else {
+			merged.push({ ...span });
+		}
+	}
+	return merged;
+}
+
+/**
  * Merge deterministic detector cuts into a planner's ops in time order, with two
  * safety rules (KTD7):
  *

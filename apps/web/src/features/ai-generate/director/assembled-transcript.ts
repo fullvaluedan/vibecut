@@ -21,7 +21,11 @@
  */
 
 import type { DirectorOp, VerifyJoinFragment } from "@framecut/hf-bridge";
-import { isMidpointContained, type WordTiming } from "./cut-utils";
+import {
+	isMidpointContained,
+	mergeAcceptedRemovalSpans,
+	type WordTiming,
+} from "./cut-utils";
 
 /** Past this many characters the full assembled text is replaced by windows. */
 export const ASSEMBLED_TRANSCRIPT_MAX_CHARS = 24_000;
@@ -46,31 +50,6 @@ interface KeptWord {
 	cutBefore: boolean;
 }
 
-/** Merge the default-accepted removal spans (cut/take_select with defaultAccept
- * absent or true) into sorted, non-overlapping regions. Mirrors join-texture. */
-function mergeAcceptedSpans(
-	ops: readonly DirectorOp[],
-): { startSec: number; endSec: number }[] {
-	const spans = ops
-		.filter(
-			(op) =>
-				(op.op === "cut" || op.op === "take_select") &&
-				op.defaultAccept !== false,
-		)
-		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
-		.sort((a, b) => a.startSec - b.startSec);
-	const merged: { startSec: number; endSec: number }[] = [];
-	for (const span of spans) {
-		const last = merged[merged.length - 1];
-		if (last && span.startSec <= last.endSec) {
-			last.endSec = Math.max(last.endSec, span.endSec);
-		} else {
-			merged.push({ ...span });
-		}
-	}
-	return merged;
-}
-
 /** Walk the transcript in order and keep every word whose midpoint is NOT inside
  * a merged accepted removal, marking each kept word that follows one or more
  * removed words (`cutBefore`: a seam). */
@@ -81,7 +60,7 @@ function collectKeptWords({
 	ops: readonly DirectorOp[];
 	words: readonly WordTiming[];
 }): KeptWord[] {
-	const removedSpans = mergeAcceptedSpans(ops);
+	const removedSpans = mergeAcceptedRemovalSpans(ops);
 	const kept: KeptWord[] = [];
 	let pendingCut = false;
 	for (const w of words) {

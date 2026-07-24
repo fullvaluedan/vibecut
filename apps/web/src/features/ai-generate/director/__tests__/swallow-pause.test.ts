@@ -306,6 +306,64 @@ describe("swallowPauseBounds", () => {
 		expect(ops[0].endSec).toBeCloseTo(20.0, 2);
 	});
 
+	test("round 12 B1: an OFFERED cut spanning the GAPS between two accepted cuts survives as BOTH disjoint remainders", () => {
+		// The confirmed multi-island trace: OFFERED [3,20] minus accepted [0,5]
+		// and [10,15] must leave BOTH [5,10] AND [15,20]. The old single-span trim
+		// mutated one range cumulatively and returned only [5,10], silently
+		// discarding [15,20] (which overlapped no accepted cut at all). A flat,
+		// loud envelope with EMPTY words keeps every edge exactly where it starts
+		// (no widen; the trough-snap fallback is a no-op on a flat envelope), so
+		// the subtraction runs at the exact trace coordinates.
+		const env = envelope(25, LOUD); // 500 flat-loud windows, zero silence
+		const ops = swallowPauseBounds({
+			ops: [
+				cut(3, 20, { id: "offered", category: "retake", defaultAccept: false }),
+				cut(0, 5, { id: "accA", category: "pacing" }), // defaultAccept omitted = accepted
+				cut(10, 15, { id: "accB", category: "pacing" }),
+			],
+			envelope: env,
+			words: [],
+			threshold: THRESH,
+		});
+		// The two accepted cuts survive untouched.
+		expect(ops.find((o) => o.id === "accA")).toBeDefined();
+		expect(ops.find((o) => o.id === "accB")).toBeDefined();
+		// The offered cut survives as TWO disjoint sub-spans, not one.
+		const offered = ops.filter((o) => o.category === "retake");
+		expect(offered).toHaveLength(2);
+		const spans = offered
+			.map((o) => [o.startSec, o.endSec] as const)
+			.sort((a, b) => a[0] - b[0]);
+		expect(spans[0][0]).toBeCloseTo(5, 6);
+		expect(spans[0][1]).toBeCloseTo(10, 6);
+		expect(spans[1][0]).toBeCloseTo(15, 6);
+		expect(spans[1][1]).toBeCloseTo(20, 6);
+		// Both remainders keep the offered row's id FAMILY, re-keyed distinctly so
+		// two ops never share one id.
+		expect(offered.every((o) => o.id.startsWith("offered"))).toBe(true);
+		expect(new Set(offered.map((o) => o.id)).size).toBe(2);
+	});
+
+	test("round 12 B1: an OFFERED cut trimmed on a single side keeps its original id (byte-identical)", () => {
+		// A one-survivor trim is the common case and must not re-key: OFFERED
+		// [3,20] minus a single accepted [0,5] leaves exactly [5,20], id intact.
+		const env = envelope(25, LOUD);
+		const ops = swallowPauseBounds({
+			ops: [
+				cut(3, 20, { id: "offered", category: "retake", defaultAccept: false }),
+				cut(0, 5, { id: "accA", category: "pacing" }),
+			],
+			envelope: env,
+			words: [],
+			threshold: THRESH,
+		});
+		const offered = ops.filter((o) => o.category === "retake");
+		expect(offered).toHaveLength(1);
+		expect(offered[0].id).toBe("offered");
+		expect(offered[0].startSec).toBeCloseTo(5, 6);
+		expect(offered[0].endSec).toBeCloseTo(20, 6);
+	});
+
 	test("keep and reorder ops pass through untouched", () => {
 		const env = envelope(30, LOUD, [10, 14, QUIET]);
 		const keep: DirectorOp = {

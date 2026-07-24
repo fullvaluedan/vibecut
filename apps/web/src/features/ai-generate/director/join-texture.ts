@@ -25,7 +25,12 @@
  */
 
 import type { DirectorOp } from "@framecut/hf-bridge";
-import { isMidpointContained, stableCutId, type WordTiming } from "./cut-utils";
+import {
+	isMidpointContained,
+	mergeAcceptedRemovalSpans,
+	stableCutId,
+	type WordTiming,
+} from "./cut-utils";
 
 /** A wordless gap between two accepted cuts at/below this is a splice sliver,
  * swallowed AUTO (KTD3). Above it, a wordless gap is a real pause and stays. */
@@ -51,27 +56,11 @@ export function detectJoinTextureCuts({
 	words: readonly WordTiming[];
 }): DirectorOp[] {
 	// Default-accepted removal spans only (R1): cut/take_select with
-	// defaultAccept absent or true. Opt-in rows are excluded entirely.
-	const spans = ops
-		.filter(
-			(op) =>
-				(op.op === "cut" || op.op === "take_select") &&
-				op.defaultAccept !== false,
-		)
-		.map((op) => ({ startSec: op.startSec, endSec: op.endSec }))
-		.sort((a, b) => a.startSec - b.startSec);
-
-	// Merge overlapping/touching spans so pairing sees contiguous removed
-	// regions, not individual ops (two ops sharing an edge have no gap).
-	const merged: { startSec: number; endSec: number }[] = [];
-	for (const span of spans) {
-		const last = merged[merged.length - 1];
-		if (last && span.startSec <= last.endSec) {
-			last.endSec = Math.max(last.endSec, span.endSec);
-		} else {
-			merged.push({ ...span });
-		}
-	}
+	// defaultAccept absent or true, opt-in rows excluded. Overlapping/touching
+	// spans are merged so pairing sees contiguous removed regions, not individual
+	// ops (two ops sharing an edge have no gap). Shared with the
+	// assembled-transcript builder via cut-utils so the two never drift (KTD1).
+	const merged = mergeAcceptedRemovalSpans(ops);
 
 	const joins: DirectorOp[] = [];
 	for (let i = 0; i + 1 < merged.length; i++) {
