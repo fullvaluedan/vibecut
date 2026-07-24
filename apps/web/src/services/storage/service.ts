@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import type { SavedSoundsData, SavedSound, SoundEffect } from "@/sounds/types";
 import { normalizeTextStyles } from "@/features/text-styles/project-styles";
+import { normalizeRunLedger } from "@/features/ai-generate/director/run-ledger";
 import {
 	migrations,
 	runStorageMigrations,
@@ -170,6 +171,7 @@ class StorageService {
 			version: project.version,
 			timelineViewState: project.timelineViewState,
 			textStyles: project.textStyles,
+			runLedger: project.runLedger,
 		};
 
 		await this.projectsAdapter.set({
@@ -231,6 +233,7 @@ class StorageService {
 			version: serializedProject.version,
 			timelineViewState: serializedProject.timelineViewState,
 			textStyles: normalizeTextStyles({ raw: serializedProject.textStyles }),
+			runLedger: normalizeRunLedger({ raw: serializedProject.runLedger }),
 		};
 
 		return { project };

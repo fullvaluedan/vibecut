@@ -10,6 +10,7 @@
  * "applied-locked", which only works if the panel never unmounts.
  */
 
+import { useEffect } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowExpandIcon, ScissorIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
@@ -21,9 +22,12 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/utils/ui";
 import { PropertiesPanel } from "@/components/editor/panels/properties";
+import { useEditor } from "@/editor/use-editor";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
 import { hasDirectorSession, shouldShowDirectorBadge } from "../dock-badge";
 import { useDirectorPlanStore } from "../director-plan-store";
+import { useDirectorTasteStore } from "../taste";
+import { deriveLedgerTasteNote } from "../run-ledger";
 import { DirectorDock } from "./director-dock";
 
 export function DirectorDockShell() {
@@ -33,6 +37,16 @@ export function DirectorDockShell() {
 	const draft = useDirectorPlanStore((s) => s.draft);
 	const keeps = useDirectorPlanStore((s) => s.keeps);
 	const busy = useAiActivityStore((s) => s.label !== null);
+
+	// Run ledger (taste v2): this is the one always-mounted place with a live
+	// project subscription, so it is where the ledger's per-project note gets
+	// pushed into taste.ts (which has no editor access of its own - see that
+	// file's docstring). Re-fires on project load/switch and on every ledger
+	// write (apply / a post-apply revision, both in director-cut-panel.tsx).
+	const runLedger = useEditor((e) => e.project.getActiveOrNull()?.runLedger);
+	useEffect(() => {
+		useDirectorTasteStore.getState().setLedgerNote(deriveLedgerTasteNote(runLedger ?? []));
+	}, [runLedger]);
 
 	const showBadge = shouldShowDirectorBadge({
 		dockTab,
