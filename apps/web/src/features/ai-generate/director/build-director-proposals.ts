@@ -78,7 +78,17 @@ import {
 } from "./assembled-transcript";
 import { detectSegmentRepeatCuts } from "./segment-repeat";
 import { runSecondPass } from "./second-pass";
-import { mergeDetectedCuts, stableCutId, type KeeperSpan } from "./cut-utils";
+import {
+	buildVirtualTimeline,
+	mapAssembledOpsToSource,
+	tagSecondPass,
+} from "./virtual-timeline";
+import {
+	mergeAcceptedRemovalSpans,
+	mergeDetectedCuts,
+	stableCutId,
+	type KeeperSpan,
+} from "./cut-utils";
 import {
 	collectPauseGaps,
 	computeEmphasisPauseKeepers,
@@ -99,6 +109,15 @@ const REMNANT_FRAMES_TOLERANCE = 15;
  * sits next to a repeat/mistake we're cutting anyway (a breath, not a hard splice). */
 const PAUSE_FLOOR_FRAMES = 15;
 
+/** Round 14 U1 early exit: the second cut (P2) only pays for its two LLM calls when
+ * the first cut removed at least this many SECONDS of DEFAULT-ACCEPTED footage. Below
+ * it the assembled result barely differs from the source - no new adjacencies, nothing
+ * meaningful to re-read - so P2 is skipped entirely and the run is byte-identical to
+ * the single-pass pipeline. Sized so any real talking-head cut (silences + fillers +
+ * dead air already clear this on a clip of more than a few seconds) engages P2, while a
+ * near-untouched short clip does not. */
+const P2_MIN_ACCEPTED_REMOVAL_SEC = 5;
+
 /** Request/response shapes for the three LLM passes. The in-app adapter wraps
  * the existing route `fetch`es; the eval adapter calls the hf-bridge planners
  * directly. Responses are the already-parsed route JSON (KTD2). */
@@ -112,6 +131,10 @@ export interface DirectorPlanRequest {
 	 * Absent = today's timid default. The cache key must include this (see the eval
 	 * adapter) so an A/B run with a target doesn't read a no-target cached response. */
 	compressionTarget?: number;
+	/** Round 14 U1: this plan call is the SECOND cut, reading the assembled result of
+	 * the first pass. Adds the second-pass preamble (and, in the eval adapter, the
+	 * DIRECTOR_P2_PROMPT_VERSION cache-key term). Absent/false = the first-pass prompt. */
+	secondPass?: boolean;
 }
 export interface DirectorPlanResponse {
 	plan?: { operations?: DirectorOp[] };
@@ -947,6 +970,137 @@ export async function buildDirectorProposals(
 					keepers: allKeepers,
 				}).filter((op) => op.op !== "keep")
 			: withSecondPass;
+	// P2, the second cut (round 14 U1): re-read the ASSEMBLED result of the first
+	// cut. Dan's verdict on a real 208-op run was that one-shot analysis under-cuts
+	// (missed cuts, surviving repeats); ADDENDUM 8 proved those recall gaps are
+	// STRUCTURAL, not a threshold-tuning miss. Compression reveals adjacency: two
+	// verbatim takes 60s apart only sit close enough to match once the material
+	// between them is gone, and leftover dead weight stands out against a tighter
+	// cut. So virtually apply the DEFAULT-ACCEPTED removals, run the LLM plan (with
+	// the second-pass preamble) + redundancy passes over that assembled state, carry
+	// every finding back to SOURCE coordinates, subtract P1 territory, and fold the
+	// remainders in as OFFERED rows. OFFERED, never AUTO: the harm net that would let
+	// a second cut auto-apply is round 14's P3 (a separate unit), so until it exists
+	// P2 only ADDS review rows - it can never move an AUTO metric or perturb the
+	// assembled result the join/verify passes below read (they see default-accepted
+	// removals only, which P2 does not change). The deterministic detector re-read is
+	// already covered by `runSecondPass` above; this is the LLM half.
+	let withP2 = withStructural;
+	const p1AcceptedRemovals = mergeAcceptedRemovalSpans(withStructural);
+	const p1RemovedSec = p1AcceptedRemovals.reduce(
+		(sum, span) => sum + (span.endSec - span.startSec),
+		0,
+	);
+	// Early exit: nothing meaningful to re-read below the removal floor, so skip both
+	// P2 LLM calls entirely and stay byte-identical to the single-pass pipeline.
+	if (p1RemovedSec >= P2_MIN_ACCEPTED_REMOVAL_SEC) {
+		onProgress?.("Second pass: reading the assembled cut...");
+		const virtual = buildVirtualTimeline({
+			words,
+			segments,
+			features,
+			envelope,
+			windowSec: ENERGY_WINDOW_SEC,
+			ops: withStructural,
+			totalSec,
+		});
+		// The assembled signal table + redundancy catalog carry NO src/clip attribution
+		// (assembled time does not map to a source element), so `elements: []` - both
+		// builders omit the src column and degrade to transcript-only, which is exactly
+		// what the residual repeat/dead-weight hunt needs.
+		const p2SignalTable = buildSignalTable({
+			segments: virtual.segments,
+			features: virtual.features,
+			elements: [],
+		});
+		const p2Catalog = buildRedundancyCatalog({
+			segments: virtual.segments,
+			features: virtual.features,
+			elements: [],
+			clipNameByAssetId: new Map(),
+		});
+		let p2PlanOps: DirectorOp[] = [];
+		let p2RedundancyOps: DirectorOp[] = [];
+		// Both P2 passes are GUARDED and OPTIONAL: unlike the mandatory first-pass plan,
+		// a P2 route error / degrade contributes zero second-cut ops and the run
+		// continues. They run CONCURRENTLY at the proven-safe level (the P1
+		// redundancy+context pair already runs two claude-code passes at once).
+		const p2PlanPass = async () => {
+			if (virtual.segments.length === 0) return;
+			try {
+				const pData = await llm.plan({
+					segments: p2SignalTable,
+					totalSec: virtual.map.assembledTotalSec,
+					taste: taste || undefined,
+					secondPass: true,
+					...(compressionTarget !== undefined ? { compressionTarget } : {}),
+				});
+				const raw = Array.isArray(pData?.plan?.operations)
+					? pData.plan.operations
+					: [];
+				// Untagged plan cuts default to category "llm" for taste learning (the
+				// same default the taste module derives for a raw cut), no new category.
+				p2PlanOps = mapAssembledOpsToSource({
+					ops: raw.map((op) => ({ ...op, category: op.category ?? "llm" })),
+					map: virtual.map,
+				});
+			} catch {
+				// P2 plan route error / degrade: no second-cut plan ops, the run continues.
+			}
+		};
+		const p2RedundancyPass = async () => {
+			if (virtual.segments.length === 0) return;
+			try {
+				const rData = await llm.redundancy({
+					lines: p2Catalog,
+					taste: taste || undefined,
+				});
+				const groups = Array.isArray(rData?.plan?.groups) ? rData.plan.groups : [];
+				// Reuse the P1 mapper for the assembled catalog, then map the flat cuts
+				// back to source; the review-group machinery (swap-to-alternate) is P1-
+				// only, so only the cuts cross over (tagSecondPass drops the group link).
+				const mapped = mapRedundancyGroups({ groups });
+				p2RedundancyOps = mapAssembledOpsToSource({
+					ops: mapped.cuts,
+					map: virtual.map,
+				});
+			} catch {
+				// P2 redundancy route error: no second-cut redundancy ops, the run continues.
+			}
+		};
+		await Promise.all([p2PlanPass(), p2RedundancyPass()]);
+		abort();
+		// Tag every P2 op as an OFFERED second-cut row, then TRIM against P1 TERRITORY
+		// (every P1 removal, accepted OR opt-in) and the keepers, so a second cut never
+		// re-proposes what the first cut already covers and never deletes a protected
+		// span. Remainders survive as their own rows; the `p2` id namespace keeps split
+		// pieces from colliding with any P1 id. `trimRetakeCuts` is the shared helper
+		// the retake/structural folds already use.
+		const p2Tagged = [...p2PlanOps, ...p2RedundancyOps].map(tagSecondPass);
+		const p1RemovalSpans = withStructural
+			.filter((op) => op.op === "cut" || op.op === "take_select")
+			.map((op) => ({ startSec: op.startSec, endSec: op.endSec }));
+		const p2Trimmed =
+			p2Tagged.length > 0
+				? trimRetakeCuts({
+						ops: p2Tagged,
+						blockers: p1RemovalSpans,
+						keepers: allKeepers,
+						idNamespace: "p2",
+					})
+				: [];
+		if (p2Trimmed.length > 0) {
+			withP2 = mergeDetectedCuts({
+				planOps: withStructural,
+				extraOps: p2Trimmed,
+				keepers: allKeepers,
+			}).filter((op) => op.op !== "keep");
+			onNotice?.({
+				kind: "info",
+				message: `Director second pass: found ${p2Trimmed.length} more possible cut${p2Trimmed.length === 1 ? "" : "s"} in the assembled result (offered for review).`,
+			});
+		}
+	}
 	// Deterministic assembly tail (round 12 U2): the silence fold + pause snap +
 	// word refine + trim-vs-cut + justify + join-texture chain, factored into ONE
 	// closure so it can run twice - once as a cheap pure PREVIEW before the verify
@@ -1045,11 +1199,11 @@ export async function buildDirectorProposals(
 	// degraded result, or nothing to judge leaves every row untouched and the run
 	// continues (R4). Nothing to judge NEVER calls the LLM, so a candidate-less,
 	// fragment-less run is byte-identical to the pre-verify pipeline.
-	let verified = withStructural;
+	let verified = withP2;
 	let joinVerdicts: VerifyJoinVerdict[] = [];
 	// Hoisted so the REAL assembly pass below can REUSE it whenever verify changed
 	// nothing (round-12 B2): the preview is a pure run of the SAME chain on
-	// `withStructural`, so re-running it on an unchanged `verified` would burn the
+	// `withP2`, so re-running it on an unchanged `verified` would burn the
 	// six-stage chain for a byte-identical result.
 	let preview: ReturnType<typeof assembleFinalCut> | undefined;
 	if (llm.verify) {
@@ -1059,7 +1213,7 @@ export async function buildDirectorProposals(
 			endSec: w.end,
 		}));
 		const verifyCandidates = collectVerifyCandidates({
-			ops: withStructural,
+			ops: withP2,
 			words: verifyWords,
 			lines: redundancyLines,
 		});
@@ -1069,7 +1223,7 @@ export async function buildDirectorProposals(
 		// preview MUST run here (not behind the candidate/fragment gate below):
 		// the join fragments are DERIVED from it, so it is what tells us whether
 		// any fragment exists at all.
-		preview = assembleFinalCut(withStructural);
+		preview = assembleFinalCut(withP2);
 		const joinFragments = collectJoinFragments({
 			ops: preview.operations,
 			joinOps: preview.joinCuts,
@@ -1100,7 +1254,7 @@ export async function buildDirectorProposals(
 					? vData.plan.verdicts
 					: [];
 				verified = applyVerifyVerdicts({
-					ops: withStructural,
+					ops: withP2,
 					candidates: verifyCandidates,
 					verdicts,
 				});
@@ -1117,13 +1271,13 @@ export async function buildDirectorProposals(
 	// The REAL assembly pass: the post-verify ops through the same deterministic
 	// tail the preview ran (byte-identical to the pre-U2 inline chain when verify
 	// is absent or judged nothing). When verify changed nothing - `verified` is
-	// still the SAME reference as `withStructural` (nothing to verify, or verify
+	// still the SAME reference as `withP2` (nothing to verify, or verify
 	// threw / was skipped) - the preview already ran this exact pure chain on this
 	// exact input, so REUSE it instead of recomputing the whole six-stage chain
 	// (round-12 B2). `applyVerifyVerdicts` always returns a fresh array, so a
-	// real verdict makes `verified !== withStructural` and forces the recompute.
+	// real verdict makes `verified !== withP2` and forces the recompute.
 	const { operations, trimmed, joinCuts } =
-		preview && verified === withStructural ? preview : assembleFinalCut(verified);
+		preview && verified === withP2 ? preview : assembleFinalCut(verified);
 	// Final-read promotion (round 12 U2/R3): a confident "swallow" verdict flips
 	// its OFFERED join row to checked; "keep", low confidence, an unknown id, or a
 	// failed verify leave every row exactly as detected (fail-open).

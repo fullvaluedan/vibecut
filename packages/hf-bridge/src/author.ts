@@ -616,12 +616,22 @@ export function clampCompressionTarget(target: number): number {
  */
 export const DIRECTOR_PROMPT_VERSION = 2;
 
+/**
+ * Version of the SECOND-PASS preamble below (round 14 U1). The multi-pass Director
+ * re-reads the ASSEMBLED result of its own first cut and hunts residual dead weight
+ * / repeats; that re-read reuses this plan pass with an extra preamble, so a wording
+ * change to the preamble must bump THIS constant (the eval threads it into the plan
+ * cache key alongside DIRECTOR_PROMPT_VERSION, the VERIFY_PROMPT_VERSION precedent).
+ * The base prompt below is shared, so DIRECTOR_PROMPT_VERSION still governs it. */
+export const DIRECTOR_P2_PROMPT_VERSION = 1;
+
 export function buildDirectorPrompt({
 	segments,
 	totalSec,
 	taste,
 	catalog,
 	compressionTarget,
+	secondPass,
 }: {
 	segments: readonly DirectorSegment[];
 	totalSec: number;
@@ -632,6 +642,10 @@ export function buildDirectorPrompt({
 	/** Fraction of words this creator typically REMOVES (0..0.8). When present, the
 	 * prompt gains an explicit compression contract; absent = byte-identical prompt. */
 	compressionTarget?: number;
+	/** Round 14 U1: when true this is the SECOND cut, reading the already-tightened
+	 * assembled result. Prepends a preamble that reframes the task as hunting the
+	 * dead weight / repeats the first cut left behind. Absent = byte-identical prompt. */
+	secondPass?: boolean;
 }): string {
 	const hasClusters = segments.some((s) => s.clusterId !== undefined);
 	const hasImportance = segments.some((s) => s.importance !== undefined);
@@ -655,7 +669,15 @@ export function buildDirectorPrompt({
 					clampCompressionTarget(compressionTarget) * 100,
 				)}% of the raw spoken words. Match that ruthlessness: drop WHOLE tangents, abandoned threads, and entire low-value sections that don't serve the core point — not just word-level trims. Aim near that removal ratio rather than a timid handful of cuts. The editor reviews every cut and restores anything you over-reached, so UNDER-cutting (leaving the video bloated) wastes their time more than over-cutting.\n`
 			: "";
-	return `You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
+	// Second-pass preamble (round 14 U1): this is the SECOND read, over the result
+	// of the first cut already applied. The transcript below is what the video reads
+	// like now - shorter and cleaner - so far-apart repeats have become adjacent and
+	// leftover dead weight stands out. The task is the residue the first pass missed,
+	// not a fresh full edit. Absent field => byte-identical prompt (DIRECTOR_PROMPT_VERSION).
+	const secondPassBlock = secondPass
+		? `SECOND PASS - you are re-reading a cut that has ALREADY been tightened once. The signal table below is the ASSEMBLED result: the silences, fillers, and obvious repeats the first pass caught are GONE, and the remaining lines now sit next to each other. Your job is the residue the first pass missed: repeats or restatements that only became adjacent once the material between them was cut, dead weight and tangents that now stand out against the tighter cut, and any stalling the first read left in. Do NOT re-cut what is already tight - propose only genuine remaining removals. Finding nothing more is a fine answer (return an empty operations list).\n\n`
+		: "";
+	return `${secondPassBlock}You are an expert video DIRECTOR editing a talking-head recording into a tight, high-retention cut. Below is a per-segment SIGNAL TABLE in timeline seconds: the transcript plus audio loudness (0-1, relative to the loudest segment), speaking rate (wpm), filler likelihood, leading silence, and which SOURCE CLIP (src) each line came from.
 
 ${catalogBlock}Emit a plan of typed OPERATIONS:
 - "cut": remove a span [startSec,endSec) - stutters/false-starts, contentless filler runs, OFF-TOPIC TANGENTS (a detour that doesn't serve the video's core point - e.g. troubleshooting an unrelated issue, a side-story that goes nowhere), dead-weight intros/outros, and DEAD TIME where the speaker isn't advancing the point: long fumbling / "let me just..." while figuring something out, silently sitting, drinking or sipping water, fiddling with gear, checking notes, or reaching off-camera. When in doubt about a low-value stretch, CUT it - the editor reviews and can keep any cut they disagree with, so being too timid (leaving boring footage in) wastes their time more than being too aggressive. Do NOT cut for redundancy here - retakes, restarts, and repeated/restated points are handled by a separate dedicated pass; pacing beats completeness. TRAILING SPECULATION EXCEPTION: when the speaker muses about implications, predictions, or future plans AFTER the point has already landed, AND that musing is coherent (complete deliberate sentences, not fumbling), still emit the cut but add "kind":"speculation" - this editor deliberately keeps that style, so tagged cuts are offered unchecked instead of auto-applied. Incoherent rambling, abandoned threads, and trailing dead time are plain cuts, never "speculation".
@@ -755,6 +777,7 @@ export async function planDirector({
 	taste,
 	catalog,
 	compressionTarget,
+	secondPass,
 	auth,
 }: {
 	segments: readonly DirectorSegment[];
@@ -763,9 +786,12 @@ export async function planDirector({
 	catalog?: readonly DirectorAssetSummary[];
 	/** Fraction of words to REMOVE (0..0.8); adds the compression contract (U3). */
 	compressionTarget?: number;
+	/** Round 14 U1: this is the second cut, reading the assembled result (adds the
+	 * second-pass preamble). Absent = the ordinary first-pass prompt. */
+	secondPass?: boolean;
 	auth: ClaudeAuth;
 }): Promise<{ plan: DirectorPlan; usage: TokenUsage | null }> {
-	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog, compressionTarget });
+	const prompt = buildDirectorPrompt({ segments, totalSec, taste, catalog, compressionTarget, secondPass });
 	const { raw, usage } = await planJson({ prompt, auth, schema: DIRECTOR_SCHEMA });
 	return { plan: sanitizeDirectorPlan(raw, totalSec), usage };
 }

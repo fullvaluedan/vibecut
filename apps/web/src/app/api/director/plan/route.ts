@@ -112,6 +112,10 @@ export async function POST(req: NextRequest) {
 		typeof compressionTargetRaw === "number" && Number.isFinite(compressionTargetRaw)
 			? compressionTargetRaw
 			: undefined;
+	// Second-pass flag (round 14 U1): a truthy `secondPass` adds the assembled-cut
+	// re-read preamble to the plan prompt. Only a strict `true` engages it; anything
+	// else keeps the first-pass prompt byte-identical.
+	const secondPass = body?.secondPass === true;
 
 	// `frames: <non-array>` is a malformed request; `frames` absent or `[]` is the
 	// text-only path. Only a populated, well-formed array engages vision.
@@ -139,6 +143,7 @@ export async function POST(req: NextRequest) {
 			taste: tasteNote,
 			catalog,
 			compressionTarget,
+			secondPass,
 			auth,
 		});
 		return NextResponse.json({ plan, usage, degraded: false });
