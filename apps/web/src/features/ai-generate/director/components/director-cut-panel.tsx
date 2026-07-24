@@ -24,9 +24,17 @@ import {
 	selectApplyGuardSpans,
 	selectFilteredOps,
 	useDirectorPlanStore,
+	type OpDecisions,
 	type ReviewRowFilter,
 } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
+import {
+	appendRunRecord,
+	readRunLedger,
+	recordApplyDecisions,
+	recordPostApplyRevisions,
+	type RunLedgerRecord,
+} from "../run-ledger";
 import { describeReviewOp, formatTimecode, formatTimeRange } from "../review-format";
 
 const ROW_FILTERS: { id: ReviewRowFilter; label: string }[] = [
@@ -142,19 +150,68 @@ export function DirectorCutPanel() {
 		} as const;
 	};
 
+	// Run ledger (taste v2): the project write helper shared by apply (a fresh
+	// record) and a post-apply revision (an update to the latest record).
+	// `updater` gets the CURRENT project ledger fresh (never a stale closure -
+	// this panel is docked and long-lived) and returns the next one; a no-op
+	// updater (same array reference back, e.g. nothing actually reversed) skips
+	// the project write entirely.
+	const persistRunLedger = (
+		updater: (ledger: RunLedgerRecord[]) => RunLedgerRecord[],
+	) => {
+		const project = editor.project.getActive();
+		const currentLedger = readRunLedger({ project });
+		const nextLedger = updater(currentLedger);
+		if (nextLedger === currentLedger) return;
+		editor.project.setActiveProject({
+			project: {
+				...project,
+				runLedger: nextLedger,
+				metadata: { ...project.metadata, updatedAt: new Date() },
+			},
+		});
+		editor.save.markDirty();
+	};
+
+	// A row un-checked AFTER it was already applied (the round-9 persistent
+	// review makes this observable) is a stronger "the Director over-cut here"
+	// signal than a pre-apply toggle, so the run ledger tracks it separately.
+	// `before` is the decisions snapshot from immediately before the toggle
+	// that triggered this.
+	const recordLedgerRevisions = (before: OpDecisions) => {
+		const after = useDirectorPlanStore.getState().decisions;
+		persistRunLedger((ledger) =>
+			recordPostApplyRevisions({ ledger, operations: ops, before, after }),
+		);
+	};
+
 	// First apply from the review phase: run the plan, seed taste once, and stay open
 	// in the applied phase (U8). The plan + decisions persist so rows stay revisable.
 	const apply = () => {
 		const args = resolveApplyArgs();
 		if (!args) return;
 		const result = applyDirectorPlan(args);
+		const decisionsAtApply = useDirectorPlanStore.getState().decisions;
 		useDirectorTasteStore.getState().noteReviewDecisions(
 			ops.map((op) => ({
 				op: op.op,
 				category: op.category,
-				accepted: Boolean(useDirectorPlanStore.getState().decisions[op.id]),
+				accepted: Boolean(decisionsAtApply[op.id]),
 			})),
 		);
+		// Run ledger (taste v2): fold the apply-time decisions onto the proposal
+		// snapshot `openCutPanel` captured, then persist it onto the project so
+		// the signal survives closing VibeCut (taste.ts's opStats above are
+		// session/device-local; this is per-project and durable).
+		const pendingRunRecord = useDirectorPlanStore.getState().pendingRunRecord;
+		if (pendingRunRecord) {
+			const record = recordApplyDecisions({
+				record: pendingRunRecord,
+				operations: ops,
+				decisions: decisionsAtApply,
+			});
+			persistRunLedger((ledger) => appendRunRecord({ ledger, record }));
+		}
 		markApplied({ batch: result.appliedCommand });
 		if (result.cuts === 0 && result.reorders === 0) {
 			toast.info("Director: nothing applied");
@@ -190,20 +247,30 @@ export function DirectorCutPanel() {
 	};
 
 	// A row toggle revises live once applied; before apply it just records the choice.
-	// In the locked phase revise is disabled (the checkbox is disabled too).
+	// In the locked phase revise is disabled (the checkbox is disabled too). A toggle
+	// that starts already-applied is a post-apply revision (run ledger, taste v2):
+	// snapshot decisions BEFORE the flip so recordLedgerRevisions can tell an
+	// un-check apart from a re-check.
 	const handleToggle = (id: string) => {
+		const wasApplied = phase === "applied";
+		const before = decisions;
 		toggle(id);
 		if (useDirectorPlanStore.getState().phase === "applied") revise();
+		if (wasApplied) recordLedgerRevisions(before);
 	};
 
 	// Bulk select/deselect the currently FILTERED visible rows only (U8 fix: never
-	// flips hidden rows), then revise live if applied.
+	// flips hidden rows), then revise live if applied. Same post-apply-revision
+	// tracking as handleToggle above.
 	const handleSetAll = (accepted: boolean) => {
+		const wasApplied = phase === "applied";
+		const before = decisions;
 		setAll(
 			accepted,
 			visibleOps.map((op) => op.id),
 		);
 		if (useDirectorPlanStore.getState().phase === "applied") revise();
+		if (wasApplied) recordLedgerRevisions(before);
 	};
 
 	// A/B: undo/redo the batch to preview the timeline without vs with the cuts.
