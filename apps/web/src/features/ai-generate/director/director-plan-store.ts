@@ -221,10 +221,14 @@ interface DirectorPlanState {
 	 * Cut-review lifecycle (U8). "review" = proposing, nothing applied yet. "applied"
 	 * = the plan is on the timeline but the panel STAYS OPEN and editable: toggling a
 	 * row revises the applied cut in place, and only an explicit dismiss clears it.
-	 * "applied-locked" (U8 fix) = the applied batch is no longer the controllable top
-	 * of the undo stack (the user made an intervening edit or a manual Ctrl+Z), so
-	 * revise + A/B are disabled and only Dismiss remains: the AI cut is now just part
-	 * of the user's timeline, which is the correct, expected behavior.
+	 * "applied-locked" (U8 fix) = the applied batch is on NEITHER stack top the guard
+	 * recognizes (the user made an intervening edit, or the stack was rewritten past
+	 * recognition), so revise + A/B are disabled and only Dismiss remains: the AI cut
+	 * is now just part of the user's timeline, which is the correct, expected
+	 * behavior. A plain external Ctrl+Z or Ctrl+Shift+Z alone does NOT land here
+	 * (dock-undo-resync fix): that just moves the batch to the OTHER stack top,
+	 * which `checkBatchControllability` in applied-plan.ts recognizes as the dock's
+	 * own legitimate A/B state and resyncs `abShowing` to match instead of locking.
 	 */
 	phase: "review" | "applied" | "applied-locked";
 	/**

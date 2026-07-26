@@ -45,6 +45,7 @@ const {
 	reviseAppliedHighlightPlan,
 	toggleAbPreview,
 	isBatchControllable,
+	checkBatchControllability,
 	ensureAppliedLockReactor,
 } = await import("../applied-plan");
 const { useDirectorPlanStore } = await import("../director-plan-store");
@@ -204,6 +205,70 @@ describe("isBatchControllable", () => {
 	});
 });
 
+describe("checkBatchControllability (dock-undo-resync fix)", () => {
+	test("no resync needed: passes the belief through unchanged when already controllable", () => {
+		const { editor, batch } = applyOnce();
+		expect(
+			checkBatchControllability(editor as never, {
+				appliedBatch: batch,
+				appliedHasBatch: true,
+				abShowing: "with",
+			}),
+		).toEqual({ controllable: true, abShowing: "with" });
+	});
+
+	test("resyncs with -> without after an EXTERNAL undo (Dan's live-test repro)", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo(); // an external Ctrl+Z; the store still believes "with"
+		expect(
+			checkBatchControllability(editor as never, {
+				appliedBatch: batch,
+				appliedHasBatch: true,
+				abShowing: "with",
+			}),
+		).toEqual({ controllable: true, abShowing: "without" });
+	});
+
+	test("resyncs without -> with after an EXTERNAL redo", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo();
+		editor.log.length = 0;
+		editor.command.redo(); // an external Ctrl+Shift+Z; the store still believes "without"
+		expect(
+			checkBatchControllability(editor as never, {
+				appliedBatch: batch,
+				appliedHasBatch: true,
+				abShowing: "without",
+			}),
+		).toEqual({ controllable: true, abShowing: "with" });
+	});
+
+	test("stays locked when a foreign command sits on top of the batch", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.execute({ command: "user-edit" });
+		expect(
+			checkBatchControllability(editor as never, {
+				appliedBatch: batch,
+				appliedHasBatch: true,
+				abShowing: "with",
+			}),
+		).toEqual({ controllable: false });
+	});
+
+	test("stays locked when the batch is on neither stack top", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo(); // batch -> redo top
+		editor.command.execute({ command: "some-other-edit" }); // clears the redo stack
+		expect(
+			checkBatchControllability(editor as never, {
+				appliedBatch: batch,
+				appliedHasBatch: true,
+				abShowing: "with",
+			}),
+		).toEqual({ controllable: false });
+	});
+});
+
 describe("reviseAppliedPlan: guarded against a moved batch (U8 fix)", () => {
 	test("an intervening manual command makes revise a no-op lock, not a double-apply", () => {
 		const { editor, batch } = applyOnce();
@@ -222,9 +287,10 @@ describe("reviseAppliedPlan: guarded against a moved batch (U8 fix)", () => {
 		expect(editor.timeline()).toEqual(timelineBefore); // user's edit intact, no double batch
 	});
 
-	test("a manual Ctrl+Z before revise locks instead of undoing the pre-Director step", () => {
+	test("a manual Ctrl+Z THEN a further foreign edit still locks (batch is on neither stack top)", () => {
 		const { editor, batch } = applyOnce();
-		editor.command.undo();
+		editor.command.undo(); // batch -> redo top
+		editor.command.execute({ command: "user-edit" }); // clears the redo stack
 		editor.log.length = 0;
 		const outcome = reviseAppliedPlan({
 			editor: editor as never,
@@ -233,6 +299,45 @@ describe("reviseAppliedPlan: guarded against a moved batch (U8 fix)", () => {
 		});
 		expect(outcome.status).toBe("locked");
 		expect(editor.log).toEqual([]);
+	});
+});
+
+// A manual Ctrl+Z ALONE (nothing else intervening) used to land here too and lock
+// (see the U8 fix test above, superseded). It no longer does: see
+// "reviseAppliedPlan: resyncs from an external undo/redo instead of locking" below,
+// the dock-undo-resync fix this file pins.
+
+describe("reviseAppliedPlan: resyncs from an external undo/redo instead of locking (dock-undo-resync fix)", () => {
+	test("revise after an EXTERNAL Ctrl+Z re-applies fresh, without a second (wrong) undo", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo(); // external Ctrl+Z; the store still believes abShowing "with"
+		editor.log.length = 0;
+		const outcome = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "with" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		expect(outcome.status).toBe("revised");
+		// The batch is already undone (on the redo stack): revise must NOT undo
+		// again, it just executes fresh, which clears the stale redo entry.
+		expect(editor.log).toEqual(["execute"]);
+		expect(editor.timeline()).toHaveLength(1);
+	});
+
+	test("revise after an EXTERNAL redo undoes the resynced batch before re-applying", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo();
+		editor.log.length = 0;
+		editor.command.redo(); // external Ctrl+Shift+Z; the store still believes "without"
+		editor.log.length = 0;
+		const outcome = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "without" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		expect(outcome.status).toBe("revised");
+		expect(editor.log).toEqual(["undo", "execute"]);
+		expect(editor.timeline()).toHaveLength(1);
 	});
 });
 
@@ -267,6 +372,36 @@ describe("toggleAbPreview", () => {
 		});
 		expect(outcome.status).toBe("locked");
 		expect(editor.log).toEqual([]); // did not undo the user's edit
+	});
+});
+
+describe("toggleAbPreview: resyncs from an external undo/redo instead of locking (dock-undo-resync fix)", () => {
+	test("an EXTERNAL Ctrl+Z resyncs to without, so the toggle click redoes the cuts back (Dan's repro)", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo(); // external Ctrl+Z; the store still believes abShowing "with"
+		editor.log.length = 0;
+		const outcome = toggleAbPreview({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "with" },
+		});
+		// Resynced belief is "without" (already undone), so THIS toggle click is the
+		// redo that puts the cuts back: one click, no separate unlock step first.
+		expect(outcome).toEqual({ status: "toggled", showing: "with" });
+		expect(editor.log).toEqual(["redo"]);
+	});
+
+	test("an EXTERNAL redo resyncs to with, so the toggle click undoes to preview the original", () => {
+		const { editor, batch } = applyOnce();
+		editor.command.undo();
+		editor.log.length = 0;
+		editor.command.redo(); // external Ctrl+Shift+Z; the store still believes "without"
+		editor.log.length = 0;
+		const outcome = toggleAbPreview({
+			editor: editor as never,
+			state: { appliedBatch: batch, appliedHasBatch: true, abShowing: "without" },
+		});
+		expect(outcome).toEqual({ status: "toggled", showing: "without" });
+		expect(editor.log).toEqual(["undo"]);
 	});
 });
 
@@ -378,6 +513,76 @@ describe("ensureAppliedLockReactor (shared applied-lock reactor, R1)", () => {
 		});
 		expect(outcome.status).toBe("revised");
 		expect(useDirectorPlanStore.getState().phase).toBe("applied"); // not locked
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("resyncs abShowing when an EXTERNAL redo restores the batch, instead of locking (dock-undo-resync fix)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		const editor = makeStubEditor();
+		ensureAppliedLockReactor(editor as never);
+
+		const first = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		if (first.status !== "revised") throw new Error("expected revised");
+		const batch = first.result.appliedCommand;
+		useDirectorPlanStore.getState().markApplied({ batch });
+
+		// The dock's own A/B toggle previews the original (a legitimate "without").
+		editor.command.undo();
+		useDirectorPlanStore.getState().setAbShowing("without");
+
+		// An EXTERNAL redo (Ctrl+Shift+Z fired from outside the dock) brings the
+		// cuts back. Redo fires reactors: the reactor must resync the belief to
+		// "with" and stay live, not lock it.
+		editor.command.redo();
+
+		expect(useDirectorPlanStore.getState().phase).toBe("applied");
+		expect(useDirectorPlanStore.getState().abShowing).toBe("with");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("an EXTERNAL undo does not lock immediately (undo fires no reactors); the NEXT guarded interaction resyncs it live", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		const editor = makeStubEditor();
+		ensureAppliedLockReactor(editor as never);
+
+		const first = reviseAppliedPlan({
+			editor: editor as never,
+			state: { appliedBatch: null, appliedHasBatch: false, abShowing: "with" },
+			ops: [op({ op: "cut", startSec: 1, endSec: 2 })],
+		});
+		if (first.status !== "revised") throw new Error("expected revised");
+		useDirectorPlanStore.getState().markApplied({ batch: first.result.appliedCommand });
+
+		// Dan's repro: an external Ctrl+Z. Nothing observes this yet (same as
+		// before the fix), so the store's belief is stale until the next
+		// interaction.
+		editor.command.undo();
+		expect(useDirectorPlanStore.getState().phase).toBe("applied");
+		expect(useDirectorPlanStore.getState().abShowing).toBe("with"); // stale
+
+		// The next interaction the dock offers (its own A/B button) is what
+		// resyncs: it must NOT lock, and it must act on the true stack state.
+		const s = useDirectorPlanStore.getState();
+		const outcome = toggleAbPreview({
+			editor: editor as never,
+			state: {
+				appliedBatch: s.appliedBatch,
+				appliedHasBatch: s.appliedHasBatch,
+				abShowing: s.abShowing,
+			},
+		});
+		expect(outcome.status).toBe("toggled");
+		if (outcome.status === "toggled") {
+			useDirectorPlanStore.getState().setAbShowing(outcome.showing);
+		}
+		expect(useDirectorPlanStore.getState().phase).toBe("applied"); // never locked
+		expect(useDirectorPlanStore.getState().abShowing).toBe("with"); // cuts re-applied
 		useDirectorPlanStore.getState().close();
 	});
 });
