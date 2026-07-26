@@ -17,8 +17,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useEditor } from "@/editor/use-editor";
 import { applyHighlightPlan } from "../apply-plan";
 import {
+	checkBatchControllability,
 	ensureAppliedLockReactor,
-	isBatchControllable,
 	reviseAppliedHighlightPlan,
 	toggleAbPreview,
 	withReactorSuppressed,
@@ -152,17 +152,17 @@ export function DirectorHighlightPanel() {
 	// Dismiss is the ONLY thing that clears the plan. If mid A/B "without" AND the
 	// batch is still controllable, redo first so the applied highlight (not the
 	// previewed original) is what stays; in the locked phase we must not touch the
-	// moved stack.
+	// moved stack. GUARDED path too (dock-undo-resync fix): an external Ctrl+Z can
+	// leave the store's `abShowing` stale, so this resyncs before deciding whether
+	// to redo, the same way revise/A-B do.
 	const handleDismiss = () => {
 		const s = useDirectorPlanStore.getState();
 		if (s.phase === "applied" || s.phase === "applied-locked") {
-			if (
-				s.phase === "applied" &&
-				s.appliedHasBatch &&
-				s.abShowing === "without" &&
-				isBatchControllable(editor, revisableState())
-			) {
-				withReactorSuppressed(() => editor.command.redo());
+			if (s.phase === "applied" && s.appliedHasBatch) {
+				const check = checkBatchControllability(editor, revisableState());
+				if (check.controllable && check.abShowing === "without") {
+					withReactorSuppressed(() => editor.command.redo());
+				}
 			}
 			close();
 			toast.info("Highlight: review closed", {
