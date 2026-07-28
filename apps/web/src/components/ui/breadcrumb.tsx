@@ -1,3 +1,5 @@
+"use client";
+
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import { Slot } from "radix-ui";
 
