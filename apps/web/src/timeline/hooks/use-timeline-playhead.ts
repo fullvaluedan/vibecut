@@ -44,6 +44,7 @@ export function useTimelinePlayhead({
 		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
 		getSceneBookmarks: () => editor.scenes.getActiveScene()?.bookmarks ?? [],
 		seek: (time) => editor.playback.seek({ time }),
+		pause: () => editor.playback.pause(),
 		setScrubbing: (scrubbing) =>
 			editor.playback.setScrubbing({ isScrubbing: scrubbing }),
 		setTimelineViewState: ({ zoomLevel, scrollLeft, playheadTime }) =>

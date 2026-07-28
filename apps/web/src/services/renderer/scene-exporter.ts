@@ -18,7 +18,20 @@ import { TICKS_PER_SECOND } from "@/wasm";
 import { frameRateToFloat } from "@/fps/utils";
 import type { RootNode } from "./nodes/root-node";
 import type { ExportFormat, ExportQuality } from "@/export";
+import type { TimelineAudioChunk } from "@/media/audio";
 import { CanvasRenderer } from "./canvas-renderer";
+
+/**
+ * A long timeline can't be mixed into one `AudioBuffer` (the `createBuffer`
+ * wall), so the audio is streamed to the encoder as a sequence of mastered
+ * windows instead. The encoder is configured from `sampleRate` / channel count
+ * up front, then each chunk is added in order.
+ */
+export type AudioChunkStream = {
+	sampleRate: number;
+	numberOfChannels: number;
+	chunks: AsyncIterable<TimelineAudioChunk>;
+};
 
 type ExportParams = {
 	width: number;
@@ -27,7 +40,10 @@ type ExportParams = {
 	format: ExportFormat;
 	quality: ExportQuality;
 	shouldIncludeAudio?: boolean;
+	/** Whole-timeline mix (short timelines). Mutually exclusive with `audioChunks`. */
 	audioBuffer?: AudioBuffer;
+	/** Streamed window mix (long timelines). Mutually exclusive with `audioBuffer`. */
+	audioChunks?: AudioChunkStream;
 };
 
 const qualityMap = {
@@ -50,6 +66,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 	private quality: ExportQuality;
 	private shouldIncludeAudio: boolean;
 	private audioBuffer?: AudioBuffer;
+	private audioChunks?: AudioChunkStream;
 
 	private isCancelled = false;
 
@@ -61,6 +78,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		quality,
 		shouldIncludeAudio,
 		audioBuffer,
+		audioChunks,
 	}: ExportParams) {
 		super();
 		this.renderer = new CanvasRenderer({
@@ -73,6 +91,7 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		this.quality = quality;
 		this.shouldIncludeAudio = shouldIncludeAudio ?? false;
 		this.audioBuffer = audioBuffer;
+		this.audioChunks = audioChunks;
 	}
 
 	cancel(): void {
@@ -110,15 +129,30 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		output.addVideoTrack(videoSource, { frameRate: fpsFloat });
 
+		// One whole-timeline buffer (short) OR a stream of window buffers (long) -
+		// exactly one is set. Read the sample rate / channel count from whichever
+		// is present so the encoder is configured the same way for both.
+		const audioInfo = this.audioBuffer
+			? {
+					sampleRate: this.audioBuffer.sampleRate,
+					numberOfChannels: this.audioBuffer.numberOfChannels,
+				}
+			: this.audioChunks
+				? {
+						sampleRate: this.audioChunks.sampleRate,
+						numberOfChannels: this.audioChunks.numberOfChannels,
+					}
+				: null;
+
 		let audioSource: AudioBufferSource | null = null;
-		if (this.shouldIncludeAudio && this.audioBuffer) {
+		if (this.shouldIncludeAudio && audioInfo) {
 			let audioCodec: "aac" | "opus" = this.format === "webm" ? "opus" : "aac";
 
 			if (audioCodec === "aac" && typeof AudioEncoder !== "undefined") {
 				const { supported } = await AudioEncoder.isConfigSupported({
 					codec: "mp4a.40.2",
-					sampleRate: this.audioBuffer.sampleRate,
-					numberOfChannels: this.audioBuffer.numberOfChannels,
+					sampleRate: audioInfo.sampleRate,
+					numberOfChannels: audioInfo.numberOfChannels,
 					bitrate: 192000,
 				});
 				if (!supported) audioCodec = "opus";
@@ -133,9 +167,26 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 
 		await output.start();
 
-		if (audioSource && this.audioBuffer) {
-			await audioSource.add(this.audioBuffer);
+		if (audioSource) {
+			if (this.audioBuffer) {
+				await audioSource.add(this.audioBuffer);
+			} else if (this.audioChunks) {
+				// Add each mastered window in order. `add` places every buffer right
+				// after the previous one, so the windows reassemble into a gapless
+				// track; awaiting each add respects encoder/writer backpressure so
+				// only one window is ever in flight.
+				for await (const { buffer } of this.audioChunks.chunks) {
+					if (this.isCancelled) break;
+					await audioSource.add(buffer);
+				}
+			}
 			audioSource.close();
+		}
+
+		if (this.isCancelled) {
+			await output.cancel();
+			this.emit("cancelled");
+			return null;
 		}
 
 		for (let i = 0; i < frameCount; i++) {

@@ -13,10 +13,14 @@ import os from "node:os";
 import path from "node:path";
 import { authorComposition } from "../src/author-composition.ts";
 import { enqueueRender, resolveHyperframesCli, runNode } from "../src/renderer.ts";
+import { resolveRegistryBase } from "../src/registry-ref.ts";
 
 const count = Number(process.argv[2] ?? 10);
 const offset = Number(process.argv[3] ?? 0);
-const REGISTRY = "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
+// Tag-pinned to the installed hyperframes engine version, not `main`. See
+// registry-ref.ts. Throws (no silent main-fallback) if the engine isn't
+// installed or its version can't be read.
+const REGISTRY = resolveRegistryBase();
 const CONCURRENCY = 3;
 
 interface Row {

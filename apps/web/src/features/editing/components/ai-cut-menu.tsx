@@ -1,7 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { toast } from "sonner";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -15,227 +14,46 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { NumberField } from "@/components/ui/number-field";
 import { Spinner } from "@/components/ui/spinner";
 import { useEditor } from "@/editor/use-editor";
-import { runRemoveSilences } from "@/features/editing/remove-silences";
-import { runDirector } from "@/features/ai-generate/director/run-director";
-import { runAssemble } from "@/features/ai-generate/director/run-assemble";
-import { runHighlight } from "@/features/ai-generate/director/run-highlight";
-import { DirectorReviewDialog } from "@/features/ai-generate/director/components/director-review-dialog";
-import { usePreferenceStore } from "@/features/ai-generate/preference-store";
+import {
+	runAutoAssembleAction,
+	runDirectorAction,
+	runHighlightAction,
+	runRemoveSilencesAction,
+} from "@/features/ai-generate/director/ai-cut-actions";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
+import {
+	HIDE_AUTO_ASSEMBLE_ACTION,
+	HIDE_HIGHLIGHT_ACTION,
+} from "@/features/editing/surface-flags";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ScissorIcon } from "@hugeicons/core-free-icons";
 
-const fmtSec = (sec: number) => `${sec.toFixed(1)}s`;
-
+/**
+ * The AI CUT toolbar dropdown. Shows exactly two entries (roadmap D2): "AI CUT"
+ * (the Director run) and "Remove silences". Auto-assemble and Highlight are
+ * hidden behind `surface-flags.ts`, not deleted - their menu items and the
+ * Highlight dialog stay in this file, just unreachable while the flags are on.
+ * All four actions' run orchestration (progress toasts, abort wiring, the
+ * transcriber-pause flag) lives in `ai-cut-actions.ts` and writes into
+ * `ai-activity-store` (R1/KTD1); this component just renders the shared
+ * label/stage/cancel, so it and the persistent Director dock's Running view
+ * can never drift out of sync.
+ */
 export function AiCutMenu() {
 	const editor = useEditor();
-	const [busy, setBusy] = useState<string | null>(null);
-	const [stage, setStage] = useState<string | null>(null);
+	const label = useAiActivityStore((s) => s.label);
+	const stage = useAiActivityStore((s) => s.stage);
 	const [highlightOpen, setHighlightOpen] = useState(false);
 	const [budgetText, setBudgetText] = useState("");
-	const abortRef = useRef<AbortController | null>(null);
-
-	const run = async ({
-		label,
-		fn,
-	}: {
-		label: string;
-		fn: (helpers: {
-			onProgress: (detail: string) => void;
-			signal: AbortSignal;
-		}) => Promise<{ cuts: number; removedSec: number }>;
-	}) => {
-		if (busy) return;
-		const controller = new AbortController();
-		abortRef.current = controller;
-		setBusy(label);
-		// Pause the background transcriber while AI CUT works the machine.
-		useAiActivityStore.getState().setBusy(true);
-		setStage("Starting...");
-		// Remember the last stage so a failure can say WHERE it died.
-		const lastStage = { current: "starting" };
-		const toastId = toast.loading(`${label}...`);
-		try {
-			const { cuts, removedSec } = await fn({
-				onProgress: (detail) => {
-					lastStage.current = detail;
-					setStage(detail);
-				},
-				signal: controller.signal,
-			});
-			// Self-learning: a quick Ctrl+Z counts against this run, and the
-			// post-cut duration is the baseline the export diff compares to.
-			usePreferenceStore.getState().noteCutRun(label, {
-				durationTicks: editor.timeline.getTotalDuration() as number,
-			});
-			if (cuts === 0) {
-				toast.info(`${label}: nothing to cut`, { id: toastId });
-			} else {
-				toast.success(
-					`${label}: ${cuts} cut${cuts === 1 ? "" : "s"}, ${fmtSec(removedSec)} removed`,
-					{ id: toastId, description: "Ctrl+Z restores everything." },
-				);
-			}
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			if (message === "Cancelled" || controller.signal.aborted) {
-				toast.info(`${label} stopped`, { id: toastId });
-			} else {
-				console.error(`${label} failed during "${lastStage.current}"`, e);
-				toast.error(`${label} failed`, {
-					id: toastId,
-					duration: 15000,
-					description: `While "${lastStage.current}": ${message}`,
-				});
-			}
-		} finally {
-			abortRef.current = null;
-			setBusy(null);
-			useAiActivityStore.getState().setBusy(false);
-			setStage(null);
-		}
-	};
-
-	// The Director plans then opens the Review modal — the modal owns apply + the
-	// result toast, so this flow has no success toast of its own.
-	const runDirectorFlow = async () => {
-		if (busy) return;
-		const controller = new AbortController();
-		abortRef.current = controller;
-		setBusy("AI Director");
-		useAiActivityStore.getState().setBusy(true);
-		setStage("Starting...");
-		const lastStage = { current: "starting" };
-		const toastId = toast.loading("AI Director...");
-		try {
-			await runDirector({
-				editor,
-				onProgress: (detail) => {
-					lastStage.current = detail;
-					setStage(detail);
-				},
-				signal: controller.signal,
-			});
-			toast.dismiss(toastId);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			if (message === "Cancelled" || controller.signal.aborted) {
-				toast.info("AI Director stopped", { id: toastId });
-			} else {
-				console.error(`AI Director failed during "${lastStage.current}"`, e);
-				toast.error("AI Director failed", {
-					id: toastId,
-					duration: 15000,
-					description: `While "${lastStage.current}": ${message}`,
-				});
-			}
-		} finally {
-			abortRef.current = null;
-			setBusy(null);
-			useAiActivityStore.getState().setBusy(false);
-			setStage(null);
-		}
-	};
-
-	// Auto-assemble (the headline AI feature): read the WHOLE bin (every retake +
-	// unused clip), pick the best spans, and lay a rough cut on the main track.
-	// Replaces the current main track in ONE undoable command (Ctrl+Z reverts).
-	const runAutoAssembleFlow = async () => {
-		if (busy) return;
-		const controller = new AbortController();
-		abortRef.current = controller;
-		setBusy("Auto-assemble");
-		useAiActivityStore.getState().setBusy(true);
-		setStage("Starting...");
-		const lastStage = { current: "starting" };
-		const toastId = toast.loading("Auto-assemble...");
-		try {
-			const result = await runAssemble({
-				editor,
-				onProgress: (detail) => {
-					lastStage.current = detail;
-					setStage(detail);
-				},
-				signal: controller.signal,
-			});
-			toast.success(
-				`Assembled ${result.placed} clip${result.placed === 1 ? "" : "s"} on a new scene`,
-				{
-					id: toastId,
-					description: result.narrative
-						? `${result.narrative} — review it in the panel; your original timeline is untouched.`
-						: "Review it in the panel; your original timeline is untouched.",
-				},
-			);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			if (message === "Cancelled" || controller.signal.aborted) {
-				toast.info("Auto-assemble stopped", { id: toastId });
-			} else {
-				console.error(`Auto-assemble failed during "${lastStage.current}"`, e);
-				toast.error("Auto-assemble failed", {
-					id: toastId,
-					duration: 15000,
-					description: `While "${lastStage.current}": ${message}`,
-				});
-			}
-		} finally {
-			abortRef.current = null;
-			setBusy(null);
-			useAiActivityStore.getState().setBusy(false);
-			setStage(null);
-		}
-	};
-
-	// Highlight (keep-only): the inverse of the Director — keep the best parts, cut
-	// the rest. Opens the same Review modal in highlight mode (it owns apply).
-	const runHighlightFlow = async (budgetSec?: number) => {
-		if (busy) return;
-		setHighlightOpen(false);
-		const controller = new AbortController();
-		abortRef.current = controller;
-		setBusy("Highlight");
-		useAiActivityStore.getState().setBusy(true);
-		setStage("Starting...");
-		const lastStage = { current: "starting" };
-		const toastId = toast.loading("Highlight...");
-		try {
-			await runHighlight({
-				editor,
-				budgetSec,
-				onProgress: (detail) => {
-					lastStage.current = detail;
-					setStage(detail);
-				},
-				signal: controller.signal,
-			});
-			toast.dismiss(toastId);
-		} catch (e) {
-			const message = e instanceof Error ? e.message : String(e);
-			if (message === "Cancelled" || controller.signal.aborted) {
-				toast.info("Highlight stopped", { id: toastId });
-			} else {
-				console.error(`Highlight failed during "${lastStage.current}"`, e);
-				toast.error("Highlight failed", {
-					id: toastId,
-					duration: 15000,
-					description: `While "${lastStage.current}": ${message}`,
-				});
-			}
-		} finally {
-			abortRef.current = null;
-			setBusy(null);
-			useAiActivityStore.getState().setBusy(false);
-			setStage(null);
-		}
-	};
 
 	const buildHighlight = () => {
 		const n = Number(budgetText);
 		const budgetSec = budgetText.trim() && Number.isFinite(n) && n > 0 ? n : undefined;
-		void runHighlightFlow(budgetSec);
+		setHighlightOpen(false);
+		void runHighlightAction({ editor, budgetSec });
 	};
 
 	return (
@@ -246,11 +64,11 @@ export function AiCutMenu() {
 						variant="default"
 						size="sm"
 						className="gap-1.5 rounded-sm font-semibold data-[state=open]:bg-neutral-600 data-[state=open]:text-white"
-						disabled={!!busy}
+						disabled={!!label}
 					>
-						{busy ? (
+						{label ? (
 							<>
-								<Spinner className="size-3.5" /> {stage ?? `${busy}...`}
+								<Spinner className="size-3.5" /> {stage ?? `${label}...`}
 							</>
 						) : (
 							<>
@@ -260,23 +78,20 @@ export function AiCutMenu() {
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
-					<DropdownMenuItem onClick={() => void runAutoAssembleFlow()}>
-						Auto-assemble — build a cut from all my clips
+					{!HIDE_AUTO_ASSEMBLE_ACTION && (
+						<DropdownMenuItem onClick={() => void runAutoAssembleAction({ editor })}>
+							Auto-assemble: build a cut from all my clips
+						</DropdownMenuItem>
+					)}
+					<DropdownMenuItem onClick={() => void runDirectorAction({ editor })}>
+						AI CUT: review and cut the whole video
 					</DropdownMenuItem>
-					<DropdownMenuItem onClick={() => void runDirectorFlow()}>
-						AI Director — review &amp; cut the whole video
-					</DropdownMenuItem>
-					<DropdownMenuItem onClick={() => setHighlightOpen(true)}>
-						Highlight — keep the best parts
-					</DropdownMenuItem>
-					<DropdownMenuItem
-						onClick={() =>
-							void run({
-								label: "Remove silences",
-								fn: () => runRemoveSilences({ editor }),
-							})
-						}
-					>
+					{!HIDE_HIGHLIGHT_ACTION && (
+						<DropdownMenuItem onClick={() => setHighlightOpen(true)}>
+							Highlight: keep the best parts
+						</DropdownMenuItem>
+					)}
+					<DropdownMenuItem onClick={() => void runRemoveSilencesAction({ editor })}>
 						Remove silences
 					</DropdownMenuItem>
 				</DropdownMenuContent>
@@ -292,38 +107,36 @@ export function AiCutMenu() {
 						<label className="text-sm font-medium" htmlFor="highlight-budget">
 							Target length (seconds) — optional
 						</label>
-						<input
+						<NumberField
 							id="highlight-budget"
-							type="number"
-							min="1"
+							allowExpressions={false}
+							min={1}
 							value={budgetText}
 							onChange={(e) => setBudgetText(e.target.value)}
 							placeholder="e.g. 60 — blank keeps all the good parts"
-							className="border-input w-full rounded-sm border bg-transparent px-2 py-1 text-sm"
 						/>
 					</div>
 					<div className="flex justify-end gap-2 pt-3">
 						<Button variant="ghost" size="sm" onClick={() => setHighlightOpen(false)}>
 							Cancel
 						</Button>
-						<Button size="sm" onClick={buildHighlight} disabled={!!busy}>
+						<Button size="sm" onClick={buildHighlight} disabled={!!label}>
 							Build highlight
 						</Button>
 					</div>
 				</DialogContent>
 			</Dialog>
-			{busy && (
+			{label && (
 				<Button
 					variant="destructive"
 					size="sm"
 					className="ml-1 rounded-sm px-2"
 					title="Stop this AI CUT run"
-					onClick={() => abortRef.current?.abort()}
+					onClick={() => useAiActivityStore.getState().cancel?.()}
 				>
 					Stop
 				</Button>
 			)}
-			<DirectorReviewDialog />
 		</>
 	);
 }

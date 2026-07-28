@@ -17,6 +17,7 @@ import { existsSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { HF_TEMPLATES, renderTemplateJob, bakeRegistryItem } from "../src/index.ts";
+import { resolveRegistryBase } from "../src/registry-ref.ts";
 
 type Probe = {
 	durationSec: number;
@@ -134,8 +135,13 @@ for (const tpl of HF_TEMPLATES) {
 
 // Registry bakes (panel "bake library" path): discover blocks, bake the first few.
 try {
+	// Tag-pinned to the installed hyperframes engine version, not `main`. See
+	// registry-ref.ts. Throws (no silent main-fallback) if the engine isn't
+	// installed or its version can't be read; caught by this try, reported as
+	// "bakes skipped" below, same as any other registry-fetch failure.
+	const registryBase = resolveRegistryBase();
 	const idx: any = await (
-		await fetch("https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry/registry.json", {
+		await fetch(`${registryBase}/registry.json`, {
 			signal: AbortSignal.timeout(15000),
 		})
 	).json();

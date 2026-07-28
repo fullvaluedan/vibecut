@@ -47,6 +47,26 @@ export class SplitElementsCommand extends Command {
 		this.savedState = editor.scenes.getActiveScene().tracks;
 		this.rightSideElements = [];
 
+		// A linked group (video + its separated audio share a `linkId`) split at
+		// the same time must NOT hand the original `linkId` to the right halves:
+		// four clips on one id makes A/V-sync pairing ambiguous once an edit
+		// drifts them (the false out-of-sync badge, LIVE-TEST item 10). Mint ONE
+		// fresh id per link group per execute, so the right-side halves stay
+		// ganged with each other while the left halves keep the original id.
+		// Mirrors the drag-drop straddle-split precedent (computeStraddleSplit).
+		const freshLinkIdByGroup = new Map<string, string>();
+		const rightSideLinkId = (
+			linkId: string | undefined,
+		): { linkId?: string } => {
+			if (linkId === undefined) return {};
+			let fresh = freshLinkIdByGroup.get(linkId);
+			if (fresh === undefined) {
+				fresh = generateUUID();
+				freshLinkIdByGroup.set(linkId, fresh);
+			}
+			return { linkId: fresh };
+		};
+
 		const splitTrack = <
 			TTrack extends { id: string; elements: TimelineElement[] },
 		>(
@@ -155,6 +175,7 @@ export class SplitElementsCommand extends Command {
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
+							...rightSideLinkId(element.linkId),
 						},
 					];
 				} else {
@@ -181,6 +202,7 @@ export class SplitElementsCommand extends Command {
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
+							...rightSideLinkId(element.linkId),
 						},
 					];
 				}

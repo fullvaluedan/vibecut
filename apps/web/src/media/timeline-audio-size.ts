@@ -32,3 +32,32 @@ export function audioBufferByteSize({
 }): number {
 	return frameCount * channels * 4;
 }
+
+/** Output samples in one mix window of `chunkSeconds` at `sampleRate` (at least 1). */
+export function chunkFrameCount({
+	sampleRate,
+	chunkSeconds,
+}: {
+	sampleRate: number;
+	chunkSeconds: number;
+}): number {
+	return Math.max(1, Math.ceil(sampleRate * chunkSeconds));
+}
+
+/**
+ * True when a timeline of `frameCount` output samples would need a mix buffer
+ * larger than `maxBytes` - i.e. big enough to risk the `createBuffer` wall, so
+ * it should be mixed in bounded windows instead of one allocation. Small
+ * timelines stay under the cap and keep the byte-identical single-buffer path.
+ */
+export function shouldChunkTimelineAudio({
+	frameCount,
+	channels,
+	maxBytes,
+}: {
+	frameCount: number;
+	channels: number;
+	maxBytes: number;
+}): boolean {
+	return audioBufferByteSize({ frameCount, channels }) > maxBytes;
+}

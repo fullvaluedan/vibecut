@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { FrameRate } from "opencut-wasm";
-import { computeResize } from "@/timeline/group-resize";
+import { computeLinkedResize, computeResize } from "@/timeline/group-resize";
 import type { GroupResizeMember } from "@/timeline/group-resize";
 import { buildResizeMembers } from "@/timeline/controllers/resize-controller";
 import type { SceneTracks, VideoElement, VideoTrack } from "@/timeline";
@@ -111,6 +111,125 @@ describe("computeResize (single grabbed clip)", () => {
 		// left-trim by +2 frames: start moves right, duration shrinks.
 		expect(result.updates[0].patch.startTime).toBe(12 * FRAME);
 		expect(result.updates[0].patch.duration).toBe(8 * FRAME);
+	});
+});
+
+describe("computeLinkedResize (linked trim, Dan's fork)", () => {
+	test("a single member matches computeResize exactly (Alt-solo parity)", () => {
+		const m = member({
+			elementId: "a",
+			sourceDuration: mediaTime({ ticks: 12 * FRAME }),
+			trimEnd: mediaTime({ ticks: 2 * FRAME }),
+		});
+		const solo = computeResize({
+			member: m,
+			side: "right",
+			deltaTime: mediaTime({ ticks: 5 * FRAME }),
+			fps: FPS,
+		});
+		const linked = computeLinkedResize({
+			members: [m],
+			side: "right",
+			deltaTime: mediaTime({ ticks: 5 * FRAME }),
+			fps: FPS,
+		});
+		expect(linked).toEqual(solo);
+	});
+
+	test("the shared delta is clamped by the MOST restrictive member's source headroom", () => {
+		// Grabbed video has 5 frames of headroom, its linked audio only 2: the
+		// pair extends 2 frames together, never desyncing mid-trim.
+		const video = member({
+			elementId: "v",
+			sourceDuration: mediaTime({ ticks: 15 * FRAME }),
+			trimEnd: mediaTime({ ticks: 5 * FRAME }),
+		});
+		const audio = member({
+			elementId: "a",
+			trackId: "audio-1",
+			sourceDuration: mediaTime({ ticks: 12 * FRAME }),
+			trimEnd: mediaTime({ ticks: 2 * FRAME }),
+		});
+		const result = computeLinkedResize({
+			members: [video, audio],
+			side: "right",
+			deltaTime: mediaTime({ ticks: 5 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.deltaTime).toBe(2 * FRAME);
+		expect(result.updates).toHaveLength(2);
+		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
+		expect(result.updates[1].patch.duration).toBe(12 * FRAME);
+	});
+
+	test("a partner's neighbor bound clamps the whole pair", () => {
+		const video = member({
+			elementId: "v",
+			sourceDuration: mediaTime({ ticks: 100 * FRAME }),
+		});
+		const audio = member({
+			elementId: "a",
+			trackId: "audio-1",
+			sourceDuration: mediaTime({ ticks: 100 * FRAME }),
+			// Another audio clip right behind the partner: ends at frame 23.
+			rightNeighborBound: mediaTime({ ticks: 23 * FRAME }),
+		});
+		const result = computeLinkedResize({
+			members: [video, audio],
+			side: "right",
+			deltaTime: mediaTime({ ticks: 10 * FRAME }),
+			fps: FPS,
+		});
+		// Both end at frame 20; the audio neighbor allows +3 frames only.
+		expect(result.deltaTime).toBe(3 * FRAME);
+		for (const update of result.updates) {
+			expect(update.patch.duration).toBe(13 * FRAME);
+		}
+	});
+
+	test("a retimed partner consumes PER-MEMBER source deltas, never the shared one", () => {
+		// Timeline delta +2 frames: the 1x video gives up 2 frames of source
+		// trimEnd, the 2x partner gives up 4 (delta * rate).
+		const video = member({
+			elementId: "v",
+			sourceDuration: mediaTime({ ticks: 18 * FRAME }),
+			trimEnd: mediaTime({ ticks: 8 * FRAME }),
+		});
+		const retimed = member({
+			elementId: "r",
+			trackId: "audio-1",
+			sourceDuration: mediaTime({ ticks: 28 * FRAME }),
+			trimEnd: mediaTime({ ticks: 8 * FRAME }),
+			retime: { rate: 2 },
+		});
+		const result = computeLinkedResize({
+			members: [video, retimed],
+			side: "right",
+			deltaTime: mediaTime({ ticks: 2 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.deltaTime).toBe(2 * FRAME);
+		expect(result.updates[0].patch.trimEnd).toBe(6 * FRAME);
+		expect(result.updates[1].patch.trimEnd).toBe(4 * FRAME);
+		// Same timeline geometry for both.
+		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
+		expect(result.updates[1].patch.duration).toBe(12 * FRAME);
+	});
+
+	test("a left trim moves every member's start by the same shared delta", () => {
+		const video = member({ elementId: "v" });
+		const audio = member({ elementId: "a", trackId: "audio-1" });
+		const result = computeLinkedResize({
+			members: [video, audio],
+			side: "left",
+			deltaTime: mediaTime({ ticks: 2 * FRAME }),
+			fps: FPS,
+		});
+		for (const update of result.updates) {
+			expect(update.patch.startTime).toBe(12 * FRAME);
+			expect(update.patch.duration).toBe(8 * FRAME);
+			expect(update.patch.trimStart).toBe(2 * FRAME);
+		}
 	});
 });
 

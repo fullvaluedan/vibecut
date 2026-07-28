@@ -8,9 +8,10 @@
 	"types": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./templates": "./src/templates/index.ts"
+		"./templates": "./src/templates/index.ts",
+		"./stable-op-id": "./src/stable-op-id.ts"
 	},
 	"dependencies": {
-		"hyperframes": "0.7.10"
+		"hyperframes": "0.7.68"
 	}
 }

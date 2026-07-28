@@ -44,8 +44,8 @@ export function HelpContent() {
 				</p>
 				<p>
 					The fastest path to a finished video: import everything, then run{" "}
-					<b>AI CUT → AI Cut</b> (assembles and edits it like a YouTube
-					video), add effects with <b>RUN HYPERFRAMES</b>, and hit{" "}
+					<b>AI CUT -&gt; Auto-assemble</b> (builds the whole timeline for
+					you), add effects with <b>RUN HYPERFRAMES</b>, and hit{" "}
 					<b>Export</b>.
 				</p>
 			</HelpSection>
@@ -100,16 +100,35 @@ export function HelpContent() {
 				</p>
 			</HelpSection>
 
-			<HelpSection title="AI CUT — automatic editing">
+			<HelpSection title="AI CUT: automatic editing">
 				<p>
-					<b>AI Cut</b> (top item): assembles every bin asset onto the
-					timeline, removes silences, then Claude reads the whole transcript
-					and edits it like a YouTube video — retakes, stutters, tangents,
-					pacing. <b>Remove silences</b>: audio-only dead-air removal.{" "}
-					<b>Remove repeats</b>: retakes only (keeps your last take).{" "}
-					<b>Full cleanup</b>: stutters + repeats + tangents without
-					assembling. One Ctrl+Z always restores everything; Stop aborts
-					mid-run.
+					The <b>AI CUT</b> button in the timeline toolbar has four options:
+				</p>
+				<p>
+					<b>Auto-assemble</b> builds a full rough cut for you: it reads every
+					clip in your media bin (even ones not on the timeline yet), picks
+					the good parts, and lays them out in order. Best when the timeline
+					is empty or you just want a starting point.
+				</p>
+				<p>
+					<b>AI Director</b> reads through whatever is already on your
+					timeline and proposes edits (retakes, stutters, tangents, pacing,
+					dead air), then opens a review list so you can check off which
+					suggestions to keep before anything actually changes.
+				</p>
+				<p>
+					<b>Highlight</b> works the opposite way: instead of trimming what is
+					there, it picks only the best moments (optionally to a target
+					length, like "give me 60 seconds") and opens the same kind of
+					review list.
+				</p>
+				<p>
+					<b>Remove silences</b> is the simple one: it just cuts out dead air
+					and long pauses, nothing else.
+				</p>
+				<p>
+					Every option shows a <b>Stop</b> button while it is working, and one
+					Ctrl+Z always undoes the whole change.
 				</p>
 			</HelpSection>
 

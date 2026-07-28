@@ -19,6 +19,7 @@ import {
 	PopoverContent,
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
+import { NumberField } from "@/components/ui/number-field";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -398,9 +399,10 @@ function BookmarkPopoverContent({
 			<div className="flex flex-col gap-2">
 				<Label className="text-xs">Duration</Label>
 				<div className="flex items-center gap-1.5">
-					<Input
-						type="number"
+					<NumberField
+						allowExpressions={false}
 						min={0}
+						max={maxDuration}
 						step={0.1}
 						value={durationSeconds}
 						onChange={(event) => {
@@ -416,8 +418,7 @@ function BookmarkPopoverContent({
 								duration: mediaTimeFromSeconds({ seconds: value }),
 							});
 						}}
-						className="h-8 text-sm"
-						containerClassName="w-full"
+						className="h-8"
 					/>
 				</div>
 			</div>

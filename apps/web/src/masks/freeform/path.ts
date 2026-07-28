@@ -556,6 +556,32 @@ export function insertPointIntoFreeformSegment({
 	const startPoint = points[indices.startIndex];
 	const endPoint = points[indices.endIndex];
 	const clampedT = Math.min(0.999, Math.max(0.001, t));
+
+	// Straight segment (no bezier handles on either end): insert a plain corner
+	// point. De Casteljau subdivision would hand the new point collinear handles
+	// (a smooth point sitting on a straight line), so dragging that vertex would
+	// bend a polygon edge into a curve. A zero-handle corner keeps the polygon a
+	// polygon and preserves the identical current shape. Curved segments still
+	// subdivide via De Casteljau below so their shape is preserved exactly.
+	const isStraightSegment =
+		startPoint.outX === 0 &&
+		startPoint.outY === 0 &&
+		endPoint.inX === 0 &&
+		endPoint.inY === 0;
+	if (isStraightSegment) {
+		const nextPoints = [...points];
+		nextPoints.splice(indices.endIndex, 0, {
+			id: pointId,
+			x: startPoint.x + (endPoint.x - startPoint.x) * clampedT,
+			y: startPoint.y + (endPoint.y - startPoint.y) * clampedT,
+			inX: 0,
+			inY: 0,
+			outX: 0,
+			outY: 0,
+		});
+		return nextPoints;
+	}
+
 	const p0 = { x: startPoint.x, y: startPoint.y };
 	const p1 = {
 		x: startPoint.x + startPoint.outX,

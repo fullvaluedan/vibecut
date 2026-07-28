@@ -1,7 +1,11 @@
 import type { TranscriptSegmentLite } from "./transcript-cache";
 
-/** Seconds -> mm:ss.s (e.g. 65.3 -> "01:05.3"). */
-function formatTimestamp(sec: number): string {
+/**
+ * Seconds -> mm:ss.s (e.g. 65.3 -> "01:05.3"). Exported so the export menu
+ * (export-transcript.ts) can reuse the same readable timestamp style instead
+ * of growing a second formatter.
+ */
+export function formatTimestamp(sec: number): string {
 	const safe = Math.max(0, sec);
 	const minutes = Math.floor(safe / 60);
 	const seconds = safe - minutes * 60;

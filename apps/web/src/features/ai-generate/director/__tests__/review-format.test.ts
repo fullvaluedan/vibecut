@@ -38,9 +38,21 @@ describe("describeReviewOp", () => {
 		expect(rejected.rejectedHint).toBe("Keeping this take");
 	});
 
-	test("a plain filler cut has no rejected hint (keeping it is obvious)", () => {
+	test("a rejected filler cut says the filler stays (round 9: mid-flow fillers start unchecked)", () => {
 		const d = describeReviewOp({ op: op({ op: "cut", category: "filler" }), accepted: false });
-		expect(d.rejectedHint).toBe("");
+		expect(d.rejectedHint).toBe("Keeping the filler");
+		expect(
+			describeReviewOp({ op: op({ op: "cut", category: "filler" }), accepted: true }).rejectedHint,
+		).toBe("");
+	});
+
+	test("a speculation cut shows the badge; rejecting keeps the speculation (round 9)", () => {
+		const accepted = describeReviewOp({ op: op({ op: "cut", category: "speculation" }), accepted: true });
+		expect(accepted.badge).toBe("Cut");
+		expect(accepted.categoryBadge).toBe("Speculation");
+		expect(accepted.rejectedHint).toBe("");
+		const rejected = describeReviewOp({ op: op({ op: "cut", category: "speculation" }), accepted: false });
+		expect(rejected.rejectedHint).toBe("Keeping the speculation");
 	});
 
 	test("vision and dead-air categories surface their badges", () => {
@@ -55,6 +67,15 @@ describe("describeReviewOp", () => {
 		expect(accepted.rejectedHint).toBe("");
 		const rejected = describeReviewOp({ op: op({ op: "cut", category: "context" }), accepted: false });
 		expect(rejected.rejectedHint).toBe("Keeping this content");
+	});
+
+	test("a join cut shows the badge; rejecting keeps the fragment (round 12)", () => {
+		const accepted = describeReviewOp({ op: op({ op: "cut", category: "join" }), accepted: true });
+		expect(accepted.badge).toBe("Cut");
+		expect(accepted.categoryBadge).toBe("Join");
+		expect(accepted.rejectedHint).toBe("");
+		const rejected = describeReviewOp({ op: op({ op: "cut", category: "join" }), accepted: false });
+		expect(rejected.rejectedHint).toBe("Keeping the fragment");
 	});
 
 	test("a reorder never gets a rejected hint", () => {

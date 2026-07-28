@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { enqueueRender, resolveHyperframesCli, runNode } from "./renderer";
 import { fetchRegistryComposition, registryKindDir } from "./registry-fetch";
+import { resolveRegistryBase } from "./registry-ref";
 
 /**
  * The "bake library": registry items that are full standalone HyperFrames
@@ -14,10 +15,11 @@ import { fetchRegistryComposition, registryKindDir } from "./registry-fetch";
  * each one ONCE through the pinned hyperframes CLI to a cached transparent WebM
  * and reuse that file for every drop. The cache key folds in the composition's
  * content hash, so a registry update re-bakes automatically.
+ *
+ * The default registry base (when `job.registryBase` is not given) resolves
+ * to the git tag matching the installed `hyperframes` engine version, not
+ * `main`. See registry-ref.ts for why.
  */
-
-const REGISTRY_BASE =
-	"https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry";
 
 export interface BakeJob {
 	/** Registry item name, e.g. "yt-lower-third". */
@@ -25,7 +27,10 @@ export interface BakeJob {
 	fps: number;
 	/** Registry item type (e.g. "hyperframes:example"); defaults to a block. */
 	type?: string;
-	/** Override for tests; defaults to the official registry. */
+	/**
+	 * Override for tests; defaults to the tag-pinned registry matching the
+	 * installed hyperframes engine (see registry-ref.ts), not `main`.
+	 */
 	registryBase?: string;
 }
 
@@ -63,7 +68,7 @@ async function fetchOk(url: string): Promise<Response> {
  * throws a clear error.
  */
 export async function bakeRegistryItem(job: BakeJob): Promise<BakeOutcome> {
-	const base = job.registryBase ?? REGISTRY_BASE;
+	const base = job.registryBase ?? resolveRegistryBase();
 	const fps = Math.round(job.fps) || 30;
 	const type = job.type ?? "hyperframes:block";
 	const dir = registryKindDir(type);

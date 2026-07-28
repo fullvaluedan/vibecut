@@ -75,6 +75,23 @@ describe("consolidateAdjacentClips (U4/KTD5)", () => {
 		expect(aA[0].duration).toBe(aV[0].duration);
 	});
 
+	test("fresh right-half linkIds (split hardening) still merge pairs in lockstep", () => {
+		// SplitElementsCommand now mints a fresh linkId for the right-side halves,
+		// so a pure split leaves V-left(L)+V-right(L2) and A-left(L)+A-right(L2).
+		// Merging matches on mediaId + contiguity (never linkId), so both tracks
+		// still collapse back to one clip each, and mergeable linked slices
+		// contribute no blocked spans.
+		const vGroups = consolidateAdjacentClips({ clips: [A, B] });
+		expect(vGroups).toHaveLength(1);
+		const blocked = collectBlockedLinkedSpans([
+			{ linkId: "L", startTime: 0, duration: 100, mergeable: true }, // V-left
+			{ linkId: "L2", startTime: 100, duration: 50, mergeable: true }, // V-right
+			{ linkId: "L", startTime: 0, duration: 100, mergeable: true }, // A-left
+			{ linkId: "L2", startTime: 100, duration: 50, mergeable: true }, // A-right
+		]);
+		expect(blocked).toEqual([]);
+	});
+
 	test("a real source jump between clips does NOT merge (content was removed)", () => {
 		// B's source starts at 130, not 100 -> 30 ticks of source removed between them.
 		const Bjump = clip({ id: "B", startTime: 100, trimStart: 130, duration: 50 });

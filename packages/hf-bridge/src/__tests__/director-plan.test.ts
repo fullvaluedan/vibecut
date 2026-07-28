@@ -100,6 +100,45 @@ describe("buildDirectorPrompt", () => {
 		// No clusters → no de-dup rule (and the prompt is otherwise unchanged).
 		expect(buildDirectorPrompt({ segments, totalSec: 12 })).not.toContain('Rows sharing a "grp" id');
 	});
+
+	test("adds the compression contract block ONLY when compressionTarget is present (U3)", () => {
+		const withTarget = buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: 0.585 });
+		expect(withTarget).toContain("COMPRESSION TARGET");
+		expect(withTarget).toContain("59%"); // round(0.585 * 100)
+		expect(buildDirectorPrompt({ segments, totalSec: 12 })).not.toContain("COMPRESSION TARGET");
+	});
+
+	test("absent compressionTarget is byte-identical to omitting the field entirely (U3 pin)", () => {
+		const omitted = buildDirectorPrompt({ segments, totalSec: 12 });
+		const explicitUndefined = buildDirectorPrompt({
+			segments,
+			totalSec: 12,
+			compressionTarget: undefined,
+		});
+		expect(explicitUndefined).toBe(omitted);
+	});
+
+	test("compressionTarget stacks with the taste note without splitting it (U3)", () => {
+		const both = buildDirectorPrompt({
+			segments,
+			totalSec: 12,
+			taste: "be conservative with tangent-cuts",
+			compressionTarget: 0.4,
+		});
+		expect(both).toContain("EDITOR TASTE");
+		expect(both).toContain("be conservative with tangent-cuts"); // pinned substring intact
+		expect(both).toContain("COMPRESSION TARGET");
+		expect(both).toContain("40%");
+	});
+
+	test("out-of-range compressionTarget is clamped into [0, 0.8] (U3)", () => {
+		expect(buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: 0.95 })).toContain(
+			"80%",
+		);
+		expect(buildDirectorPrompt({ segments, totalSec: 12, compressionTarget: -0.3 })).toContain(
+			"0%",
+		);
+	});
 });
 
 describe("sanitizeDirectorPlan", () => {
@@ -167,6 +206,47 @@ describe("sanitizeDirectorPlan", () => {
 	test("empty operations stays empty; a missing array throws", () => {
 		expect(sanitizeDirectorPlan({ operations: [] }, 12).operations).toEqual([]);
 		expect(() => sanitizeDirectorPlan({}, 12)).toThrow(/no operations array/);
+	});
+
+	test('kind:"speculation" on a cut maps to the opt-in speculation category (round 9)', () => {
+		const raw = {
+			operations: [
+				{ op: "cut", startSec: 3, endSec: 5, reason: "trailing musing", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		const { operations } = sanitizeDirectorPlan(raw, 12);
+		expect(operations).toHaveLength(1);
+		expect(operations[0].category).toBe("speculation");
+		expect(operations[0].defaultAccept).toBe(false);
+	});
+
+	test("an unknown kind and a kind on a non-cut op are both ignored", () => {
+		const raw = {
+			operations: [
+				{ op: "cut", startSec: 1, endSec: 2, reason: "a", confidence: 0.8, kind: "banter" },
+				{ op: "keep", startSec: 3, endSec: 4, reason: "b", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		const { operations } = sanitizeDirectorPlan(raw, 12);
+		expect(operations).toHaveLength(2);
+		for (const op of operations) {
+			expect(op.category).toBeUndefined();
+			expect(op.defaultAccept).toBeUndefined();
+		}
+	});
+
+	test("speculation tagging does not change the op id", () => {
+		const plain = {
+			operations: [{ op: "cut", startSec: 3, endSec: 5, reason: "x", confidence: 0.8 }],
+		};
+		const tagged = {
+			operations: [
+				{ op: "cut", startSec: 3, endSec: 5, reason: "x", confidence: 0.8, kind: "speculation" },
+			],
+		};
+		expect(sanitizeDirectorPlan(tagged, 12).operations[0].id).toBe(
+			sanitizeDirectorPlan(plain, 12).operations[0].id,
+		);
 	});
 });
 

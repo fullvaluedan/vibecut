@@ -7,6 +7,7 @@ import {
 } from "@/retime";
 import type { RetimeConfig, SceneTracks, TimelineElement } from "@/timeline";
 import { isRetimableElement } from "@/timeline";
+import { isUnderHeadGravity } from "@/timeline/head-gravity";
 import { ZERO_MEDIA_TIME, roundMediaTime } from "@/wasm";
 
 type ElementUpdateField = keyof TimelineElement | string;
@@ -138,8 +139,8 @@ const enforceRules: ElementUpdateRule[] = [
 				};
 			}
 
-			// Only a PURE MOVE is pinned to 0 (you can't drag the first main clip
-			// off the start). A trim/resize also changes the in-point or length, and
+			// Only a PURE MOVE is subject to head gravity (the 2s snap-to-0 zone
+			// below). A trim/resize also changes the in-point or length, and
 			// head-trimming the first clip legitimately shifts its start, leaving a
 			// leading gap — a tolerated state (findTimelineGaps models "leading
 			// space"; delete leaves one; nothing assumes the first element is at 0).
@@ -165,11 +166,20 @@ const enforceRules: ElementUpdateRule[] = [
 					return earliest;
 				}, null);
 
+			// HEAD GRAVITY (Dan's fork, 2026-07-17): the pin above used to fire for
+			// EVERY head-bound pure move, so the earliest main clip snapped back to
+			// 0 no matter where it was dropped. It now fires only inside the shared
+			// HEAD_GRAVITY_SEC zone: a head-bound move under 2s snaps to 0, anything
+			// at/beyond 2s keeps its requested start. A sub-2s move that would NOT
+			// become the earliest clip also keeps its spot, so a programmatic ripple
+			// shift can never pile a downstream clip onto an occupied head.
+			const isHeadBound =
+				!earliestElement || requestedStartTime <= earliestElement.startTime;
 			return {
 				element: {
 					...element,
 					startTime:
-						!earliestElement || requestedStartTime <= earliestElement.startTime
+						isHeadBound && isUnderHeadGravity({ startTime: requestedStartTime })
 							? ZERO_MEDIA_TIME
 							: requestedStartTime,
 				},

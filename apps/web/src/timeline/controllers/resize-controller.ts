@@ -10,12 +10,22 @@ import {
 	TICKS_PER_SECOND,
 } from "@/wasm";
 import {
-	computeResize,
+	computeLinkedResize,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
 	type ResizeSide,
 } from "@/timeline/group-resize";
+import { findLinkedPartners } from "@/timeline/link-elements";
+import {
+	collectRippleTrimTargets,
+	computeRippleShrinkFloor,
+	liftShiftingNeighborBounds,
+	shiftRippleTrimTargets,
+	type RippleTrimCommit,
+	type RippleTrimTarget,
+} from "@/timeline/ripple-trim";
+import { useTimelineStore } from "@/timeline/timeline-store";
 import {
 	buildTimelineSnapPoints,
 	getTimelineSnapThresholdInTicks,
@@ -47,11 +57,30 @@ interface ResizeSession {
 	fps: FrameRate;
 	members: GroupResizeMember[];
 	result: GroupResizeResult | null;
+	/**
+	 * Cross-track ripple trim (right handle with ripple editing ON): the
+	 * grabbed clip's OLD end (the edit point), the shrink headroom, and the
+	 * downstream snapshot (for the drag's live shift preview), all measured
+	 * at mousedown. Null = plain neighbor-clamped trim.
+	 */
+	rippleTrim: {
+		pivotTime: MediaTime;
+		shrinkFloorDelta: MediaTime | null;
+		targets: RippleTrimTarget[];
+	} | null;
 }
 
 type Session = { kind: "idle" } | ResizeSession;
 
 // --- Config ---
+
+/**
+ * A drag-preview patch: the resized members carry the full four-field resize
+ * patch, ripple-shifted downstream elements carry `startTime` only.
+ */
+export interface ResizePreviewUpdate extends ElementRef {
+	patch: Partial<GroupResizeUpdate["patch"]>;
+}
 
 export interface ResizeConfig {
 	zoomLevel: number;
@@ -61,8 +90,11 @@ export interface ResizeConfig {
 	getCurrentPlayheadTime: () => MediaTime;
 	getActiveProjectFps: () => FrameRate | null;
 	discardPreview: () => void;
-	previewElements: (updates: GroupResizeUpdate[]) => void;
-	commitElements: (updates: GroupResizeUpdate[]) => void;
+	previewElements: (updates: ResizePreviewUpdate[]) => void;
+	commitElements: (
+		updates: GroupResizeUpdate[],
+		ripple: RippleTrimCommit | null,
+	) => void;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
 }
 
@@ -223,18 +255,57 @@ export class ResizeController {
 		const fps = this.config.getActiveProjectFps();
 		if (!fps) return;
 
-		// A trim resizes ONLY the grabbed clip, always (no group-resize). Building
-		// a one-member session from the grabbed ref means computeGroupResize is
-		// clamped solely by this clip's own source/neighbor bounds, never fanned
-		// out across the selection or clamped by another selected clip's tighter
-		// limit. (U2 / OQ2: group-resize removed by decision.)
+		// Linked trim (Dan's fork, 2026-07-17): with linked selection ON, a trim
+		// resizes the grabbed clip AND its linked partners (a video + its
+		// separated audio) as one gesture; Alt on the handle trims just the
+		// grabbed clip. Scope is strictly linked partners (findLinkedPartners,
+		// timeline mode), NEVER the arbitrary multi-selection: the U2 / OQ2
+		// no-group-resize decision stands for multi-select. The whole member set
+		// is excluded from neighbor bounds (buildResizeMembers), the drag delta
+		// is clamped by the MOST restrictive member (computeLinkedResize), and
+		// the commit is one UpdateElementsCommand, so one undo reverts the pair.
 		const ref = { trackId: track.id, elementId: element.id };
+		const tracks = this.config.getSceneTracks();
+		const linkedRefs =
+			!event.altKey && useTimelineStore.getState().linkedSelectionEnabled
+				? findLinkedPartners({ ref, tracks, mode: "timeline" })
+				: [];
 
 		const members = buildResizeMembers({
-			tracks: this.config.getSceneTracks(),
-			selectedElements: [ref],
+			tracks,
+			selectedElements: [ref, ...linkedRefs],
 		});
 		if (members.length === 0) return;
+
+		// Cross-track ripple trim (Dan's fork): with ripple editing ON, a RIGHT
+		// handle drag shifts all downstream material at commit, so shifting
+		// neighbors stop clamping the extend (a neighbor parked before the edit
+		// point still binds) and the shrink is floored by the tightest track's
+		// straddler headroom, both measured once at mousedown. Left-handle trims
+		// keep today's per-track heuristic ripple.
+		const pivotTime = addMediaTime({
+			a: element.startTime,
+			b: element.duration,
+		});
+		const memberElementIds = new Set(
+			members.map((member) => member.elementId),
+		);
+		const rippleTrim =
+			side === "right" && useTimelineStore.getState().rippleEditingEnabled
+				? {
+						pivotTime,
+						shrinkFloorDelta: computeRippleShrinkFloor({
+							tracks,
+							pivotTime,
+							excludeElementIds: memberElementIds,
+						}),
+						targets: collectRippleTrimTargets({
+							tracks,
+							pivotTime,
+							excludeElementIds: memberElementIds,
+						}),
+					}
+				: null;
 
 		this.config.discardPreview();
 
@@ -243,8 +314,14 @@ export class ResizeController {
 			side,
 			startX: event.clientX,
 			fps,
-			members,
+			members: rippleTrim
+				? liftShiftingNeighborBounds({
+						members,
+						pivotTime: rippleTrim.pivotTime,
+					})
+				: members,
 			result: null,
+			rippleTrim,
 		};
 		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
@@ -345,15 +422,38 @@ export class ResizeController {
 			),
 		});
 		const deltaTime = this.snappedDelta({ session, rawDeltaTime });
-		const result = computeResize({
-			member: session.members[0],
+		const result = computeLinkedResize({
+			members: session.members,
 			side: session.side,
 			deltaTime,
 			fps: session.fps,
+			...(session.rippleTrim
+				? {
+						rippleTrim: {
+							shrinkFloorDelta: session.rippleTrim.shrinkFloorDelta,
+						},
+					}
+				: {}),
 		});
 
 		session.result = result;
-		this.config.previewElements(result.updates);
+		// Ripple live preview: downstream clips shift on screen during the drag
+		// instead of jumping at commit. Emitted even at zero delta, so a drag
+		// back to the origin overwrites stale shifted overlay positions.
+		const previewUpdates: ResizePreviewUpdate[] = session.rippleTrim
+			? [
+					...result.updates,
+					...shiftRippleTrimTargets({
+						targets: session.rippleTrim.targets,
+						deltaTime: result.deltaTime,
+					}).map(({ trackId, elementId, newStartTime }) => ({
+						trackId,
+						elementId,
+						patch: { startTime: newStartTime },
+					})),
+				]
+			: result.updates;
+		this.config.previewElements(previewUpdates);
 	}
 
 	private handleMouseUp(): void {
@@ -366,7 +466,17 @@ export class ResizeController {
 			session.result &&
 			hasResizeChanges({ members: session.members, result: session.result })
 		) {
-			this.config.commitElements(session.result.updates);
+			const ripple =
+				session.rippleTrim && session.result.deltaTime !== 0
+					? {
+							pivotTime: session.rippleTrim.pivotTime,
+							deltaTime: session.result.deltaTime,
+							excludeElementIds: new Set(
+								session.members.map((member) => member.elementId),
+							),
+						}
+					: null;
+			this.config.commitElements(session.result.updates, ripple);
 		}
 
 		this.finishSession();

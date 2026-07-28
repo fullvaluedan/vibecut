@@ -12,6 +12,7 @@ import {
 	getTrackPlacementById,
 } from "./track-placement";
 import { remainingVideoTrackBudget } from "@/timeline/placement/track-cap";
+import { isUnderHeadGravity } from "@/timeline/head-gravity";
 import { planCollapsedNewTracks } from "./collapse-new-tracks";
 import {
 	addMediaTime,
@@ -412,9 +413,18 @@ function clampAnchorStartTime({
 
 			return earliestStartTime;
 		}, null);
+	// HEAD GRAVITY (Dan's fork, 2026-07-17): the old rule pinned every
+	// head-bound main-track move to 0 unconditionally, so the first main clip
+	// could never be dragged off the start (it always snapped back). The pin now
+	// fires only inside the shared HEAD_GRAVITY_SEC zone: a move that would make
+	// this member the earliest main-track clip AND lands under 2s snaps to 0;
+	// at/beyond 2s it lands where dropped. A move under 2s that would NOT be the
+	// earliest keeps its requested spot (gravity yields to an occupied head; a
+	// genuine overlap is still rejected by canApplyMovesToExistingTracks).
 	if (
-		earliestStationaryMainStartTime == null ||
-		requestedMainStartTime <= earliestStationaryMainStartTime
+		(earliestStationaryMainStartTime == null ||
+			requestedMainStartTime <= earliestStationaryMainStartTime) &&
+		isUnderHeadGravity({ startTime: requestedMainStartTime })
 	) {
 		clampedAnchorStartTime = maxMediaTime({
 			a: minimumAnchorStartTime,

@@ -8,11 +8,23 @@ import {
 	ResizeController,
 	type ResizeConfig,
 } from "@/timeline/controllers/resize-controller";
-import type { ResizeSide } from "@/timeline/group-resize";
+import type { GroupResizeUpdate, ResizeSide } from "@/timeline/group-resize";
+import { computeRippleTrimShifts } from "@/timeline/ripple-trim";
+import { BatchCommand } from "@/commands";
+import { UpdateElementsCommand } from "@/commands/timeline";
+import { RippleShiftElementsCommand } from "@/commands/timeline/element/ripple-shift-elements";
 import type { SnapPoint } from "@/timeline/snapping";
 import type { TimelineElement } from "@/timeline";
 
 export type { ResizeSide };
+
+function toElementUpdates(updates: GroupResizeUpdate[]) {
+	return updates.map(({ trackId, elementId, patch }) => ({
+		trackId,
+		elementId,
+		patch: patch as Partial<TimelineElement>,
+	}));
+}
 
 interface UseTimelineResizeProps {
 	zoomLevel: number;
@@ -43,14 +55,36 @@ export function useTimelineResize({
 					updates: patch as Partial<TimelineElement>,
 				})),
 			}),
-		commitElements: (updates) =>
-			editor.timeline.updateElements({
-				updates: updates.map(({ trackId, elementId, patch }) => ({
-					trackId,
-					elementId,
-					patch: patch as Partial<TimelineElement>,
-				})),
-			}),
+		commitElements: (updates, ripple) => {
+			if (!ripple) {
+				editor.timeline.updateElements({
+					updates: toElementUpdates(updates),
+				});
+				return;
+			}
+			// Cross-track ripple trim (Dan's fork): ONE BatchCommand carrying the
+			// resize plus an explicit shift of every downstream element on ALL
+			// tracks (one undo). The command manager's per-track ripple heuristic
+			// is suppressed for this commit: the batch already contains the whole
+			// ripple, and the heuristic would re-shift gapped clips a second time.
+			const shifts = computeRippleTrimShifts({
+				tracks: editor.scenes.getActiveScene().tracks,
+				pivotTime: ripple.pivotTime,
+				deltaTime: ripple.deltaTime,
+				excludeElementIds: ripple.excludeElementIds,
+			});
+			const resizeCommand = new UpdateElementsCommand({
+				updates: toElementUpdates(updates),
+			});
+			const command =
+				shifts.length > 0
+					? new BatchCommand([
+							resizeCommand,
+							new RippleShiftElementsCommand({ shifts }),
+						])
+					: resizeCommand;
+			editor.command.execute({ command, suppressRipple: true });
+		},
 		onSnapPointChange,
 	};
 	const configRef = useCommittedRef(config);

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { cn } from "@/utils/ui";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowDownIcon } from "@hugeicons/core-free-icons";
+import { ArrowDownIcon, ArrowTurnBackwardIcon } from "@hugeicons/core-free-icons";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
@@ -87,6 +87,15 @@ interface SectionHeaderProps {
 	actions?: React.ReactNode;
 	onClick?: () => void;
 	className?: string;
+	/**
+	 * Group-level reset (Premiere's "Reset Effect"): pass true when any field
+	 * in this section's group is non-default. The reset icon only renders
+	 * while this is true AND onResetGroup is provided, mirroring NumberField's
+	 * own "hidden entirely at default" reset convention, one level up.
+	 */
+	isAnyNonDefault?: boolean;
+	onResetGroup?: () => void;
+	resetGroupLabel?: string;
 }
 
 export function SectionHeader({
@@ -96,12 +105,16 @@ export function SectionHeader({
 	actions,
 	onClick,
 	className,
+	isAnyNonDefault = false,
+	onResetGroup,
+	resetGroupLabel = "Reset to default",
 }: SectionHeaderProps) {
 	const ctx = useSectionContext();
 	const isCollapsible = ctx?.collapsible ?? false;
 	const isOpen = ctx?.isOpen ?? true;
 	const isInteractive = isCollapsible || !!onClick;
 	const handleClick = isCollapsible ? ctx?.toggle : onClick;
+	const showResetGroup = Boolean(onResetGroup) && isAnyNonDefault;
 
 	const chevronIcon = (
 		<HugeiconsIcon
@@ -116,8 +129,18 @@ export function SectionHeader({
 	);
 
 	const trailingArea =
-		trailing || isCollapsible ? (
+		trailing || isCollapsible || showResetGroup ? (
 			<div className="flex items-center">
+				{showResetGroup && (
+					<Button
+						variant="text"
+						size="text"
+						aria-label={resetGroupLabel}
+						onClick={onResetGroup}
+					>
+						<HugeiconsIcon icon={ArrowTurnBackwardIcon} className="size-3.5!" />
+					</Button>
+				)}
 				{trailing}
 				{isCollapsible && (
 					<Button

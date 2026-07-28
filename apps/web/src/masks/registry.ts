@@ -55,6 +55,25 @@ export const BASE_MASK_PARAM_DEFINITIONS: ParamDefinition<
 		type: "color",
 		default: "#ffffff",
 	},
+	{
+		key: "expansion",
+		label: "Expansion",
+		type: "number",
+		default: 0,
+		min: -100,
+		max: 100,
+		step: 1,
+	},
+	{
+		key: "opacity",
+		label: "Opacity",
+		type: "number",
+		default: 1,
+		min: 0,
+		max: 1,
+		step: 1,
+		unit: "percent",
+	},
 ];
 
 export interface RegisteredMaskDefinition {

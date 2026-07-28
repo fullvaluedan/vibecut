@@ -1,6 +1,7 @@
-export { computeResize } from "./compute-resize";
+export { computeLinkedResize, computeResize } from "./compute-resize";
 
 export type {
+	ComputeLinkedResizeArgs,
 	ComputeResizeArgs,
 	GroupResizeMember,
 	GroupResizeResult,

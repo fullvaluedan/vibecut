@@ -33,6 +33,29 @@ export const CALLBACK_GAP_SEC = 60;
 /** Penalty subtracted from a member's loudness when it reads as filler. */
 const FILLER_PENALTY = 0.2;
 
+/**
+ * How the keeper is chosen inside a cluster (KTD3, U2):
+ * - `last` — the LATEST take (keep-last, the shipped default from live testing).
+ * - `quality` — a complete-delivery score (no cutoff token, not filler, wordCount
+ *   near the cluster norm, loudness as tiebreak). An EXPERIMENT gated by the eval;
+ *   the in-app default stays `last` until U5's scorecard adopts it.
+ */
+export type KeeperPolicy = "last" | "quality";
+
+/** Quality-score weights (KTD3). Cutoff dominates (an incomplete take is unusable);
+ * filler + rambling/short (wordCount off the cluster norm) subtract; loudness breaks
+ * ties. Deliberately tunable — U5 documents the adopted values in the findings addendum. */
+const CUTOFF_PENALTY = 1.0;
+const QUALITY_FILLER_PENALTY = 0.2;
+const WORDCOUNT_DEVIATION_WEIGHT = 0.3;
+const LOUDNESS_TIEBREAK_WEIGHT = 0.1;
+
+/** A trailing dash marks a truncated/cut-off word (whisper's cue). Cheap, path-
+ * independent (works for both the timeline and bin-pool candidates) — no word timings. */
+function endsWithCutoff(text: string): boolean {
+	return /[-–—]\s*$/.test(text.trim());
+}
+
 /** One member of a take cluster, in TIMELINE coordinates. */
 export interface ClusterMember {
 	/** Index into the flattened candidate list (stable within one run). */
@@ -68,6 +91,56 @@ interface Candidate {
 	endSec: number;
 	text: string;
 	audioScore: number;
+	/** Quality-policy signals (KTD3): SpeechFeatures-derived + a text cutoff flag. */
+	wordCount: number;
+	fillerCandidate: boolean;
+	loudnessRelative: number;
+	cutoff: boolean;
+}
+
+/** Count the median of a numeric list (lower-middle on even length). */
+function median(values: readonly number[]): number {
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((a, b) => a - b);
+	return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Complete-delivery quality score for one candidate against its cluster's norm
+ * (KTD3). Higher is better. A cutoff take is heavily penalized (unusable); filler and
+ * a wordCount far from the cluster median subtract; loudness is a small tiebreak.
+ */
+function qualityScore(cand: Candidate, medianWordCount: number): number {
+	let score = 0;
+	if (cand.cutoff) score -= CUTOFF_PENALTY;
+	if (cand.fillerCandidate) score -= QUALITY_FILLER_PENALTY;
+	const deviation =
+		medianWordCount > 0 ? Math.abs(cand.wordCount - medianWordCount) / medianWordCount : 0;
+	score -= WORDCOUNT_DEVIATION_WEIGHT * Math.min(deviation, 1);
+	score += LOUDNESS_TIEBREAK_WEIGHT * cand.loudnessRelative;
+	return score;
+}
+
+/**
+ * Keeper index INTO the sorted member list for the chosen policy. `last` returns the
+ * final take (keep-last). `quality` returns the highest complete-delivery score, and
+ * on a TIE prefers the LATEST take — so a cluster whose takes are all equally flubbed
+ * (e.g. all cutoff) still falls back to keep-last.
+ */
+function selectKeeperIndex(sorted: readonly Candidate[], policy: KeeperPolicy): number {
+	if (policy === "last" || sorted.length === 0) return sorted.length - 1;
+	const med = median(sorted.map((c) => c.wordCount));
+	let bestIndex = 0;
+	let bestScore = Number.NEGATIVE_INFINITY;
+	for (let i = 0; i < sorted.length; i++) {
+		const score = qualityScore(sorted[i], med);
+		if (score >= bestScore) {
+			// >= so the LATEST take wins ties (keep-last fallback for all-flubbed clusters).
+			bestScore = score;
+			bestIndex = i;
+		}
+	}
+	return bestIndex;
 }
 
 function startKey(sec: number): number {
@@ -107,14 +180,17 @@ function sameAssetGapOk({ a, b }: { a: Candidate; b: Candidate }): boolean {
 export function buildTakeClusters({
 	assetTranscripts,
 	features,
+	keeperPolicy = "last",
 }: {
 	assetTranscripts: readonly AssetTranscript[];
 	features: readonly SpeechFeatures[];
+	/** Keeper selection (KTD3). Defaults to keep-last; the eval passes "quality". */
+	keeperPolicy?: KeeperPolicy;
 }): TakeCluster[] {
 	const featureByStart = new Map<number, SpeechFeatures>();
 	for (const f of features) featureByStart.set(startKey(f.startSec), f);
 
-	// Flatten to candidates, joining audio for the keeper ranking.
+	// Flatten to candidates, joining audio for the keeper ranking + quality signals.
 	const candidates: Candidate[] = [];
 	for (const transcript of assetTranscripts) {
 		for (const seg of transcript.segments) {
@@ -127,11 +203,15 @@ export function buildTakeClusters({
 				endSec: seg.end,
 				text: seg.text,
 				audioScore,
+				wordCount: f?.wordCount ?? 0,
+				fillerCandidate: f?.fillerCandidate ?? false,
+				loudnessRelative: f?.loudnessRelative ?? 0,
+				cutoff: endsWithCutoff(seg.text),
 			});
 		}
 	}
 	if (candidates.length < 2) return [];
-	return clusterCandidates({ candidates });
+	return clusterCandidates({ candidates, keeperPolicy });
 }
 
 /**
@@ -142,8 +222,10 @@ export function buildTakeClusters({
  */
 function clusterCandidates({
 	candidates,
+	keeperPolicy = "last",
 }: {
 	candidates: Candidate[];
+	keeperPolicy?: KeeperPolicy;
 }): TakeCluster[] {
 	if (candidates.length < 2) return [];
 
@@ -196,23 +278,23 @@ function clusterCandidates({
 	const clusters: TakeCluster[] = [];
 	for (const group of groups.values()) {
 		if (group.length < 2) continue;
-		const members = [...group]
-			.sort((a, b) => a.startSec - b.startSec)
-			.map((c) => ({
-				index: c.index,
-				assetId: c.assetId,
-				startSec: c.startSec,
-				endSec: c.endSec,
-				text: c.text,
-				audioScore: c.audioScore,
-			}));
+		const sortedGroup = [...group].sort((a, b) => a.startSec - b.startSec);
+		const members = sortedGroup.map((c) => ({
+			index: c.index,
+			assetId: c.assetId,
+			startSec: c.startSec,
+			endSec: c.endSec,
+			text: c.text,
+			audioScore: c.audioScore,
+		}));
 
 		const assetIds = new Set(members.map((m) => m.assetId));
 		const kind = assetIds.size >= 2 ? "take" : "repeat";
 
-		// Keeper: the LATEST take ("the last attempt is the keeper after stumbles").
-		// members are sorted ascending by timeline start, so the last one is latest.
-		const keeperIndex = members.length - 1;
+		// Keeper: keep-last by default (the LATEST take — "the last attempt is the keeper
+		// after stumbles"), or the highest complete-delivery score under the quality policy
+		// (KTD3). `sortedGroup` is ascending by timeline start, so index length-1 is latest.
+		const keeperIndex = selectKeeperIndex(sortedGroup, keeperPolicy);
 
 		// Callback guard: a far-apart same-asset cluster is low confidence. Measure
 		// the cluster's start-to-start extent (not end-to-start, which a long first
@@ -242,8 +324,10 @@ function clusterCandidates({
  */
 export function buildTakeClustersFromPool({
 	pool,
+	keeperPolicy = "last",
 }: {
 	pool: readonly CandidateSpan[];
+	keeperPolicy?: KeeperPolicy;
 }): TakeCluster[] {
 	const candidates: Candidate[] = pool.map((span, index) => ({
 		index,
@@ -255,6 +339,10 @@ export function buildTakeClustersFromPool({
 			? span.audio.loudnessRelative -
 				(span.audio.fillerCandidate ? FILLER_PENALTY : 0)
 			: 0,
+		wordCount: span.audio?.wordCount ?? 0,
+		fillerCandidate: span.audio?.fillerCandidate ?? false,
+		loudnessRelative: span.audio?.loudnessRelative ?? 0,
+		cutoff: endsWithCutoff(span.text),
 	}));
-	return clusterCandidates({ candidates });
+	return clusterCandidates({ candidates, keeperPolicy });
 }

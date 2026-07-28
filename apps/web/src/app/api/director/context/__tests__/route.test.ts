@@ -20,11 +20,14 @@ mock.module("@framecut/hf-bridge", () => ({
 		lastLines = arg?.lines;
 		return planContextImpl();
 	},
-	// Inert siblings so the plan/redundancy route imports stay satisfied under the
-	// shared process-global mock.
+	// Inert siblings so the plan/redundancy/retake/structural route imports stay
+	// satisfied under the shared process-global mock.
 	planRedundancy: async () => ({ plan: { groups: [] }, usage: null }),
 	planDirector: async () => ({ plan: { operations: [] }, usage: null }),
 	planDirectorVision: async () => ({ plan: { operations: [] }, usage: null, degraded: false }),
+	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
+	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
+	planVerify: async () => ({ plan: { verdicts: [] }, usage: null }),
 }));
 
 const { POST } = await import("../route");

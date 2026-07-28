@@ -2,7 +2,9 @@ import type { ElementRef, SceneTracks } from "@/timeline";
 import {
 	asMediaBacked,
 	computeOffsetFrames,
+	isBetterAvSyncPartner,
 	sourceOverlap,
+	type AvSyncPartnerCandidate,
 	type MediaBacked,
 } from "@/timeline/av-sync";
 import type { FrameRate } from "opencut-wasm";
@@ -27,13 +29,14 @@ function orderedTracks(tracks: SceneTracks) {
  * Build every media clip's A/V-sync offset in ONE O(n) pass instead of the
  * per-clip O(total-elements) scan `computeAvSyncOffset` runs. Semantics are
  * identical: partner pairing prefers the shared `linkId` (falling back to same
- * `mediaId` + overlapping source for legacy clips), the closest source-
- * overlapping partner wins, and the offset math is the shared
+ * `mediaId` + overlapping source for legacy clips), the LARGEST source overlap
+ * wins (tie-break: largest timeline overlap, via the shared
+ * `isBetterAvSyncPartner`), and the offset math is the shared
  * `computeOffsetFrames`. An unlinked/unpaired clip gets no entry.
  *
  * Iterate tracks in the SAME order the per-clip scan does
- * ([...overlay, main, ...audio], then element order) so the "first qualifying,
- * upgrade to first source-overlapping" tie-break resolves to the same partner.
+ * ([...overlay, main, ...audio], then element order) so remaining ties
+ * resolve to the same partner as the per-clip scan.
  */
 export function buildAvSyncMap({
 	tracks,
@@ -81,8 +84,7 @@ export function buildAvSyncMap({
 					? (byLinkId.get(self.linkId) ?? [])
 					: (byMediaId.get(self.mediaId) ?? []);
 
-			let partner: MediaBacked | null = null;
-			let partnerRef: ElementRef | null = null;
+			let best: AvSyncPartnerCandidate | null = null;
 			for (const { ref, media: other } of candidates) {
 				if (other.type !== wantType) continue;
 				const linked =
@@ -92,19 +94,17 @@ export function buildAvSyncMap({
 					other.mediaId === self.mediaId &&
 					sourceOverlap(self, other);
 				if (!linked && !legacy) continue;
-				// First qualifying candidate is provisional; the first that also
-				// source-overlaps wins and ends the search.
-				if (!partner || sourceOverlap(self, other)) {
-					partner = other;
-					partnerRef = ref;
-					if (sourceOverlap(self, other)) break;
+				// Largest source overlap wins (shared rule with the per-clip scan).
+				const next = { ref, media: other };
+				if (isBetterAvSyncPartner({ self, current: best, candidate: next })) {
+					best = next;
 				}
 			}
 
-			if (!partner || !partnerRef) continue;
+			if (!best) continue;
 			result.set(el.id, {
-				offsetFrames: computeOffsetFrames({ self, partner, fps }),
-				partner: partnerRef,
+				offsetFrames: computeOffsetFrames({ self, partner: best.media, fps }),
+				partner: best.ref,
 			});
 		}
 	}

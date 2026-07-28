@@ -53,6 +53,40 @@ export interface ResolvedTextBackgroundLike {
 	cornerRadius: number;
 }
 
+// U3 (text round): stroke (outline) and drop shadow for plain text elements.
+// Both are "true no-ops" at their inert default (width 0 / blur+offsets 0):
+// isTextStrokeActive/isTextShadowActive gate every canvas call below so an
+// element that never touched these fields never has strokeText called or
+// ctx.shadow* assigned at all, not just visually unchanged.
+export interface TextStrokeLike {
+	color: string;
+	width: number;
+}
+
+export interface TextShadowLike {
+	color: string;
+	blur: number;
+	offsetX: number;
+	offsetY: number;
+}
+
+export function isTextStrokeActive({
+	stroke,
+}: {
+	stroke?: TextStrokeLike | null;
+}): boolean {
+	return (stroke?.width ?? 0) > 0;
+}
+
+export function isTextShadowActive({
+	shadow,
+}: {
+	shadow?: TextShadowLike | null;
+}): boolean {
+	if (!shadow) return false;
+	return shadow.blur !== 0 || shadow.offsetX !== 0 || shadow.offsetY !== 0;
+}
+
 export function quoteFontFamily({ fontFamily }: { fontFamily: string }): string {
 	return `"${fontFamily.replace(/"/g, '\\"')}"`;
 }
@@ -144,6 +178,8 @@ export function drawMeasuredTextLayout({
 	textColor,
 	background,
 	backgroundColor,
+	stroke,
+	shadow,
 	textBaseline = "middle",
 }: {
 	ctx: TextCanvasContext;
@@ -151,6 +187,8 @@ export function drawMeasuredTextLayout({
 	textColor: string;
 	background?: ResolvedTextBackgroundLike | null;
 	backgroundColor?: string;
+	stroke?: TextStrokeLike | null;
+	shadow?: TextShadowLike | null;
 	textBaseline?: CanvasTextBaseline;
 }): void {
 	ctx.font = layout.fontString;
@@ -197,6 +235,30 @@ export function drawMeasuredTextLayout({
 		}
 	}
 
+	// Stroke draws as its own full pass, behind the fill, unaffected by the
+	// shadow set up below. Reuses the same primitive the mask system already
+	// has (strokeMeasuredTextLayout) rather than a second stroke implementation.
+	const hasStroke = isTextStrokeActive({ stroke });
+	if (hasStroke && stroke) {
+		strokeMeasuredTextLayout({
+			ctx,
+			layout,
+			strokeColor: stroke.color,
+			strokeWidth: stroke.width,
+			textBaseline,
+		});
+	}
+
+	// Shadow is set on the context right before the fill draw, per line, so it
+	// only affects the fill (+ its decoration), not the background or stroke.
+	const hasShadow = isTextShadowActive({ shadow });
+	if (hasShadow && shadow) {
+		ctx.shadowColor = shadow.color;
+		ctx.shadowBlur = shadow.blur;
+		ctx.shadowOffsetX = shadow.offsetX;
+		ctx.shadowOffsetY = shadow.offsetY;
+	}
+
 	for (let index = 0; index < layout.lines.length; index++) {
 		const lineY = index * layout.lineHeightPx - layout.block.visualCenterOffset;
 		ctx.fillText(layout.lines[index], 0, lineY);
@@ -209,6 +271,13 @@ export function drawMeasuredTextLayout({
 			scaledFontSize: layout.scaledFontSize,
 			textAlign: layout.textAlign,
 		});
+	}
+
+	if (hasShadow) {
+		ctx.shadowColor = "transparent";
+		ctx.shadowBlur = 0;
+		ctx.shadowOffsetX = 0;
+		ctx.shadowOffsetY = 0;
 	}
 }
 

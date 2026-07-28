@@ -413,6 +413,8 @@ export const freeformMaskDefinition: MaskDefinition<"freeform"> = {
 				strokeColor: "#ffffff",
 				strokeWidth: 0,
 				strokeAlign: "center",
+				expansion: 0,
+				opacity: 1,
 				path: [],
 				closed: false,
 				centerX: 0,

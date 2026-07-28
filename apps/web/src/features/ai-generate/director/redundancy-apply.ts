@@ -11,7 +11,35 @@
  */
 
 import type { DirectorOp, RedundancyGroup, RedundancyMember } from "@framecut/hf-bridge";
-import { stableCutId } from "./cut-utils";
+import { stableCutId, type WordTiming } from "./cut-utils";
+import { swallowPauseBounds } from "./swallow-pause";
+import { refineCutWordBounds } from "./refine-cut-words";
+import { HIGH_SIMILAR, similarity } from "./text-similarity";
+
+/**
+ * Round 7 (Dan's 2026-07-17 smoke pass): a redundancy group auto-accepts only
+ * when it is NEAR-VERBATIM, i.e. every non-keeper take reads as the same line
+ * as the keeper (similarity >= HIGH_SIMILAR). Paraphrase-level groups are the
+ * model judging that two DIFFERENT sentences make the same point; on Dan's
+ * instructional footage those are deliberate setup-then-payoff restatements
+ * (the "leave a link in the description" pair the pass auto-cut at ~29.5s),
+ * so they surface as opt-in review rows regardless of model confidence.
+ * Missing/empty member text is conservatively NOT near-verbatim.
+ */
+export function isNearVerbatimGroup(group: RedundancyGroup): boolean {
+	const keeper = group.members.find((m) => m.lineId === group.keeperLineId);
+	if (!keeper || typeof keeper.text !== "string" || keeper.text.trim().length === 0) {
+		return false;
+	}
+	return group.members
+		.filter((m) => m.lineId !== group.keeperLineId)
+		.every(
+			(m) =>
+				typeof m.text === "string" &&
+				m.text.trim().length > 0 &&
+				similarity({ a: m.text, b: keeper.text }) >= HIGH_SIMILAR,
+		);
+}
 
 /**
  * Groups below this LLM confidence are dropped entirely (inclusive at the floor).
@@ -45,22 +73,29 @@ function buildRedundancyCutOp({
 	confidence,
 	reason,
 	defaultAccept = true,
+	paraphrase = false,
 }: {
 	member: RedundancyMember;
 	groupId: string;
 	confidence: number;
 	reason: string;
-	/** Sub-floor groups pass `false` so their row starts unchecked (opt-in). */
+	/** Sub-floor and paraphrase-level groups pass `false`: row starts unchecked. */
 	defaultAccept?: boolean;
+	/** True when the round-7 near-verbatim gate demoted this group: the reason
+	 * tells Dan WHY the row is unchecked (deliberate restatement vs flub). */
+	paraphrase?: boolean;
 }): DirectorOp {
+	const label = paraphrase
+		? "Possible repeat (paraphrased, may be a deliberate restatement)"
+		: "Repeat";
 	return {
 		id: `redun-${stableCutId(`${member.startSec.toFixed(3)}:${member.endSec.toFixed(3)}`)}`,
 		op: "cut",
 		startSec: member.startSec,
 		endSec: member.endSec,
 		reason: reason
-			? `Repeat — kept the best take (${reason})`.slice(0, 240)
-			: "Repeat — kept the best of the takes",
+			? `${label}: kept the best take (${reason})`.slice(0, 240)
+			: `${label}: kept the best of the takes`,
 		confidence,
 		category: "redundancy",
 		groupId,
@@ -108,7 +143,10 @@ export function mapRedundancyGroups({
 		const groupId = `g${gi++}`;
 		// Sub-threshold groups are opt-in: their cut ops start unchecked so the higher
 		// recall never auto-cuts distinct content (R7); the user approves them per row.
-		const defaultAccept = group.confidence >= acceptThreshold;
+		// Round 7: paraphrase-level groups are ALSO opt-in regardless of confidence;
+		// only a near-verbatim group (a true retake) earns the auto-accept.
+		const nearVerbatim = isNearVerbatimGroup(group);
+		const defaultAccept = group.confidence >= acceptThreshold && nearVerbatim;
 		for (const member of nonKeepers) {
 			cuts.push(
 				buildRedundancyCutOp({
@@ -117,6 +155,7 @@ export function mapRedundancyGroups({
 					confidence: group.confidence,
 					reason: group.reason,
 					defaultAccept,
+					paraphrase: !nearVerbatim,
 				}),
 			);
 		}
@@ -137,19 +176,31 @@ export function mapRedundancyGroups({
  * Drops every op tagged with this group's id and re-adds a cut over each new non-
  * keeper take, leaving every other op untouched; the result stays start-sorted for a
  * stable review order. Pure — the store calls it, then re-defaults the new ops to
- * accepted. (The rebuilt cuts use the takes' RAW line spans, so a swapped group is
- * not re-run through the energy/clip-edge snap — sub-frame at line boundaries.)
+ * accepted.
+ *
+ * KTD5 (U2): the rebuilt cuts are routed through the SAME energy-snap + word-boundary
+ * refine chain the originally-mapped redundancy cuts flow through, instead of shipping
+ * raw line spans. Pass `envelope` to energy-snap the edges and `words` to keep them off
+ * mid-word landings; both are optional — omit them and the behavior is byte-identical
+ * to the pre-U2 raw-span swap (snap needs a non-empty envelope; refine fails open with
+ * no words). This fixes the live inconsistency where a swapped group bypassed snapping.
  */
 export function applyKeeperSwap({
 	operations,
 	group,
 	newKeeperLineId,
 	acceptThreshold = DEFAULT_REDUNDANCY_ACCEPT_THRESHOLD,
+	envelope,
+	words,
 }: {
 	operations: readonly DirectorOp[];
 	group: RedundancyReviewGroup;
 	newKeeperLineId: string;
 	acceptThreshold?: number;
+	/** RMS energy envelope for the edge snap; omit to skip energy-snapping. */
+	envelope?: readonly number[];
+	/** Transcript word timings for the mid-word refine; omit to fail open. */
+	words?: readonly WordTiming[];
 }): DirectorOp[] {
 	// Defensive: a keeper that isn't a member of the group would make
 	// cutMembersForKeeper cut EVERY take (total group loss). Treat an unknown
@@ -160,11 +211,26 @@ export function applyKeeperSwap({
 	// Preserve the group's accept default across a swap: a sub-threshold (accept-OFF)
 	// group's rebuilt ops must STAY opt-in, or swapping its keeper would silently flip
 	// the whole group to fully accepted (the rebuilt ops get new ids the store's
-	// decision merge can't match, so it would fall back to accepted). Mirrors
-	// `mapRedundancyGroups`'s `group.confidence >= acceptThreshold`.
-	const defaultAccept = group.confidence >= acceptThreshold;
+	// decision merge can't match, so it would fall back to accepted).
+	//
+	// F3 fix (round 12): this must apply the SAME round-7 near-verbatim conjunct
+	// `mapRedundancyGroups` applies at the initial mapping, re-derived against the
+	// NEW keeper. Before this fix the swap path only checked
+	// `group.confidence >= acceptThreshold`, so swapping the keeper of a
+	// paraphrase-level group (a deliberate setup-then-payoff restatement, not a
+	// flub, per `isNearVerbatimGroup`'s doc comment) silently promoted it to
+	// AUTO-checked regardless of confidence. That is exactly the auto-cut the
+	// round-7 gate exists to prevent; a keeper swap is not the user endorsing the
+	// WHOLE group as a true retake, only picking which take reads best.
+	const nearVerbatim = isNearVerbatimGroup({
+		members: group.members,
+		keeperLineId: newKeeperLineId,
+		confidence: group.confidence,
+		reason: group.reason,
+	});
+	const defaultAccept = group.confidence >= acceptThreshold && nearVerbatim;
 	const others = operations.filter((op) => op.groupId !== group.groupId);
-	const rebuilt = cutMembersForKeeper({
+	const rawRebuilt = cutMembersForKeeper({
 		members: group.members,
 		keeperLineId: newKeeperLineId,
 	}).map((member) =>
@@ -174,8 +240,23 @@ export function applyKeeperSwap({
 			confidence: group.confidence,
 			reason: group.reason,
 			defaultAccept,
+			// Same reason-string treatment as the initial mapping: a rebuilt row
+			// that stays opt-in because it is paraphrase-level (not sub-threshold)
+			// should say so, not read as a plain unexplained "Repeat" row.
+			paraphrase: !nearVerbatim,
 		}),
 	);
+	// KTD5 + round 6 U3: run the rebuilt cuts through the SAME placement chain the
+	// main pipeline uses (pause-swallow with trough-snap fallback, then word-refine)
+	// so a swapped group's joins match pipeline joins instead of regressing to the
+	// old residual-leaving snap. Both steps no-op without their input (envelope /
+	// words); the fixed-ceiling threshold applies here because this path has no
+	// per-segment energies to compute the adaptive median from.
+	const snapped =
+		envelope && envelope.length > 0
+			? swallowPauseBounds({ ops: rawRebuilt, envelope, words: words ?? [] })
+			: rawRebuilt;
+	const rebuilt = refineCutWordBounds({ ops: snapped, words });
 	return [...others, ...rebuilt].sort((a, b) => a.startSec - b.startSec);
 }
 

@@ -39,6 +39,11 @@ export type LayerMaskDescriptor = {
 	textureId: string;
 	feather: number;
 	inverted: boolean;
+	// Grow/shrink the boundary (SDF-threshold bias) and mask strength (0..1).
+	// Consumed by the wasm compositor; see MASK_EXPANSION_OPACITY_RENDERED for why
+	// they are currently forced to the no-op values (0, 1) at the descriptor edge.
+	expansion: number;
+	opacity: number;
 };
 
 export type TextureCanvasDrawFn = (

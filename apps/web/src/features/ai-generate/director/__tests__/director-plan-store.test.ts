@@ -142,7 +142,7 @@ describe("openCutPanel (docked cut review, U6)", () => {
 		{ groupId: "g1", keeperLineId: "l1", members: [], confidence: 0.6, reason: "r" },
 	];
 
-	test("docks in the panel with open:false and preserves plan/decisions/groups", () => {
+	test("docks and preserves plan/decisions/groups", () => {
 		useDirectorPlanStore.getState().close();
 		useDirectorPlanStore.getState().openCutPanel({
 			plan: optIn,
@@ -150,22 +150,154 @@ describe("openCutPanel (docked cut review, U6)", () => {
 			redundancyGroups: groups,
 		});
 		const s = useDirectorPlanStore.getState();
-		expect(s.surface).toBe("panel");
 		expect(s.mode).toBe("cut");
-		// `open` stays false so the still-mounted modal does NOT also pop.
-		expect(s.open).toBe(false);
 		expect(s.plan?.operations.map((o) => o.id)).toEqual(["a", "b"]);
 		// defaultAccept:false op starts unchecked; nothing new is auto-applied.
 		expect(s.decisions).toEqual({ a: true, b: false });
 		expect(s.redundancyGroups.map((g) => g.groupId)).toEqual(["g1"]);
 	});
 
-	test("close() resets the surface back to the modal default", () => {
+	test("close() resets the dock tab back to the properties default", () => {
 		useDirectorPlanStore.getState().openCutPanel({ plan: optIn });
 		useDirectorPlanStore.getState().close();
 		const s = useDirectorPlanStore.getState();
-		expect(s.surface).toBe("modal");
+		expect(s.dockTab).toBe("properties");
 		expect(s.plan).toBeNull();
+	});
+
+	test("seekPreRollSec is a session preference: survives close/reopen, clamps to 1-10 (round 9)", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(1); // default
+		useDirectorPlanStore.getState().setSeekPreRollSec(5);
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: optIn });
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(5);
+		useDirectorPlanStore.getState().setSeekPreRollSec(99);
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(10);
+		useDirectorPlanStore.getState().setSeekPreRollSec(0);
+		expect(useDirectorPlanStore.getState().seekPreRollSec).toBe(1);
+		// Reset for later describes (the store is module-global across tests).
+		useDirectorPlanStore.getState().setSeekPreRollSec(1);
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("rollbackMark / rollbackGuardMark (Director-cancel U8 fix)", () => {
+	const plan: DirectorPlan = { operations: [op({ id: "a", kind: "cut" })] };
+
+	test("openCutPanel carries both marks through", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 7, rollbackGuardMark: 7 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(7);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(7);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("a pre-pass that mutated the timeline reports a higher guard mark", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 2, rollbackGuardMark: 5 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(2);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(5);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("omitting both marks defaults to null (nothing to roll back)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("close() clears both marks", () => {
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 3, rollbackGuardMark: 3 });
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+	});
+
+	test("a later run's marks replace an earlier one's (each run gets its own)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 1, rollbackGuardMark: 1 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(1);
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 9, rollbackGuardMark: 12 });
+		expect(useDirectorPlanStore.getState().rollbackMark).toBe(9);
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBe(12);
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("openHighlight / openAssemble leave both marks null (Director cut mode only)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.openCutPanel({ plan, rollbackMark: 4, rollbackGuardMark: 4 });
+		useDirectorPlanStore.getState().openHighlight({
+			keeps: [{ startSec: 0, endSec: 1 }],
+			preview: { keptCount: 1, totalCount: 1, keptSec: 1, totalSec: 1 },
+			totalSec: 1,
+		});
+		expect(useDirectorPlanStore.getState().rollbackMark).toBeNull();
+		expect(useDirectorPlanStore.getState().rollbackGuardMark).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("dockTab (R1: persistent Director dock, surface field retired)", () => {
+	const plan: DirectorPlan = { operations: [op({ id: "a", kind: "cut" })] };
+
+	test("the store starts on the properties tab", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().dockTab).toBe("properties");
+	});
+
+	test("setDockTab focuses a tab directly", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("director");
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().setDockTab("properties");
+		expect(useDirectorPlanStore.getState().dockTab).toBe("properties");
+	});
+
+	test("openCutPanel auto-focuses the Director tab on completion", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openCutPanel({ plan });
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("openAssemble auto-focuses the Director tab on completion", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openAssemble({
+			draft: { spans: [], alternatesByClusterId: {} },
+		});
+		expect(useDirectorPlanStore.getState().dockTab).toBe("director");
+		useDirectorPlanStore.getState().closeAssemble();
+	});
+
+	test("openHighlight docks (no modal) and auto-focuses the Director tab", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setDockTab("properties");
+		useDirectorPlanStore.getState().openHighlight({
+			keeps: [{ startSec: 0, endSec: 3 }],
+			preview: { keptCount: 1, totalCount: 1, keptSec: 3, totalSec: 3 },
+			totalSec: 3,
+		});
+		const s = useDirectorPlanStore.getState();
+		expect(s.dockTab).toBe("director");
+		expect(s.mode).toBe("highlight");
+		useDirectorPlanStore.getState().close();
 	});
 });
 
@@ -459,6 +591,61 @@ describe("setAll scoping (U8 fix): a bulk toggle respects the active row filter"
 		useDirectorPlanStore.getState().setAll(false);
 		const d = useDirectorPlanStore.getState().decisions;
 		expect([d.a, d.b, d.c]).toEqual([false, false, false]);
+		useDirectorPlanStore.getState().close();
+	});
+});
+
+describe("run error state (round 12 U3/R4): a failure persists until dismissed or superseded", () => {
+	const errPlan: DirectorPlan = {
+		operations: [
+			{ id: "a", op: "cut", startSec: 0, endSec: 1, reason: "r", confidence: 0.8 },
+		],
+	};
+
+	test("the store starts with no run error", () => {
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("setRunError records stage + message + a timestamp", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore
+			.getState()
+			.setRunError({ stage: "Transcribing...", message: "No speech found" });
+		const err = useDirectorPlanStore.getState().runError;
+		expect(err?.stage).toBe("Transcribing...");
+		expect(err?.message).toBe("No speech found");
+		expect(err?.at).toBeGreaterThan(0);
+		useDirectorPlanStore.getState().clearRunError();
+	});
+
+	test("clearRunError dismisses the card", () => {
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().clearRunError();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("a successful run (openCutPanel) clears the previous failure", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().openCutPanel({ plan: errPlan });
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+		useDirectorPlanStore.getState().close();
+	});
+
+	test("close clears it too", () => {
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		useDirectorPlanStore.getState().close();
+		expect(useDirectorPlanStore.getState().runError).toBeNull();
+	});
+
+	test("setRunError does not disturb an open review (dismiss returns to it)", () => {
+		useDirectorPlanStore.getState().close();
+		useDirectorPlanStore.getState().openCutPanel({ plan: errPlan });
+		useDirectorPlanStore.getState().setRunError({ stage: "s", message: "m" });
+		const s = useDirectorPlanStore.getState();
+		expect(s.plan?.operations.map((o) => o.id)).toEqual(["a"]);
+		expect(s.decisions).toEqual({ a: true });
 		useDirectorPlanStore.getState().close();
 	});
 });

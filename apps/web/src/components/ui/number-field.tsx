@@ -17,6 +17,47 @@ const DRAG_SENSITIVITIES = {
 
 type DragSensitivity = "default" | "slow";
 
+/**
+ * Live scrub precision modifiers, read from the pointer-move event every
+ * frame (not captured once at drag start) so holding or releasing Ctrl/Shift
+ * mid-drag changes sensitivity immediately. Ctrl = fine (1/10 the base
+ * per-pixel step), Shift = coarse (10x). Neither held = the base rate.
+ */
+const PRECISION_MODIFIERS = {
+	fine: 0.1,
+	coarse: 10,
+} as const;
+
+export function getScrubPrecisionMultiplier({
+	ctrlKey,
+	shiftKey,
+}: {
+	ctrlKey: boolean;
+	shiftKey: boolean;
+}): number {
+	if (ctrlKey) return PRECISION_MODIFIERS.fine;
+	if (shiftKey) return PRECISION_MODIFIERS.coarse;
+	return 1;
+}
+
+/**
+ * C3 fix: Escape must only suppress the blur that follows it (skipping the
+ * normal onBlur-commit path) when the consumer actually wired an `onCancel` -
+ * a real revert path that puts a value back. Without `onCancel`, suppressing
+ * the commit anyway stranded the field on an uncommitted draft forever (the
+ * Settings nudge-frames field: `onBlur={commit}`, no `onCancel`, `key={value}`
+ * so nothing ever remounts it and re-seeds the draft). Legacy consumers with
+ * no `onCancel` keep the old commit-on-blur behavior instead. Exported for a
+ * headless unit test (this repo's `bun test` suite has no DOM).
+ */
+export function shouldSuppressBlurCommitOnEscape({
+	hasOnCancel,
+}: {
+	hasOnCancel: boolean;
+}): boolean {
+	return hasOnCancel;
+}
+
 type ScrubRange = {
 	from: number;
 	to: number;
@@ -110,6 +151,12 @@ interface NumberFieldProps
 	allowExpressions?: boolean;
 	onReset?: () => void;
 	isDefault?: boolean;
+	/**
+	 * Escape: called before the input blurs, distinct from onBlur's commit
+	 * path. Typical wiring is `usePropertyDraft`'s `onCancel`, which reverts
+	 * the in-progress typed draft to its pre-edit value without committing.
+	 */
+	onCancel?: () => void;
 }
 
 function NumberField({
@@ -131,6 +178,7 @@ function NumberField({
 	onMouseDown,
 	onReset,
 	isDefault = false,
+	onCancel,
 	ref,
 	...props
 }: NumberFieldProps & { ref?: React.Ref<HTMLInputElement> }) {
@@ -139,6 +187,11 @@ function NumberField({
 	const ghostRef = useRef<HTMLSpanElement>(null);
 	const startValueRef = useRef(0);
 	const cumulativeDeltaRef = useRef(0);
+	// Escape calls onCancel then blurs to exit editing, but that blur must
+	// NOT also run the normal commit-on-blur path (onBlur). This flag is set
+	// synchronously right before the Escape-triggered blur() call and read
+	// (then cleared) by the blur handler below.
+	const isCancellingRef = useRef(false);
 	const [isInputFocused, setIsInputFocused] = useState(false);
 	const [suffixLeft, setSuffixLeft] = useState(0);
 	const ghostValue = Array.isArray(value) ? value.join(", ") : String(value ?? "");
@@ -181,7 +234,14 @@ function NumberField({
 		document.body.style.cursor = "ew-resize";
 
 		const handlePointerMove = (moveEvent: PointerEvent) => {
-			cumulativeDeltaRef.current += moveEvent.movementX;
+			const precisionMultiplier = getScrubPrecisionMultiplier({
+				ctrlKey: moveEvent.ctrlKey,
+				shiftKey: moveEvent.shiftKey,
+			});
+			// Scale THIS frame's movement only, then accumulate, so a modifier
+			// pressed or released mid-drag changes sensitivity live without
+			// retroactively rescaling pixels already accounted for.
+			cumulativeDeltaRef.current += moveEvent.movementX * precisionMultiplier;
 			const newValue = scrubRanges
 				? scrubAcrossRanges({
 						startValue: startValueRef.current,
@@ -233,13 +293,31 @@ function NumberField({
 				onFocus?.(event);
 			}}
 			onKeyDown={(event) => {
-				const shouldBlurInput = event.key === "Enter" || event.key === "Escape";
-				if (shouldBlurInput) event.currentTarget.blur();
+				if (event.key === "Enter") {
+					// Enter commits: blur runs the normal onBlur commit path.
+					event.currentTarget.blur();
+				} else if (event.key === "Escape") {
+					// Escape reverts: run the distinct cancel path, then blur
+					// WITHOUT letting that blur also commit - but only when there is
+					// an onCancel to actually do the reverting (C3 fix). With no
+					// onCancel, suppressing the blur commit anyway would strand the
+					// field on an uncommitted draft, so it falls back to the legacy
+					// commit-on-blur behavior instead.
+					if (shouldSuppressBlurCommitOnEscape({ hasOnCancel: Boolean(onCancel) })) {
+						isCancellingRef.current = true;
+					}
+					onCancel?.();
+					event.currentTarget.blur();
+				}
 				onKeyDown?.(event);
 			}}
 			onBlur={(event) => {
 				setIsInputFocused(false);
-				onBlur?.(event);
+				if (isCancellingRef.current) {
+					isCancellingRef.current = false;
+				} else {
+					onBlur?.(event);
+				}
 			}}
 			{...props}
 		/>

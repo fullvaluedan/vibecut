@@ -23,18 +23,8 @@ export function AssetsPanel() {
 		text: <TextView />,
 		shapes: <ShapesView />,
 		effects: <EffectsView />,
-		transitions: (
-			<div className="text-muted-foreground p-4">
-				Transitions view coming soon...
-			</div>
-		),
 		captions: <Captions />,
 		transcript: <TranscriptView />,
-		adjustment: (
-			<div className="text-muted-foreground p-4">
-				Adjustment view coming soon...
-			</div>
-		),
 		settings: <SettingsView />,
 	};
 

@@ -1,6 +1,13 @@
 /**
  * Snap Director cut boundaries to nearby low-energy troughs (issue E).
  *
+ * ROUND-6 STATUS: `snapRemovalOps` is SUPERSEDED on both production paths
+ * (build-director-proposals and redundancy-apply's keeper swap) by
+ * `swallow-pause.ts`, which widens through silence instead of relocating a
+ * boundary within it. It remains exported for tests and as the reference
+ * implementation of the non-overlap clip invariant; `nearestLowEnergyTime`
+ * and `snapKeepSpans` (Highlight mode) are still live consumers here.
+ *
  * Director cuts are aligned to transcript SEGMENT edges, but a segment edge can
  * fall mid-word / mid-sound — the join then sounds abrupt (no breathing room).
  * This nudges each removal's start and end to the quietest envelope window within

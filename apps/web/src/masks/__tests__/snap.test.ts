@@ -49,6 +49,8 @@ function buildSplitParams(
 		strokeColor: "#ffffff",
 		strokeWidth: 0,
 		strokeAlign: "center",
+		expansion: 0,
+		opacity: 1,
 		centerX: 0,
 		centerY: 0,
 		rotation: 0,
@@ -65,6 +67,8 @@ function buildRectangleParams(
 		strokeColor: "#ffffff",
 		strokeWidth: 0,
 		strokeAlign: "center",
+		expansion: 0,
+		opacity: 1,
 		centerX: 0,
 		centerY: 0,
 		width: 0.4,
@@ -84,6 +88,8 @@ function buildTextMaskParams(
 		strokeColor: "#ffffff",
 		strokeWidth: 0,
 		strokeAlign: "center",
+		expansion: 0,
+		opacity: 1,
 		content: "Mask",
 		fontSize: 15,
 		fontFamily: "Arial",
@@ -109,6 +115,8 @@ function buildFreeformPathMaskParams(
 		strokeColor: "#ffffff",
 		strokeWidth: 0,
 		strokeAlign: "center",
+		expansion: 0,
+		opacity: 1,
 		path: [
 			{
 				id: "a",
@@ -433,6 +441,28 @@ describe("custom mask creation", () => {
 		expect(next.scale).toBe(1);
 		expect(next.path).toHaveLength(1);
 	});
+
+	test("appends a subsequent point without closing the open path", () => {
+		const params = buildFreeformPathMaskParams({
+			path: [
+				{ id: "a", x: -0.2, y: -0.1, inX: 0, inY: 0, outX: 0, outY: 0 },
+				{ id: "b", x: 0.2, y: -0.1, inX: 0, inY: 0, outX: 0, outY: 0 },
+			],
+			closed: false,
+		});
+		const next = appendPointToFreeformPathMask({
+			params,
+			canvasPoint: { x: bounds.cx, y: bounds.cy + 20 },
+			bounds,
+		});
+
+		expect(next.path).toHaveLength(3);
+		// Appending a vertex while drawing never closes the path (Premiere closes
+		// only when you click back on the first vertex).
+		expect(next.closed).toBe(false);
+		expect(Number.isFinite(next.centerX)).toBe(true);
+		expect(Number.isFinite(next.centerY)).toBe(true);
+	});
 });
 
 describe("custom mask point deletion", () => {
@@ -506,6 +536,41 @@ describe("custom mask point insertion", () => {
 		});
 	});
 
+	test("preserves a curved segment's shape when inserting (De Casteljau)", () => {
+		// The straight-segment test above proves a polygon edge gets a plain corner.
+		// A segment WITH bezier handles must instead subdivide so the curve is
+		// preserved: the new anchor lands on the original cubic and keeps its own
+		// non-zero handles. This locks the pen's curve math against the
+		// straight-segment corner fast path.
+		const points = [
+			{ id: "a", x: -0.2, y: -0.1, inX: 0, inY: 0, outX: 0.1, outY: -0.1 },
+			{ id: "b", x: 0.2, y: -0.1, inX: -0.1, inY: -0.1, outX: 0, outY: 0 },
+		];
+		const nextPoints = insertPointIntoFreeformSegment({
+			points,
+			segmentIndex: 0,
+			pointId: "mid",
+			t: 0.5,
+			closed: false,
+		});
+
+		expect(nextPoints.map((point) => point.id)).toEqual(["a", "mid", "b"]);
+
+		const inserted = nextPoints[1];
+		// Cubic bezier at t=0.5 for p0(-0.2,-0.1) p1(-0.1,-0.2) p2(0.1,-0.2)
+		// p3(0.2,-0.1): the midpoint sits at (0, -0.175).
+		expect(inserted.x).toBeCloseTo(0, 6);
+		expect(inserted.y).toBeCloseTo(-0.175, 6);
+		// The subdivided anchor keeps collinear handles that hold the curve.
+		expect(inserted.inX).toBeCloseTo(-0.075, 6);
+		expect(inserted.outX).toBeCloseTo(0.075, 6);
+		expect(inserted.inX).not.toBe(0);
+		expect(inserted.outX).not.toBe(0);
+		// Neighbours' inner handles are rescaled to the split, not left untouched.
+		expect(nextPoints[0].outX).toBeCloseTo(0.05, 6);
+		expect(nextPoints[2].inX).toBeCloseTo(-0.05, 6);
+	});
+
 	test("builds updated custom mask params for a clicked segment", () => {
 		const result = insertPointOnFreeformSegment({
 			params: buildFreeformPathMaskParams(),
@@ -519,5 +584,31 @@ describe("custom mask point insertion", () => {
 		const nextPoints = result?.params.path ?? [];
 		expect(nextPoints).toHaveLength(4);
 		expect(nextPoints.some((point) => point.id === "new")).toBe(true);
+	});
+});
+
+describe("custom mask pen closing", () => {
+	test("an open path is inactive; closing it activates the mask", () => {
+		// freeform isActive gates on `closed`, so a still-drawing (open) path never
+		// composites and a closed one does.
+		expect(
+			freeformMaskDefinition.isActive?.(
+				buildFreeformPathMaskParams({ closed: false }),
+			),
+		).toBe(false);
+		expect(
+			freeformMaskDefinition.isActive?.(
+				buildFreeformPathMaskParams({ closed: true }),
+			),
+		).toBe(true);
+	});
+
+	test("keeps a closed path closed while three or more points remain", () => {
+		expect(
+			getFreeformPathClosedStateAfterPointRemoval({
+				wasClosed: true,
+				remainingPointCount: 3,
+			}),
+		).toBe(true);
 	});
 });

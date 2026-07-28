@@ -58,6 +58,10 @@ const CATEGORY_BADGE: Partial<Record<NonNullable<DirectorOp["category"]>, string
 	noise: "Noise",
 	redundancy: "Repeat",
 	context: "Out of context",
+	retake: "Retake",
+	structural: "Structural",
+	speculation: "Speculation",
+	join: "Join",
 };
 
 function isRemoval(op: DirectorOp): boolean {
@@ -88,9 +92,27 @@ export function describeReviewOp({
 		} else if (op.category === "redundancy") {
 			// A group's non-keeper take: rejecting it keeps that take in the cut.
 			rejectedHint = "Keeping this take";
+		} else if (op.category === "filler") {
+			// A filler cut: rejecting it keeps the filler word in the video. Mid-flow
+			// fillers start unchecked (round 9), so this is their resting-state note.
+			rejectedHint = "Keeping the filler";
 		} else if (op.category === "context") {
 			// An out-of-context flag: rejecting it keeps the content in the video.
 			rejectedHint = "Keeping this content";
+		} else if (op.category === "retake") {
+			// A retake/false-start cut: rejecting it keeps the flubbed take in the cut.
+			rejectedHint = "Keeping this take";
+		} else if (op.category === "structural") {
+			// A whole-section drop: rejecting it keeps that section in the video.
+			rejectedHint = "Keeping this section";
+		} else if (op.category === "speculation") {
+			// Coherent trailing speculation starts unchecked (round 9): this editor
+			// keeps that style, so the resting state reads as a deliberate keep.
+			rejectedHint = "Keeping the speculation";
+		} else if (op.category === "join") {
+			// A join-texture swallow (round 12): rejecting it keeps the stranded
+			// fragment (or sliver) between the two neighboring cuts.
+			rejectedHint = "Keeping the fragment";
 		}
 	}
 
