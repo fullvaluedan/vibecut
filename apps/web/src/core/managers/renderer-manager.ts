@@ -159,7 +159,7 @@ export class RendererManager {
 		/** Render these tracks instead of the active scene's (e.g. nesting a scene). */
 		sceneTracks?: SceneTracks;
 	}): Promise<ExportResult> {
-		const { format, quality, fps, includeAudio } = options;
+		const { format, quality, fps, includeAudio, outputSize } = options;
 
 		try {
 			const tracks = sceneTracks ?? this.editor.scenes.getActiveScene().tracks;
@@ -240,6 +240,7 @@ export class RendererManager {
 				shouldIncludeAudio: !!includeAudio,
 				audioBuffer: audioBuffer || undefined,
 				audioChunks,
+				outputSize,
 			});
 
 			exporter.on("progress", (progress) => {

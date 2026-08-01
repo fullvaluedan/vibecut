@@ -517,3 +517,14 @@ Storage rides the project the same way `textStyles` did in the text round (see t
 | `apps/web/src/components/ui/button.tsx` | Added `"use client"` directive - `radix-ui` `Slot` import calls `React.createContext` at module scope, unavailable under the react-server condition; reached from the server-component `/roadmap` page via `GitHubContributeSection` | 2026-07-28 | One directive line |
 | `apps/web/src/components/ui/breadcrumb.tsx` | Added `"use client"` directive - same latent bug (`radix-ui` `Slot` import, module-scope `React.createContext`), same import chain | 2026-07-28 | One directive line |
 | `apps/web/src/components/ui/navigation-menu.tsx` | Added `"use client"` directive - same latent bug (`radix-ui` `NavigationMenu` import, module-scope `React.createContext`), same import chain | 2026-07-28 | One directive line |
+
+## T18.4 - Export options (2026-08-01)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/export/index.ts` | Added `ExportResolution` type and `outputSize?: ExportResolution` field to `ExportOptions` (optional output resolution override, defaulting to project size when omitted) | 2026-08-01 | Additive field; drop if output-size scaling not needed |
+| `apps/web/src/components/editor/export-button.tsx` | Export popover gains: (1) Resolution preset select (project/2160p/1080p/720p with live output-size display); (2) Quality labels updated to show effective bitrate (computed from resolution and quality via `deriveOutputSize`/`computeEffectiveBitrate`); (3) Captions section with "Also export captions (.srt)" checkbox (shown only when transcript cache has segments) + SRT export logic that downloads alongside the video | 2026-08-01 | Three feature blocks; bitrate computation is pure and testable |
+| `apps/web/src/services/renderer/scene-exporter.ts` | Added optional `outputSize?: {width,height}` to `ExportParams`; constructor uses it to override canvas dimensions when rendering (defaults to project size when omitted) | 2026-08-01 | One optional field; no behavior change when omitted |
+| `apps/web/src/core/managers/renderer-manager.ts` | `exportProject` destructures `outputSize` from options and passes it to `SceneExporter` | 2026-08-01 | Two lines (destructure + pass-through) |
+
+New FrameCut-owned files (no PATCHES.md rows needed): `apps/web/src/export/resolution-utils.ts` (utility functions `deriveOutputSize`, `computeEffectiveBitrate`, `formatBitrate` for resolution scaling and bitrate calculation) and its tests `apps/web/src/export/__tests__/resolution-utils.test.ts` (11 tests covering aspect-ratio preservation, even-rounding, quality levels, bitrate scaling).
