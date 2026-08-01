@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { Transform } from "@/rendering";
 import type { SceneTracks, VideoElement } from "@/timeline";
 import { applyElementUpdate } from "@/timeline/update-pipeline";
+import { averageRetimeCurveRate } from "@/retime/curve";
+import { buildRetimeCurveFromPreset } from "@/retime/curve-presets";
 import { mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 function buildTransform(): Transform {
@@ -68,6 +70,84 @@ describe("applyElementUpdate", () => {
 
 		expect(updatedElement.duration).toBe(7);
 		expect(Number.isInteger(updatedElement.duration)).toBe(true);
+	});
+
+	test("T18.2: applying a flat 2x curve re-derives duration exactly like a plain 2x rate", () => {
+		const element = buildVideoElement();
+		const tracks = buildTracks(element);
+
+		const updatedElement = applyElementUpdate({
+			element,
+			patch: {
+				retime: {
+					rate: 1,
+					curve: {
+						points: [
+							{ t: 0, rate: 2 },
+							{ t: 1, rate: 2 },
+						],
+					},
+				},
+			},
+			context: { tracks, trackId: tracks.main.id },
+		});
+
+		expect(updatedElement.duration).toBe(5);
+		expect(Number.isInteger(updatedElement.duration)).toBe(true);
+	});
+
+	test("T18.2: applying the Hero curve preset re-derives duration from the curve's average rate", () => {
+		const element = buildVideoElement();
+		const tracks = buildTracks(element);
+		const heroCurve = buildRetimeCurveFromPreset({ id: "hero" });
+		const avgRate = averageRetimeCurveRate({ curve: heroCurve });
+
+		const updatedElement = applyElementUpdate({
+			element,
+			patch: { retime: { rate: 1, curve: heroCurve } },
+			context: { tracks, trackId: tracks.main.id },
+		});
+
+		expect(updatedElement.duration).toBe(Math.round(10 / avgRate));
+		expect(Number.isInteger(updatedElement.duration)).toBe(true);
+	});
+
+	test("T18.2: swapping from one curve preset to another re-derives duration for the NEW curve", () => {
+		const element = buildVideoElement();
+		const tracks = buildTracks(element);
+		const bulletCurve = buildRetimeCurveFromPreset({ id: "bullet" });
+
+		const withHero = applyElementUpdate({
+			element,
+			patch: { retime: { rate: 1, curve: buildRetimeCurveFromPreset({ id: "hero" }) } },
+			context: { tracks, trackId: tracks.main.id },
+		});
+		const withBullet = applyElementUpdate({
+			element: withHero,
+			patch: { retime: { rate: 1, curve: bulletCurve } },
+			context: { tracks: buildTracks(withHero), trackId: tracks.main.id },
+		});
+
+		const avgRate = averageRetimeCurveRate({ curve: bulletCurve });
+		expect(withBullet.duration).toBe(Math.round(10 / avgRate));
+	});
+
+	test("T18.2: removing a curve (back to constant rate) re-derives duration from the plain rate", () => {
+		const element = buildVideoElement({
+			duration: mediaTime({ ticks: 5 }),
+			retime: { rate: 1, curve: { points: [{ t: 0, rate: 2 }, { t: 1, rate: 2 }] } },
+		});
+		const tracks = buildTracks(element);
+
+		const updatedElement = applyElementUpdate({
+			element,
+			patch: { retime: { rate: 1 } },
+			context: { tracks, trackId: tracks.main.id },
+		});
+
+		// sourceDuration was implied as 10 ticks (5 * 2x); back at 1x that's a
+		// 10-tick clip again.
+		expect(updatedElement.duration).toBe(10);
 	});
 });
 

@@ -2,6 +2,7 @@ import type { ElementAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
+import type { RetimeCurve } from "@/retime/curve";
 import type { MediaTime } from "@/wasm";
 
 export type ElementRef = {
@@ -95,6 +96,16 @@ export interface RetimeConfig {
 	 * exercised by the renderer.
 	 */
 	reversed?: boolean;
+	/**
+	 * T18.2: an optional piecewise-linear speed profile that supersedes the
+	 * constant `rate` when present (see retime/curve.ts for the integration
+	 * math). Absent means constant-rate retime, exactly as before this field
+	 * existed - full backward compatibility for old projects. UI + validator
+	 * keep `curve` and `reversed` mutually exclusive in v1 (see
+	 * speed-tab.tsx): a curve always plays forward, and toggling Reverse
+	 * clears any active curve.
+	 */
+	curve?: RetimeCurve;
 }
 
 /**

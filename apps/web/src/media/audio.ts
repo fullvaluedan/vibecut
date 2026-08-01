@@ -5,7 +5,7 @@ import type {
 	RetimeConfig,
 	SceneTracks,
 } from "@/timeline";
-import { shouldMaintainPitch } from "@/retime/rate";
+import { shouldUsePitchPreservedRetimeBuffer } from "@/retime/rate";
 import type { MediaAsset } from "@/media/types";
 import {
 	applyAudioMasteringToBuffer,
@@ -874,9 +874,10 @@ export async function createTimelineAudioBuffer({
 	let mixed = 0;
 	for (const element of audioElements) {
 		if (!element.muted) {
-			const renderedBuffer = shouldMaintainPitch({
+			const renderedBuffer = shouldUsePitchPreservedRetimeBuffer({
 				rate: element.retime?.rate ?? 1,
 				maintainPitch: element.retime?.maintainPitch,
+				hasCurve: element.retime?.curve !== undefined,
 			})
 				? await renderRetimedBuffer({
 						audioContext: context,
@@ -935,9 +936,10 @@ async function prepareChunkMixElements({
 		// Muted elements are skipped from the mix (same as the single-buffer path).
 		if (element.muted) continue;
 
-		const renderedBuffer = shouldMaintainPitch({
+		const renderedBuffer = shouldUsePitchPreservedRetimeBuffer({
 			rate: element.retime?.rate ?? 1,
 			maintainPitch: element.retime?.maintainPitch,
+			hasCurve: element.retime?.curve !== undefined,
 		})
 			? await renderRetimedBuffer({
 					audioContext: context,
@@ -1293,8 +1295,13 @@ function buildWindowMixElement({
 		outputStartSample,
 		renderedLength,
 		outputSampleRate: sampleRate,
+		// T18.2: clipDuration is threaded through so a curve retime integrates
+		// exactly (see retime/resolve.ts) instead of falling back to its
+		// average-rate approximation - export audio then reads the SAME source
+		// instants the renderer's video sampling does for the same clip time.
 		sourceIndexAt: (clipTime) =>
-			(trimStart + getSourceTimeAtClipTime({ clipTime, retime })) *
+			(trimStart +
+				getSourceTimeAtClipTime({ clipTime, retime, clipDuration: element.duration })) *
 			sourceSampleRate,
 		gainAt: animated
 			? (clipTime) =>
