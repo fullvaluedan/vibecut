@@ -233,6 +233,106 @@ describe("computeLinkedResize (linked trim, Dan's fork)", () => {
 	});
 });
 
+describe("reversed trim (T18.1 follow-up, T18.2)", () => {
+	test("trimming the HEAD of a reversed clip grows trimEnd (the source TAIL), not trimStart", () => {
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 20 * FRAME }),
+				trimStart: mediaTime({ ticks: 2 * FRAME }),
+				trimEnd: mediaTime({ ticks: 3 * FRAME }),
+				retime: { rate: 1, reversed: true },
+			}),
+			side: "left",
+			deltaTime: mediaTime({ ticks: 2 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.updates[0].patch.trimStart).toBe(2 * FRAME);
+		expect(result.updates[0].patch.trimEnd).toBe(5 * FRAME);
+		expect(result.updates[0].patch.startTime).toBe(12 * FRAME);
+		expect(result.updates[0].patch.duration).toBe(8 * FRAME);
+	});
+
+	test("trimming the TAIL of a reversed clip shrinks trimStart (the source HEAD), not trimEnd", () => {
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 20 * FRAME }),
+				trimStart: mediaTime({ ticks: 5 * FRAME }),
+				trimEnd: mediaTime({ ticks: 3 * FRAME }),
+				retime: { rate: 1, reversed: true },
+			}),
+			side: "right",
+			deltaTime: mediaTime({ ticks: 2 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.updates[0].patch.trimStart).toBe(3 * FRAME);
+		expect(result.updates[0].patch.trimEnd).toBe(3 * FRAME);
+		expect(result.updates[0].patch.startTime).toBe(10 * FRAME);
+		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
+	});
+
+	test("a forward (non-reversed) clip is unaffected by the reversed-aware swap", () => {
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 20 * FRAME }),
+				trimStart: mediaTime({ ticks: 2 * FRAME }),
+				trimEnd: mediaTime({ ticks: 3 * FRAME }),
+				retime: { rate: 1 },
+			}),
+			side: "left",
+			deltaTime: mediaTime({ ticks: 2 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.updates[0].patch.trimStart).toBe(4 * FRAME);
+		expect(result.updates[0].patch.trimEnd).toBe(3 * FRAME);
+	});
+
+	test("right-side growth on a reversed clip is ceilinged by trimStart headroom (the tail field), not trimEnd", () => {
+		// sourceDuration 12 = trimStart(2) + duration(10) + trimEnd(0): reversed,
+		// so the right handle consumes trimStart. Only 2 frames of trimStart
+		// headroom exist, so a +5 frame drag clamps to +2.
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 12 * FRAME }),
+				trimStart: mediaTime({ ticks: 2 * FRAME }),
+				trimEnd: ZERO_MEDIA_TIME,
+				retime: { rate: 1, reversed: true },
+			}),
+			side: "right",
+			deltaTime: mediaTime({ ticks: 5 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.deltaTime).toBe(2 * FRAME);
+		expect(result.updates[0].patch.trimStart).toBe(ZERO_MEDIA_TIME);
+		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
+	});
+
+	test("left-side growth on a reversed clip is floored by trimEnd headroom (the head field), not trimStart", () => {
+		// sourceDuration 12 = trimStart(0) + duration(9) + trimEnd(3): reversed,
+		// so the left handle consumes trimEnd. Only 3 frames of trimEnd headroom
+		// exist, so a -5 frame drag (grow left) clamps to -3.
+		const result = computeResize({
+			member: member({
+				elementId: "a",
+				sourceDuration: mediaTime({ ticks: 12 * FRAME }),
+				trimStart: ZERO_MEDIA_TIME,
+				trimEnd: mediaTime({ ticks: 3 * FRAME }),
+				duration: mediaTime({ ticks: 9 * FRAME }),
+				retime: { rate: 1, reversed: true },
+			}),
+			side: "left",
+			deltaTime: mediaTime({ ticks: -5 * FRAME }),
+			fps: FPS,
+		});
+		expect(result.deltaTime).toBe(-3 * FRAME);
+		expect(result.updates[0].patch.trimEnd).toBe(ZERO_MEDIA_TIME);
+		expect(result.updates[0].patch.duration).toBe(12 * FRAME);
+	});
+});
+
 function buildVideoElement({
 	id,
 	startTime,

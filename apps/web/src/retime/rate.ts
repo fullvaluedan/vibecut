@@ -25,6 +25,34 @@ export function shouldMaintainPitch({
 }
 
 /**
+ * T18.2 audio-under-curve decision: the pitch-preserving stretch path
+ * (audio-stretch.ts's `buildPitchPreservedBuffer`) drives a single
+ * soundtouchjs `PitchShifter` at one constant `tempo` - it has no notion of
+ * a rate that varies over the clip, so it can't represent a curve. Rather
+ * than build a variable-rate pitch-preserving stretcher (a much larger DSP
+ * undertaking), v1 ships: a curve-active clip's audio always RESAMPLES along
+ * the curve's exact source-time path - frame-accurate, the same
+ * `getSourceTimeAtClipTime` the renderer's video sampling uses, in both live
+ * preview (audio-manager.ts's prepared-buffer path, see `hasCurveRetime`)
+ * and export (media/audio.ts) - with pitch shifting NATURALLY, i.e.
+ * `maintainPitch` is ignored while a curve is active. Audio always plays,
+ * always in sync with the curve; it just isn't pitch-corrected. See
+ * speed-tab.tsx for the matching UI (the "Change pitch" toggle is disabled
+ * while a curve is active).
+ */
+export function shouldUsePitchPreservedRetimeBuffer({
+	rate,
+	maintainPitch,
+	hasCurve,
+}: {
+	rate: number;
+	maintainPitch?: boolean;
+	hasCurve: boolean;
+}): boolean {
+	return !hasCurve && shouldMaintainPitch({ rate, maintainPitch });
+}
+
+/**
  * T18.1: rate stays at 1x while reversed (see RetimeConfig.reversed doc
  * comment in timeline/types.ts) - the Speed tab disables the rate field
  * when reversed is on, and this is the single place that enforces it for

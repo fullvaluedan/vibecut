@@ -168,6 +168,56 @@ export function computeLinkedResize({
 	};
 }
 
+/**
+ * T18.2 (T18.1 follow-up): which trim field a timeline-side resize consumes.
+ * Forward playback reads the trimmed span front-to-back, so trimming the
+ * timeline HEAD (`side: "left"`) advances into the source from its own head
+ * (`trimStart` grows) and trimming the timeline TAIL (`side: "right"`) chops
+ * from the source's own tail (`trimEnd` grows) - the pre-T18.2 behavior,
+ * unchanged for every non-reversed clip.
+ *
+ * A REVERSED clip reads the span back-to-front (see retime/resolve.ts): its
+ * timeline HEAD (clipTime 0) samples the LAST instant of the visible span,
+ * and its timeline TAIL samples the FIRST. So trimming the timeline head of
+ * a reversed clip removes frames that were reading near the source's TAIL -
+ * `trimEnd` should grow, not `trimStart` - and trimming the timeline tail
+ * removes frames reading near the source's HEAD, growing `trimStart`
+ * instead. This is exactly the mirror `computeSplitTrimBoundaries` already
+ * applies for a reversed split; this is the same swap for a resize/trim
+ * drag (verified in group-resize/__tests__/compute-resize.test.ts "reversed
+ * trim").
+ */
+function getReversedAwareTrimSide({
+	member,
+	side,
+}: {
+	member: GroupResizeMember;
+	side: ResizeSide;
+}): "trimStart" | "trimEnd" {
+	const reversed = member.retime?.reversed === true;
+	if (reversed) {
+		return side === "left" ? "trimEnd" : "trimStart";
+	}
+	return side === "left" ? "trimStart" : "trimEnd";
+}
+
+/**
+ * The same head/tail swap as `getReversedAwareTrimSide`, expressed as the
+ * two trim VALUES rather than a field name - `getResizeBoundBreakdown` needs
+ * to plug the right one into its span arithmetic for both the left and
+ * right branch, not just decide which field a patch writes to.
+ */
+function getReversedAwareTrimFields({
+	member,
+}: {
+	member: GroupResizeMember;
+}): { headField: MediaTime; tailField: MediaTime } {
+	const reversed = member.retime?.reversed === true;
+	return reversed
+		? { headField: member.trimEnd, tailField: member.trimStart }
+		: { headField: member.trimStart, tailField: member.trimEnd };
+}
+
 function buildResizeUpdate({
 	member,
 	side,
@@ -181,32 +231,55 @@ function buildResizeUpdate({
 		member,
 		clipDelta: deltaTime,
 	});
+	const trimSide = getReversedAwareTrimSide({ member, side });
 
 	if (side === "left") {
+		const trimStart =
+			trimSide === "trimStart"
+				? maxMediaTime({
+						a: ZERO_MEDIA_TIME,
+						b: addMediaTime({ a: member.trimStart, b: sourceDelta }),
+					})
+				: member.trimStart;
+		const trimEnd =
+			trimSide === "trimEnd"
+				? maxMediaTime({
+						a: ZERO_MEDIA_TIME,
+						b: addMediaTime({ a: member.trimEnd, b: sourceDelta }),
+					})
+				: member.trimEnd;
 		return {
 			trackId: member.trackId,
 			elementId: member.elementId,
-		patch: {
-			trimStart: maxMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: addMediaTime({ a: member.trimStart, b: sourceDelta }),
-			}),
-			trimEnd: member.trimEnd,
-			startTime: addMediaTime({ a: member.startTime, b: deltaTime }),
-			duration: subMediaTime({ a: member.duration, b: deltaTime }),
-		},
+			patch: {
+				trimStart,
+				trimEnd,
+				startTime: addMediaTime({ a: member.startTime, b: deltaTime }),
+				duration: subMediaTime({ a: member.duration, b: deltaTime }),
+			},
 		};
 	}
 
+	const trimStart =
+		trimSide === "trimStart"
+			? maxMediaTime({
+					a: ZERO_MEDIA_TIME,
+					b: subMediaTime({ a: member.trimStart, b: sourceDelta }),
+				})
+			: member.trimStart;
+	const trimEnd =
+		trimSide === "trimEnd"
+			? maxMediaTime({
+					a: ZERO_MEDIA_TIME,
+					b: subMediaTime({ a: member.trimEnd, b: sourceDelta }),
+				})
+			: member.trimEnd;
 	return {
 		trackId: member.trackId,
 		elementId: member.elementId,
 		patch: {
-			trimStart: member.trimStart,
-			trimEnd: maxMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: subMediaTime({ a: member.trimEnd, b: sourceDelta }),
-			}),
+			trimStart,
+			trimEnd,
 			startTime: member.startTime,
 			duration: addMediaTime({ a: member.duration, b: deltaTime }),
 		},
@@ -301,7 +374,12 @@ export function getResizeBoundBreakdown({
 							member,
 							sourceSpan: subMediaTime({
 								a: getSourceDuration({ member }),
-								b: member.trimStart,
+								// T18.2 (T18.1 follow-up): the right handle grows the
+								// TAIL field (see `getReversedAwareTrimFields`) - which is
+								// unspent source once the HEAD field is subtracted from the
+								// total. Non-reversed head field = trimStart (unchanged);
+								// reversed head field = trimEnd.
+								b: getReversedAwareTrimFields({ member }).headField,
 							}),
 						}),
 						b: member.duration,
@@ -354,7 +432,11 @@ export function getResizeBoundBreakdown({
 								member,
 								duration: member.duration,
 							}),
-							b: member.trimStart,
+							// T18.2 (T18.1 follow-up): the left handle grows the HEAD
+							// field (see `getReversedAwareTrimFields`) - non-reversed
+							// head field = trimStart (unchanged); reversed head field =
+							// trimEnd.
+							b: getReversedAwareTrimFields({ member }).headField,
 						}),
 					}),
 					b: member.duration,
