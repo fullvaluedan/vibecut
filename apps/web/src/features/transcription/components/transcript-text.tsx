@@ -26,6 +26,15 @@
  * following itself never looks like a manual scroll and re-suspends. Restore
  * shell: struck (removed) words are no longer `pointer-events-none` - a click
  * on one calls `onRemovedClick` instead of starting a selection drag.
+ *
+ * T16.2 adds the RED PIPE BARS. `seamsByIndex` maps an item index to the seam
+ * ids whose cut sits immediately BEFORE it (`items.length` for a trailing cut),
+ * derived by seam-markers.ts so the placement is unit-testable and identical for
+ * word-level and segment-level rendering. A pipe carries no `data-index`, so the
+ * delegated selection handlers ignore it outright; it stops propagation as well,
+ * so clicking one opens the restore window without clearing the selection. The
+ * look is the same for a Director cut and a manual delete - the panel must not
+ * teach the user that one kind of cut is more real than the other.
  */
 
 /* eslint-disable jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-tabindex, jsx-a11y/mouse-events-have-key-events -- Mouse-only index-drag selection (KTD2); keyboard word-selection is a documented deferral (OQ3). The container is focusable (tabIndex) so Delete/Backspace can ripple-delete the active selection. */
@@ -82,6 +91,63 @@ function splitByQuery({
 	return parts;
 }
 
+/** One red pipe bar: a cut sits here, click to see and restore what it removed. */
+function SeamPipe({
+	seamId,
+	highlighted,
+	onSeamClick,
+	onSeamHover,
+}: {
+	seamId: string;
+	highlighted: boolean;
+	onSeamClick?: (args: { seamId: string; rect: DOMRect | null }) => void;
+	onSeamHover?: (seamId: string | null) => void;
+}) {
+	return (
+		<span
+			data-seam-id={seamId}
+			role="button"
+			tabIndex={0}
+			aria-label="Show the words removed here"
+			title="Words were removed here - click to see and restore them"
+			className={cn(
+				"mx-[3px] inline-block h-[1.05em] w-[3px] translate-y-[0.18em] cursor-pointer rounded-[1px] align-baseline transition-[width,box-shadow] duration-100",
+				highlighted
+					? "w-[5px] bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.85)]"
+					: "bg-red-500",
+			)}
+			onMouseDown={(event) => {
+				// Never let a pipe click reach the container's selection handlers.
+				event.preventDefault();
+				event.stopPropagation();
+			}}
+			onClick={(event) => {
+				event.stopPropagation();
+				onSeamClick?.({
+					seamId,
+					rect: event.currentTarget.getBoundingClientRect(),
+				});
+			}}
+			onKeyDown={(event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				// Tab to a pipe, Enter/Space to open its window: the restore flow is
+				// reachable without a mouse even though word SELECTION inside the
+				// window is mouse-only (the same deferral as the transcript itself).
+				event.preventDefault();
+				event.stopPropagation();
+				onSeamClick?.({
+					seamId,
+					rect: event.currentTarget.getBoundingClientRect(),
+				});
+			}}
+			onFocus={() => onSeamHover?.(seamId)}
+			onBlur={() => onSeamHover?.(null)}
+			onMouseEnter={() => onSeamHover?.(seamId)}
+			onMouseLeave={() => onSeamHover?.(null)}
+		/>
+	);
+}
+
 function indexFromEvent(event: {
 	target: EventTarget | null;
 }): number | null {
@@ -108,6 +174,11 @@ export function TranscriptText({
 	followEnabled = false,
 	onRemovedClick,
 	onScroll,
+	seamsByIndex,
+	activeSeamId,
+	hoveredSeamId,
+	onSeamClick,
+	onSeamHover,
 }: {
 	items: readonly TranscriptItem[];
 	granularity: TranscriptGranularity;
@@ -130,6 +201,14 @@ export function TranscriptText({
 	 * popover. Follow-suspend tracking is handled internally and does not
 	 * need this. */
 	onScroll?: () => void;
+	/** T16.2: item index -> the seam ids whose red pipe is drawn before it. */
+	seamsByIndex?: ReadonlyMap<number, readonly string[]>;
+	/** The seam whose restore window is open (stays highlighted). */
+	activeSeamId?: string | null;
+	/** The seam under the pointer (hover pre-highlight). */
+	hoveredSeamId?: string | null;
+	onSeamClick?: (args: { seamId: string; rect: DOMRect | null }) => void;
+	onSeamHover?: (seamId: string | null) => void;
 }) {
 	const anchorRef = useRef<number | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -253,6 +332,7 @@ export function TranscriptText({
 			}}
 		>
 			{items.map((item, index) => {
+				const pipes = seamsByIndex?.get(index) ?? [];
 				const selected =
 					selection != null &&
 					index >= selection.startIndex &&
@@ -267,6 +347,17 @@ export function TranscriptText({
 					: [{ text: item.text, matched: false }];
 				return (
 					<span key={index}>
+						{pipes.map((seamId) => (
+							<SeamPipe
+								key={seamId}
+								seamId={seamId}
+								highlighted={
+									seamId === activeSeamId || seamId === hoveredSeamId
+								}
+								onSeamClick={onSeamClick}
+								onSeamHover={onSeamHover}
+							/>
+						))}
 						<span
 							data-index={index}
 							className={cn(
@@ -297,6 +388,15 @@ export function TranscriptText({
 					</span>
 				);
 			})}
+			{(seamsByIndex?.get(items.length) ?? []).map((seamId) => (
+				<SeamPipe
+					key={seamId}
+					seamId={seamId}
+					highlighted={seamId === activeSeamId || seamId === hoveredSeamId}
+					onSeamClick={onSeamClick}
+					onSeamHover={onSeamHover}
+				/>
+			))}
 		</div>
 	);
 }

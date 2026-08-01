@@ -8,6 +8,16 @@
  * never introduces a second transcription code path. A `wantWords: true` request
  * can still trigger a real word-level pass (multi-second on local Whisper) even
  * when a segment-only cache entry already exists, so progress is honest.
+ *
+ * T16.2 puts the TRANSCRIPT LINEAGE in charge whenever it can explain the live
+ * timeline. The panel then reads its words, segments AND seams (the red pipes)
+ * straight from `readTranscriptLineage`, so a delete needs no local strikethrough
+ * preview and no timestamp remap: the cut words move from the word flow to a
+ * pipe, which is both truer and restorable per word. The pre-T16.1 local preview
+ * (`removedIndices` + `remapTranscriptTimestamps` + the "showing a local preview"
+ * banner) is kept ONLY as the fallback for a "missing"/"cannot-explain" lineage -
+ * a fresh project before its first capture, or an edit the journal cannot account
+ * for - where it is still the best the panel can do.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -63,12 +73,21 @@ import {
 	deriveTranscriptReadyState,
 } from "@/features/transcription/transcript-ready-state";
 import { canRestoreDeletion } from "@/features/transcription/restore-popover-gate";
+import { readTranscriptLineage } from "@/features/transcription/lineage";
+import type { LineageSeam } from "@/features/transcription/lineage-types";
+import {
+	deriveSeamMarkers,
+	groupSeamMarkers,
+} from "@/features/transcription/seam-markers";
+import { describeSeam } from "@/features/transcription/seam-window-model";
+import { restoreSeamWords } from "@/features/transcription/restore-seam";
 import { downloadBuffer } from "@/export";
 import { mediaTimeFromSeconds, mediaTimeToSeconds, type MediaTime } from "@/wasm";
 import { TranscriptText } from "./transcript-text";
 import {
 	TranscriptRestorePopover,
 	type RestoreAnchorRect,
+	type SeamWordRange,
 } from "./transcript-restore-popover";
 
 /** One manual deletion, tracked for the restore-popover shell (T16.3). The
@@ -85,6 +104,12 @@ interface DeletionRecord {
 
 interface ActivePopover {
 	deletion: DeletionRecord;
+	anchorRect: RestoreAnchorRect;
+}
+
+/** T16.2: the open red-pipe window (the lineage path's popover). */
+interface ActiveSeamPopover {
+	seamId: string;
 	anchorRect: RestoreAnchorRect;
 }
 
@@ -152,6 +177,12 @@ export function TranscriptView() {
 		null,
 	);
 	const deletionIdRef = useRef(0);
+	// T16.2: the red pipes, plus which one is open / hovered. `lineageExplained`
+	// is the switch between the lineage path and the pre-T16.1 local preview.
+	const [seams, setSeams] = useState<LineageSeam[]>([]);
+	const [lineageExplained, setLineageExplained] = useState(false);
+	const [activeSeam, setActiveSeam] = useState<ActiveSeamPopover | null>(null);
+	const [hoveredSeamId, setHoveredSeamId] = useState<string | null>(null);
 	// T16.3: auto-scroll-follow, default ON, persisted across sessions.
 	const [followEnabled, setFollowEnabled] = useLocalStorage({
 		key: FOLLOW_PLAYBACK_STORAGE_KEY,
@@ -182,7 +213,47 @@ export function TranscriptView() {
 		stale,
 		liveHash,
 		expectedHash,
+		// T16.1 note 2: with a lineage in charge the displayed coordinates are
+		// re-derived from the live timeline on every edit, so the stale-coordinate
+		// guard has nothing to protect against and must not block further deletes.
+		lineageExplained,
 	});
+
+	// T16.2: adopt the lineage as the panel's source of truth whenever it explains
+	// the live timeline. Returns false when it cannot, which leaves the caller on
+	// the pre-T16.1 local-preview path.
+	const syncFromLineage = useCallback(
+		({
+			currentWords,
+		}: {
+			currentWords: readonly TranscriptWordLite[];
+		}): boolean => {
+			const view = readTranscriptLineage({ editor });
+			if (view.status !== "explained") {
+				setSeams([]);
+				setLineageExplained(false);
+				return false;
+			}
+			// Word-level pipes are placed by INDEX into the lineage's own word array,
+			// so they may only be drawn when that array is what is on screen. The one
+			// case where it is not is a words-less capture next to a word-level
+			// transcript (a degraded model, then a later word upgrade): keep the words
+			// and drop the pipes rather than misplace them.
+			const takeWords = view.words.length > 0;
+			if (takeWords) setWords(view.words);
+			if (view.segments.length > 0) setSegments(view.segments);
+			setSeams(takeWords || currentWords.length === 0 ? view.seams : []);
+			setLineageExplained(true);
+			setSelection(null);
+			setRemovedIndices(new Set());
+			setDeletionRecords([]);
+			setActivePopover(null);
+			setStale(false);
+			setExpectedHash(safeAudioHash(editor));
+			return true;
+		},
+		[editor],
+	);
 
 	// Word-level when the model produced words; otherwise segment-level (KTD4).
 	const granularity: TranscriptGranularity =
@@ -217,8 +288,14 @@ export function TranscriptView() {
 				setRemovedIndices(new Set());
 				setDeletionRecords([]);
 				setActivePopover(null);
+				setActiveSeam(null);
 				setStale(false);
 				setExpectedHash(safeAudioHash(editor));
+				// A fresh transcription resets the lineage to this very capture, so
+				// this normally lands on an empty journal (no pipes). It matters when
+				// the transcript came from the lineage FAST PATH instead: the seams
+				// are then already there and must be drawn on the first render.
+				syncFromLineage({ currentWords: result.words ?? [] });
 				setLoad({ status: "ready" });
 			})
 			.catch((err: unknown) => {
@@ -243,7 +320,7 @@ export function TranscriptView() {
 						: message,
 				});
 			});
-	}, [editor]);
+	}, [editor, syncFromLineage]);
 
 	useEffect(() => {
 		// Kick off the load (and its progress state) when the tab opens; the
@@ -278,6 +355,21 @@ export function TranscriptView() {
 		};
 	}, [editor, items]);
 
+	// T16.2: an external edit, an undo or a redo moves the timeline hash. Re-read
+	// the lineage so the pipes (and the words around them) follow the live timeline
+	// instead of waiting for a manual Refresh - that is what makes one Ctrl+Z after
+	// a restore put the pipe straight back. Cheap: pure derivation over a stored
+	// record, and `liveHash` only moves on a real tracks change. The words go
+	// through a ref so re-reading never re-triggers this effect.
+	const wordsRef = useRef<readonly TranscriptWordLite[]>([]);
+	useEffect(() => {
+		wordsRef.current = words;
+	}, [words]);
+	useEffect(() => {
+		if (load.status !== "ready") return;
+		syncFromLineage({ currentWords: wordsRef.current });
+	}, [liveHash, load.status, syncFromLineage]);
+
 	// W4/R2: click-a-word seeks the playhead.
 	const handleSeek = useCallback(
 		(seconds: number) => {
@@ -297,6 +389,10 @@ export function TranscriptView() {
 			segments,
 		});
 		if (!range) return;
+		// T16.2 (roadmap note 1): with a lineage in charge the deleted words become a
+		// red pipe on the next read, so none of the local strikethrough preview below
+		// runs - no `removedIndices`, no timestamp remap, no "local preview" banner.
+		if (syncFromLineage({ currentWords: words })) return;
 		const removedDurationSec = range.endSec - range.startSec;
 		// Strike the deleted display items (indices into `items`).
 		setRemovedIndices((prev) => {
@@ -340,7 +436,41 @@ export function TranscriptView() {
 				command: editor.command.peekUndoCommand(),
 			},
 		]);
-	}, [selection, timelineChanged, editor, words, segments]);
+	}, [selection, timelineChanged, editor, words, segments, syncFromLineage]);
+
+	// T16.2: a red pipe was clicked - open its window, anchored on the pipe.
+	const handleSeamClick = useCallback(
+		({ seamId, rect }: { seamId: string; rect: DOMRect | null }) => {
+			if (!rect) return;
+			setActivePopover(null);
+			setActiveSeam({
+				seamId,
+				anchorRect: { top: rect.top, left: rect.left, bottom: rect.bottom },
+			});
+		},
+		[],
+	);
+
+	const handleCloseSeam = useCallback(() => setActiveSeam(null), []);
+
+	// T16.2: restore all of a seam, or the sub-range selected in its window, as
+	// ONE undoable command; then re-read the lineage so the pipe disappears (full
+	// restore) or shrinks to what is still cut (partial).
+	const handleSeamRestore = useCallback(
+		(range?: SeamWordRange) => {
+			const seam = seams.find((candidate) => candidate.id === activeSeam?.seamId);
+			if (!seam) return;
+			restoreSeamWords({
+				editor,
+				seam,
+				wordStartIndex: range?.startIndex,
+				wordEndIndex: range?.endIndex,
+			});
+			setActiveSeam(null);
+			syncFromLineage({ currentWords: words });
+		},
+		[activeSeam, seams, editor, words, syncFromLineage],
+	);
 
 	// T16.3: a struck word range was clicked - find the deletion that produced
 	// it (indices are stable across remaps, only timestamps shift) and open
@@ -359,7 +489,10 @@ export function TranscriptView() {
 		[deletionRecords],
 	);
 
-	const handleClosePopover = useCallback(() => setActivePopover(null), []);
+	const handleClosePopover = useCallback(() => {
+		setActivePopover(null);
+		setActiveSeam(null);
+	}, []);
 
 	// Only ever runs when `canRestoreDeletion` already confirmed this delete is
 	// still the top of the undo stack (see the popover's own gating below), so
@@ -440,6 +573,17 @@ export function TranscriptView() {
 				topUndoCommand: editor.command.peekUndoCommand(),
 			})
 		: false;
+
+	// T16.2: where the red pipes go, and what the open window renders. Both come
+	// from pure helpers, so this is just memoized derivation.
+	const seamsByIndex = useMemo(
+		() => groupSeamMarkers(deriveSeamMarkers({ seams, items, granularity })),
+		[seams, items, granularity],
+	);
+	const activeSeamModel = useMemo(() => {
+		const seam = seams.find((candidate) => candidate.id === activeSeam?.seamId);
+		return seam ? describeSeam({ seam }) : null;
+	}, [seams, activeSeam]);
 
 	return (
 		<PanelView
@@ -614,12 +758,31 @@ export function TranscriptView() {
 						followEnabled={followEnabled}
 						onRemovedClick={handleRemovedClick}
 						onScroll={handleClosePopover}
+						seamsByIndex={seamsByIndex}
+						activeSeamId={activeSeam?.seamId ?? null}
+						hoveredSeamId={hoveredSeamId}
+						onSeamClick={handleSeamClick}
+						onSeamHover={setHoveredSeamId}
 					/>
 				</div>
 			)}
+			{activeSeam && activeSeamModel && (
+				<TranscriptRestorePopover
+					// Remount per seam: the card owns its word selection, and a stale
+					// range from the previous pipe must never carry over.
+					key={activeSeam.seamId}
+					target={{ kind: "seam", ...activeSeamModel }}
+					anchorRect={activeSeam.anchorRect}
+					onRestore={() => handleSeamRestore()}
+					onRestoreWords={handleSeamRestore}
+					onClose={handleCloseSeam}
+				/>
+			)}
 			{activePopover && (
 				<TranscriptRestorePopover
+					key={`deletion-${activePopover.deletion.id}`}
 					target={{
+						kind: "deletion",
 						startIndex: activePopover.deletion.startIndex,
 						endIndex: activePopover.deletion.endIndex,
 						words: items

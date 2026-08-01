@@ -61,16 +61,31 @@ export interface LineageOpMeta {
 }
 
 /**
- * One removal event. `hashBefore`/`hashAfter` are the timeline-audio hashes
+ * One journal event. `hashBefore`/`hashAfter` are the timeline-audio hashes
  * immediately before and after the entry's command executed; they are what makes
  * undo/redo reconciliation possible without holding a command reference (see
  * `resolveActiveJournal`).
+ *
+ * T16.2 adds `restores`: a per-word RESTORE puts back source the journal had
+ * already removed, so it is recorded as its own APPENDED entry rather than by
+ * rewriting the earlier removals. Rewriting would have broken the hash chain
+ * (the pre-restore timeline would stop being any entry's `hashAfter`, so one
+ * Ctrl+Z would land on "cannot-explain") and would have discarded the Director
+ * category/reason of every other seam in the same entry. Appending keeps undo
+ * and redo of a restore working by the SAME rule as everything else, and keeps
+ * the journal composable: fold it in order, adding `ranges` and subtracting
+ * `restores` entry by entry (see `foldJournalRemovals` in lineage.ts).
  */
 export interface LineageJournalEntry {
 	id: string;
 	source: LineageEditSource;
 	/** Removed spans in SOURCE ticks, sorted and disjoint. */
 	ranges: LineageSourceRange[];
+	/**
+	 * Spans in SOURCE ticks this entry PUT BACK (T16.2 restores). Applied after
+	 * `ranges` within the same entry; absent on every removal entry.
+	 */
+	restores?: LineageSourceRange[];
 	/** Wall-clock ms when the entry was recorded. */
 	at: number;
 	/** Timeline-audio hash immediately BEFORE this entry applied. */
