@@ -10,6 +10,15 @@ export interface GroupResizeMember extends ElementRef {
 	trimStart: MediaTime;
 	trimEnd: MediaTime;
 	sourceDuration?: MediaTime;
+	/**
+	 * True for element types that always have REAL source footage backing them
+	 * (video, audio): a missing `sourceDuration` on one of these is a data
+	 * anomaly (metadata not loaded yet), not "no source limit". Left `false`/
+	 * unset for images, text, and other types that legitimately never have a
+	 * `sourceDuration` and must keep free extension. See
+	 * `getResizeBoundBreakdown` in `compute-resize.ts`.
+	 */
+	sourceDurationRequired?: boolean;
 	retime?: RetimeConfig;
 	leftNeighborBound: MediaTime | null;
 	rightNeighborBound: MediaTime | null;

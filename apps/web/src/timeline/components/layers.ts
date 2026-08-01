@@ -3,4 +3,5 @@ export const TIMELINE_LAYERS = {
 	dragLine: 20,
 	playhead: 30,
 	snapIndicator: 40,
+	resizeClamp: 50,
 } as const;

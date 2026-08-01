@@ -11,6 +11,9 @@ import {
 } from "@/wasm";
 import {
 	computeLinkedResize,
+	getGroupClampReason,
+	getMinDurationForFps,
+	type ClampReason,
 	type GroupResizeMember,
 	type GroupResizeResult,
 	type GroupResizeUpdate,
@@ -68,6 +71,9 @@ interface ResizeSession {
 		shrinkFloorDelta: MediaTime | null;
 		targets: RippleTrimTarget[];
 	} | null;
+	/** UI-only: the real neighbor ELEMENT on each side of every member, for the
+	 * "blocked by neighbor" edge highlight. See `buildNeighborElementIds`. */
+	neighborElementIds: Map<string, { left: string | null; right: string | null }>;
 }
 
 type Session = { kind: "idle" } | ResizeSession;
@@ -81,6 +87,17 @@ type Session = { kind: "idle" } | ResizeSession;
 export interface ResizePreviewUpdate extends ElementRef {
 	patch: Partial<GroupResizeUpdate["patch"]>;
 }
+
+/**
+ * CapCut-style "why did the edge stop" feedback for the currently active drag.
+ * `"dragged"` flashes the grabbed clip's own edge with a reason tooltip
+ * (source-limit / min-duration); `"neighbor"` highlights the blocking clip's
+ * near edge instead. `null` clears any feedback (drag released, or not
+ * currently at a bound).
+ */
+export type ResizeClampFeedback =
+	| { kind: "dragged"; side: ResizeSide; reason: ClampReason; elementId: string }
+	| { kind: "neighbor"; side: ResizeSide; neighborElementId: string };
 
 export interface ResizeConfig {
 	zoomLevel: number;
@@ -96,6 +113,7 @@ export interface ResizeConfig {
 		ripple: RippleTrimCommit | null,
 	) => void;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
+	onClampReasonChange?: (feedback: ResizeClampFeedback | null) => void;
 }
 
 export interface ResizeConfigRef {
@@ -166,12 +184,79 @@ export function buildResizeMembers({
 				trimStart: element.trimStart,
 				trimEnd: element.trimEnd,
 				sourceDuration: element.sourceDuration,
+				// VIDEO/AUDIO always have REAL source footage backing them; a missing
+				// sourceDuration on one of those is metadata-not-loaded-yet, not "no
+				// limit" (see getResizeBoundBreakdown). Images/text/etc. leave this
+				// unset and keep today's free extension.
+				sourceDurationRequired:
+					element.type === "video" || element.type === "audio",
 				retime: isRetimableElement(element) ? element.retime : undefined,
 				leftNeighborBound,
 				rightNeighborBound,
 			},
 		];
 	});
+}
+
+/**
+ * The actual neighbor ELEMENT (not just its bound time) on each side of every
+ * member, for UI feedback only (highlighting "the blocking clip" when a drag
+ * is clamped by a neighbor). Mirrors the same left/right neighbor selection
+ * `buildResizeMembers` performs for the bound math above; kept separate so
+ * the pure resize-math members stay free of UI-only fields.
+ */
+function buildNeighborElementIds({
+	tracks,
+	selectedElements,
+}: {
+	tracks: SceneTracks;
+	selectedElements: ElementRef[];
+}): Map<string, { left: string | null; right: string | null }> {
+	const selectedElementIds = new Set(
+		selectedElements.map((el) => el.elementId),
+	);
+	const trackMap = new Map(
+		[...tracks.overlay, tracks.main, ...tracks.audio].map((track) => [
+			track.id,
+			track,
+		]),
+	);
+
+	const result = new Map<string, { left: string | null; right: string | null }>();
+	for (const { trackId, elementId } of selectedElements) {
+		const track = trackMap.get(trackId);
+		const element = track?.elements.find((el) => el.id === elementId);
+		if (!track || !element) continue;
+
+		const otherElements = track.elements.filter(
+			(el) => !selectedElementIds.has(el.id),
+		);
+
+		let left: { id: string; end: MediaTime } | null = null;
+		for (const el of otherElements) {
+			const end = addMediaTime({ a: el.startTime, b: el.duration });
+			if (end <= element.startTime && (left === null || end > left.end)) {
+				left = { id: el.id, end };
+			}
+		}
+
+		const elementEnd = addMediaTime({
+			a: element.startTime,
+			b: element.duration,
+		});
+		let right: { id: string; start: MediaTime } | null = null;
+		for (const el of otherElements) {
+			if (
+				el.startTime >= elementEnd &&
+				(right === null || el.startTime < right.start)
+			) {
+				right = { id: el.id, start: el.startTime };
+			}
+		}
+
+		result.set(elementId, { left: left?.id ?? null, right: right?.id ?? null });
+	}
+	return result;
 }
 
 function hasResizeChanges({
@@ -322,6 +407,10 @@ export class ResizeController {
 				: members,
 			result: null,
 			rippleTrim,
+			neighborElementIds: buildNeighborElementIds({
+				tracks,
+				selectedElements: [ref, ...linkedRefs],
+			}),
 		};
 		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
@@ -348,6 +437,7 @@ export class ResizeController {
 		this.cursorLock = null;
 		this.deactivate();
 		this.config.onSnapPointChange?.(null);
+		this.config.onClampReasonChange?.(null);
 		this.notify();
 	}
 
@@ -410,6 +500,50 @@ export class ResizeController {
 		return deltaTime;
 	}
 
+	/**
+	 * CapCut-style "why did the edge stop" feedback for the current drag
+	 * position: `requestedDeltaTime` is the (snapped, pre-clamp) delta the user
+	 * is asking for; when it exceeds the group's bound, classify why via
+	 * `getGroupClampReason` (same bound math `computeLinkedResize` enforces)
+	 * and resolve WHICH element to decorate. A "neighbor" reason with no real
+	 * neighbor element (the timeline-zero wall, side "left" with nothing to
+	 * its left) falls back to flashing the dragged edge instead of showing
+	 * nothing, since the whole point of this feature is that a stuck drag
+	 * never goes silent.
+	 */
+	private computeClampFeedback({
+		session,
+		requestedDeltaTime,
+	}: {
+		session: ResizeSession;
+		requestedDeltaTime: MediaTime;
+	}): ResizeClampFeedback | null {
+		const clamp = getGroupClampReason({
+			members: session.members,
+			side: session.side,
+			requestedDeltaTime,
+			minDuration: getMinDurationForFps(session.fps),
+			rippleShrinkFloorDelta: session.rippleTrim?.shrinkFloorDelta ?? null,
+		});
+		if (!clamp) return null;
+
+		const draggedElementId = session.members[0].elementId;
+		if (clamp.reason === "neighbor") {
+			const neighborElementId =
+				session.neighborElementIds.get(clamp.elementId)?.[session.side] ??
+				null;
+			if (neighborElementId) {
+				return { kind: "neighbor", side: session.side, neighborElementId };
+			}
+		}
+		return {
+			kind: "dragged",
+			side: session.side,
+			reason: clamp.reason,
+			elementId: draggedElementId,
+		};
+	}
+
 	private handleMouseMove({ clientX }: MouseEvent): void {
 		if (this.session.kind !== "active") return;
 		const session = this.session;
@@ -437,6 +571,9 @@ export class ResizeController {
 		});
 
 		session.result = result;
+		this.config.onClampReasonChange?.(
+			this.computeClampFeedback({ session, requestedDeltaTime: deltaTime }),
+		);
 		// Ripple live preview: downstream clips shift on screen during the drag
 		// instead of jumping at commit. Emitted even at zero delta, so a drag
 		// back to the origin overwrites stale shifted overlay positions.

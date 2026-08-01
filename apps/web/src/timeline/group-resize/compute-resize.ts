@@ -1,3 +1,4 @@
+import type { FrameRate } from "opencut-wasm";
 import {
 	getSourceSpanAtClipTime,
 	getTimelineDurationForSourceSpan,
@@ -23,6 +24,16 @@ import type {
 	GroupResizeUpdate,
 	ResizeSide,
 } from "./types";
+
+/** One frame's `MediaTime` duration at the given project fps. Shared by
+ * `computeLinkedResize` (the min-duration floor/ceiling) and by
+ * `clamp-reason.ts` (which needs the identical value to classify a clamp the
+ * same way this file computes it). */
+export function getMinDurationForFps(fps: FrameRate): MediaTime {
+	return mediaTime({
+		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
+	});
+}
 
 /**
  * Resize a SINGLE clip (the grabbed one), clamped solely by that clip's own
@@ -60,9 +71,7 @@ export function computeLinkedResize({
 	fps,
 	rippleTrim,
 }: ComputeLinkedResizeArgs): GroupResizeResult {
-	const minDuration = mediaTime({
-		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
-	});
+	const minDuration = getMinDurationForFps(fps);
 	const membersMinimumDeltaTime = members.reduce<MediaTime>(
 		(minimum, member) =>
 			maxMediaTime({
@@ -194,35 +203,7 @@ function getMinimumAllowedDeltaTime({
 	side: ResizeSide;
 	minDuration: MediaTime;
 }): MediaTime {
-	if (side === "right") {
-		return subMediaTime({ a: minDuration, b: member.duration });
-	}
-
-	const leftNeighborFloor =
-		member.leftNeighborBound !== null
-			? subMediaTime({ a: member.leftNeighborBound, b: member.startTime })
-			: subMediaTime({ a: ZERO_MEDIA_TIME, b: member.startTime });
-	if (member.sourceDuration == null) {
-		return leftNeighborFloor;
-	}
-
-	const maximumSourceExtension = subMediaTime({
-		a: getDurationForVisibleSourceSpan({
-			member,
-			sourceSpan: addMediaTime({
-				a: getVisibleSourceSpanForDuration({
-					member,
-					duration: member.duration,
-				}),
-				b: member.trimStart,
-			}),
-		}),
-		b: member.duration,
-	});
-	return maxMediaTime({
-		a: leftNeighborFloor,
-		b: subMediaTime({ a: ZERO_MEDIA_TIME, b: maximumSourceExtension }),
-	});
+	return getResizeBoundBreakdown({ member, side, minDuration }).minimum;
 }
 
 function getMaximumAllowedDeltaTime({
@@ -234,36 +215,134 @@ function getMaximumAllowedDeltaTime({
 	side: ResizeSide;
 	minDuration: MediaTime;
 }): MediaTime | null {
-	if (side === "left") {
-		return subMediaTime({ a: member.duration, b: minDuration });
+	return getResizeBoundBreakdown({ member, side, minDuration }).maximum;
+}
+
+/** Why a bound is where it is: `clamp-reason.ts` reports this straight to the
+ * UI, so the three values here ARE the three reasons CapCut-style feedback
+ * distinguishes. */
+export type ResizeBoundReason = "source-limit" | "neighbor" | "min-duration";
+
+export interface ResizeBoundBreakdown {
+	minimum: MediaTime;
+	minimumReason: ResizeBoundReason;
+	/** `null` = unbounded (no neighbor, and either no source limit applies -
+	 * images/text - or the source limit doesn't cap this direction). */
+	maximum: MediaTime | null;
+	maximumReason: ResizeBoundReason | null;
+}
+
+/**
+ * The single source of truth for a member's per-side resize bounds, split
+ * into the value AND which constraint produced it. `getMinimumAllowedDeltaTime`
+ * / `getMaximumAllowedDeltaTime` above are thin wrappers over this (so the
+ * clamp math itself is defined exactly once); `clamp-reason.ts` calls this
+ * directly to classify a drag that has run into a bound.
+ *
+ * `member.sourceDurationRequired` (VIDEO/AUDIO elements) distinguishes a real
+ * "no more footage" limit from a data anomaly: a required sourceDuration that
+ * is missing (metadata not loaded yet) is treated as ZERO extra headroom
+ * instead of unbounded, so playback never runs into non-existent source.
+ * Images/text never set this flag, so a missing sourceDuration on them keeps
+ * meaning "genuinely no source limit" (free extension), exactly as before.
+ */
+export function getResizeBoundBreakdown({
+	member,
+	side,
+	minDuration,
+}: {
+	member: GroupResizeMember;
+	side: ResizeSide;
+	minDuration: MediaTime;
+}): ResizeBoundBreakdown {
+	if (side === "right") {
+		const minimum = subMediaTime({ a: minDuration, b: member.duration });
+		const rightNeighborCeiling =
+			member.rightNeighborBound === null
+				? null
+				: subMediaTime({
+						a: member.rightNeighborBound,
+						b: addMediaTime({ a: member.startTime, b: member.duration }),
+					});
+
+		if (member.sourceDuration == null && !member.sourceDurationRequired) {
+			return {
+				minimum,
+				minimumReason: "min-duration",
+				maximum: rightNeighborCeiling,
+				maximumReason: rightNeighborCeiling === null ? null : "neighbor",
+			};
+		}
+
+		const sourceDurationCeiling =
+			member.sourceDuration == null
+				? ZERO_MEDIA_TIME
+				: subMediaTime({
+						a: getDurationForVisibleSourceSpan({
+							member,
+							sourceSpan: subMediaTime({
+								a: getSourceDuration({ member }),
+								b: member.trimStart,
+							}),
+						}),
+						b: member.duration,
+					});
+		if (rightNeighborCeiling === null) {
+			return {
+				minimum,
+				minimumReason: "min-duration",
+				maximum: sourceDurationCeiling,
+				maximumReason: "source-limit",
+			};
+		}
+		return {
+			minimum,
+			minimumReason: "min-duration",
+			maximum: minMediaTime({ a: rightNeighborCeiling, b: sourceDurationCeiling }),
+			maximumReason:
+				rightNeighborCeiling <= sourceDurationCeiling ? "neighbor" : "source-limit",
+		};
 	}
 
-	const rightNeighborCeiling =
-		member.rightNeighborBound === null
-			? null
+	// side === "left"
+	const maximum = subMediaTime({ a: member.duration, b: minDuration });
+	const leftNeighborFloor =
+		member.leftNeighborBound !== null
+			? subMediaTime({ a: member.leftNeighborBound, b: member.startTime })
+			: subMediaTime({ a: ZERO_MEDIA_TIME, b: member.startTime });
+
+	if (member.sourceDuration == null && !member.sourceDurationRequired) {
+		return {
+			minimum: leftNeighborFloor,
+			minimumReason: "neighbor",
+			maximum,
+			maximumReason: "min-duration",
+		};
+	}
+
+	const maximumSourceExtension =
+		member.sourceDuration == null
+			? ZERO_MEDIA_TIME
 			: subMediaTime({
-					a: member.rightNeighborBound,
-					b: addMediaTime({ a: member.startTime, b: member.duration }),
+					a: getDurationForVisibleSourceSpan({
+						member,
+						sourceSpan: addMediaTime({
+							a: getVisibleSourceSpanForDuration({
+								member,
+								duration: member.duration,
+							}),
+							b: member.trimStart,
+						}),
+					}),
+					b: member.duration,
 				});
-	if (member.sourceDuration == null) {
-		return rightNeighborCeiling;
-	}
-
-	const maximumVisibleSourceSpan = subMediaTime({
-		a: getSourceDuration({ member }),
-		b: member.trimStart,
-	});
-	const maximumDuration = getDurationForVisibleSourceSpan({
-		member,
-		sourceSpan: maximumVisibleSourceSpan,
-	});
-	const sourceDurationCeiling = subMediaTime({
-		a: maximumDuration,
-		b: member.duration,
-	});
-	return rightNeighborCeiling === null
-		? sourceDurationCeiling
-		: minMediaTime({ a: rightNeighborCeiling, b: sourceDurationCeiling });
+	const sourceFloor = subMediaTime({ a: ZERO_MEDIA_TIME, b: maximumSourceExtension });
+	return {
+		minimum: maxMediaTime({ a: leftNeighborFloor, b: sourceFloor }),
+		minimumReason: leftNeighborFloor >= sourceFloor ? "neighbor" : "source-limit",
+		maximum,
+		maximumReason: "min-duration",
+	};
 }
 
 function getSourceDeltaForClipDelta({

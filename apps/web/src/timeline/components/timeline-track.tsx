@@ -3,7 +3,8 @@
 import { useCallback } from "react";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
-import { TimelineElement } from "./timeline-element";
+import { TimelineElement, type ResizeClampVisual } from "./timeline-element";
+import type { ResizeClampFeedback } from "@/timeline/hooks/use-timeline-resize";
 import {
 	useVisibleClips,
 	type VisibleWindow,
@@ -49,6 +50,31 @@ interface TimelineTrackContentProps {
 	onTrackMouseUp?: (event: React.MouseEvent) => void;
 	shouldIgnoreClick?: () => boolean;
 	targetElementId?: string | null;
+	resizeClampFeedback?: ResizeClampFeedback | null;
+}
+
+/**
+ * Resolves the shared drag-level `ResizeClampFeedback` down to a per-element
+ * decoration: `"dragged"` only for the exact clip being dragged (flash its
+ * own edge), `"neighbor"` only for the exact clip identified as the wall
+ * (highlight its NEAR edge, i.e. the side facing the dragged clip - the
+ * opposite of the drag side). Every other clip gets `null`.
+ */
+function resolveResizeClampVisual({
+	feedback,
+	elementId,
+}: {
+	feedback: ResizeClampFeedback | null | undefined;
+	elementId: string;
+}): ResizeClampVisual | null {
+	if (!feedback) return null;
+	if (feedback.kind === "dragged") {
+		return feedback.elementId === elementId
+			? { kind: "dragged", side: feedback.side, reason: feedback.reason }
+			: null;
+	}
+	if (feedback.neighborElementId !== elementId) return null;
+	return { kind: "neighbor", side: feedback.side === "left" ? "right" : "left" };
 }
 
 export function TimelineTrackContent({
@@ -63,6 +89,7 @@ export function TimelineTrackContent({
 	onTrackMouseUp,
 	shouldIgnoreClick,
 	targetElementId = null,
+	resizeClampFeedback = null,
 }: TimelineTrackContentProps) {
 	const { isElementSelected } = useElementSelection();
 	const editor = useEditor();
@@ -322,6 +349,10 @@ export function TimelineTrackContent({
 								onElementClick={handleClipClick}
 								drag={drag}
 								isDropTarget={element.id === targetElementId}
+								resizeClamp={resolveResizeClampVisual({
+									feedback: resizeClampFeedback,
+									elementId: element.id,
+								})}
 							/>
 						);
 					})
