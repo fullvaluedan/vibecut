@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { transcribeWithGroq } from "@/services/transcription/providers/groq";
+import {
+	GroqTranscriptionError,
+	transcribeWithGroq,
+} from "@/services/transcription/providers/groq";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -56,11 +59,22 @@ export async function POST(req: NextRequest) {
 		});
 		return NextResponse.json(result);
 	} catch (e) {
+		// A GroqTranscriptionError carries the REAL upstream status (401/403/429/
+		// 413/...) so the client can tell "key rejected" from "rate limited" from
+		// "Groq is down" instead of every failure flattening to a generic 500
+		// (T16.3 G6 - that flattening is why the client only ever saw
+		// "Cloud transcription failed (500)" no matter the real cause).
+		if (e instanceof GroqTranscriptionError) {
+			return NextResponse.json({ error: e.message }, { status: e.status });
+		}
+		// Anything else (network failure reaching Groq, a bad audio decode, an
+		// unexpected throw) is an upstream problem, not the client's - 502.
+		console.error("[transcribe] unexpected failure:", e);
 		return NextResponse.json(
 			{
 				error: `Transcription failed: ${e instanceof Error ? e.message : String(e)}`,
 			},
-			{ status: 500 },
+			{ status: 502 },
 		);
 	}
 }
