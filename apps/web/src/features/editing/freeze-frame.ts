@@ -42,6 +42,7 @@ import { getSourceTimeAtClipTime } from "@/retime";
 import { getElementsAtTime, isRetimableElement } from "@/timeline";
 import type { SceneTracks, VideoElement } from "@/timeline";
 import { buildElementFromMedia } from "@/timeline/element-utils";
+import { findLinkedPartners } from "@/timeline/link-elements";
 import {
 	addMediaTime,
 	mediaTimeFromSeconds,
@@ -188,6 +189,7 @@ export async function freezeFrameAtPlayhead({
 		elementId,
 		splitTime: currentTime,
 		stillAssetId: addAssetCommand.getAssetId(),
+		tracks: activeScene.tracks,
 		leadingCommands: [addAssetCommand],
 	});
 
@@ -207,12 +209,18 @@ export async function freezeFrameAtPlayhead({
  * exercise the split+ripple+insert mechanics directly, without mocking the
  * async frame-capture step - see
  * commands/timeline/element/__tests__/freeze-frame-batch.test.ts.
+ *
+ * G6 fix (round 18 reopen): `tracks` is now required so the split can find
+ * the target clip's linked audio partner (shared `linkId`, same span) BEFORE
+ * splitting - see the `linkedPartners` comment below for why that has to
+ * happen in the SAME `SplitElementsCommand` call rather than a second one.
  */
 export function buildFreezeFrameBatch({
 	trackId,
 	elementId,
 	splitTime,
 	stillAssetId,
+	tracks,
 	leadingCommands = [],
 	durationSeconds = FREEZE_FRAME_DURATION_SECONDS,
 }: {
@@ -220,20 +228,39 @@ export function buildFreezeFrameBatch({
 	elementId: string;
 	splitTime: MediaTime;
 	stillAssetId: string;
+	tracks: SceneTracks;
 	leadingCommands?: Command[];
 	durationSeconds?: number;
 }): { batch: BatchCommand; insertCommand: InsertElementCommand } {
+	// CapCut parity choice: the still is silent, so the linked audio is SPLIT
+	// (not left running) at the freeze point and its right half rides the
+	// same ripple as the video - silence plays under the still instead of the
+	// original audio racing ahead of the now-frozen picture. Both halves must
+	// come out of the SAME SplitElementsCommand.execute() call so its
+	// freshLinkIdByGroup mints ONE fresh linkId shared by the video's right
+	// half and the audio's right half (keyed by the ORIGINAL linkId) - two
+	// separate split calls would each mint their own fresh id and the right
+	// halves would come out unlinked, defeating the ripple's linked-partner
+	// propagation below (see ripple-shift-at.ts).
+	const linkedPartners = findLinkedPartners({
+		ref: { trackId, elementId },
+		tracks,
+		mode: "timeline",
+	});
+
 	const splitCommand = new SplitElementsCommand({
-		elements: [{ trackId, elementId }],
+		elements: [{ trackId, elementId }, ...linkedPartners],
 		splitTime,
 		retainSide: "both",
 	});
 
 	const freezeDuration = mediaTimeFromSeconds({ seconds: durationSeconds });
 
-	// Opens the hole (shifts the split's right half + everything further
-	// right on this track) BEFORE the insert, same discipline as the
-	// ripple-insert-on-drop flow (timeline/placement/ripple-insert.ts).
+	// Opens the hole on the video's own track (current behavior) AND, via its
+	// linked-partner walk, on the audio track the split above just put a
+	// freshly-linked right half onto - one ripple call, cross-track by
+	// construction. See ripple-shift-at.ts's class doc for the propagation
+	// rule (mirrors timeline/magnet.ts's collectMagnetTrimTargets).
 	const rippleCommand = new RippleShiftAtCommand({
 		trackId,
 		atTime: splitTime,
