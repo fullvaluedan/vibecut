@@ -8,13 +8,8 @@ import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
 import { isRetimableElement } from "@/timeline";
 import { splitAnimationsAtTime } from "@/animation";
-import { getSourceSpanAtClipTime } from "@/retime";
-import {
-	addMediaTime,
-	type MediaTime,
-	roundMediaTime,
-	subMediaTime,
-} from "@/wasm";
+import { computeSplitTrimBoundaries, getSourceSpanAtClipTime } from "@/retime";
+import { type MediaTime, roundMediaTime, subMediaTime } from "@/wasm";
 
 export class SplitElementsCommand extends Command {
 	private savedState: SceneTracks | null = null;
@@ -139,20 +134,25 @@ export class SplitElementsCommand extends Command {
 				});
 				let splitResult: TimelineElement[];
 
-				const leftTrimEnd = addMediaTime({
-					a: element.trimEnd,
-					b: rightSourceSpan,
-				});
-				const rightTrimStart = addMediaTime({
-					a: element.trimStart,
-					b: leftSourceSpan,
-				});
+				// T18.1: a reversed clip reads its trimmed span back-to-front, so the
+				// timeline-left half actually owns the source's TAIL - see the
+				// doc comment on computeSplitTrimBoundaries for why the boundaries
+				// swap sides instead of just adding to the same field as forward.
+				const { leftTrimStart, leftTrimEnd, rightTrimStart, rightTrimEnd } =
+					computeSplitTrimBoundaries({
+						trimStart: element.trimStart,
+						trimEnd: element.trimEnd,
+						leftSourceSpan,
+						rightSourceSpan,
+						retime: retimeRef,
+					});
 
 				if (this.retainSide === "left") {
 					splitResult = [
 						{
 							...element,
 							duration: leftVisibleDuration,
+							trimStart: leftTrimStart,
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
@@ -172,6 +172,7 @@ export class SplitElementsCommand extends Command {
 							startTime: this.splitTime,
 							duration: rightVisibleDuration,
 							trimStart: rightTrimStart,
+							trimEnd: rightTrimEnd,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
@@ -188,6 +189,7 @@ export class SplitElementsCommand extends Command {
 						{
 							...element,
 							duration: leftVisibleDuration,
+							trimStart: leftTrimStart,
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
@@ -199,6 +201,7 @@ export class SplitElementsCommand extends Command {
 							startTime: this.splitTime,
 							duration: rightVisibleDuration,
 							trimStart: rightTrimStart,
+							trimEnd: rightTrimEnd,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),

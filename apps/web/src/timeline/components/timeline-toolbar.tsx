@@ -36,6 +36,7 @@ import {
 	Bookmark02Icon,
 	Delete02Icon,
 	ScissorIcon,
+	SnowIcon,
 	MagnetIcon,
 	Magnet02Icon,
 	SearchAddIcon,
@@ -192,6 +193,14 @@ function ToolbarLeftSection() {
 					tooltip="Split right"
 					onClick={({ event }) =>
 						handleAction({ action: "split-right", event })
+					}
+				/>
+
+				<ToolbarButton
+					icon={<HugeiconsIcon icon={SnowIcon} />}
+					tooltip="Freeze frame: split at playhead and hold this frame for 3s"
+					onClick={({ event }) =>
+						handleAction({ action: "freeze-frame", event })
 					}
 				/>
 

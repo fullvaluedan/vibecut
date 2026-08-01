@@ -7,6 +7,7 @@ import type {
 	TimelineTrack,
 	TimelineElement,
 	RetimeConfig,
+	CropRect,
 	ElementRef,
 } from "@/timeline";
 import { calculateTotalDuration } from "@/timeline";
@@ -200,6 +201,39 @@ export class TimelineManager {
 				elementId: ref.elementId,
 				updates: { retime },
 			})),
+		});
+	}
+
+	/** T18.1: commit a crop rect (one undo step, mirrors updateElementRetime). */
+	updateElementCrop({
+		trackId,
+		elementId,
+		crop,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		crop: CropRect | undefined;
+		pushHistory?: boolean;
+	}): void {
+		this.updateElements({
+			updates: [{ trackId, elementId, patch: { crop } }],
+			pushHistory,
+		});
+	}
+
+	/** Live preview while dragging a crop handle or editing a Crop field. */
+	previewElementCrop({
+		trackId,
+		elementId,
+		crop,
+	}: {
+		trackId: string;
+		elementId: string;
+		crop: CropRect | undefined;
+	}): void {
+		this.previewElements({
+			updates: [{ trackId, elementId, updates: { crop } }],
 		});
 	}
 

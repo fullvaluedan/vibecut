@@ -23,3 +23,27 @@ export function shouldMaintainPitch({
 }): boolean {
 	return maintainPitch === true && canMaintainPitch({ rate });
 }
+
+/**
+ * T18.1: rate stays at 1x while reversed (see RetimeConfig.reversed doc
+ * comment in timeline/types.ts) - the Speed tab disables the rate field
+ * when reversed is on, and this is the single place that enforces it for
+ * any programmatic caller (assistant ops, presets) too.
+ */
+export function isRetimeReversed({
+	retime,
+}: {
+	retime?: { reversed?: boolean };
+}): boolean {
+	return retime?.reversed === true;
+}
+
+export function clampRetimeForReverse({
+	rate,
+	reversed,
+}: {
+	rate: number;
+	reversed: boolean;
+}): number {
+	return reversed ? DEFAULT_RETIME_RATE : rate;
+}

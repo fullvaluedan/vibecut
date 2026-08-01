@@ -2,7 +2,7 @@ import { BaseNode } from "./base-node";
 import type { Effect, EffectPass } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { BlendMode, Transform } from "@/rendering";
-import type { RetimeConfig, VisualElement } from "@/timeline";
+import type { CropRect, RetimeConfig, VisualElement } from "@/timeline";
 
 export interface VisualNodeParams {
 	duration: number;
@@ -16,6 +16,8 @@ export interface VisualNodeParams {
 	blendMode?: BlendMode;
 	effects?: Effect[];
 	masks?: Mask[];
+	/** T18.1: only meaningful for VideoNode/ImageNode; see rendering/crop.ts. */
+	crop?: CropRect;
 }
 
 export interface ResolvedVisualNodeState {
