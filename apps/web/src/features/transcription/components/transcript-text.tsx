@@ -16,6 +16,16 @@
  * plays. W4/R3 adds `query`: matching substrings are marked and non-matching
  * items dim, purely visual - the underlying item array and its indices are
  * never filtered, so ripple-delete's index math (R4) is untouched.
+ *
+ * T16.3 adds two more overlays. Auto-scroll-follow: while `followEnabled` is
+ * on, the active word scrolls into view on every `activeIndex` change, unless
+ * `isFollowSuspended` says the user is mid-interaction (pointer over the
+ * transcript, or a manual scroll in the last ~2s) - tracked locally via refs
+ * so it never re-renders on every scroll tick. A `programmaticScrollRef` flag
+ * distinguishes our own `scrollIntoView` calls from real user scrolls so
+ * following itself never looks like a manual scroll and re-suspends. Restore
+ * shell: struck (removed) words are no longer `pointer-events-none` - a click
+ * on one calls `onRemovedClick` instead of starting a selection drag.
  */
 
 /* eslint-disable jsx-a11y/no-static-element-interactions, jsx-a11y/no-noninteractive-tabindex, jsx-a11y/mouse-events-have-key-events -- Mouse-only index-drag selection (KTD2); keyboard word-selection is a documented deferral (OQ3). The container is focusable (tabIndex) so Delete/Backspace can ripple-delete the active selection. */
@@ -27,6 +37,13 @@ import type {
 	TranscriptSelection,
 } from "@/features/transcription/resolve-selection-to-range";
 import { normalizeSelection } from "@/features/transcription/transcript-selection";
+import { isFollowSuspended } from "@/features/transcription/follow-playback-suspend";
+
+/** How long a manual scroll suspends auto-scroll-follow (T16.3). */
+const FOLLOW_SUSPEND_MS = 2000;
+/** How long a programmatic scrollIntoView is excluded from counting as a
+ * manual scroll (covers the "smooth" scroll's animation, not just one frame). */
+const PROGRAMMATIC_SCROLL_GUARD_MS = 500;
 
 interface TranscriptItem {
 	text: string;
@@ -88,6 +105,9 @@ export function TranscriptText({
 	onSeek,
 	activeIndex,
 	query,
+	followEnabled = false,
+	onRemovedClick,
+	onScroll,
 }: {
 	items: readonly TranscriptItem[];
 	granularity: TranscriptGranularity;
@@ -101,8 +121,26 @@ export function TranscriptText({
 	activeIndex?: number | null;
 	/** Live search text (W4/R3) - matches are marked, everything else dims. */
 	query?: string;
+	/** Auto-scroll-follow toggle (T16.3) - the persisted panel preference. */
+	followEnabled?: boolean;
+	/** A struck (removed) word was clicked - opens the restore popover shell (T16.3). */
+	onRemovedClick?: (args: { index: number; rect: DOMRect | null }) => void;
+	/** Fired on a genuine user scroll of the transcript container (never our
+	 * own auto-scroll-follow), for the caller to close an open restore
+	 * popover. Follow-suspend tracking is handled internally and does not
+	 * need this. */
+	onScroll?: () => void;
 }) {
 	const anchorRef = useRef<number | null>(null);
+	const containerRef = useRef<HTMLDivElement>(null);
+	// Follow-suspend inputs (T16.3): kept as refs, not state, since they only
+	// need to be READ at the moment `activeIndex` changes - turning them into
+	// state would re-render on every mouseenter/leave and every scroll tick.
+	const pointerOverRef = useRef(false);
+	const lastManualScrollAtRef = useRef<number | null>(null);
+	// Distinguishes our own scrollIntoView from a real user scroll, so
+	// following itself is never mistaken for a manual scroll that re-suspends it.
+	const programmaticScrollRef = useRef(false);
 
 	// End the drag even if the button is released outside the container.
 	useEffect(() => {
@@ -113,12 +151,40 @@ export function TranscriptText({
 		return () => window.removeEventListener("mouseup", onUp);
 	}, []);
 
+	// Auto-scroll-follow (T16.3): keep the active word in view while playing,
+	// unless suspended (pointer over the transcript, or a recent manual scroll).
+	useEffect(() => {
+		if (!followEnabled || activeIndex == null) return;
+		const suspended = isFollowSuspended({
+			pointerOver: pointerOverRef.current,
+			lastManualScrollAt: lastManualScrollAtRef.current,
+			now: Date.now(),
+			suspendMs: FOLLOW_SUSPEND_MS,
+		});
+		if (suspended) return;
+		const container = containerRef.current;
+		if (!container) return;
+		const target = container.querySelector(`[data-index="${activeIndex}"]`);
+		if (!target) return;
+		programmaticScrollRef.current = true;
+		target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		const timer = setTimeout(() => {
+			programmaticScrollRef.current = false;
+		}, PROGRAMMATIC_SCROLL_GUARD_MS);
+		return () => clearTimeout(timer);
+	}, [activeIndex, followEnabled]);
+
 	const handleMouseDown = (event: React.MouseEvent) => {
 		const index = indexFromEvent(event);
 		if (index == null) {
 			// Clicking empty space clears the selection.
 			onSelectionChange(null);
 			anchorRef.current = null;
+			return;
+		}
+		if (removedIndices?.has(index)) {
+			// Struck words open the restore popover on click (handleClick), not a
+			// selection drag - they are already gone from the live timeline.
 			return;
 		}
 		anchorRef.current = index;
@@ -133,7 +199,7 @@ export function TranscriptText({
 	const handleMouseOver = (event: React.MouseEvent) => {
 		if (anchorRef.current == null) return;
 		const index = indexFromEvent(event);
-		if (index == null) return;
+		if (index == null || removedIndices?.has(index)) return;
 		onSelectionChange(
 			normalizeSelection({
 				anchorIndex: anchorRef.current,
@@ -141,6 +207,14 @@ export function TranscriptText({
 				granularity,
 			}),
 		);
+	};
+
+	const handleClick = (event: React.MouseEvent) => {
+		const index = indexFromEvent(event);
+		if (index == null || !removedIndices?.has(index) || !onRemovedClick) return;
+		const target = event.target;
+		const el = target instanceof Element ? target.closest("[data-index]") : null;
+		onRemovedClick({ index, rect: el?.getBoundingClientRect() ?? null });
 	};
 
 	const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -151,13 +225,32 @@ export function TranscriptText({
 		}
 	};
 
+	const handleScroll = () => {
+		// Only a genuine user scroll counts as "manual" - our own
+		// scrollIntoView from auto-scroll-follow must not re-suspend itself,
+		// nor close a popover the user didn't touch.
+		if (!programmaticScrollRef.current) {
+			lastManualScrollAtRef.current = Date.now();
+			onScroll?.();
+		}
+	};
+
 	return (
 		<div
+			ref={containerRef}
 			className="text-foreground cursor-text overflow-y-auto p-4 text-sm leading-relaxed select-none outline-none"
 			tabIndex={0}
 			onMouseDown={handleMouseDown}
 			onMouseOver={handleMouseOver}
+			onClick={handleClick}
 			onKeyDown={handleKeyDown}
+			onScroll={handleScroll}
+			onMouseEnter={() => {
+				pointerOverRef.current = true;
+			}}
+			onMouseLeave={() => {
+				pointerOverRef.current = false;
+			}}
 		>
 			{items.map((item, index) => {
 				const selected =
@@ -180,8 +273,11 @@ export function TranscriptText({
 								"rounded-sm",
 								selected && "bg-primary/25",
 								playing && "bg-primary/10 ring-1 ring-primary/50",
+								// Not pointer-events-none (T16.3): clicking a struck run opens
+								// the restore popover shell, so it stays clickable but exits
+								// the normal drag-select path (handleMouseDown/handleMouseOver).
 								removed &&
-									"text-muted-foreground pointer-events-none line-through opacity-60",
+									"text-muted-foreground line-through opacity-60 cursor-pointer hover:bg-destructive/10",
 								hasQuery && !isMatch && "opacity-40",
 							)}
 						>
