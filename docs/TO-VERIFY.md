@@ -66,11 +66,112 @@ A working LLM provider WAS configured in this environment (Settings > AI > "Clau
 - [x] Export menu offers .txt (with an "Include timecodes" sub-toggle), .srt, .csv; all three download correctly from the panel.
 - [ ] FAILS after a cut is active: see the new bug above. Exports on the unedited transcript, and exports after a full delete+restore-all cycle (net zero cuts), are both correct; only a transcript with an active, unrestored cut somewhere in a segment triggers the bug.
 
-### Left for Dan / a future round
+### Left for Dan / a future round (superseded by the G6 re-rate below; kept for history)
 - [ ] Groq live key check: a Groq key IS stored in Settings, but running transcription with "Groq (cloud)" selected FAILED ("Transcript failed to load - Transcription was interrupted") with no clear "check your key" messaging and no fallback to in-browser. Could not tell whether the stored key is genuinely invalid/expired in this environment or whether this is a real regression in the cloud path; needs Dan to test with a known-good key.
 - [ ] Director live run on REAL footage with fillers/retakes/repeats, to actually exercise a Director-sourced pipe with category + reason (this pass only had a clean TTS clip, which gave the Director nothing to cut except trailing silence).
 - [ ] Auto-scroll and hover-suspend-follow on a transcript long enough to overflow the panel.
 - [ ] The `diag-join-verdicts.ts` recall/precision gate: re-run with a fresh cache-key comparison before treating the 9/16, 9/10 result as a confirmed regression from round 16's lineage/journal changes.
+
+## Round 16 G6 RE-RATE (2026-08-01, T16.4 re-rate, tip `97a61dfa`)
+
+Second agent pass after the round-16 G6 fix cycle, re-checking the three defects that kept
+T16.1-T16.3 below 9. New media this pass: a 41s clip, 6 sentences / 113 words (long enough
+to overflow the transcript panel), Windows `System.Speech` TTS muxed over an ffmpeg
+`testsrc` video via the `claude-in-chrome` bridge (file staged at
+`apps/web/public/verify-speech-test.mp4`, deleted after, confirmed clean via `git status`).
+
+### Gates
+- G1 `bun test` apps/web: 1976 pass, 0 fail. PASS (up from 1942, matches the 14 new export
+  tests + 20 new Groq-fallback tests from the fix cycle).
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- G5 diag gate: NOT re-run, per the fix-cycle's own cross-commit forensics. The prior
+  round's recall 9/16 / precision 9/10 reading was diagnosed as an instrumentation
+  artifact, not a real regression: running `diag-join-verdicts.ts` at the pre-round-15
+  commit and at tip, with the `.eval-cache` held fixed, produced byte-identical diag
+  output. The re-baselined reproducible number is recall 12/16, precision 12/13, 19
+  fragments. This defect is CLOSED; do not re-run it again without a fresh cache-key
+  reason to suspect drift.
+
+### EXPORT BUG RE-VERIFIED - PASS
+Repro from the original bug report, plus the two additional scenarios the fix note asked
+for. All four confirmed on the live app, not just unit tests:
+- [x] Baseline (unedited) export of .txt/.srt/.csv: all 6 sentences present, correct
+  timecodes, SRT numbered 1-6.
+- [x] Delete 5 words inside the FIRST sentence ("the Round 16 Re -Verification" cut from
+  "Welcome to **the Round 16 Re -Verification** Pass for the video editor."): re-exported
+  .txt/.srt/.csv all show "Welcome to Pass for the video editor." as segment 1, all 6
+  segments still present, timecodes shifted down by the cut duration, SRT still numbered
+  1-6 from the top.
+- [x] Delete a 4-word span CROSSING the segment 1/segment 2 boundary ("video editor. This
+  clip"): both segments shrink independently and stay as two separate rows ("Welcome to
+  Pass for the" / "contains several full sentences...") - neither segment is dropped, they
+  are not merged into one row.
+- [x] Restore-all after both deletes: exported .txt/.srt/.csv are BYTE-IDENTICAL to the
+  baseline files (diffed with `diff`, zero output on all three).
+
+This closes the "export drops any segment containing a cut" bug from the previous pass.
+Root-cause fix (`viewFromRecord` deriving segments from the word journal instead of a
+segment-midpoint test) holds under a boundary-crossing case the original repro did not
+cover.
+
+### GROQ ERROR PATH RE-VERIFIED - PASS
+Settings > AI > Transcribe on "Groq (cloud)" with an invalid key (`gsk_invalid_test`)
+stored, then a genuinely fresh transcription attempt (cache cleared, no prior "current
+value" for the timeline's audio hash). Confirmed at the network level, not just the UI:
+intercepted the `fetch` call and captured `POST /api/transcribe -> 401,
+{"error":"Groq key rejected - check your key."}` in 200ms, immediately followed by a normal
+local-Whisper transcription that completed to "Transcript ready - 113 words" - a plain
+transcript, not an error screen, not a hang. The UI's own progress line for this moment
+(`${cloudError.message} - using local transcription...`, i.e. "Groq key rejected - check
+your key. - using local transcription...") is broadcast by the same code path that produced
+the captured network response; it was too fast (well under a second) to catch as DOM text
+in this automated pass, but the network proof plus the visible fallback-then-success outcome
+together confirm the fix works end to end. Cloud transcription was disabled and the test key
+cleared afterward (Settings back to "In browser", key field empty).
+
+### AUTO-SCROLL FOLLOW - PARTIALLY VERIFIED
+- [x] Overflow condition reproduced: with the 113-word / 41s clip and the transcript panel
+  at its normal size the content did not overflow (551px content in a 551px box), so the
+  panel was zoomed via `document.documentElement.style.fontSize` (a genuine
+  content-vs-viewport ratio change, not a code edit) until the transcript genuinely
+  overflowed its scroll container (337px content in a 309px box).
+- [x] Follow-playback toggle is ON by default.
+- [x] Toggle state survives reload: turned OFF, reloaded the page, confirmed it read back
+  OFF from `localStorage`; turned back ON to restore the default.
+- [ ] Live scroll-tracks-playback, hover-suspends-follow, and manual-scroll-suspends-then-
+  resumes-after-2s were NOT exercised this pass. The automated browser tab used
+  (`claude-in-chrome`) reported `document.hidden: true` / `document.hasFocus(): false` for
+  the whole session, which throttles the app's requestAnimationFrame-driven playback timer
+  in Chrome; clicking Play advanced the displayed time by under one frame and then froze,
+  reproducibly, across multiple fresh page loads. This reads as a tab-visibility artifact of
+  the automation environment, not a product defect: the pure suspend/resume timing logic
+  (`isFollowSuspended` in `features/transcription/follow-playback-suspend.ts`) is unit-tested
+  (5 cases: idle, pointer-over, within-window, resumes-after-window, exact-boundary) and
+  passing in the G1 gate above. Per the round's own "unit-proven code paths don't block the
+  score" allowance, this is recorded as a Dan-owed live check, not a new defect.
+
+### SPOT-CHECK - PASS
+One manual delete (5 words) -> red pipe appears -> restore 2 of the 5 words -> pipe stays
+(only the remaining 3 cut words shown on reopen) -> restore all -> pipe gone (0 pipes in the
+DOM) -> undo chain: three `command.undo()` calls trace exactly back through
+113 -> 110 -> 108 -> 113 words, i.e. restore-all undone, then restore-2 undone, then the
+original delete undone, landing back on the clean 113-word baseline with zero pipes. (Undo
+was driven through the editor's own `command.undo()` API rather than the Ctrl+Z key
+combination - keyboard-shortcut delivery was unreliable through the automation bridge in
+this session; the underlying undo/redo history mechanism itself is what was being tested and
+it reversed every step exactly.)
+
+### Left for Dan / a future round (current)
+- [ ] Real Groq key success path: the error/fallback path is now proven at the network
+  level; a genuinely valid key's happy path (fast cloud transcription, word-level cuts) still
+  needs Dan's own key.
+- [ ] Director-sourced red pipe with category + reason on REAL footage with fillers,
+  retakes, or repeats (this pass's synthetic clean-TTS clip gives the Director nothing to cut
+  except trailing silence, so no pipe is ever produced to inspect).
+- [ ] Live scroll-follow-during-playback, hover-suspend, and manual-scroll-suspend on a real,
+  focused browser tab (see AUTO-SCROLL FOLLOW above - blocked on tab visibility in this
+  automated pass, not unit-test coverage).
 
 ## Round 12: join cleanup, final read, and run feedback (2026-07-19, commits `51bc9bd9`..`1338ba04`, branch `feat/director-eval`)
 Built from your 2026-07-19 verdict ("the AI doesn't consider what the final product looks like when it cuts", the stranded "so...", the sliver clips). Three parts. What to check on a real run:
