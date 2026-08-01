@@ -263,6 +263,103 @@ function seamId(spans: readonly LineageSourceSpanSec[]): string {
 	)}`;
 }
 
+/**
+ * What is LEFT of one segment's own span once the journal ranges are subtracted,
+ * as a single SOURCE span from the first surviving piece to the last. Null when the
+ * removals swallowed the segment whole. Used only by the word-less path below,
+ * where there are no words to fold.
+ */
+function survivingSegmentSpan({
+	seg,
+	removalsTicks,
+}: {
+	seg: LineageSegment;
+	removalsTicks: readonly LineageSourceRange[];
+}): LineageSourceSpanSec | null {
+	const pieces = subtractRanges({
+		ranges: [{ start: secToTicks(seg.start), end: secToTicks(seg.end) }],
+		holes: removalsTicks,
+	});
+	if (pieces.length === 0) return null;
+	return {
+		startSec: ticksToSec(pieces[0].start),
+		endSec: ticksToSec(pieces[pieces.length - 1].end),
+	};
+}
+
+/**
+ * The surviving segments, derived from the SAME journal fold the view's words come
+ * from. A segment owns the words whose midpoint falls inside it; it survives while
+ * any of those words do, and a partially cut segment reports only the words it has
+ * left, spanning their surviving extent. A segment whose words are all gone is
+ * dropped. An untouched segment keeps its original text and bounds verbatim, so an
+ * unedited (or fully restored) transcript serializes byte-identically.
+ *
+ * A capture with no word-level data has nothing to fold, so its segments shrink to
+ * whatever the journal ranges left of their own span instead, keeping the text
+ * whole (the best the record can say without words).
+ *
+ * TESTING THE SEGMENT'S OWN MIDPOINT - what this replaces - was the G6 bug: a
+ * removal in the MIDDLE of a sentence contains that sentence's midpoint, so the
+ * whole segment vanished. Invisible in the panel, which draws `words`, but the
+ * Export menu serializes `segments` only, so the entire sentence went missing from
+ * every exported .txt/.srt/.csv.
+ */
+function segmentsFromRecord({
+	record,
+	geo,
+}: {
+	record: TranscriptLineageRecord;
+	geo: LineageGeometry;
+}): LineageSegment[] {
+	const isRemoved = (start: number, end: number): boolean =>
+		geo.removalsSec.some((r) =>
+			isMidpointContained({
+				spanStart: start,
+				spanEnd: end,
+				containerStart: r.startSec,
+				containerEnd: r.endSec,
+			}),
+		);
+
+	const out: LineageSegment[] = [];
+	record.segments.forEach((seg, i) => {
+		// Half-open ownership everywhere except the final segment, so a word whose
+		// midpoint lands exactly on a boundary belongs to the segment after it and
+		// the last word of the transcript is never left unowned.
+		const owned = record.words.filter((w) =>
+			isMidpointContained({
+				spanStart: w.start,
+				spanEnd: w.end,
+				containerStart: seg.start,
+				containerEnd: seg.end,
+				inclusiveEnd: i === record.segments.length - 1,
+			}),
+		);
+
+		if (owned.length === 0) {
+			const span = survivingSegmentSpan({ seg, removalsTicks: geo.removalsTicks });
+			if (!span) return;
+			out.push({
+				text: seg.text,
+				start: geo.map.toAssembled(span.startSec),
+				end: geo.map.toAssembled(span.endSec),
+			});
+			return;
+		}
+
+		const kept = owned.filter((w) => !isRemoved(w.start, w.end));
+		if (kept.length === 0) return;
+		const intact = kept.length === owned.length;
+		out.push({
+			text: intact ? seg.text : kept.map((w) => w.text.trim()).join(" "),
+			start: geo.map.toAssembled(intact ? seg.start : kept[0].start),
+			end: geo.map.toAssembled(intact ? seg.end : kept[kept.length - 1].end),
+		});
+	});
+	return out;
+}
+
 // --- Read API (what T16.2 consumes) ----------------------------------------
 
 /**
@@ -321,23 +418,7 @@ export function viewFromRecord({
 		end: geo.map.toAssembled(w.end),
 	}));
 
-	const segments: LineageSegment[] = [];
-	for (const seg of record.segments) {
-		const removed = geo.removalsSec.some((r) =>
-			isMidpointContained({
-				spanStart: seg.start,
-				spanEnd: seg.end,
-				containerStart: r.startSec,
-				containerEnd: r.endSec,
-			}),
-		);
-		if (removed) continue;
-		segments.push({
-			text: seg.text,
-			start: geo.map.toAssembled(seg.start),
-			end: geo.map.toAssembled(seg.end),
-		});
-	}
+	const segments = segmentsFromRecord({ record, geo });
 
 	const seams: LineageSeam[] = [];
 	for (const run of partition.removedRuns) {

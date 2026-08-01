@@ -508,8 +508,13 @@ describe("lineage - fast-path refresh", () => {
 		const fast = getLineageFastPathTranscript({ editor, wantWords: true });
 		expect(fast).not.toBeNull();
 		expect(fast?.words?.map((w) => w.text)).toEqual(["one", "four", "five"]);
-		// The whole first segment's midpoint (1.5s) fell inside the cut, so it goes.
-		expect(fast?.segments.map((s) => s.text)).toEqual(["four five"]);
+		// The first segment lost "two three" but kept "one", so it survives with just
+		// that word (G6: dropping it on the SEGMENT midpoint lost the whole sentence
+		// from every export). Its bounds shrink to the surviving word.
+		expect(fast?.segments).toEqual([
+			{ text: "one", start: 0, end: 1 },
+			{ text: "four five", start: 1, end: 3 },
+		]);
 	});
 
 	test("a word-level request refuses a words-less capture", () => {
