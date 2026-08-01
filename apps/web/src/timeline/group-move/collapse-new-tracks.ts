@@ -4,9 +4,10 @@ import type { GroupMember, PlannedTrackCreation } from "./types";
 /**
  * Decide the NEW tracks a group move should create, collapsed to ONE track per
  * distinct SOURCE track (members sharing a source track share the new lane) and
- * capped so no more than `videoBudget` new VIDEO tracks are made. Source tracks
- * that can't get a new video track (budget exhausted) are absent from the
- * returned map — their members stay on their current track.
+ * capped so no more than `videoBudget` new VIDEO tracks and no more than
+ * `audioBudget` new AUDIO tracks are made. Source tracks that can't get a new
+ * track (their type's budget exhausted) are absent from the returned map;
+ * their members stay on their current track.
  *
  * Pure (integer/string only, no `@/wasm`), so it is bun-testable in isolation —
  * the explosion fix (Track-Select-Forward of N clips → N tracks) lives here.
@@ -14,6 +15,7 @@ import type { GroupMember, PlannedTrackCreation } from "./types";
 export function planCollapsedNewTracks({
 	sortedMembers,
 	videoBudget,
+	audioBudget,
 	blockStartIndex,
 	newTrackIds,
 }: {
@@ -21,6 +23,7 @@ export function planCollapsedNewTracks({
 	// shape — keeps this leaf pure (no MediaTime / `@/wasm`) and easy to test.
 	sortedMembers: ReadonlyArray<Pick<GroupMember, "trackId" | "elementType">>;
 	videoBudget: number;
+	audioBudget: number;
 	blockStartIndex: number;
 	newTrackIds: string[];
 }): {
@@ -28,6 +31,7 @@ export function planCollapsedNewTracks({
 	newTrackIdBySourceTrackId: Map<string, string>;
 } {
 	let remainingVideoBudget = videoBudget;
+	let remainingAudioBudget = audioBudget;
 	const newTrackIdBySourceTrackId = new Map<string, string>();
 	const createTracks: PlannedTrackCreation[] = [];
 	let nextNewTrackIdIndex = 0;
@@ -45,6 +49,12 @@ export function planCollapsedNewTracks({
 				continue; // cap reached — this source track's members keep their lane
 			}
 			remainingVideoBudget -= 1;
+		}
+		if (trackType === "audio") {
+			if (remainingAudioBudget <= 0) {
+				continue; // cap reached, this source track's members keep their lane
+			}
+			remainingAudioBudget -= 1;
 		}
 		const id = newTrackIds[nextNewTrackIdIndex];
 		nextNewTrackIdIndex += 1;
