@@ -68,7 +68,9 @@ mock.module("@/services/transcription/service", () => ({
 	},
 }));
 
-const { useAiSettingsStore } = await import("@/features/ai-generate/store");
+const { useAiSettingsStore, resetServerGroqKeyProbeForTests } = await import(
+	"@/features/ai-generate/store"
+);
 const {
 	ensureTimelineTranscript,
 	computeTimelineAudioHash,
@@ -135,6 +137,9 @@ beforeEach(() => {
 		groqApiKey: "test-key",
 		directorVadGatedTranscriptionEnabled: false,
 	});
+	// The server-key probe is cached module-level (by design - see store.ts);
+	// clear it so each test starts from a fresh, un-probed state.
+	resetServerGroqKeyProbeForTests();
 	testCounter++;
 });
 
@@ -144,12 +149,36 @@ afterEach(() => {
 		transcriptionBackend: "in-browser",
 		groqApiKey: "",
 	});
+	resetServerGroqKeyProbeForTests();
 });
 
 function stubFetch(impl: typeof fetch) {
 	globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
 		fetchCalls++;
 		return impl(...args);
+	}) as typeof fetch;
+}
+
+/**
+ * Routes GET /api/transcribe (the server-key probe) to `probeResponse` and
+ * everything else (the actual transcribe POST) to `transcribeImpl`, so a
+ * probe-driven test can control both independently through the one global
+ * `fetch` stub.
+ */
+function stubFetchWithProbe({
+	serverKeyDetected,
+	transcribeImpl,
+}: {
+	serverKeyDetected: boolean;
+	transcribeImpl: typeof fetch;
+}) {
+	globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+		fetchCalls++;
+		const init = args[1];
+		if (!init || init.method === undefined || init.method === "GET") {
+			return Response.json({ groqServerKey: serverKeyDetected });
+		}
+		return transcribeImpl(...args);
 	}) as typeof fetch;
 }
 
@@ -294,6 +323,100 @@ describe("ensureTimelineTranscript - cloud failure falls back to local (T16.3 G6
 		expect(fetchCalls).toBe(0);
 		expect(localTranscribeCalls).toBe(1);
 		expect(result.segments).toEqual([{ start: 0, end: 1, text: "local ok" }]);
+	});
+});
+
+/**
+ * Round 21 groundwork: a server-side GROQ_API_KEY lets cloud transcription
+ * run even when the user never pasted their own key. `shouldAttemptCloudTranscription`
+ * (store.ts) probes GET /api/transcribe once and caches the result; these
+ * tests drive that probe through the real orchestration in `transcript-cache.ts`.
+ */
+describe("ensureTimelineTranscript - server-key probe gates cloud (Round 21)", () => {
+	test("no device-local key, server reports one: cloud is attempted", async () => {
+		useAiSettingsStore.setState({ transcriptionBackend: "cloud", groqApiKey: "" });
+		stubFetchWithProbe({
+			serverKeyDetected: true,
+			transcribeImpl: async () =>
+				Response.json({
+					text: "cloud via server key",
+					language: "english",
+					segments: [{ start: 0, end: 1, text: "cloud via server key" }],
+				}),
+		});
+		const editor = makeFakeEditor({
+			projectId: `p-${testCounter}-probe-a`,
+			mediaId: "m9",
+		});
+		const result = await ensureTimelineTranscript({ editor: editor as never });
+		expect(localTranscribeCalls).toBe(0);
+		expect(result.segments).toEqual([
+			{ start: 0, end: 1, text: "cloud via server key" },
+		]);
+		// One GET (the probe) + one POST (the transcribe upload).
+		expect(fetchCalls).toBe(2);
+	});
+
+	test("no device-local key, server reports none: existing no-key behavior is preserved (straight to local, no upload attempt)", async () => {
+		useAiSettingsStore.setState({ transcriptionBackend: "cloud", groqApiKey: "" });
+		stubFetchWithProbe({
+			serverKeyDetected: false,
+			transcribeImpl: async () => {
+				throw new Error("must not upload when no key is available anywhere");
+			},
+		});
+		const editor = makeFakeEditor({
+			projectId: `p-${testCounter}-probe-b`,
+			mediaId: "m10",
+		});
+		const result = await ensureTimelineTranscript({ editor: editor as never });
+		expect(localTranscribeCalls).toBe(1);
+		expect(result.segments).toEqual([{ start: 0, end: 1, text: "local ok" }]);
+		// Only the probe GET ran; the transcribe POST was never attempted.
+		expect(fetchCalls).toBe(1);
+	});
+
+	test("backend is local: the probe never fires even with no device-local key", async () => {
+		useAiSettingsStore.setState({ transcriptionBackend: "in-browser", groqApiKey: "" });
+		stubFetchWithProbe({
+			serverKeyDetected: true,
+			transcribeImpl: async () => {
+				throw new Error("must not be called for the local backend");
+			},
+		});
+		const editor = makeFakeEditor({
+			projectId: `p-${testCounter}-probe-c`,
+			mediaId: "m11",
+		});
+		await ensureTimelineTranscript({ editor: editor as never });
+		expect(fetchCalls).toBe(0);
+		expect(localTranscribeCalls).toBe(1);
+	});
+
+	test("a device-local key skips the probe entirely (no extra network call)", async () => {
+		useAiSettingsStore.setState({
+			transcriptionBackend: "cloud",
+			groqApiKey: "test-key",
+		});
+		stubFetchWithProbe({
+			serverKeyDetected: false, // would fail the test if the probe were consulted
+			transcribeImpl: async () =>
+				Response.json({
+					text: "cloud via device key",
+					language: "english",
+					segments: [{ start: 0, end: 1, text: "cloud via device key" }],
+				}),
+		});
+		const editor = makeFakeEditor({
+			projectId: `p-${testCounter}-probe-d`,
+			mediaId: "m12",
+		});
+		const result = await ensureTimelineTranscript({ editor: editor as never });
+		expect(result.segments).toEqual([
+			{ start: 0, end: 1, text: "cloud via device key" },
+		]);
+		// Only the transcribe POST - no GET probe, since the device key short-circuits it.
+		expect(fetchCalls).toBe(1);
 	});
 });
 

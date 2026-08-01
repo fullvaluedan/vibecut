@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
 	Section,
 	SectionContent,
@@ -27,7 +27,11 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { useAiSettingsStore, type AiAuthMode } from "@/features/ai-generate/store";
+import {
+	probeServerGroqKey,
+	useAiSettingsStore,
+	type AiAuthMode,
+} from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { useTranscriptStatusStore } from "@/features/transcription/transcript-cache";
 import { Switch } from "@/components/ui/switch";
@@ -289,11 +293,27 @@ function DirectorVadGatedTranscriptionSection() {
 	);
 }
 
+/** True once the (cached, session-long) probe reports a server Groq key. */
+function useServerGroqKeyDetected(): boolean {
+	const [detected, setDetected] = useState(false);
+	useEffect(() => {
+		let cancelled = false;
+		probeServerGroqKey().then((hasKey) => {
+			if (!cancelled) setDetected(hasKey);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	return detected;
+}
+
 function CloudTranscriptionSection() {
 	const backend = useAiSettingsStore((s) => s.transcriptionBackend);
 	const setBackend = useAiSettingsStore((s) => s.setTranscriptionBackend);
 	const groqApiKey = useAiSettingsStore((s) => s.groqApiKey);
 	const setGroqApiKey = useAiSettingsStore((s) => s.setGroqApiKey);
+	const serverKeyDetected = useServerGroqKeyDetected();
 	const isCloud = backend === "cloud";
 	return (
 		<Section showTopBorder={false}>
@@ -322,6 +342,11 @@ function CloudTranscriptionSection() {
 					long videos. Audio is compressed before upload. More cloud providers
 					can slot in here later.
 				</p>
+				{serverKeyDetected && (
+					<p className="text-muted-foreground text-xs">
+						Server key detected, cloud transcription available without a key.
+					</p>
+				)}
 				{isCloud && (
 					<>
 						<div className="flex flex-col gap-1">
