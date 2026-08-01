@@ -6,6 +6,7 @@ import { useTimelineStore } from "@/timeline/timeline-store";
 import { registerCanceller } from "@/editor/cancel-interaction";
 import {
 	ResizeController,
+	type ResizeClampFeedback,
 	type ResizeConfig,
 } from "@/timeline/controllers/resize-controller";
 import type { GroupResizeUpdate, ResizeSide } from "@/timeline/group-resize";
@@ -16,7 +17,7 @@ import { RippleShiftElementsCommand } from "@/commands/timeline/element/ripple-s
 import type { SnapPoint } from "@/timeline/snapping";
 import type { TimelineElement } from "@/timeline";
 
-export type { ResizeSide };
+export type { ResizeSide, ResizeClampFeedback };
 
 function toElementUpdates(updates: GroupResizeUpdate[]) {
 	return updates.map(({ trackId, elementId, patch }) => ({
@@ -29,11 +30,13 @@ function toElementUpdates(updates: GroupResizeUpdate[]) {
 interface UseTimelineResizeProps {
 	zoomLevel: number;
 	onSnapPointChange?: (snapPoint: SnapPoint | null) => void;
+	onClampReasonChange?: (feedback: ResizeClampFeedback | null) => void;
 }
 
 export function useTimelineResize({
 	zoomLevel,
 	onSnapPointChange,
+	onClampReasonChange,
 }: UseTimelineResizeProps) {
 	const editor = useEditor();
 	const isShiftHeldRef = useShiftKey();
@@ -86,6 +89,7 @@ export function useTimelineResize({
 			editor.command.execute({ command, suppressRipple: true });
 		},
 		onSnapPointChange,
+		onClampReasonChange,
 	};
 	const configRef = useCommittedRef(config);
 	const [controller] = useState(() => new ResizeController({ configRef }));

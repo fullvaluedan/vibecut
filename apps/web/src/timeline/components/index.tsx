@@ -84,7 +84,10 @@ import {
 } from "@/timeline/bookmarks/index";
 import { useEdgeAutoScroll } from "@/timeline/hooks/use-edge-auto-scroll";
 import { useInitialScrollBottom } from "@/timeline/hooks/use-initial-scroll-bottom";
-import { useTimelineResize } from "@/timeline/hooks/use-timeline-resize";
+import {
+	useTimelineResize,
+	type ResizeClampFeedback,
+} from "@/timeline/hooks/use-timeline-resize";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useEditor } from "@/editor/use-editor";
 import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
@@ -169,6 +172,8 @@ function TimelineImpl() {
 	const [currentSnapPoint, setCurrentSnapPoint] = useState<SnapPoint | null>(
 		null,
 	);
+	const [resizeClampFeedback, setResizeClampFeedback] =
+		useState<ResizeClampFeedback | null>(null);
 	const { width: tracksContainerWidth } = useContainerSize({
 		containerRef: tracksContainerRef,
 	});
@@ -198,6 +203,13 @@ function TimelineImpl() {
 		setCurrentSnapPoint(snapPoint);
 	}, []);
 
+	const handleClampReasonChange = useCallback(
+		(feedback: ResizeClampFeedback | null) => {
+			setResizeClampFeedback(feedback);
+		},
+		[],
+	);
+
 	const timelineDuration = timeline.getTotalDuration() || 0;
 	const containerWidth = tracksContainerWidth || FALLBACK_CONTAINER_WIDTH;
 	const minZoomLevel = getTimelineZoomMin({
@@ -220,6 +232,7 @@ function TimelineImpl() {
 	const { isResizing, handleResizeStart } = useTimelineResize({
 		zoomLevel,
 		onSnapPointChange: handleSnapPointChange,
+		onClampReasonChange: handleClampReasonChange,
 	});
 
 	const expandedElementIds = useTimelineStore((s) => s.expandedElementIds);
@@ -607,6 +620,7 @@ function TimelineImpl() {
 										isDragOver={isDragOver}
 										dropTarget={dropTarget}
 										isInsertMode={isInsertMode}
+										resizeClampFeedback={resizeClampFeedback}
 									/>
 								)}
 							</div>
@@ -821,6 +835,7 @@ function TimelineTrackRows({
 	isDragOver,
 	dropTarget,
 	isInsertMode,
+	resizeClampFeedback,
 }: {
 	mainTrackId: string | null;
 	zoomLevel: number;
@@ -841,6 +856,7 @@ function TimelineTrackRows({
 	isDragOver: boolean;
 	dropTarget: DropTarget | null;
 	isInsertMode: boolean;
+	resizeClampFeedback: ResizeClampFeedback | null;
 }) {
 	const timeline = useEditor((e) => e.timeline);
 	const editor = useEditor();
@@ -925,6 +941,7 @@ function TimelineTrackRows({
 										? (dropTarget?.targetElement?.elementId ?? null)
 										: null
 								}
+								resizeClampFeedback={resizeClampFeedback}
 							/>
 						</div>
 					</ContextMenuTrigger>
