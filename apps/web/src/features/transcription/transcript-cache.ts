@@ -22,6 +22,11 @@ import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { needsWordUpgrade } from "./word-upgrade";
+import { computeAudioHash } from "./audio-hash";
+import {
+	getLineageFastPathTranscript,
+	resetTranscriptLineage,
+} from "./lineage";
 
 export interface TranscriptSegmentLite {
 	start: number;
@@ -75,42 +80,13 @@ export const useTranscriptStatusStore = create<TranscriptStatusStore>(
 /**
  * Hash of everything that affects the timeline's WORDS: which media plays
  * when, with what trims. Volume/effects/text don't change the transcript.
+ *
+ * The hash itself lives in `audio-hash.ts` (T16.1) so the transcript lineage can
+ * compute it without importing this whole pipeline; this stays the name every
+ * existing caller uses.
  */
 export function computeTimelineAudioHash(editor: EditorCore): string {
-	const tracks = editor.scenes.getActiveScene().tracks;
-	const parts: string[] = [];
-	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
-		for (const el of track.elements) {
-			const obj = el as {
-				type: string;
-				mediaId?: string;
-				startTime: number;
-				duration: number;
-				trimStart?: number;
-				trimEnd?: number;
-				isSourceAudioEnabled?: boolean;
-			};
-			if (obj.type !== "video" && obj.type !== "audio") continue;
-			if (obj.type === "video" && obj.isSourceAudioEnabled === false) continue;
-			parts.push(
-				[
-					obj.mediaId ?? "",
-					Math.round(obj.startTime),
-					Math.round(obj.duration),
-					Math.round(obj.trimStart ?? 0),
-					Math.round(obj.trimEnd ?? 0),
-				].join(":"),
-			);
-		}
-	}
-	parts.sort();
-	// djb2 over the joined string — collision-safe enough for a local cache.
-	let hash = 5381;
-	const joined = parts.join("|");
-	for (let i = 0; i < joined.length; i++) {
-		hash = ((hash << 5) + hash + joined.charCodeAt(i)) | 0;
-	}
-	return `${parts.length}-${(hash >>> 0).toString(36)}`;
+	return computeAudioHash({ tracks: editor.scenes.getActiveScene().tracks });
 }
 
 function readCache(): Record<string, CacheEntry> {
@@ -241,6 +217,42 @@ export function parseCloudTranscript(payload: unknown): {
 	return { segments, words: words.length > 0 ? words : undefined };
 }
 
+/**
+ * Every REAL transcription re-bases the transcript lineage (T16.1): the fresh
+ * transcript becomes the capture and the removal journal starts empty. That is
+ * also the reset the cannot-explain path needs - we only get here when the journal
+ * could not account for the timeline, so the old journal is meaningless. Wrapped
+ * because the lineage is an optimization: it must never fail a transcription.
+ */
+function captureLineage({
+	editor,
+	hash,
+	segments,
+	words,
+	wordsUnavailable,
+	sourceTotalSec,
+}: {
+	editor: EditorCore;
+	hash: string;
+	segments: readonly TranscriptSegmentLite[];
+	words?: readonly TranscriptWordLite[];
+	wordsUnavailable?: boolean;
+	sourceTotalSec: number;
+}): void {
+	try {
+		resetTranscriptLineage({
+			editor,
+			hash,
+			segments,
+			words: words ?? [],
+			wordsUnavailable,
+			sourceTotalSec,
+		});
+	} catch {
+		// Lineage is best-effort; a failure here must not lose the transcript.
+	}
+}
+
 export async function ensureTimelineTranscript({
 	editor,
 	onProgress,
@@ -279,6 +291,28 @@ export async function ensureTimelineTranscript({
 
 	const hash = computeTimelineAudioHash(editor);
 	const projectId = editor.project.getActive().metadata.id;
+
+	// LINEAGE FAST PATH (T16.1). The hash moved, but if every change since the last
+	// full transcription was a REMOVAL the journal recorded, the surviving words are
+	// derivable - remap them instead of re-transcribing minutes of audio. Anything
+	// the journal cannot explain (new media, a trim, a move) returns null here and
+	// falls through to the real transcription below, which resets the lineage.
+	const fastPath = getLineageFastPathTranscript({ editor, wantWords });
+	if (fastPath) {
+		writeCache(projectId, {
+			hash,
+			segments: fastPath.segments,
+			words: fastPath.words,
+			wordsUnavailable: fastPath.wordsUnavailable,
+			createdAt: Date.now(),
+		});
+		return {
+			segments: fastPath.segments,
+			words: fastPath.words,
+			wordsUnavailable: fastPath.wordsUnavailable,
+			fromCache: true,
+		};
+	}
 
 	const abortable = <T>(promise: Promise<T>): Promise<T> => {
 		if (!signal) return promise;
@@ -408,6 +442,13 @@ export async function ensureTimelineTranscript({
 					words,
 					wordsUnavailable: undefined,
 					createdAt: Date.now(),
+				});
+				captureLineage({
+					editor,
+					hash,
+					segments,
+					words,
+					sourceTotalSec: totalDuration / TICKS_PER_SECOND,
 				});
 				return { segments, words, wordsUnavailable: undefined };
 			} finally {
@@ -551,6 +592,14 @@ export async function ensureTimelineTranscript({
 				words,
 				wordsUnavailable,
 				createdAt: Date.now(),
+			});
+			captureLineage({
+				editor,
+				hash,
+				segments,
+				words,
+				wordsUnavailable,
+				sourceTotalSec: totalDuration / TICKS_PER_SECOND,
 			});
 			return { segments, words, wordsUnavailable };
 		} finally {
