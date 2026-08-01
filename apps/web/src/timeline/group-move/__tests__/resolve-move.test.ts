@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { resolveGroupMove } from "@/timeline/group-move";
-import type { MoveGroup } from "@/timeline/group-move";
-import type { SceneTracks, VideoElement, VideoTrack } from "@/timeline";
+import type { GroupMember, MoveGroup } from "@/timeline/group-move";
+import type {
+	AudioElement,
+	AudioTrack,
+	SceneTracks,
+	VideoElement,
+	VideoTrack,
+} from "@/timeline";
 import { mediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 
 // TICKS_PER_SECOND is 120_000 under the test wasm mock; 1 frame at 30fps = 4_000.
@@ -68,6 +74,118 @@ function singleMemberGroup({
 		displayIndex: 0,
 	};
 	return { anchor: member, members: [member] };
+}
+
+function audioElement({
+	id,
+	startTime,
+	duration,
+}: {
+	id: string;
+	startTime: number;
+	duration: number;
+}): AudioElement {
+	return {
+		id,
+		type: "audio",
+		name: id,
+		startTime: mediaTime({ ticks: startTime }),
+		duration: mediaTime({ ticks: duration }),
+		trimStart: ZERO_MEDIA_TIME,
+		trimEnd: ZERO_MEDIA_TIME,
+		sourceType: "upload",
+		mediaId: `media-${id}`,
+	};
+}
+
+/** Tracks fixture with `overlayVideoCount` empty overlay video tracks above
+ * main and `audioCount` empty audio tracks below, for exercising the
+ * new-track budget caps (video and audio) in `resolveNewTrackMove`. */
+function tracksWithSections({
+	overlayVideoCount,
+	audioCount,
+}: {
+	overlayVideoCount: number;
+	audioCount: number;
+}): SceneTracks {
+	const overlay: VideoTrack[] = Array.from(
+		{ length: overlayVideoCount },
+		(_unused, index) => ({
+			id: `ov${index}`,
+			type: "video",
+			name: `Overlay ${index}`,
+			muted: false,
+			hidden: false,
+			elements: [],
+		}),
+	);
+	const audio: AudioTrack[] = Array.from(
+		{ length: audioCount },
+		(_unused, index) => ({
+			id: `a${index}`,
+			type: "audio",
+			name: `Audio ${index}`,
+			muted: false,
+			elements: [],
+		}),
+	);
+	const main: VideoTrack = {
+		id: "main-track",
+		type: "video",
+		name: "Main",
+		muted: false,
+		hidden: false,
+		elements: [],
+	};
+	return { overlay, main, audio };
+}
+
+/** A group member sourced from an existing AUDIO track, for the newTracks
+ * (vertical drag creates fresh lanes) path. */
+function audioTrackMember({
+	trackId,
+	elementId,
+	sectionIndex,
+	overlayVideoCount,
+}: {
+	trackId: string;
+	elementId: string;
+	sectionIndex: number;
+	overlayVideoCount: number;
+}): GroupMember {
+	return {
+		trackId,
+		elementId,
+		elementType: "audio",
+		duration: mediaTime({ ticks: SECOND }),
+		timeOffset: ZERO_MEDIA_TIME,
+		trackSection: "audio",
+		sectionIndex,
+		displayIndex: overlayVideoCount + 1 + sectionIndex,
+	};
+}
+
+/** A group member sourced from an existing OVERLAY video track, for the
+ * newTracks path. */
+function overlayVideoMember({
+	trackId,
+	elementId,
+	sectionIndex,
+}: {
+	trackId: string;
+	elementId: string;
+	sectionIndex: number;
+}): GroupMember {
+	return {
+		trackId,
+		elementId,
+		elementType: "video",
+		duration: mediaTime({ ticks: SECOND }),
+		timeOffset: ZERO_MEDIA_TIME,
+		trackSection: "overlay",
+		sectionIndex,
+		displayIndex: sectionIndex,
+	};
 }
 
 function resolveOnMain({
@@ -155,5 +273,155 @@ describe("resolveGroupMove main-track head gravity (Dan's fork)", () => {
 		});
 		expect(result).not.toBeNull();
 		expect(result?.moves[0]?.newStartTime).toBe(1.5 * SECOND);
+	});
+});
+
+describe("resolveGroupMove new-track budget caps", () => {
+	test("below the AUDIO cap, a vertical drag creates a new audio track per source track", () => {
+		const tracks = tracksWithSections({ overlayVideoCount: 0, audioCount: 2 });
+		const memberA = audioTrackMember({
+			trackId: "a0",
+			elementId: "elA",
+			sectionIndex: 0,
+			overlayVideoCount: 0,
+		});
+		const memberB = audioTrackMember({
+			trackId: "a1",
+			elementId: "elB",
+			sectionIndex: 1,
+			overlayVideoCount: 0,
+		});
+		const group: MoveGroup = { anchor: memberA, members: [memberA, memberB] };
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime: ZERO_MEDIA_TIME,
+			target: {
+				kind: "newTracks",
+				anchorInsertIndex: tracks.overlay.length + 1 + tracks.audio.length,
+				newTrackIds: ["n1", "n2"],
+			},
+		});
+		expect(result).not.toBeNull();
+		expect(result?.createTracks).toHaveLength(2);
+		expect(result?.createTracks.map((t) => t.type)).toEqual(["audio", "audio"]);
+		const targetIds = new Set(result?.moves.map((move) => move.targetTrackId));
+		expect(targetIds.has("a0")).toBe(false);
+		expect(targetIds.has("a1")).toBe(false);
+	});
+
+	test("at the AUDIO cap, the over-budget source keeps its current lane instead of a new one", () => {
+		const tracks = tracksWithSections({ overlayVideoCount: 0, audioCount: 7 });
+		const memberA = audioTrackMember({
+			trackId: "a0",
+			elementId: "elA",
+			sectionIndex: 0,
+			overlayVideoCount: 0,
+		});
+		const memberB = audioTrackMember({
+			trackId: "a1",
+			elementId: "elB",
+			sectionIndex: 1,
+			overlayVideoCount: 0,
+		});
+		const group: MoveGroup = { anchor: memberA, members: [memberA, memberB] };
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime: ZERO_MEDIA_TIME,
+			target: {
+				kind: "newTracks",
+				anchorInsertIndex: tracks.overlay.length + 1 + tracks.audio.length,
+				newTrackIds: ["n1", "n2"],
+			},
+		});
+		expect(result).not.toBeNull();
+		// Only 1 more audio track fits (7 existing + main's video budget is
+		// unrelated); the first member gets it, the second collapses onto its
+		// own already-existing lane rather than spawning a 9th.
+		expect(result?.createTracks).toHaveLength(1);
+		expect(result?.createTracks[0]?.type).toBe("audio");
+		const moveA = result?.moves.find((move) => move.elementId === "elA");
+		const moveB = result?.moves.find((move) => move.elementId === "elB");
+		expect(moveA?.targetTrackId).not.toBe("a0");
+		expect(moveB?.targetTrackId).toBe("a1");
+	});
+
+	test("below the VIDEO cap, a vertical drag creates a new overlay video track per source track", () => {
+		const tracks = tracksWithSections({ overlayVideoCount: 2, audioCount: 0 });
+		const memberA = overlayVideoMember({
+			trackId: "ov0",
+			elementId: "elA",
+			sectionIndex: 0,
+		});
+		const memberB = overlayVideoMember({
+			trackId: "ov1",
+			elementId: "elB",
+			sectionIndex: 1,
+		});
+		const group: MoveGroup = { anchor: memberA, members: [memberA, memberB] };
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime: ZERO_MEDIA_TIME,
+			target: { kind: "newTracks", anchorInsertIndex: 0, newTrackIds: ["n1", "n2"] },
+		});
+		expect(result).not.toBeNull();
+		expect(result?.createTracks).toHaveLength(2);
+		expect(result?.createTracks.map((t) => t.type)).toEqual(["video", "video"]);
+	});
+
+	test("at the VIDEO cap, the over-budget source keeps its current lane instead of a new one", () => {
+		// main (1) + 6 overlay = 7, budget 1: only room for one more video track.
+		const tracks = tracksWithSections({ overlayVideoCount: 6, audioCount: 0 });
+		const memberA = overlayVideoMember({
+			trackId: "ov0",
+			elementId: "elA",
+			sectionIndex: 0,
+		});
+		const memberB = overlayVideoMember({
+			trackId: "ov1",
+			elementId: "elB",
+			sectionIndex: 1,
+		});
+		const group: MoveGroup = { anchor: memberA, members: [memberA, memberB] };
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime: ZERO_MEDIA_TIME,
+			target: { kind: "newTracks", anchorInsertIndex: 0, newTrackIds: ["n1", "n2"] },
+		});
+		expect(result).not.toBeNull();
+		expect(result?.createTracks).toHaveLength(1);
+		const moveA = result?.moves.find((move) => move.elementId === "elA");
+		const moveB = result?.moves.find((move) => move.elementId === "elB");
+		expect(moveA?.targetTrackId).not.toBe("ov0");
+		expect(moveB?.targetTrackId).toBe("ov1");
+	});
+
+	test("a mixed video+audio group never creates new tracks (both budgets moot)", () => {
+		const tracks = tracksWithSections({ overlayVideoCount: 2, audioCount: 2 });
+		const videoMember = overlayVideoMember({
+			trackId: "ov0",
+			elementId: "elVideo",
+			sectionIndex: 0,
+		});
+		const audioMember = audioTrackMember({
+			trackId: "a0",
+			elementId: "elAudio",
+			sectionIndex: 0,
+			overlayVideoCount: 2,
+		});
+		const group: MoveGroup = {
+			anchor: videoMember,
+			members: [videoMember, audioMember],
+		};
+		const result = resolveGroupMove({
+			group,
+			tracks,
+			anchorStartTime: ZERO_MEDIA_TIME,
+			target: { kind: "newTracks", anchorInsertIndex: 0, newTrackIds: ["n1", "n2"] },
+		});
+		expect(result).toBeNull();
 	});
 });
