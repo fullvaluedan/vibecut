@@ -180,6 +180,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * True for a fetch() call that never reached a server at all (offline, DNS,
+ * TLS) - a plain browser TypeError, not an HTTP response. Distinguished from
+ * an HTTP failure so the message says "check your connection" instead of
+ * repeating a status code that was never returned (T16.3 G6).
+ */
+function isNetworkFetchError(error: unknown): boolean {
+	return error instanceof TypeError && /fetch/i.test(error.message);
+}
+
+/**
+ * Turn a caught cloud-transcription error into a plain-language Error. The
+ * /api/transcribe route already returns a friendly `error` string keyed off
+ * the real Groq status (see route.ts + providers/groq.ts), so most errors
+ * arrive here already actionable; this only has to handle the request never
+ * reaching the route at all.
+ */
+function describeCloudTranscribeFailure(error: unknown): Error {
+	if (isNetworkFetchError(error)) {
+		return new Error(
+			"Could not reach the transcription service - check your internet connection.",
+		);
+	}
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
  * Parse the /api/transcribe response (a normalized TranscriptionResult) into the
  * cache's lite shape, dropping malformed entries. The route already normalized
  * it; this re-validates at the boundary and keeps only the fields we cache.
@@ -385,6 +411,16 @@ export async function ensureTimelineTranscript({
 		// instead of decoding + running Whisper in the browser. Fast, accurate,
 		// and always word-level (re-arms the Director's word detectors), so
 		// `wantWords` is always satisfied and `wordsUnavailable` never trips.
+		//
+		// GRACEFUL FALLBACK (T16.3 G6 reopen): a cloud failure of ANY kind (bad
+		// key, rate limit, oversized upload, offline, Groq down) must not dead-end
+		// the transcript - it falls through to the local in-browser path below
+		// instead of throwing. `cloudError` carries the plain-language reason so
+		// the fallback's status line can say why, and so a local failure too can
+		// report both instead of just "the fallback also broke." This can only
+		// run ONE cloud attempt then ONE local attempt per call - there is no
+		// retry loop.
+		let cloudError: Error | null = null;
 		const aiSettings = useAiSettingsStore.getState();
 		if (aiSettings.transcriptionBackend === "cloud" && aiSettings.groqApiKey) {
 			const startedAt = Date.now();
@@ -413,20 +449,29 @@ export async function ensureTimelineTranscript({
 				};
 				// Refuse an oversized upload instead of letting Groq 413. Only the raw
 				// WAV fallback on long content can reach this; a compressed blob is
-				// single-digit MB. Fail with an actionable message (points at the
-				// in-browser backend) rather than a raw "413 Request Entity Too Large".
+				// single-digit MB. This now falls back to the in-browser backend
+				// automatically (below) instead of just telling the user to switch.
 				const sizeCheck = checkTranscribeUploadSize(upload.blob.size);
 				if (!sizeCheck.ok) throw new Error(sizeCheck.error);
 				const form = new FormData();
 				form.append("audio", upload.blob, upload.filename);
-				const response = await abortable(
-					fetch("/api/transcribe", {
-						method: "POST",
-						headers: buildTranscribeHeaders(),
-						body: form,
-						signal,
-					}),
-				);
+				// Deliberately NOT signal-gated: this run may be shared with a JOINED
+				// caller (see the join logic above `run` is invoked from) whose own
+				// signal has nothing to do with this one. Wiring this fetch to
+				// whichever caller happened to START the run meant that caller
+				// unmounting (a tab switch, or React StrictMode's dev-only double
+				// mount/unmount/remount) killed the upload for every joiner too, with
+				// a bare "Cancelled" that had nothing to do with Groq or the key
+				// (T16.3 G6 reopen - the most likely cause of the reported "FAILED
+				// OUTRIGHT" with no actionable message). Each caller still bails on
+				// its OWN wait early via its own `abortable(thisRun)`/`abortable(current)`
+				// wrap further down; only the underlying request itself is no longer
+				// tied to any single caller's lifetime.
+				const response = await fetch("/api/transcribe", {
+					method: "POST",
+					headers: buildTranscribeHeaders(),
+					body: form,
+				});
 				if (!response.ok) {
 					const detail: unknown = await response.json().catch(() => null);
 					const message =
@@ -451,9 +496,15 @@ export async function ensureTimelineTranscript({
 					sourceTotalSec: totalDuration / TICKS_PER_SECOND,
 				});
 				return { segments, words, wordsUnavailable: undefined };
+			} catch (error) {
+				cloudError = describeCloudTranscribeFailure(error);
 			} finally {
 				clearInterval(cloudTicker);
 			}
+			broadcastProgress({
+				phase: "transcribing",
+				detail: `${cloudError.message} - using local transcription...`,
+			});
 		}
 
 		const { samples, sampleRate } = await decodeAudioToFloat32({
@@ -602,6 +653,18 @@ export async function ensureTimelineTranscript({
 				sourceTotalSec: totalDuration / TICKS_PER_SECOND,
 			});
 			return { segments, words, wordsUnavailable };
+		} catch (localError) {
+			// The fallback itself failed too - report BOTH reasons. Without the
+			// cloud reason here this would just look like a fresh, unrelated local
+			// failure and hide that the cloud path ever ran.
+			if (cloudError) {
+				const localMessage =
+					localError instanceof Error ? localError.message : String(localError);
+				throw new Error(
+					`${cloudError.message} Local transcription also failed: ${localMessage}`,
+				);
+			}
+			throw localError;
 		} finally {
 			stopTicker();
 		}
