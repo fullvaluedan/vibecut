@@ -2,6 +2,85 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 18: parity quick wins + VibeCut home verification (2026-08-01, T18.6, branch `feat/director-eval`, tip `70cb9fb5`)
+
+Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech TTS muxed over an ffmpeg testsrc video, staged temporarily at `apps/web/public/verify-r18.mp4` for the sandboxed preview pane and deleted afterward (git status confirmed clean). Screenshots were unavailable the whole session (Browser pane not compositing), so verification ran on DOM reads, editor state via `window.__vibeEditor`, and export file readback (ffprobe, frame extraction, volumedetect). Two environment shims, both page-side only, no code edits: requestAnimationFrame mapped to setTimeout (the hidden tab never fires rAF, which otherwise stalls the media-import toast pipeline), and the exported blobs were POSTed to a temporary localhost receiver to reach ffprobe on disk.
+
+### Gates
+- G1 `bun test` apps/web: 2405 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+
+### A. Freeze frame (T18.1) - PASS with one real defect
+- [x] Playhead at 2s, toolbar button: clip splits at exactly 2s, a real captured 1280x720 PNG still (ephemeral asset, kept out of the media bin) is inserted for 3s, downstream video clips shift right 3s, ONE undo reverts the whole batch.
+- [x] Context-menu "Freeze frame" on the clip does the identical thing.
+- [x] Playhead off-clip: toast "Move the playhead over a video clip to freeze it".
+- [x] Export proof: frames at t=3.5 and t=4.9 are the identical source-2.0s frame (testsrc digit "2", frozen gradient bar); video resumes correctly after the still.
+- [ ] **NEW BUG (reopens T18.1): the linked separated audio does NOT shift.** The video track ripples +3s but the audio clip stays at its old position, so every word after the freeze plays 3s early relative to picture, and no desync badge appears. Confirmed in live state (audio track untouched by the freeze batch) and audible/measurable in the exported file. `buildFreezeFrameBatch` ripples only the target track.
+
+### B. Reverse (T18.1 + T18.2 trim fix) - PASS
+- [x] Speed tab Reverse toggle sets retime.reversed on the clip AND its linked audio; Speed field shows 1.00 and disables; the tooltip "Audio is muted while reversed" is on the Reverse row (code-confirmed; hover not reproducible in the automated pane).
+- [x] Audio silent while reversed: resolveEffectiveAudioGain returns 0 for reversed clips, the single choke point shared by preview and export, unit-tested.
+- [x] Split a reversed clip at 2s: frame-continuous at the cut (left half source window [36.07, 38.07] played backward, right half [0, 36.07]; both meet at source 36.07).
+- [x] Reversed trim directions, live-dragged on the real handles: LEFT edge drag ate the source TAIL (trimEnd 2 to 3, trimStart untouched), RIGHT edge drag ate the source HEAD (trimStart 0 to 1, trimEnd untouched). This is the T18.2 fix working in the UI, not just in compute-resize tests.
+- [x] Export proof of backward playback: timeline 14.0 shows source frame 19, timeline 16.0 shows source frame 17 (testsrc counter read from extracted frames).
+- [ ] Backward playback during live SCRUB: preview canvas renders black in this non-compositing pane (WebGL draw loop tied to visibility), so scrubbing visuals are Dan-owed; the export proof above covers the sampling math end to end.
+
+### C. Crop (T18.1) - PASS except keyframability
+- [x] Transform tab Crop group (Left/Top/Right/Bottom %): typing Left 10 commits crop.left 0.1 live, one undo clears it.
+- [x] Crop button toggles handle mode: exactly 4 edge-handle buttons plus a dim-mask SVG overlay appear (the transform handles are replaced); Escape exits the mode (overlay gone).
+- [x] The drag pipeline (previewElementCrop live layer, commitPreview as ONE undoable command, undo restores) verified through the same manager calls the handles drive; the raw on-canvas pointer gesture could not be exercised because screenToCanvas depends on the degenerate hidden-pane viewport (Dan-owed feel check).
+- [x] Old project loads uncropped: the 8-clip round-16 project opens with crop null on every element, no errors; also unit-tested (crop-serialization).
+- [ ] **Spec gap (reopens T18.1 alongside the freeze bug): crop is not keyframable.** The UI says "Crop applies before Motion's scale/position. Not keyframable yet." while the roadmap line says keyframable. Implement or have Dan descope.
+
+### D. Speed curves (T18.2) - PASS
+- [x] All 7 chips present. Each preset applied a distinct curve and retimed the 38.07s clip correctly: Montage 30.45s (6 pts), Hero 45.32s (5 pts), Bullet 15.60s (5 pts), Jump Cut 14.45s (8 pts), Flash In 27.69s (3 pts), Flash Out 27.69s (3 pts), Custom 38.07s editable 3-point flat curve.
+- [x] Graph point drag: middle point pulled up committed rate 2.73 at t=0.5, duration 38.07s to 20.43s, one undo step. The graph tracks the pointer live; the timeline duration commits on release.
+- [x] Reverse while a curve is active clears the curve (retime becomes rate 1 reversed, duration back to 38.07s).
+- [x] Audio follows: the linked audio element carries the identical curve points in state; the renderer-sync unit test (curve-renderer-sync.test.ts) pins preview-vs-export sampling at inflections, per-frame, monotonic.
+- [x] Export proof: the Bullet-curved tail shows source frame 26 at timeline 25 (2s into the segment), i.e. compression is real in the file.
+- [ ] Audible pitch behavior (curve + Change pitch toggle) needs speakers: Dan-owed.
+
+### E. Audio fade handles (T18.3) - PASS
+- [x] Top-left corner handle drag inward committed fadeInSec 2.0 (matches drag px at current zoom); top-right set fadeOutSec; the fade curve overlay renders on the clip.
+- [x] One undo per drag: undo reverted only the fade-out drag (fade-in stayed 2), redo restored it.
+- [x] Audio tab numeric fields mirror the handles (read 2/2 after the drags); typing a value commits on blur.
+- [x] Cannot cross: fade-in 40 on the 38.07s clip clamped to the full duration and forced fade-out to 0 (the edited side has priority, resolveFadePair).
+- [x] Trim shorter than fades: effective values clamp at read time via clampFadesToDuration (raw params kept, unit-tested), verified with a live 4s trim.
+- [x] Export proof: first exported second measures mean -33.0 dB vs -20.6 dB steady state, the 5s fade-in ramp is in the mixdown. (The tail window was silent source audio, so the fade-out ramp was not measurable on this clip.)
+
+### F. Export options (T18.4) - PASS
+- [x] Popover: resolution picker Project size (1280x720) / 2160p / 1080p / 720p with a live "Output: WxH" label (3840x2160 and 1280x720 both observed).
+- [x] Bitrate labels scale with resolution: 2/6/12/24 Mbps at 720p, 18/54/108/216 Mbps at 2160p (9x pixels, 9x bitrate).
+- [x] "Also export captions (.srt)" appears when a transcript exists AND still appears after deleting words (lineage-aware follow-up).
+- [x] Export at 1080p (non-native) with SRT checked: exactly two files (New project.mp4 1920x1080@30 h264+aac, duration 38.06s; New project.srt). The SRT reflects the cut: the deleted word is gone, its segment shrank instead of dropping (round-16 fix holds through the export dialog), and the surviving second segment's timecode matches where that word's audio actually plays on the edited timeline.
+- [x] The composite project (freeze + reverse + curve + fades) exported with all four effects verifiably present in the file (see sections A/B/D/E export-proof lines).
+- Note: the in-browser Whisper transcript of this synthetic TTS clip was a 4-word hallucination ("Thank you. Thank you."), enough to exercise the SRT flow but not a rich remap test; the heavy SRT remap coverage remains round 16's live pass plus unit tests.
+
+### G. VibeCut home + wordmark (T18.5) - PASS
+- [x] /projects shows the VibeCut wordmark (own SVG, /logos/vibecut/wordmark.svg, weight-900 text, invert/dark:invert-0 theme handling) and the hero tiles: New project / AI Cut / Edit by transcript / Auto captions, each with a description.
+- [x] Deep links: AI Cut opened the newest project with the Director dock active ("AI CUT: review and cut the whole video" panel) and the URL stripped to /editor/id; Edit by transcript opened with the Transcript panel showing; both live-verified.
+- [x] Favicon files replaced in the T18.5 commit (b3b1f6eb); /favicon.ico serves the new 827-byte mark.
+- [x] Footer says VibeCut (component text: "VibeCut", current-year copyright).
+- [ ] Disabled-tiles-with-hint on a profile with zero projects: not reproducible live without deleting Dan's existing projects; deriveHeroTileStates and the deep-link param logic are unit-tested (hero-tiles.test.ts, deep-link-open.test.ts) in the passing suite. Dan-owed only if he cares to see the empty state.
+- [ ] Dark/light visual readability: markup handles both themes but no screenshot was possible this session.
+
+### G6 scores (round 18)
+| Feature | Functionality | Quality | Verdict |
+|---|---|---|---|
+| T18.1 freeze + reverse + crop | 7 | 7 | REOPENED: freeze linked-audio desync; crop not keyframable |
+| T18.2 speed curves | 9 | 9 | DONE |
+| T18.3 audio fade handles | 9 | 9 | DONE |
+| T18.4 export options | 9 | 9 | DONE |
+| T18.5 VibeCut home + wordmark | 9 | 9 | DONE |
+
+### Left for Dan (round 18)
+- [ ] Real-footage freeze/reverse/crop FEEL: scrub over a freeze still, drag the 4 crop handles on canvas, reverse a real clip and listen for the mute, judge the cut texture at a reversed split. The automated pane cannot composite the preview canvas, so all visual-feel checks here are yours.
+- [ ] Export playback on your machine: play an exported MP4 end to end with sound (this pass verified the file contents via ffprobe and extracted frames, not a human viewing).
+- [ ] Speed curve pitch: play a curved clip with Change pitch on and off and confirm the audio chipmunks vs stays natural.
+- [ ] Hero tiles empty state: on a fresh profile (no projects) the three AI tiles should render disabled with a hint until the first project exists.
+- [ ] The freeze-frame desync fix, once landed, needs a re-listen on real footage (dialog before AND after a freeze staying in lip sync).
+
 ## Round 16: transcript x Director hands-on verification (2026-08-01, T16.4, branch `feat/director-eval`)
 
 Agent hands-on pass on real speech media (no Dan's own footage was available in this environment). Media: since no bundled speech fixture exists in the repo and synthetic tone audio (testsrc + sine) produces no real transcript, speech was generated with Windows PowerShell `System.Speech` TTS and muxed over an ffmpeg `testsrc` video (11s clip, 31-word sentence). Both browser panes used: the sandboxed preview pane could not reach any localhost port other than the declared dev server, so file injection into the Assets panel had to go through the Chrome extension bridge (`claude-in-chrome`) with the video staged at `apps/web/public/verify-speech-test.mp4` temporarily and deleted afterward (confirmed clean via `git status`).

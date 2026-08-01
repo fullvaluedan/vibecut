@@ -486,6 +486,7 @@ features per G6, evidence attached.
 All tasks parallel in worktrees except T18.6. May overlap Round 17.
 
 ### T18.1 Freeze frame + Reverse + Crop (Sonnet, M-L)
+Status: MERGED. G6 RATED 2026-08-01 (T18.6, tip `70cb9fb5`): **7/10 functionality, 7/10 quality. REOPENED** with two defects. (1) Freeze frame does not shift the linked separated audio: the video track ripples right by 3s but the audio clip stays put, so everything after the still plays 3s out of sync, silently (no desync badge appears either). Verified live and in an exported file. Since every normal project auto-separates audio, this hits the default path. Fix direction: the freeze batch (features/editing/freeze-frame.ts buildFreezeFrameBatch) ripples only the target track via RippleShiftAtCommand; it needs to shift the linked audio (and arguably other downstream tracks) the way magnet ripple already does. (2) Crop ships non-keyframable with an in-UI note "Not keyframable yet" while this spec line says keyframable; implement or have Dan descope it explicitly. Everything else in the set passed hands-on: freeze via toolbar AND context menu splits at the playhead, inserts a real captured 1280x720 still (frame-exact in the export, held for the full 3s), one undo reverts all, off-clip click toasts correctly; reverse toggles per-clip, disables the speed field at 1x, propagates to linked audio, mutes audio through the single gain choke point, splits frame-continuously, and the T18.2 reversed-trim fix was verified live in both directions (left edge eats source TAIL trimEnd 2 to 3, right edge eats source HEAD trimStart 0 to 1); reversed export sampling proven by extracted frames (timeline 14 shows source 19, timeline 16 shows source 17); crop numeric fields commit live with one undo, the Crop button swaps in exactly 4 DOM handle buttons plus a mask overlay, Escape exits, and an old 8-clip project loads uncropped.
 - Freeze: toolbar + context-menu "Freeze frame" at playhead: split and insert a still
   (CapCut parity); implement as a captured-frame image element OR a rate-0 segment,
   whichever the renderer supports cleanly; the task brief must record the choice and
@@ -496,6 +497,7 @@ All tasks parallel in worktrees except T18.6. May overlap Round 17.
   existing transform handles; keyframable.
 
 ### T18.2 Speed curves (Sonnet, M)
+Status: MERGED. G6 RATED 2026-08-01 (T18.6, tip `70cb9fb5`): **9/10 functionality, 9/10 quality.** Hands-on: all 7 preset chips exist and each one set a distinct curve and changed the timeline clip duration correctly on a 38.07s clip (Montage 30.45s, Hero 45.32s, Bullet 15.60s, Jump Cut 14.45s, Flash In 27.69s, Flash Out 27.69s, Custom back to 38.07s with an editable 3-point flat curve). Dragging the middle graph point up committed rate 2.73 at t=0.5 and re-timed the clip 38.07s to 20.43s as one undoable command (the graph tracks live during the drag; duration commits on release, CapCut-like). Toggling Reverse with a curve active cleared the curve exactly as specced. The curve propagates to the linked separated audio element (verified in state), and the roadmap-required renderer-sync test exists and passes (curve-renderer-sync.test.ts: preview and export resolve identical source times at inflections, per-frame, monotonic). Export evidence: the Bullet-curved tail segment shows source frame 26 at timeline 25 (2s in), i.e. the file really plays the curve. Audible pitch behavior is a Dan-owed speaker check, not scoreable here.
 CapCut presets: Custom, Montage, Hero, Bullet, Jump Cut, Flash In, Flash Out, plus an
 editable curve reusing the existing bezier graph editor. Extends RetimeConfig from
 constant rate to piecewise; audio pitch per existing maintainPitch. Touches retime/,
@@ -503,16 +505,19 @@ renderer sampling, audio-stretch: the brief must include a renderer-sync test
 (exported frames match preview at curve inflections).
 
 ### T18.3 Audio fade handles (Sonnet, M)
+Status: MERGED. G6 RATED 2026-08-01 (T18.6, tip `70cb9fb5`): **9/10 functionality, 9/10 quality.** Hands-on: dragging the top-left corner handle of the waveform clip inward committed fadeInSec 2.0 (matching the drag distance at the current zoom), the top-right handle set fadeOutSec, the fade curve overlay renders, and each drag is exactly one undo step (undo reverted only the fade-out drag, leaving the fade-in intact; redo restored it). The Audio tab numeric fields mirror the handles both ways (read back 2/2 after the drags; typing commits on blur). Handles cannot cross: entering fade-in 40 on a 38.07s clip clamped to the clip duration and forced fade-out to 0 (edited side wins, resolveFadePair semantics). Trim shorter than the stored fades clamps at read time via clampFadesToDuration (raw params preserved by design, unit-tested). Export evidence: the exported file's first second measures mean -33.0 dB against -20.6 dB steady state, i.e. the 5s fade-in ramp is audibly in the mixdown.
 Fade in/out per audio clip (and video-with-audio): corner handles on the waveform
 clip UI + numeric fields in the Audio tab; implemented as volume ramps compatible
 with existing volume keyframes.
 
 ### T18.4 Export options (Haiku, S)
+Status: MERGED. G6 RATED 2026-08-01 (T18.6, tip `70cb9fb5`): **9/10 functionality, 9/10 quality.** Hands-on: the export popover shows the resolution picker (Project size 1280x720 / 2160p / 1080p / 720p) with a live "Output: WxH" label, and the quality tier labels scale with the selected resolution (2/6/12/24 Mbps at 720p becomes 18/54/108/216 Mbps at 2160p, tracking the 9x pixel count). "Also export captions (.srt)" appears when a transcript exists AND still appears after deleting words from the transcript (the lineage-aware follow-up). Exporting at 1080p (non-native for the 720p project) with SRT checked produced exactly two files: a 1920x1080@30 h264 MP4 (duration 38.06s, matching the timeline) and an SRT that reflects the cut (the deleted word is absent, its segment shrank instead of dropping, and the second segment's timecode lands where that word's audio actually plays). The full effects gauntlet exported correctly in the same file: the freeze still is pixel-identical for its whole 3s window, the reversed segment plays source frames backward, the curved segment is compressed, and the fade-in ramp is measurable in the audio.
 Resolution picker (project size + 1080p/720p/4K scaled), unified bitrate/quality,
 "Export SRT alongside" checkbox reusing the existing SRT writers. No new encoder
 work.
 
 ### T18.5 VibeCut home + wordmark (Sonnet, M)
+Status: MERGED. G6 RATED 2026-08-01 (T18.6, tip `70cb9fb5`): **9/10 functionality, 9/10 quality.** Hands-on: /projects renders the VibeCut wordmark (own SVG at /logos/vibecut/wordmark.svg, weight-900 text, theme-aware via invert classes), the four hero tiles with descriptions, and the project grid. Deep links verified live: the AI Cut tile opened the newest project with the Director dock active and the URL param stripped to a clean /editor/id; Edit by transcript landed with the Transcript panel open, also stripped. The favicon set was replaced in the T18.5 commit (b3b1f6eb). The footer component says VibeCut with the current-year copyright. Tiles are enabled with projects present; the disabled-with-hint empty state is covered by hero-tiles.test.ts and deep-link-open.test.ts in the passing suite (an empty profile was not reproducible live without deleting Dan's projects; Dan-owed). Visual dark/light readability could not be screenshotted in this environment (pane not compositing) but both themes are handled in markup.
 1. `/projects` becomes the VibeCut home: keep the project grid, add a hero row of
    entry tiles CapCut-style: "New project", "AI Cut" (opens newest project +
    Director), "Edit by transcript" (opens transcript tab), "Auto captions". Simple
@@ -527,6 +532,7 @@ work.
 ### T18.6 Round 18 verification + G6 rating (Sonnet, S)
 Browser pass over every 18.x feature; export a real project at a non-native
 resolution; G6 scores.
+Status: DONE 2026-08-01 (tip `70cb9fb5`). Gates: apps/web 2405 pass 0 fail, hf-bridge 210 pass 0 fail, tsc 0 errors. Full hands-on pass in the dev preview on a 38.07s TTS-over-testsrc clip; export verified by pulling the produced MP4+SRT out of the browser and reading them back with ffprobe, extracted frames, and volumedetect. Result: T18.2 / T18.3 / T18.4 / T18.5 all at 9/9; T18.1 at 7/7 and REOPENED (freeze-frame linked-audio desync, crop not keyframable; exact defect notes on the T18.1 status line). Round 18 is NOT done until T18.1 re-scores at 9/9. Environment notes and the Dan-owed list live in docs/TO-VERIFY.md round 18 section.
 
 ## 8. Round 19 - Parity big rocks (each needs its own Fable plan before build)
 
