@@ -22,8 +22,15 @@ mock.module("@/core", () => ({
 	},
 }));
 
-const { planAssistantTurn, canUndoAssistantApply, buildAssistantUndoHandle } =
-	await import("../executor");
+const {
+	planAssistantTurn,
+	canUndoAssistantApply,
+	buildAssistantUndoHandle,
+	isAdditiveOnlyTurn,
+	earliestInsertStart,
+	showInsertedElement,
+} = await import("../executor");
+const { deriveAccent, pickForeground } = await import("../color-utils");
 const { validateTurn } = await import("../tools");
 const { SelectClipsCommand } = await import("../select-clips-command");
 const { RemoveRangesCommand } = await import(
@@ -798,5 +805,218 @@ describe("frame snapping matches the validators", () => {
 		// 30fps: one frame is 4000 ticks, so both edges sit on a frame boundary.
 		expect(range.start % 4000).toBe(0);
 		expect(range.end % 4000).toBe(0);
+	});
+});
+
+describe("add_motion_template: smart defaults (T17.4)", () => {
+	test("a gap the model left (no accent, no color, no font) is filled from the project background", () => {
+		const snapshot = threeClipSnapshot({ background: "#ffffff" });
+		const result = plan(
+			[
+				{
+					id: "1",
+					name: "add_motion_template",
+					args: {
+						templateId: "kinetic-title",
+						atSec: 30,
+						durationSec: 4,
+						variables: { text: "TITLE" },
+					},
+				},
+			],
+			snapshot,
+		);
+		const [command] = result.commands;
+		const built = peek<{ element: { params: { color: string; fontFamily?: string } } }>(
+			command,
+		);
+		expect(built.element.params.color).toBe(pickForeground("#ffffff"));
+	});
+
+	test("a variable the model DID set always wins over the default", () => {
+		const snapshot = threeClipSnapshot({ background: "#ffffff" });
+		const result = plan(
+			[
+				{
+					id: "1",
+					name: "add_motion_template",
+					args: {
+						templateId: "lower-third",
+						atSec: 30,
+						durationSec: 4,
+						variables: { title: "Dan", accent: "#123456" },
+					},
+				},
+			],
+			snapshot,
+		);
+		const [command] = result.commands;
+		const built = peek<{
+			element: { params: { "background.color": string } };
+		}>(command);
+		expect(built.element.params["background.color"]).toBe("#123456");
+	});
+
+	test("an unset accent is filled from the project palette instead of the fixed look accent", () => {
+		const snapshot = threeClipSnapshot({ background: "#000000" });
+		const result = plan(
+			[
+				{
+					id: "1",
+					name: "add_motion_template",
+					args: {
+						templateId: "lower-third",
+						atSec: 30,
+						durationSec: 4,
+						variables: { title: "Dan" },
+					},
+				},
+			],
+			snapshot,
+		);
+		const [command] = result.commands;
+		const built = peek<{
+			element: { params: { "background.color": string } };
+		}>(command);
+		expect(built.element.params["background.color"]).toBe(deriveAccent("#000000"));
+	});
+});
+
+describe("show-me mode: the additive-only predicate (T17.4)", () => {
+	test("a turn of only add_text / add_motion_template calls is additive-only", () => {
+		const calls: ValidatedToolCall[] = [
+			{
+				id: "1",
+				name: "add_text",
+				args: { text: "Hi", atSec: 5, durationSec: 3 },
+			},
+			{
+				id: "2",
+				name: "add_motion_template",
+				args: {
+					templateId: "kinetic-title",
+					atSec: 10,
+					durationSec: 4,
+					variables: {},
+				},
+			},
+		];
+		expect(isAdditiveOnlyTurn(calls)).toBe(true);
+	});
+
+	test("any destructive or other call disqualifies the whole turn", () => {
+		const calls: ValidatedToolCall[] = [
+			{ id: "1", name: "add_text", args: { text: "Hi", atSec: 5, durationSec: 3 } },
+			{ id: "2", name: "delete_clip", args: { clipId: "a" } },
+		];
+		expect(isAdditiveOnlyTurn(calls)).toBe(false);
+	});
+
+	test("select_clips alone does not count as additive-only either", () => {
+		const calls: ValidatedToolCall[] = [
+			{ id: "1", name: "select_clips", args: { clipIds: ["a"] } },
+		];
+		expect(isAdditiveOnlyTurn(calls)).toBe(false);
+	});
+
+	test("an empty turn is not additive-only: there is nothing to show", () => {
+		expect(isAdditiveOnlyTurn([])).toBe(false);
+	});
+
+	test("earliestInsertStart picks the smallest atSec among the insert calls", () => {
+		const snapshot = threeClipSnapshot({ fps: FPS });
+		const calls: ValidatedToolCall[] = [
+			{
+				id: "1",
+				name: "add_motion_template",
+				args: { templateId: "kinetic-title", atSec: 10, durationSec: 4, variables: {} },
+			},
+			{ id: "2", name: "add_text", args: { text: "Hi", atSec: 4, durationSec: 3 } },
+		];
+		expect(earliestInsertStart({ calls, snapshot })).toBe(sec(4));
+	});
+
+	test("earliestInsertStart is null when nothing in the turn inserts anything", () => {
+		const snapshot = threeClipSnapshot({ fps: FPS });
+		const calls: ValidatedToolCall[] = [{ id: "1", name: "delete_clip", args: { clipId: "a" } }];
+		expect(earliestInsertStart({ calls, snapshot })).toBeNull();
+	});
+});
+
+describe("show-me mode: the post-apply hook", () => {
+	function playbackStub() {
+		const log: string[] = [];
+		const seeks: MediaTime[] = [];
+		return {
+			log,
+			seeks,
+			playback: {
+				seek: ({ time }: { time: MediaTime }) => {
+					log.push("seek");
+					seeks.push(time);
+				},
+				pause: () => log.push("pause"),
+			},
+		};
+	}
+
+	test("seeks and pauses on an additive-only turn", () => {
+		const snapshot = threeClipSnapshot({ fps: FPS });
+		const stub = playbackStub();
+		const editor = {
+			command: {
+				execute: (({ command }: { command: unknown }) => command) as never,
+				undo: () => undefined,
+				peekUndoCommand: () => null,
+			},
+			playback: stub.playback,
+		};
+		showInsertedElement({
+			calls: [{ id: "1", name: "add_text", args: { text: "Hi", atSec: 4, durationSec: 3 } }],
+			snapshot,
+			editor,
+		});
+		expect(stub.log).toEqual(["seek", "pause"]);
+		expect(stub.seeks).toEqual([sec(4)]);
+	});
+
+	test("does nothing for a destructive or mixed turn", () => {
+		const snapshot = threeClipSnapshot({ fps: FPS });
+		const stub = playbackStub();
+		const editor = {
+			command: {
+				execute: (({ command }: { command: unknown }) => command) as never,
+				undo: () => undefined,
+				peekUndoCommand: () => null,
+			},
+			playback: stub.playback,
+		};
+		showInsertedElement({
+			calls: [
+				{ id: "1", name: "add_text", args: { text: "Hi", atSec: 4, durationSec: 3 } },
+				{ id: "2", name: "delete_clip", args: { clipId: "a" } },
+			],
+			snapshot,
+			editor,
+		});
+		expect(stub.log).toEqual([]);
+	});
+
+	test("is a no-op when the editor has no playback stub (existing tests keep working)", () => {
+		const snapshot = threeClipSnapshot({ fps: FPS });
+		const editor = {
+			command: {
+				execute: (({ command }: { command: unknown }) => command) as never,
+				undo: () => undefined,
+				peekUndoCommand: () => null,
+			},
+		};
+		expect(() =>
+			showInsertedElement({
+				calls: [{ id: "1", name: "add_text", args: { text: "Hi", atSec: 4, durationSec: 3 } }],
+				snapshot,
+				editor,
+			}),
+		).not.toThrow();
 	});
 });

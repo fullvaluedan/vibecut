@@ -220,7 +220,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "callout-pill",
 		name: "Callout pill",
-		description: "Short phrase in a corner pill",
+		description:
+			"Short phrase in a corner pill - a quick reaction, label, or single-word callout over footage",
 		defaultDurationSec: 3,
 		durationRange: { min: 1, max: 10 },
 		fields: [
@@ -277,7 +278,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "kinetic-title",
 		name: "Kinetic title",
-		description: "Big pop-in title",
+		description: "Big pop-in title - a punchy opener or section headline, one short phrase",
 		defaultDurationSec: 3.5,
 		durationRange: { min: 1, max: 10 },
 		fields: [
@@ -315,7 +316,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "lower-third",
 		name: "Lower third",
-		description: "Name + subtitle bars",
+		description:
+			"Name + subtitle bars - name/title introductions during talking-head footage",
 		defaultDurationSec: 4,
 		durationRange: { min: 1.5, max: 12 },
 		fields: [
@@ -401,7 +403,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "number-pop",
 		name: "Number pop",
-		description: "Huge stat + label",
+		description:
+			"Huge stat + label - one statistic or metric that needs to hit hard (a percentage, a count)",
 		defaultDurationSec: 3,
 		durationRange: { min: 1, max: 10 },
 		fields: [
@@ -456,7 +459,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "section-break",
 		name: "Section break",
-		description: "Accent bar chapter card",
+		description:
+			"Accent bar chapter card - a divider between chapters or segments of a longer video",
 		defaultDurationSec: 2.5,
 		durationRange: { min: 1, max: 8 },
 		fields: [
@@ -545,7 +549,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "title-subtitle",
 		name: "Title + subtitle",
-		description: "Centered title with a smaller line under it",
+		description:
+			"Centered title with a smaller line under it - a headline plus one line of supporting detail",
 		defaultDurationSec: 3.5,
 		durationRange: { min: 1, max: 12 },
 		fields: [
@@ -608,7 +613,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "quote-card",
 		name: "Quote card",
-		description: "Big quote with attribution pill",
+		description: "Big quote with attribution pill - a testimonial or notable quote and its author",
 		defaultDurationSec: 4.5,
 		durationRange: { min: 2, max: 15 },
 		fields: [
@@ -677,7 +682,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "social-handle",
 		name: "Social handle",
-		description: "@handle pill, bottom-left",
+		description:
+			"@handle pill, bottom-left - a persistent creator credit or follow prompt",
 		defaultDurationSec: 4,
 		durationRange: { min: 1.5, max: 20 },
 		fields: [
@@ -721,7 +727,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "stat-bar",
 		name: "Stat bar",
-		description: "Label whose bar grows in behind it",
+		description:
+			"Label whose bar grows in behind it - a short claim or stat with a growing accent bar for emphasis",
 		defaultDurationSec: 3.5,
 		durationRange: { min: 1.5, max: 10 },
 		fields: [
@@ -775,7 +782,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "bullet-list",
 		name: "Bullet list",
-		description: "Three lines revealed one by one",
+		description:
+			"Three lines revealed one by one - a short list of points, steps, or features",
 		defaultDurationSec: 5,
 		durationRange: { min: 2, max: 20 },
 		fields: [
@@ -831,7 +839,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "location-tag",
 		name: "Location tag",
-		description: "Place pill, top-left",
+		description: "Place pill, top-left - where the footage was shot or is set",
 		defaultDurationSec: 3.5,
 		durationRange: { min: 1.5, max: 15 },
 		fields: [
@@ -880,7 +888,8 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "banner",
 		name: "Banner",
-		description: "Full-width strip along the bottom",
+		description:
+			"Full-width strip along the bottom - a news-ticker-style announcement or alert line",
 		defaultDurationSec: 4,
 		durationRange: { min: 1.5, max: 20 },
 		fields: [
@@ -931,7 +940,7 @@ export const MOTION_TEMPLATES: MotionTemplate[] = [
 	{
 		id: "end-card",
 		name: "End card",
-		description: "Outro: thanks + subscribe pill",
+		description: "Outro: thanks + subscribe pill - a closing screen with a call to action",
 		defaultDurationSec: 5,
 		durationRange: { min: 2, max: 15 },
 		fields: [
