@@ -40,6 +40,52 @@ export {
 } from "./prompt";
 
 export {
+	buildAssistantUndoHandle,
+	canUndoAssistantApply,
+	defaultTemplateLook,
+	executeAssistantTurn,
+	planAssistantTurn,
+} from "./executor";
+export type {
+	AssistantApplyResult,
+	AssistantExecutorEditor,
+	AssistantTemplateLook,
+	AssistantTurnPlan,
+	AssistantUndoHandle,
+	PlannedAssistantOp,
+} from "./executor";
+
+export { SelectClipsCommand } from "./select-clips-command";
+
+export {
+	describeClip,
+	destructiveSecondsForCall,
+	formatOpSeconds,
+	formatOpTimecode,
+	summarizeValidatedCall,
+	summarizeValidatedCalls,
+} from "./op-summary";
+
+export {
+	createAssistantTurnDriver,
+	MAX_UNCONFIRMED_DESTRUCTIVE_SEC,
+	MAX_UNCONFIRMED_OPS,
+	needsConfirmation,
+} from "./turn-service";
+export type {
+	AssistantEventStream,
+	AssistantTurnDriver,
+	AssistantTurnDriverDeps,
+	AssistantTurnEvent,
+	AssistantTurnTransport,
+} from "./turn-service";
+
+export {
+	ASSISTANT_EDIT_ENDPOINT,
+	postAssistantTurn,
+} from "./turn-transport";
+
+export {
 	allSnapshotClips,
 	buildTimelineSnapshot,
 	buildTrackLabels,
