@@ -87,6 +87,29 @@ export interface SceneTracks {
 export interface RetimeConfig {
 	rate: number;
 	maintainPitch?: boolean;
+	/**
+	 * T18.1: play the trimmed source span back-to-front. Defaults to false
+	 * (absent), so a project serialized before this field existed loads with
+	 * forward playback unchanged. UI + validator constrain `rate` to 1 while
+	 * `reversed` is true (see speed-tab.tsx) - reverse + a non-1 rate is not
+	 * exercised by the renderer.
+	 */
+	reversed?: boolean;
+}
+
+/**
+ * T18.1 crop: a per-clip crop rect in FRACTIONS of the source's own width/
+ * height (0..1), applied before transform/scale (standard video-editor
+ * order). Absent/undefined means "no crop" - this keeps old projects
+ * loading unchanged (see crop/types.ts round-trip test). Not routed through
+ * the keyframe registry (params/registry.ts): v1 ships non-keyframable,
+ * see docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md T18.1 for why.
+ */
+export interface CropRect {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
 }
 
 interface BaseAudioElement extends BaseTimelineElement {
@@ -130,6 +153,7 @@ export interface VideoElement extends BaseTimelineElement {
 	isSourceAudioEnabled?: boolean;
 	hidden?: boolean;
 	retime?: RetimeConfig;
+	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
 	/** FrameCut: set on AI-generated HyperFrames clips; enables re-render and template swap. */
@@ -157,6 +181,7 @@ export interface ImageElement extends BaseTimelineElement {
 	type: "image";
 	mediaId: string;
 	hidden?: boolean;
+	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
 	/**
@@ -232,6 +257,13 @@ export const MASKABLE_ELEMENT_TYPES = elementTypes("video", "image", "graphic");
 export type MaskableElement = Extract<
 	TimelineElement,
 	{ type: (typeof MASKABLE_ELEMENT_TYPES)[number] }
+>;
+
+export const CROPPABLE_ELEMENT_TYPES = elementTypes("video", "image");
+
+export type CroppableElement = Extract<
+	TimelineElement,
+	{ type: (typeof CROPPABLE_ELEMENT_TYPES)[number] }
 >;
 
 export const RETIMABLE_ELEMENT_TYPES = elementTypes("video", "audio");

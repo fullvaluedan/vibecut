@@ -29,6 +29,7 @@ import { useGapSelectionStore } from "@/timeline/gap-selection-store";
 import { usePlaceToolStore } from "@/preview/place-tool-store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { canToggleSourceAudio } from "@/timeline/audio-separation";
+import { freezeFrameAtPlayhead } from "@/features/editing/freeze-frame";
 import {
 	activateScope,
 	clearActiveScope,
@@ -272,6 +273,20 @@ export function useEditorActions() {
 			editor.timeline.splitElements({
 				elements: elementsToSplit,
 				splitTime: currentTime,
+			});
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"freeze-frame",
+		() => {
+			void freezeFrameAtPlayhead({ editor }).then((result) => {
+				if (result.status === "no-target") {
+					toast.error("Move the playhead over a video clip to freeze it");
+				} else if (result.status === "capture-failed") {
+					toast.error("Couldn't capture that frame");
+				}
 			});
 		},
 		undefined,

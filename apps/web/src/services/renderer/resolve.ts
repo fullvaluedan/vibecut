@@ -206,6 +206,7 @@ async function resolveVideoNode({
 		getSourceTimeAtClipTime({
 			clipTime,
 			retime: node.params.retime,
+			clipDuration: node.params.duration,
 		});
 	let frame: Awaited<ReturnType<typeof videoCache.getFrameAt>>;
 	try {
@@ -462,6 +463,7 @@ async function resolveBackdropSource({
 			getSourceTimeAtClipTime({
 				clipTime,
 				retime: node.params.retime,
+				clipDuration: node.params.duration,
 			});
 		const frame = await videoCache.getFrameAt({
 			mediaId: node.params.mediaId,

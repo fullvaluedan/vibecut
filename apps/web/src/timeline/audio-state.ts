@@ -1,5 +1,6 @@
 import { hasKeyframesForPath } from "@/animation/keyframe-query";
 import { resolveNumberAtTime } from "@/animation/values";
+import { isRetimeReversed } from "@/retime/rate";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "./audio-constants";
 import type { TimelineElement } from "./types";
 const DEFAULT_STEP_SECONDS = 1 / 60;
@@ -60,7 +61,15 @@ export function resolveEffectiveAudioGain({
 	trackMuted?: boolean;
 	localTime: number;
 }): number {
-	if (trackMuted || isElementMuted({ element })) {
+	// T18.1 reverse: CapCut mutes audio while a clip plays backward (reversed
+	// audio has no clean way to sound "right", so it's silenced rather than
+	// rendered garbled). Single choke point shared by preview waveform gain,
+	// live playback, and export (media/audio.ts calls this for both).
+	if (
+		trackMuted ||
+		isElementMuted({ element }) ||
+		isRetimeReversed({ retime: element.retime })
+	) {
 		return 0;
 	}
 

@@ -80,6 +80,7 @@ import {
 	EraserIcon,
 	Link02Icon,
 	Unlink02Icon,
+	SnowIcon,
 } from "@hugeicons/core-free-icons";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
 import { runHyperframesOnClip } from "@/features/ai-generate/run-hyperframes-scoped";
@@ -87,7 +88,9 @@ import {
 	removeAllKeyframes,
 	removeAttributes,
 } from "@/features/editing/remove-attributes";
+import { freezeFrameAtPlayhead } from "@/features/editing/freeze-frame";
 import { HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM } from "@/features/editing/surface-flags";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
 import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
@@ -483,6 +486,28 @@ function TimelineElementImpl({
 					>
 						Split
 					</ActionMenuItem>
+					{element.type === "video" && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={SnowIcon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								void freezeFrameAtPlayhead({
+									editor,
+									elementRef: { trackId: track.id, elementId: element.id },
+								}).then((result) => {
+									if (result.status === "no-target") {
+										toast.error(
+											"Move the playhead over this clip to freeze it",
+										);
+									} else if (result.status === "capture-failed") {
+										toast.error("Couldn't capture that frame");
+									}
+								});
+							}}
+						>
+							Freeze frame
+						</ContextMenuItem>
+					)}
 					<CopyMenuItem />
 					{selectedElements.length === 1 && (
 						<ActionMenuItem

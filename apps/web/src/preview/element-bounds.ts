@@ -201,7 +201,9 @@ function getElementBounds({
 export const ROTATION_HANDLE_OFFSET = 24;
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
-export type Edge = "right" | "left" | "bottom";
+// "top" is unused by TransformHandles (matches its original 3-edge design)
+// but is needed by CropHandles (T18.1), which shows all four edges.
+export type Edge = "right" | "left" | "bottom" | "top";
 
 export function getCornerPosition({
 	bounds,
