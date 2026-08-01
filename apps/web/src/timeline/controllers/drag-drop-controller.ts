@@ -23,6 +23,8 @@ import {
 import { planRegionOverwrite } from "@/timeline/controllers/overwrite-region";
 import { buildSeparatedVideoAudioPair } from "@/timeline/audio-separation";
 import { canElementGoOnTrack } from "@/timeline/placement/compatibility";
+import { canPlaceTimeSpansOnTrack } from "@/timeline/placement/overlap";
+import { resolveTrackPlacement } from "@/timeline/placement";
 import {
 	computeRippleInsertShifts,
 	computeStraddleSplit,
@@ -64,6 +66,8 @@ export interface DragDropConfig {
 	getSceneTracks: () => SceneTracks;
 	getCurrentPlayheadTime: () => MediaTime;
 	getMediaAssets: () => MediaAsset[];
+	/** Expanded-keyframe rows a track draws beyond its base height, by index. */
+	getExtraTrackHeight?: (trackIndex: number) => number;
 	dragSource: TimelineDragSource;
 	addMediaAsset: (args: {
 		projectId: string;
@@ -79,8 +83,6 @@ export interface DragDropConfig {
 		elementId: string;
 		effectType: string;
 	}) => void;
-	/** Premiere-style: split a dropped video's audio onto its own track. */
-	separateSourceAudio?: (args: { trackId: string; elementId: string }) => void;
 }
 
 export interface DragDropConfigRef {
@@ -297,6 +299,8 @@ export class DragDropController {
 			pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 			zoomLevel: this.config.zoomLevel,
 			targetElementTypes,
+			preferMainTrack: true,
+			getExtraTrackHeight: this.config.getExtraTrackHeight,
 		});
 
 		const fps = this.config.getActiveProjectFps();
@@ -392,8 +396,13 @@ export class DragDropController {
 
 		const scrollLeft = scrollContainer?.scrollLeft ?? 0;
 		const scrollTop = scrollContainer?.scrollTop ?? 0;
-		const headerHeight =
-			this.config.getHeaderEl()?.getBoundingClientRect().height ?? 0;
+		// mouseY must be relative to the TRACKS content. The scroll element already
+		// starts below the ruler/bookmarks header, so its rect needs no correction;
+		// only the container fallback (which wraps the header too) does. Subtracting
+		// the header from the scroll rect would push every hit one header down.
+		const headerHeight = scrollContainer
+			? 0
+			: (this.config.getHeaderEl()?.getBoundingClientRect().height ?? 0);
 
 		return {
 			mouseX: event.clientX - referenceRect.left + scrollLeft,
@@ -438,24 +447,98 @@ export class DragDropController {
 		return { elementId: insertCmd.getElementId(), trackId: track.id };
 	}
 
-	/** After a video lands, peel its audio off onto an audio track. */
-	private maybeSeparateAudio({
-		asset,
-		elementId,
-		trackId,
+	/** The track a drop target points at, creating it first when it is new. */
+	private resolveTargetTrackId({
+		target,
+		trackType,
+		commands,
 	}: {
-		asset: { type: string; hasAudio?: boolean };
-		elementId: string | null;
-		trackId: string | null;
-	}): void {
-		if (
-			asset.type === "video" &&
-			asset.hasAudio !== false &&
-			elementId &&
-			trackId
-		) {
-			this.config.separateSourceAudio?.({ trackId, elementId });
+		target: DropTarget;
+		trackType: TrackType;
+		commands: Command[];
+	}): string | null {
+		if (target.isNewTrack) {
+			const addTrackCmd = new AddTrackCommand({
+				type: trackType,
+				index: target.trackIndex,
+			});
+			commands.push(addTrackCmd);
+			return addTrackCmd.getTrackId();
 		}
+
+		const track = orderedTracks({ sceneTracks: this.config.getSceneTracks() })[
+			target.trackIndex
+		];
+		return track ? track.id : null;
+	}
+
+	/** The first audio lane with room for the separated audio, else a fresh one. */
+	private resolveSeparatedAudioTrackId({
+		audio,
+		commands,
+	}: {
+		audio: { startTime: MediaTime; duration: MediaTime };
+		commands: Command[];
+	}): string {
+		const placement = resolveTrackPlacement({
+			tracks: this.config.getSceneTracks(),
+			trackType: "audio",
+			timeSpans: [{ startTime: audio.startTime, duration: audio.duration }],
+			strategy: { type: "firstAvailable" },
+		});
+		if (placement?.kind === "existingTrack") {
+			return placement.trackId;
+		}
+		return this.createAudioTrackInto(commands);
+	}
+
+	/**
+	 * Insert a dropped asset at `target`, peeling a video's source audio onto the
+	 * first free audio lane IN THE SAME BatchCommand, so one Ctrl+Z reverts the
+	 * whole drop. The old path inserted first and then ran the separation as a
+	 * second command (two undo steps); this mirrors what the batched multi-drop
+	 * paths already do with `buildSeparatedVideoAudioPair`.
+	 */
+	private insertMediaWithSeparatedAudio({
+		element,
+		target,
+		trackType,
+		mediaAsset,
+	}: {
+		element: CreateTimelineElement;
+		target: DropTarget;
+		trackType: TrackType;
+		mediaAsset: MediaAsset;
+	}): void {
+		const pair =
+			element.type === "video"
+				? buildSeparatedVideoAudioPair({ videoElement: element, mediaAsset })
+				: null;
+		if (!pair) {
+			this.insertAtTarget({ element, target, trackType });
+			return;
+		}
+
+		// Both lanes are resolved (and any AddTrackCommand queued) before the two
+		// inserts, so every track exists by the time the batch inserts into it.
+		const commands: Command[] = [];
+		const trackId = this.resolveTargetTrackId({ target, trackType, commands });
+		if (!trackId) return;
+		const audioTrackId = this.resolveSeparatedAudioTrackId({
+			audio: pair.audio,
+			commands,
+		});
+		commands.push(
+			new InsertElementCommand({
+				element: pair.video,
+				placement: { mode: "explicit", trackId },
+			}),
+			new InsertElementCommand({
+				element: pair.audio,
+				placement: { mode: "explicit", trackId: audioTrackId },
+			}),
+		);
+		this.config.executeCommand(new BatchCommand(commands));
 	}
 
 	private executeAssetDrop({
@@ -582,7 +665,12 @@ export class DragDropController {
 			const rippleTrackId = this.findOccupiedLaneForInsert({
 				mediaType: dragData.mediaType,
 				dropX: target.xPosition,
+				duration: getDurationForDrag({
+					dragData,
+					mediaAssets: this.config.getMediaAssets(),
+				}),
 				coords,
+				target,
 			});
 			if (rippleTrackId) {
 				this.executeMediaRippleInsert({
@@ -618,8 +706,12 @@ export class DragDropController {
 			duration: toElementDurationTicks({ seconds: mediaAsset.duration }),
 			startTime: target.xPosition,
 		});
-		const inserted = this.insertAtTarget({ element, target, trackType });
-		this.maybeSeparateAudio({ asset: mediaAsset, ...inserted });
+		this.insertMediaWithSeparatedAudio({
+			element,
+			target,
+			trackType,
+			mediaAsset,
+		});
 	}
 
 	/**
@@ -795,31 +887,60 @@ export class DragDropController {
 	 * new track). Used for audio, which has no visual hit-test. Resolves the
 	 * hovered lane from `coords.mouseY` (same vertical hit-test as
 	 * `computeDropTarget`) so a drop meant for lane B doesn't ripple lane A when
-	 * several compatible lanes exist. Returns null when the cursor isn't over a
-	 * compatible lane, or that lane is empty at the drop point.
+	 * several compatible lanes exist. When the cursor is not over a compatible
+	 * lane (over an audio lane, the ruler, or the empty area below the tracks)
+	 * the RESOLVED target lane is used instead: computeDropTarget already pulled
+	 * such a drop onto main (T15.1), and main may well be busy there.
+	 *
+	 * "Busy" is the span not fitting, not just a clip sitting under the cursor, so
+	 * a gap too short for the clip ripple-inserts rather than spilling onto a new
+	 * track. Returns null when no compatible lane applies, or it has room.
 	 */
 	private findOccupiedLaneForInsert({
 		mediaType,
 		dropX,
+		duration,
 		coords,
+		target,
 	}: {
 		mediaType: "image" | "video" | "audio";
 		dropX: MediaTime;
+		duration: MediaTime;
 		coords: TimelineCoords | null;
+		target: DropTarget;
 	}): string | null {
-		if (!coords) return null;
 		const wantType: TrackType = mediaType === "audio" ? "audio" : "video";
 		const tracks = orderedTracks({ sceneTracks: this.config.getSceneTracks() });
-		const hovered = getTrackAtY({ mouseY: coords.mouseY, tracks });
-		if (!hovered) return null;
-		const track = tracks[hovered.trackIndex];
+		const hovered = coords
+			? getTrackAtY({
+					mouseY: coords.mouseY,
+					tracks,
+					getExtraHeight: this.config.getExtraTrackHeight,
+				})
+			: null;
+		const hoveredTrack = hovered ? tracks[hovered.trackIndex] : null;
+		const resolvedTrack = target.isNewTrack
+			? null
+			: (tracks[target.trackIndex] ?? null);
+		const track =
+			hoveredTrack?.type === wantType ? hoveredTrack : resolvedTrack;
 		if (!track || track.type !== wantType) return null;
-		const occupied = track.elements.some(
-			(element) =>
-				element.startTime <= dropX &&
-				dropX < addMediaTime({ a: element.startTime, b: element.duration }),
-		);
-		return occupied ? track.id : null;
+		// A drop that resolved to a NEW lane asked for one, so only a clip sitting
+		// AT the drop point diverts it into a ripple (the audio case, which has no
+		// visual hit-test). On an existing lane (main, after the T15.1 gravity)
+		// anything the clip cannot fit into ripples, so a gap too short for it
+		// opens a hole instead of spilling onto a fresh track.
+		const isBusy = target.isNewTrack
+			? track.elements.some(
+					(element) =>
+						element.startTime <= dropX &&
+						dropX < addMediaTime({ a: element.startTime, b: element.duration }),
+				)
+			: !canPlaceTimeSpansOnTrack({
+					track,
+					timeSpans: [{ startTime: dropX, duration }],
+				});
+		return isBusy ? track.id : null;
 	}
 
 	/**
@@ -1225,6 +1346,8 @@ export class DragDropController {
 							pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 							zoomLevel: this.config.zoomLevel,
 							startTimeOverride: startTime,
+							preferMainTrack: true,
+							getExtraTrackHeight: this.config.getExtraTrackHeight,
 						})
 					: { ...target, xPosition: startTime };
 				if (assetTarget.isNewTrack) {
@@ -1508,35 +1631,9 @@ export class DragDropController {
 					const sceneTracks = this.config.getSceneTracks();
 					const currentTime = this.config.getCurrentPlayheadTime();
 
-					const reuseMainTrackId =
-						createdAsset.type !== "audio" &&
-						sceneTracks.overlay.length === 0 &&
-						sceneTracks.audio.length === 0 &&
-						sceneTracks.main.elements.length === 0
-							? sceneTracks.main.id
-							: null;
-
-					if (reuseMainTrackId) {
-						const insertCmd = new InsertElementCommand({
-							placement: { mode: "explicit", trackId: reuseMainTrackId },
-							element: buildElementFromMedia({
-								mediaId: createdAsset.id,
-								mediaType: createdAsset.type,
-								name: createdAsset.name,
-								duration,
-								startTime: currentTime,
-							}),
-						});
-						this.config.executeCommand(insertCmd);
-						this.maybeSeparateAudio({
-							asset: createdAsset,
-							elementId: insertCmd.getElementId(),
-							trackId: reuseMainTrackId,
-						});
-						cascadeOffsetTicks += duration;
-						continue;
-					}
-
+					// The old "empty timeline reuses main" special case lived here and
+					// stopped applying as soon as ONE audio lane existed (T15.1 cause 1).
+					// `preferMainTrack` covers it for every video/image drop now.
 					const dropTarget = computeDropTarget({
 						elementType: createdAsset.type,
 						mouseX,
@@ -1547,6 +1644,8 @@ export class DragDropController {
 						elementDuration: duration,
 						pixelsPerSecond: BASE_TIMELINE_PIXELS_PER_SECOND,
 						zoomLevel: this.config.zoomLevel,
+						preferMainTrack: true,
+						getExtraTrackHeight: this.config.getExtraTrackHeight,
 					});
 
 					// Offset each subsequent file past the previous one so a
@@ -1557,7 +1656,7 @@ export class DragDropController {
 
 					const trackType: TrackType =
 						createdAsset.type === "audio" ? "audio" : "video";
-					const inserted = this.insertAtTarget({
+					this.insertMediaWithSeparatedAudio({
 						element: buildElementFromMedia({
 							mediaId: createdAsset.id,
 							mediaType: createdAsset.type,
@@ -1567,8 +1666,8 @@ export class DragDropController {
 						}),
 						target: dropTarget,
 						trackType,
+						mediaAsset: createdAsset,
 					});
-					this.maybeSeparateAudio({ asset: createdAsset, ...inserted });
 					cascadeOffsetTicks += duration;
 				}
 
