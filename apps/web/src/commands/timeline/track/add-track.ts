@@ -6,7 +6,12 @@ import {
 	buildEmptyTrack,
 	getDefaultInsertIndexForTrack,
 } from "@/timeline/placement";
-import { isAtVideoTrackCap, lastVideoTrackId } from "@/timeline/placement/track-cap";
+import {
+	isAtAudioTrackCap,
+	isAtVideoTrackCap,
+	lastVideoTrackId,
+	leastOccupiedAudioTrackId,
+} from "@/timeline/placement/track-cap";
 
 export class AddTrackCommand extends Command {
 	private trackId: string;
@@ -16,11 +21,18 @@ export class AddTrackCommand extends Command {
 		type,
 		index,
 		keepWhenEmpty,
+		span,
 	}: {
 		type: TrackType;
 		index?: number;
 		/** Premiere-style: the track persists even while empty. */
 		keepWhenEmpty?: boolean;
+		/**
+		 * The clip this track is being created FOR, when known (audio
+		 * separation). Only read at the audio cap, to pick the least-occupied
+		 * existing lane instead of one arbitrary one - see track-cap.ts.
+		 */
+		span?: { startTime: number; duration: number };
 	}) {
 		super();
 		this.type = type;
@@ -28,18 +40,24 @@ export class AddTrackCommand extends Command {
 		this.keepWhenEmpty = keepWhenEmpty;
 		this.trackId = generateUUID();
 
-		// Hard cap: never create a 9th video track. Once at the cap this command
-		// becomes a no-op that REUSES the topmost video lane. Resolved here (not in
-		// execute) because callers read getTrackId() BEFORE execute to wire an
-		// explicit InsertElementCommand into the same BatchCommand (drag-from-bin,
-		// AI lane packer). getInstance() lazily self-inits, so this never throws.
-		if (type === "video") {
-			const tracks = EditorCore.getInstance().scenes.getActiveSceneOrNull()
-				?.tracks;
-			if (tracks && isAtVideoTrackCap(tracks)) {
-				this.trackId = lastVideoTrackId(tracks);
-				this.cappedReuse = true;
-			}
+		// Hard cap: never create a 9th video/audio track. Once at the cap this
+		// command becomes a no-op that REUSES an existing lane instead (video:
+		// the topmost lane; audio: the least-occupied lane for `span`, or the
+		// first lane when no span is given - separation must never fail at the
+		// cap). Resolved here (not in execute) because callers read getTrackId()
+		// BEFORE execute to wire an explicit InsertElementCommand into the same
+		// BatchCommand (drag-from-bin, AI lane packer). getInstance() lazily
+		// self-inits, so this never throws.
+		const tracks = EditorCore.getInstance().scenes.getActiveSceneOrNull()
+			?.tracks;
+		if (type === "video" && tracks && isAtVideoTrackCap(tracks)) {
+			this.trackId = lastVideoTrackId(tracks);
+			this.cappedReuse = true;
+		} else if (type === "audio" && tracks && isAtAudioTrackCap(tracks)) {
+			this.trackId = span
+				? leastOccupiedAudioTrackId({ tracks, span })
+				: (tracks.audio[0]?.id ?? this.trackId);
+			this.cappedReuse = true;
 		}
 	}
 

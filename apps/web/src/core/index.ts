@@ -13,6 +13,7 @@ import { DiagnosticsManager } from "./managers/diagnostics-manager";
 import { registerDefaultEffects } from "@/effects";
 import { registerDefaultMasks } from "@/masks";
 import { registerTranscriptionDiagnostics } from "@/transcription/diagnostics";
+import { pruneEmptyImplicitTracks } from "./prune-empty-tracks";
 
 export class EditorCore {
 	private static instance: EditorCore | null = null;
@@ -53,17 +54,10 @@ export class EditorCore {
 			}
 
 			const tracks = activeScene.tracks;
-			const prunedTracks = {
-				...tracks,
-				// User-created tracks (keepWhenEmpty) persist like Premiere's;
-				// only implicitly created tracks are cleaned up when emptied.
-				overlay: tracks.overlay.filter(
-					(track) => track.elements.length > 0 || track.keepWhenEmpty,
-				),
-				audio: tracks.audio.filter(
-					(track) => track.elements.length > 0 || track.keepWhenEmpty,
-				),
-			};
+			// User-created tracks (keepWhenEmpty) persist like Premiere's; only
+			// implicitly created tracks are cleaned up when emptied. Pure rule in
+			// prune-empty-tracks.ts (ours), bun-tested there.
+			const prunedTracks = pruneEmptyImplicitTracks(tracks);
 			if (
 				prunedTracks.overlay.length !== tracks.overlay.length ||
 				prunedTracks.audio.length !== tracks.audio.length

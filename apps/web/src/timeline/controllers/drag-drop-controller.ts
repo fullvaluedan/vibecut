@@ -489,7 +489,7 @@ export class DragDropController {
 		if (placement?.kind === "existingTrack") {
 			return placement.trackId;
 		}
-		return this.createAudioTrackInto(commands);
+		return this.createAudioTrackInto(commands, audio);
 	}
 
 	/**
@@ -829,11 +829,18 @@ export class DragDropController {
 			return addTrackCmd.getTrackId();
 		};
 		// All separated source-audio packs onto ONE shared new audio track (lazy, so
-		// a drop with no separable video adds no empty track).
+		// a drop with no separable video adds no empty track). Takes the FIRST
+		// separated audio's span so a cap-hit reuse (AddTrackCommand) picks the
+		// least-occupied existing lane for it, not an arbitrary one.
 		let separatedAudioTrackId: string | null = null;
-		const ensureSeparatedAudioTrack = (): string => {
+		const ensureSeparatedAudioTrack = (span: {
+			startTime: MediaTime;
+			duration: MediaTime;
+		}): string => {
 			if (separatedAudioTrackId) return separatedAudioTrackId;
-			separatedAudioTrackId = ensureNewTrack("audio");
+			const addTrackCmd = new AddTrackCommand({ type: "audio", span });
+			separatedAudioTrackId = addTrackCmd.getTrackId();
+			commands.push(addTrackCmd);
 			return separatedAudioTrackId;
 		};
 
@@ -872,7 +879,10 @@ export class DragDropController {
 						element: pair.audio,
 						placement: {
 							mode: "explicit",
-							trackId: ensureSeparatedAudioTrack(),
+							trackId: ensureSeparatedAudioTrack({
+								startTime: pair.audio.startTime,
+								duration: pair.audio.duration,
+							}),
 						},
 					}),
 				);
@@ -1089,7 +1099,10 @@ export class DragDropController {
 			if (resolvedAudioTrackId) return resolvedAudioTrackId;
 			resolvedAudioTrackId = rippleAudioTrack
 				? rippleAudioTrack.id
-				: this.createAudioTrackInto(commands);
+				: this.createAudioTrackInto(commands, {
+						startTime: insertStart,
+						duration: summedDuration,
+					});
 			return resolvedAudioTrackId;
 		};
 
@@ -1266,8 +1279,11 @@ export class DragDropController {
 		}
 	}
 
-	private createAudioTrackInto(commands: Command[]): string {
-		const addAudioTrack = new AddTrackCommand({ type: "audio" });
+	private createAudioTrackInto(
+		commands: Command[],
+		span?: { startTime: MediaTime; duration: MediaTime },
+	): string {
+		const addAudioTrack = new AddTrackCommand({ type: "audio", span });
 		commands.push(addAudioTrack);
 		return addAudioTrack.getTrackId();
 	}
@@ -1296,9 +1312,12 @@ export class DragDropController {
 		// reason the per-asset toggle was dropped from this path. Lazy, so a drop with
 		// no separable video adds no empty audio track.
 		let separatedAudioTrackId: string | null = null;
-		const ensureSeparatedAudioTrack = (): string => {
+		const ensureSeparatedAudioTrack = (span: {
+			startTime: MediaTime;
+			duration: MediaTime;
+		}): string => {
 			if (separatedAudioTrackId) return separatedAudioTrackId;
-			const addAudioTrack = new AddTrackCommand({ type: "audio" });
+			const addAudioTrack = new AddTrackCommand({ type: "audio", span });
 			separatedAudioTrackId = addAudioTrack.getTrackId();
 			commands.push(addAudioTrack);
 			return separatedAudioTrackId;
@@ -1379,7 +1398,10 @@ export class DragDropController {
 						element: pair.audio,
 						placement: {
 							mode: "explicit",
-							trackId: ensureSeparatedAudioTrack(),
+							trackId: ensureSeparatedAudioTrack({
+								startTime: pair.audio.startTime,
+								duration: pair.audio.duration,
+							}),
 						},
 					}),
 				);
