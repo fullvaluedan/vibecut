@@ -77,7 +77,8 @@ Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech
 - [x] Context-menu "Freeze frame" on the clip does the identical thing.
 - [x] Playhead off-clip: toast "Move the playhead over a video clip to freeze it".
 - [x] Export proof: frames at t=3.5 and t=4.9 are the identical source-2.0s frame (testsrc digit "2", frozen gradient bar); video resumes correctly after the still.
-- [ ] **NEW BUG (reopens T18.1): the linked separated audio does NOT shift.** The video track ripples +3s but the audio clip stays at its old position, so every word after the freeze plays 3s early relative to picture, and no desync badge appears. Confirmed in live state (audio track untouched by the freeze batch) and audible/measurable in the exported file. `buildFreezeFrameBatch` ripples only the target track.
+- [x] **NEW BUG (reopens T18.1): the linked separated audio does NOT shift.** The video track ripples +3s but the audio clip stays at its old position, so every word after the freeze plays 3s early relative to picture, and no desync badge appears. Confirmed in live state (audio track untouched by the freeze batch) and audible/measurable in the exported file. `buildFreezeFrameBatch` ripples only the target track.
+- [x] FIXED and RE-VERIFIED 2026-08-01 (fix `3e81c839`, re-rate at tip `f00edced`): the linked audio now splits at the freeze point in the same SplitElementsCommand call and its right half rides the ripple. Live state after a 2s freeze on a 38.07s clip: the audio right half starts at tick 600000, exactly where the video right half starts, both share one fresh linkId, trims mirror the video. A second freeze at 10s split the already-split halves again correctly (both lanes at 1560000). No desync badge rendered. An unlinked voice clip on its own audio lane spanning the freeze point did not move. One undo reverted each freeze to a byte-identical timeline snapshot (JSON compare), including removal of the ephemeral still asset from the bin. Gates at re-rate: apps/web `bun test` 2452 pass 0 fail, `tsc --noEmit` 0 errors.
 
 ### B. Reverse (T18.1 + T18.2 trim fix) - PASS
 - [x] Speed tab Reverse toggle sets retime.reversed on the clip AND its linked audio; Speed field shows 1.00 and disables; the tooltip "Audio is muted while reversed" is on the Reverse row (code-confirmed; hover not reproducible in the automated pane).
@@ -93,6 +94,7 @@ Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech
 - [x] The drag pipeline (previewElementCrop live layer, commitPreview as ONE undoable command, undo restores) verified through the same manager calls the handles drive; the raw on-canvas pointer gesture could not be exercised because screenToCanvas depends on the degenerate hidden-pane viewport (Dan-owed feel check).
 - [x] Old project loads uncropped: the 8-clip round-16 project opens with crop null on every element, no errors; also unit-tested (crop-serialization).
 - [ ] **Spec gap (reopens T18.1 alongside the freeze bug): crop is not keyframable.** The UI says "Crop applies before Motion's scale/position. Not keyframable yet." while the roadmap line says keyframable. Implement or have Dan descope.
+- Re-rate note 2026-08-01: crop keyframability was a pre-authorized v1 descope per the T18.1 task brief (ship non-keyframable and say so). It is Dan's open decision, not a defect; the re-rate scores against the descoped spec. The line above stays open for Dan.
 
 ### D. Speed curves (T18.2) - PASS
 - [x] All 7 chips present. Each preset applied a distinct curve and retimed the 38.07s clip correctly: Montage 30.45s (6 pts), Hero 45.32s (5 pts), Bullet 15.60s (5 pts), Jump Cut 14.45s (8 pts), Flash In 27.69s (3 pts), Flash Out 27.69s (3 pts), Custom 38.07s editable 3-point flat curve.
@@ -129,11 +131,13 @@ Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech
 ### G6 scores (round 18)
 | Feature | Functionality | Quality | Verdict |
 |---|---|---|---|
-| T18.1 freeze + reverse + crop | 7 | 7 | REOPENED: freeze linked-audio desync; crop not keyframable |
+| T18.1 freeze + reverse + crop | 9 | 9 | DONE, re-rated 2026-08-01 after fix `3e81c839` (tip `f00edced`); crop keyframes stay Dan's call |
 | T18.2 speed curves | 9 | 9 | DONE |
 | T18.3 audio fade handles | 9 | 9 | DONE |
 | T18.4 export options | 9 | 9 | DONE |
 | T18.5 VibeCut home + wordmark | 9 | 9 | DONE |
+
+Re-rate 2026-08-01: T18.1 re-scored 9/9 at tip `f00edced` after the freeze linked-audio fix (`3e81c839`); evidence on the section A and C lines above. The round 18 G6 gate is now met.
 
 ### Left for Dan (round 18)
 - [ ] Real-footage freeze/reverse/crop FEEL: scrub over a freeze still, drag the 4 crop handles on canvas, reverse a real clip and listen for the mute, judge the cut texture at a reversed split. The automated pane cannot composite the preview canvas, so all visual-feel checks here are yours.
