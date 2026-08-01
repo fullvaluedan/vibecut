@@ -159,6 +159,28 @@ interface LineageGeometry {
 	entries: LineageJournalEntry[];
 }
 
+/**
+ * The removals still in effect after replaying `entries` IN ORDER: each entry
+ * first adds its `ranges` and then subtracts its `restores` (T16.2). Order is
+ * what makes remove -> restore -> remove-again land on "removed" instead of
+ * cancelling out, which a single global union-then-subtract would get wrong.
+ */
+export function foldJournalRemovals(
+	entries: readonly LineageJournalEntry[],
+): LineageSourceRange[] {
+	let removals: LineageSourceRange[] = [];
+	for (const entry of entries) {
+		removals = mergeSourceRanges([...removals, ...entry.ranges]);
+		if (entry.restores && entry.restores.length > 0) {
+			removals = subtractRanges({
+				ranges: removals,
+				holes: mergeSourceRanges(entry.restores),
+			});
+		}
+	}
+	return removals;
+}
+
 function buildGeometry({
 	record,
 	entries,
@@ -166,7 +188,7 @@ function buildGeometry({
 	record: TranscriptLineageRecord;
 	entries: readonly LineageJournalEntry[];
 }): LineageGeometry {
-	const removalsTicks = mergeSourceRanges(entries.flatMap((e) => e.ranges));
+	const removalsTicks = foldJournalRemovals(entries);
 	const removalsSec = removalsTicks.map((r) => ({
 		startSec: ticksToSec(r.start),
 		endSec: ticksToSec(r.end),
@@ -554,6 +576,55 @@ export function beginLineageRemoval({
 			hashBefore,
 			hashAfter,
 			...(mappedOps.length > 0 ? { ops: mappedOps } : {}),
+		};
+		const updated = appendJournalEntry({ record: fresh, entry });
+		if (updated) writeLineageRecord(updated);
+	};
+}
+
+/**
+ * The restore counterpart of `beginLineageRemoval` (T16.2). Same two-phase
+ * protocol - call BEFORE executing the RestoreRangeCommand (the pre-edit hash
+ * only exists then) and invoke the returned `commit` after - but the ranges are
+ * ALREADY in source ticks (they come straight out of `planSeamRestore`, which
+ * works in the record's own coordinates), so nothing is mapped here.
+ *
+ * The entry is APPENDED rather than editing the removals it puts back; see the
+ * `restores` field on `LineageJournalEntry` for why. `source` stays
+ * "manual-transcript" because a restore is always a transcript-panel action, and
+ * a restore entry has no `ranges`, so it never shows up as a seam contribution.
+ */
+export function beginLineageRestore({
+	editor,
+	restoredRanges,
+}: {
+	editor: LineageEditor;
+	restoredRanges: readonly LineageSourceRange[];
+}): (() => void) | null {
+	const projectId = projectIdOf(editor);
+	if (!projectId) return null;
+	const record = readLineageRecord(projectId);
+	if (!record) return null;
+	const hashBefore = safeLineageHash(editor);
+	if (!hashBefore) return null;
+	const active = resolveActiveJournal({ record, liveHash: hashBefore });
+	if (!active.explained) return null;
+	const restores = mergeSourceRanges(restoredRanges);
+	if (restores.length === 0) return null;
+
+	return () => {
+		const hashAfter = safeLineageHash(editor);
+		if (!hashAfter || hashAfter === hashBefore) return;
+		const fresh = readLineageRecord(projectId);
+		if (!fresh || fresh.captureHash !== record.captureHash) return;
+		const entry: LineageJournalEntry = {
+			id: `lr-${stableCutId(`${hashBefore}:${hashAfter}:${restores[0].start}`)}-${Date.now().toString(36)}`,
+			source: "manual-transcript",
+			ranges: [],
+			restores,
+			at: Date.now(),
+			hashBefore,
+			hashAfter,
 		};
 		const updated = appendJournalEntry({ record: fresh, entry });
 		if (updated) writeLineageRecord(updated);

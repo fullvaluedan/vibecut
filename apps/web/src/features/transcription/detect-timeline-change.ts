@@ -8,15 +8,28 @@
  *
  * An empty `liveHash` (hash could not be computed) is treated as "no change detected"
  * so a transient read failure never blocks deletes on its own.
+ *
+ * T16.1 note 2 / T16.2: the hash comparison is deliberately over-strict once a
+ * LINEAGE explains the live timeline. The panel then reads its words straight from
+ * the lineage, so an undo, a redo, a further Director cut or a per-word restore all
+ * leave the displayed coordinates CORRECT rather than stale - the very thing this
+ * guard exists to catch cannot happen. `lineageExplained` short-circuits it so
+ * transcript deletes keep working instead of demanding a needless Refresh. It stays
+ * false (and the old guard stands) whenever the lineage is missing or cannot explain
+ * the timeline, which is exactly when the local preview coordinates CAN drift.
  */
 export function timelineChangedWhileStale({
 	stale,
 	liveHash,
 	expectedHash,
+	lineageExplained = false,
 }: {
 	stale: boolean;
 	liveHash: string;
 	expectedHash: string;
+	/** `readTranscriptLineage().status === "explained"` for the live timeline. */
+	lineageExplained?: boolean;
 }): boolean {
+	if (lineageExplained) return false;
 	return stale && liveHash !== "" && liveHash !== expectedHash;
 }
