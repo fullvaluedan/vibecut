@@ -36,6 +36,14 @@ export function getMinDurationForFps(fps: FrameRate): MediaTime {
 }
 
 /**
+ * The floor for a left-side drag whose positional bounds have been lifted
+ * (magnet pins the start) on an element with no source limit at all - an image
+ * or a text clip, which can grow forever. An hour of ticks is far beyond any
+ * real drag, so it reads as "unbounded" without needing a nullable minimum.
+ */
+const UNBOUNDED_LEFT_DELTA = mediaTime({ ticks: -3600 * TICKS_PER_SECOND });
+
+/**
  * Resize a SINGLE clip (the grabbed one), clamped solely by that clip's own
  * source extent and its neighbor bounds. An adjacent clip constrains the drag
  * only as a `leftNeighborBound` / `rightNeighborBound`, never as a co-resized
@@ -91,7 +99,7 @@ export function computeLinkedResize({
 					b: rippleTrim.shrinkFloorDelta,
 				})
 			: membersMinimumDeltaTime;
-	const maximumDeltaTime = members.reduce<MediaTime | null>(
+	const membersMaximumDeltaTime = members.reduce<MediaTime | null>(
 		(maximum, member) => {
 			const memberMaximum = getMaximumAllowedDeltaTime({
 				member,
@@ -104,6 +112,17 @@ export function computeLinkedResize({
 		},
 		null,
 	);
+	// Magnet shrink ceiling: a LEFT-handle magnet trim pins the member's start,
+	// so the gap it closes downstream is driven by a POSITIVE delta. Same
+	// straddler headroom as the right-handle floor above, just the other sign.
+	const magnetCeiling =
+		side === "left" ? (rippleTrim?.shrinkCeilingDelta ?? null) : null;
+	const maximumDeltaTime =
+		magnetCeiling === null
+			? membersMaximumDeltaTime
+			: membersMaximumDeltaTime === null
+				? magnetCeiling
+				: minMediaTime({ a: membersMaximumDeltaTime, b: magnetCeiling });
 
 	const clampedDeltaTime =
 		maximumDeltaTime === null
@@ -306,15 +325,19 @@ export function getResizeBoundBreakdown({
 
 	// side === "left"
 	const maximum = subMediaTime({ a: member.duration, b: minDuration });
-	const leftNeighborFloor =
-		member.leftNeighborBound !== null
+	// `null` = no positional floor at all: the magnet pins this member's start,
+	// so the left neighbor and the timeline-zero wall are both irrelevant and
+	// only the source extent can stop the drag.
+	const leftNeighborFloor = member.leftBoundLifted
+		? null
+		: member.leftNeighborBound !== null
 			? subMediaTime({ a: member.leftNeighborBound, b: member.startTime })
 			: subMediaTime({ a: ZERO_MEDIA_TIME, b: member.startTime });
 
 	if (member.sourceDuration == null && !member.sourceDurationRequired) {
 		return {
-			minimum: leftNeighborFloor,
-			minimumReason: "neighbor",
+			minimum: leftNeighborFloor ?? UNBOUNDED_LEFT_DELTA,
+			minimumReason: leftNeighborFloor === null ? "source-limit" : "neighbor",
 			maximum,
 			maximumReason: "min-duration",
 		};
@@ -337,6 +360,14 @@ export function getResizeBoundBreakdown({
 					b: member.duration,
 				});
 	const sourceFloor = subMediaTime({ a: ZERO_MEDIA_TIME, b: maximumSourceExtension });
+	if (leftNeighborFloor === null) {
+		return {
+			minimum: sourceFloor,
+			minimumReason: "source-limit",
+			maximum,
+			maximumReason: "min-duration",
+		};
+	}
 	return {
 		minimum: maxMediaTime({ a: leftNeighborFloor, b: sourceFloor }),
 		minimumReason: leftNeighborFloor >= sourceFloor ? "neighbor" : "source-limit",

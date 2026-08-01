@@ -132,10 +132,17 @@ function EditorRuntimeBindings() {
 	const rippleEditingEnabled = useTimelineStore(
 		(state) => state.rippleEditingEnabled,
 	);
+	const mainTrackMagnetEnabled = useTimelineStore(
+		(state) => state.mainTrackMagnetEnabled,
+	);
 
 	useEffect(() => {
 		editor.command.isRippleEnabled = rippleEditingEnabled;
 	}, [editor, rippleEditingEnabled]);
+
+	useEffect(() => {
+		editor.command.isMagnetEnabled = mainTrackMagnetEnabled;
+	}, [editor, mainTrackMagnetEnabled]);
 
 	useEffect(() => {
 		const handleBeforeUnload = (event: BeforeUnloadEvent) => {

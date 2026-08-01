@@ -37,6 +37,7 @@ import {
 	Delete02Icon,
 	ScissorIcon,
 	MagnetIcon,
+	Magnet02Icon,
 	SearchAddIcon,
 	SearchMinusIcon,
 	Copy01Icon,
@@ -310,6 +311,9 @@ function ToolbarRightSection({
 	const editor = useEditor();
 	const snappingEnabled = useTimelineStore((s) => s.snappingEnabled);
 	const rippleEditingEnabled = useTimelineStore((s) => s.rippleEditingEnabled);
+	const mainTrackMagnetEnabled = useTimelineStore(
+		(s) => s.mainTrackMagnetEnabled,
+	);
 	const videoWaveformsEnabled = useTimelineStore(
 		(s) => s.videoWaveformsEnabled,
 	);
@@ -318,6 +322,9 @@ function ToolbarRightSection({
 	);
 	const toggleSnapping = useTimelineStore((s) => s.toggleSnapping);
 	const toggleRippleEditing = useTimelineStore((s) => s.toggleRippleEditing);
+	const toggleMainTrackMagnet = useTimelineStore(
+		(s) => s.toggleMainTrackMagnet,
+	);
 	const toggleVideoWaveforms = useTimelineStore((s) => s.toggleVideoWaveforms);
 	const toggleLinkedSelection = useTimelineStore(
 		(s) => s.toggleLinkedSelection,
@@ -339,10 +346,21 @@ function ToolbarRightSection({
 					onClick={() => toggleSnapping()}
 				/>
 
+				{/* Magnet vs Ripple editing: the magnet is main-track scoped (main
+				    clips + their linked audio only), ripple editing is the
+				    cross-track superset. With both on, ripple editing wins and
+				    the magnet stands down, so nothing is shifted twice. */}
+				<ToolbarButton
+					icon={<HugeiconsIcon icon={Magnet02Icon} />}
+					isActive={mainTrackMagnetEnabled}
+					tooltip="Main track magnet: main-track clips stay butted, so deleting, trimming or dragging one closes the gap (linked audio follows). Overlay and audio lanes stay free."
+					onClick={() => toggleMainTrackMagnet()}
+				/>
+
 				<ToolbarButton
 					icon={<OcRippleIcon size={24} className="scale-110" />}
 					isActive={rippleEditingEnabled}
-					tooltip="Ripple editing"
+					tooltip="Ripple editing (cross-track): every clip on EVERY track downstream of an edit shifts. Superset of the main track magnet; when both are on, this one wins."
 					onClick={() => toggleRippleEditing()}
 				/>
 

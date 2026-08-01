@@ -2,7 +2,37 @@ import type { EditorCore } from "@/core";
 import type { Command, CommandResult } from "@/commands";
 import type { EditorSelectionSnapshot } from "@/selection/editor-selection";
 import { applyRippleAdjustments, computeRippleAdjustments } from "@/ripple";
+import { applyMagnetShifts, computeMagnetGapShifts } from "@/timeline/magnet";
+import { Command as BaseCommand } from "@/commands/base-command";
 import type { SceneTracks } from "@/timeline/types";
+
+/**
+ * The magnetic main track's gap close, as an undoable step bound to the SAME
+ * editor instance the manager drives (never the singleton), so it can ride on
+ * its command's history entry. Writes tracks directly: the shift positions are
+ * already resolved, and routing them through the update pipeline would let
+ * head gravity re-place them.
+ */
+class MagnetGapCloseCommand extends BaseCommand {
+	constructor(
+		private readonly deps: {
+			editor: EditorCore;
+			before: SceneTracks;
+			after: SceneTracks;
+		},
+	) {
+		super();
+	}
+
+	execute(): CommandResult | undefined {
+		this.deps.editor.timeline.updateTracks(this.deps.after);
+		return undefined;
+	}
+
+	undo(): void {
+		this.deps.editor.timeline.updateTracks(this.deps.before);
+	}
+}
 
 interface CommandHistoryEntry {
 	command: Command;
@@ -10,6 +40,14 @@ interface CommandHistoryEntry {
 	selectionOverride?: EditorSelectionSnapshot;
 	/** See `execute`; carried on the entry so redo honors it too. */
 	suppressRipple?: boolean;
+	/**
+	 * The magnetic-main-track gap close this command triggered, if any. It is
+	 * NOT a separate history entry: it runs and unwinds with its command, so a
+	 * single undo puts both the edit and the magnet's shift back (see
+	 * `applyMagnetIfEnabled`). Kept off `command` itself so `peekUndoCommand`
+	 * still returns the caller's own command identity.
+	 */
+	magnetCommand?: Command;
 }
 
 /**
@@ -22,6 +60,14 @@ const MAX_HISTORY = 200;
 
 export class CommandManager {
 	public isRippleEnabled = false;
+	/**
+	 * Magnetic main track (CapCut), Dan's 2026-08-01 default-ON decision. Wired
+	 * from the timeline store in `editor-provider.tsx`. PRECEDENCE: ripple
+	 * editing is the cross-track superset, so whenever `isRippleEnabled` is also
+	 * true the ripple path runs and the magnet path is skipped entirely - that
+	 * single rule is what guarantees nothing is ever shifted twice.
+	 */
+	public isMagnetEnabled = false;
 	private history: CommandHistoryEntry[] = [];
 	private redoStack: CommandHistoryEntry[] = [];
 	private reactors: Array<() => void> = [];
@@ -52,12 +98,13 @@ export class CommandManager {
 		suppressRipple?: boolean;
 	}): Command {
 		const beforeTracks =
-			this.isRippleEnabled && !suppressRipple
+			(this.isRippleEnabled || this.isMagnetEnabled) && !suppressRipple
 				? (this.editor.scenes.getActiveSceneOrNull()?.tracks ?? null)
 				: null;
 		const previousSelection = this.getSelectionSnapshot();
 		const result = command.execute();
 		this.applyRippleIfEnabled({ beforeTracks });
+		const magnetCommand = this.applyMagnetIfEnabled({ beforeTracks });
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 		this.pushHistory({
@@ -65,6 +112,7 @@ export class CommandManager {
 			previousSelection,
 			selectionOverride,
 			...(suppressRipple ? { suppressRipple } : {}),
+			...(magnetCommand ? { magnetCommand } : {}),
 		});
 		this.redoStack = [];
 		return command;
@@ -85,6 +133,8 @@ export class CommandManager {
 	undo(): void {
 		if (this.history.length === 0) return;
 		const entry = this.history.pop();
+		// The magnet's gap close ran AFTER the command, so it unwinds first.
+		entry?.magnetCommand?.undo();
 		entry?.command.undo();
 		if (entry) {
 			// Only restore selection for commands that explicitly changed it.
@@ -115,6 +165,10 @@ export class CommandManager {
 		const previousSelection = this.getSelectionSnapshot();
 		const result = entry.command.redo();
 		this.applyRippleIfEnabled({ beforeTracks });
+		// Replay the SAME magnet shift the original execute produced (its target
+		// positions are absolute), rather than re-deriving one: redoing must land
+		// exactly where the user last saw the timeline.
+		entry.magnetCommand?.redo();
 		const selectionOverride = this.applySelectionOverride(result);
 		this.runReactors();
 
@@ -123,6 +177,7 @@ export class CommandManager {
 			previousSelection,
 			selectionOverride,
 			...(entry.suppressRipple ? { suppressRipple: entry.suppressRipple } : {}),
+			...(entry.magnetCommand ? { magnetCommand: entry.magnetCommand } : {}),
 		});
 	}
 
@@ -188,6 +243,7 @@ export class CommandManager {
 		while (this.history.length > target) {
 			const entry = this.history.pop();
 			if (!entry) break;
+			entry.magnetCommand?.undo();
 			entry.command.undo();
 			if (entry.selectionOverride !== undefined) {
 				this.editor.selection.restoreSnapshot({
@@ -255,5 +311,41 @@ export class CommandManager {
 			adjustments,
 		});
 		this.editor.timeline.updateTracks(tracksWithRipple);
+	}
+
+	/**
+	 * Magnetic main track: after a command has run, close the space it freed on
+	 * the MAIN track and slide the survivors (plus their linked audio) left. The
+	 * shift is executed as a `RippleShiftElementsCommand` that is stored on the
+	 * SAME history entry as the command, so one undo reverts both.
+	 *
+	 * Skipped whenever ripple editing is on: that path already moved everything
+	 * on every track, and running the magnet on top would shift twice.
+	 */
+	private applyMagnetIfEnabled({
+		beforeTracks,
+	}: {
+		beforeTracks: SceneTracks | null;
+	}): Command | null {
+		if (this.isRippleEnabled || !this.isMagnetEnabled || !beforeTracks) {
+			return null;
+		}
+
+		const afterTracks = this.editor.scenes.getActiveSceneOrNull()?.tracks;
+		if (!afterTracks) {
+			return null;
+		}
+		const shifts = computeMagnetGapShifts({ beforeTracks, afterTracks });
+		if (shifts.length === 0) {
+			return null;
+		}
+
+		const command = new MagnetGapCloseCommand({
+			editor: this.editor,
+			before: afterTracks,
+			after: applyMagnetShifts({ tracks: afterTracks, shifts }),
+		});
+		command.execute();
+		return command;
 	}
 }
