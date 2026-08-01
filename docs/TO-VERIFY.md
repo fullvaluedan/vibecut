@@ -2,6 +2,67 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 17 (Assistant) + T21.1 onboarding verification (2026-08-01, T17.5, branch `feat/director-eval`, tip `6702b2dc`)
+
+Closing verifier pass for T17.1-T17.4 (the prompt-to-edit Assistant) and T21.1 (the /get-started onboarding page). Freeze frame was deliberately OUT of scope (a parallel worktree agent owns that fix). Environment: dev server on localhost:3000 via the launch entry; screenshots were unavailable the whole session (Browser pane not compositing), so every interactive check ran on DOM reads and DOM-dispatched clicks/keys, and synthetic pointer clicks from the computer tool silently no-oped (documented below so the next verifier does not chase it). Fresh-profile state was simulated by clearing the pane's localStorage and deleting its two leftover "New project" IndexedDB test projects from earlier agent sessions (no real footage or Dan data involved).
+
+### Gates
+- G1 `bun test` apps/web: 2446 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+
+### A. Assistant chat UI, mock mode (T17.3) - PASS
+Mock driven via `localStorage["vibecut-assistant-mock"] = "1"` (the documented dev-only flag in real-assistant-service.ts).
+- [x] Assistant tab present in the right dock (Properties | Director | Assistant); empty state shows the three example chips; a chip pre-fills the composer (send is a deliberate second click, so the user can edit first).
+- [x] "Cut the silence at the start": streamed reply bubble, then "Applied: 3 changes" chip with an Undo link; Undo invokes the service undo handle (a no-op in mock mode by design; in real mode it drives the command-stack undo, guarded by canUndo so a stale/double click cannot corrupt the stack).
+- [x] "speed up the second clip": proposed-ops confirmation card with per-op icons + timecodes ("Set clip "B-roll 2" to 2x speed", "Shift everything after it 3s earlier"), composer disabled while held; Confirm morphs the card in place into "Applied: 2 changes" and re-enables the composer; Cancel path is client-side (unit-covered, reducer tests).
+- [x] "cut the boring part": clarifying question grounded in a concrete range ("The section from 2:10-2:45 has three long pauses...") with two quick-reply chips; clicking one sends it as the next user turn and consumes the chips.
+- [x] Unmatched prompt: plain capability reply, no edit event.
+- [x] "do something impossible": friendly error bubble ("I can't do that here - it's outside what this editor can change..."), composer re-enables, no raw error anywhere.
+- [x] Ctrl+/ from the Properties tab switches the dock to Assistant and focuses the composer (verified via panel CSS class + activeElement).
+- [x] Escape blurs the composer back to the global shortcut scope (activeElement returns to body).
+- [x] Preview-toolbar mini-prompt: typing + Enter opens the Assistant tab with the text pre-filled and focused, and clears the mini input.
+- [x] History survives reload: all five bubble kinds (user, text, applied chip, clarifying, error) restored per project after a full page reload, and again after switching mock -> real mode.
+
+### B. Real mode, no Anthropic key (graceful block) - PASS
+- [x] With the mock flag OFF and no key anywhere, sending a prompt POSTs `/api/assistant/edit`, the route answers 400, and the chat shows exactly "The assistant needs an Anthropic key - add one in Settings > AI." as a friendly bubble; no hang, no raw error, composer re-enables. This is the expected state of this environment: apps/web/.env.local has no ANTHROPIC_API_KEY, and Dan's own provider mode is Claude Code, which this route does not support yet (it needs Anthropic tool calling). The live-LLM turn is therefore Dan-owed (see below), and per the round mission this block is a key-availability fact, not a defect.
+
+### C. Executor spot evidence (no live LLM) - PASS
+- [x] Per-file unit counts (all green, part of the 2446): executor 43, turn-service 28, tools 67, context 20, snapshot 15, op-summary 13, director-dock-coexistence 5, template-catalog 2, template-defaults 12, adapter (real-assistant-service) 13, reducer 28, history-store 9.
+- [x] Code read: a whole turn's commands execute as ONE `new BatchCommand(plan.commands)` (features/assistant/executor.ts, applyAssistantTurn) so one Ctrl+Z reverts a whole prompt.
+- [x] Code read: confirmation thresholds are strict greater-than - MAX_UNCONFIRMED_OPS = 3 and MAX_UNCONFIRMED_DESTRUCTIVE_SEC = 10, `needsConfirmation` fires on `> 3` mutating ops or `> 10` removed seconds (features/assistant/turn-service.ts).
+
+### D. Onboarding page, T21.1 - PASS
+- [x] Fresh profile: /projects shows the dismissible first-run banner ("New here? See how VibeCut works - 2 minutes.") linking to /get-started; Dismiss writes `vibecut-onboarding-dismissed=1` and the banner stays gone across reload. Banner is correctly absent once a project exists.
+- [x] /get-started renders the intro, the 3-step flow (Import / Let AI cut it / Polish and export), and the three tool cards (AI Cut, Edit by transcript, Auto captions) with plain-language explainers.
+- [x] Pre-project: all three "Try it" buttons AND both "Add your key in Settings" buttons disabled with title "Create a project first", plus the inline hint line. Post-project: all enabled, hint gone.
+- [x] Provider cards reflect real state: Anthropic "Connected. Using your Claude subscription on this device (the Claude Code app), no key needed." (claude-code mode wording); Groq "Connected. This VibeCut deployment already has a shared Groq key..." (the env's server GROQ_API_KEY, detected via the probe). Get-a-key links only render when not connected.
+- [x] Privacy note present ("Bring your own keys, they stay on this device").
+- [x] "Add your key in Settings" deep link: routes to `/editor/<id>?open=ai-settings`, lands on the assets panel's Settings tab on the AI sub-view (Claude subscription card + transcription provider options visible), and the `?open` param is stripped from the URL.
+- [x] "Get started" header link on /projects; the "Set up AI" indicator links to /get-started#connect-ai, shows the amber warning dot only when setup is needed, and its tooltip flips to "AI is set up" when both providers resolve connected (as they do in this env).
+- [x] Unit evidence: 26 pass across get-started provider-status/page tests, first-run-banner.test.ts, deep-link-open.test.ts.
+- Note (not a defect): on the very first editor visit, the "Welcome to VibeCut" changelog dialog opens on top of the deep-linked Settings panel; after closing it the panel is there. Worth a glance from Dan for feel.
+
+### E. Template polish, T17.4 - PASS on unit + code evidence
+The mock path never inserts a real template (its `applied` events are scripted), and the real insert path needs a live LLM turn, so this feature is scored on unit + code evidence per the round mission.
+- [x] template-defaults.test.ts: 12 pass. Absent "accent" fields fill from the project-derived accent (color-utils.deriveAccent), absent "color" from the contrast-safe foreground, kinetic-title's font defaults to Anton, enum position fields take the template's declared preset; LLM-supplied variables always win; duration falls back to each template's defaultDurationSec in validateInsertTiming.
+- [x] Show-me mode: `showInsertedElement` seeks the playhead to the earliest inserted element's start and pauses, only for additive-only turns (executor.ts; dedicated describe blocks in executor.test.ts); the inserted element ends up selected because every insert command already returns a `CommandResult.selection`.
+- [ ] The actual LOOK of a prompted template on real footage (designed, not default-stamped) is Dan-owed with the live-LLM run below.
+
+### G6 scores (round 17 + T21.1)
+| Feature | Functionality | Quality | Verdict |
+|---|---|---|---|
+| T17.1+T17.2 assistant engine (schema, executor, turn service) | 9 | 9 | DONE (live-LLM turn Dan-owed, not a defect) |
+| T17.3 chat UI + real-service integration | 9 | 9 | DONE |
+| T17.4 template polish | 9 | 9 | DONE (visual look Dan-owed) |
+| T21.1 onboarding page | 9 | 9 | DONE |
+
+### Left for Dan (round 17 + T21.1)
+- [ ] THE live-LLM Assistant run (the one check nobody else can do): give the assistant route an Anthropic key, then run the conversation script for real ("delete the second clip", "extend the intro clip by 2 seconds", "add a lower third saying Hello at 0:30", "speed up clip 3 to 2x", one ambiguous ask, one impossible ask) and confirm each lands on the timeline with one Ctrl+Z per turn. Two ways to provide the key: (1) paste a device key in the editor under Settings > AI (Anthropic API key field, stays in this browser), or (2) add `ANTHROPIC_API_KEY=sk-ant-...` to `apps/web/.env.local` and restart the dev server. Your current Claude Code subscription mode does NOT cover this route yet; that gap is tracked for T21.2 provider work, not as a round-17 defect.
+- [ ] Judge a prompted motion template's look on real footage (T17.4's whole point): "add a title that says ..." should come out palette-matched and sensibly placed, with the playhead parked on it for inspection.
+- [ ] The Welcome-dialog-over-Settings first-visit layering (note in section D): fine per this pass, but see if it feels wrong on first run.
+- Carried from round 18 (unchanged, still owed): real-footage freeze/reverse/crop feel, export playback with sound, speed-curve pitch listen, freeze-desync re-listen once the parallel fix lands.
+
 ## Round 18: parity quick wins + VibeCut home verification (2026-08-01, T18.6, branch `feat/director-eval`, tip `70cb9fb5`)
 
 Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech TTS muxed over an ffmpeg testsrc video, staged temporarily at `apps/web/public/verify-r18.mp4` for the sandboxed preview pane and deleted afterward (git status confirmed clean). Screenshots were unavailable the whole session (Browser pane not compositing), so verification ran on DOM reads, editor state via `window.__vibeEditor`, and export file readback (ffprobe, frame extraction, volumedetect). Two environment shims, both page-side only, no code edits: requestAnimationFrame mapped to setTimeout (the hidden tab never fires rAF, which otherwise stalls the media-import toast pipeline), and the exported blobs were POSTed to a temporary localhost receiver to reach ffprobe on disk.

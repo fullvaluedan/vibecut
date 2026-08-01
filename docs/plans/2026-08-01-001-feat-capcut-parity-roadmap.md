@@ -403,6 +403,7 @@ stay coherent.
 May run in parallel with Round 18 (disjoint files) once Round 16 merges.
 
 ### T17.1 Timeline context + edit-tool schema
+Status: MERGED. G6 RATED 2026-08-01 (T17.5, tip `6702b2dc`): scored jointly with T17.2 as the assistant engine, **9/10 functionality, 9/10 quality.** Evidence: tools.test.ts 67 pass (every tool's accept + refuse cases), context.test.ts 20, snapshot.test.ts 15, all green inside the 2446-test suite. The live-LLM leg of the route is blocked in this environment by key availability only (no ANTHROPIC_API_KEY, and Dan's Claude Code mode is not supported by this route yet); the blocked path is graceful (see T17.3 status) and is recorded as Dan-owed in docs/TO-VERIFY.md, not as a defect.
 Agent: **Opus**. Size: L. Worktree: yes.
 
 1. A compact serializer: tracks, clips (ids, times, media names, link pairs),
@@ -425,6 +426,7 @@ refuse cases); schema round-trip (a canned tool-call transcript replays to the
 expected command list).
 
 ### T17.2 Executor: intents -> commands, actively reflected
+Status: MERGED. G6 RATED 2026-08-01 (T17.5, tip `6702b2dc`): **9/10 functionality, 9/10 quality** (jointly with T17.1 as the assistant engine). Code-read confirmed: a whole turn executes as ONE `new BatchCommand(plan.commands)` (executor.ts applyAssistantTurn), and the confirmation thresholds are strict greater-than (MAX_UNCONFIRMED_OPS = 3, MAX_UNCONFIRMED_DESTRUCTIVE_SEC = 10, turn-service.ts needsConfirmation). Unit evidence: executor.test.ts 43 pass (batch atomicity, undo round-trip, show-me), turn-service.test.ts 28 pass (thresholds, held-turn confirm/cancel, error legs), op-summary 13, director-dock-coexistence 5. The full scripted live-LLM conversation (G4) is Dan-owed with a real Anthropic key; the two ways to provide one are listed in docs/TO-VERIFY.md.
 Agent: **Opus**. Size: L. Worktree: yes; branches from T17.1's branch (shared schema
 module).
 
@@ -454,6 +456,7 @@ seeded project: "delete the second clip", "extend the intro clip by 2 seconds",
 in the timeline and one Ctrl+Z reverts each turn.
 
 ### T17.3 Chat window UI
+Status: MERGED. G6 RATED 2026-08-01 (T17.5, tip `6702b2dc`): **9/10 functionality, 9/10 quality.** Hands-on in the dev preview (mock service): Assistant dock tab with empty-state chips; streamed reply + "Applied: N changes" chip with Undo; the proposed-ops confirmation card (per-op icons + timecodes) that disables the composer while held and morphs in place into the applied chip on Confirm; clarifying question with quick-reply chips that send-and-consume; friendly error bubble on an impossible ask; Ctrl+/ switches the dock to Assistant and focuses the composer from another tab; Escape blurs back to the global shortcut scope; the preview-toolbar mini-prompt opens the tab pre-filled and focused; history (all five bubble kinds) survives reload per project. Real-mode graceful block verified live with no key: POST /api/assistant/edit answers 400 and the chat shows exactly "The assistant needs an Anthropic key - add one in Settings > AI.", composer re-enables, no raw error. Full checklist in docs/TO-VERIFY.md round 17 section.
 Agent: **Sonnet**. Size: M. Worktree: yes; parallel with T17.2 against a mocked
 executor interface, integrates when T17.2 merges.
 
@@ -467,6 +470,7 @@ executor interface, integrates when T17.2 merges.
 G4: layout at min panel widths, dark mode, history survives reload.
 
 ### T17.4 Graphics-via-prompt polish
+Status: MERGED. G6 RATED 2026-08-01 (T17.5, tip `6702b2dc`): **9/10 functionality, 9/10 quality** on unit + code evidence (the mock path never inserts a real template and the real path needs a live LLM turn, so the on-footage LOOK is Dan-owed). template-defaults.test.ts 12 pass: absent accent/color variables fill from the project-derived palette (deriveAccent / pickForeground), kinetic-title's font defaults to Anton, position enums take each template's declared preset, LLM-supplied variables always win, and duration already falls back to defaultDurationSec in validateInsertTiming. Show-me mode confirmed in executor.ts + its tests: additive-only turns seek the playhead to the earliest insert and pause, and the inserted element ends selected via the insert command's own CommandResult.selection.
 Agent: **Sonnet**. Size: S-M. Worktree: yes.
 
 1. Motion-template insertion quality: sensible defaults per template (position
@@ -477,6 +481,7 @@ Agent: **Sonnet**. Size: S-M. Worktree: yes.
    exists).
 
 ### T17.5 Round 17 verification + G6 rating
+Status: DONE 2026-08-01 (tip `6702b2dc`). Gates: apps/web 2446 pass 0 fail, hf-bridge 210 pass 0 fail, tsc 0 errors. Hands-on UI pass ran on the mock service (the documented vibecut-assistant-mock flag) because the live-LLM path is key-blocked in this environment: no ANTHROPIC_API_KEY in apps/web/.env.local and the route does not support Claude Code mode yet. The graceful block itself was verified live (400 -> friendly bubble). Result: all four rated features at 9/9; the 12+-prompt LIVE conversation script remains Dan-owed with a real Anthropic key (device key in Settings > AI, or ANTHROPIC_API_KEY in .env.local + restart). Full evidence in docs/TO-VERIFY.md round 17 section. Freeze frame was out of scope here (parallel fix in flight).
 Agent: **Sonnet**. Size: M. The T17.2 G4 conversation script expanded to 12+
 prompts incl. ambiguous and impossible asks (verify refusal UX), rate all T17.x
 features per G6, evidence attached.
@@ -592,6 +597,7 @@ doc; they are the largest single system in this roadmap and must not block the
 editor rounds.
 
 ### T21.1 Get-started / onboarding page + first-run wizard
+Status: MERGED. G6 RATED 2026-08-01 (T17.5 closing pass, tip `6702b2dc`): **9/10 functionality, 9/10 quality.** Hands-on on a simulated fresh profile: the /projects first-run banner shows pre-first-project, Dismiss persists across reload (vibecut-onboarding-dismissed), and it never auto-redirects; /get-started renders the 3-step flow, the three AI tool cards (disabled with a "Create a project first" hint until a project exists, then enabled with working deep links), provider cards reflecting REAL state (Anthropic connected via Claude Code mode wording, Groq connected via the server GROQ_API_KEY probe), get-a-key links only when missing, and the keys-stay-local privacy note; "Add your key in Settings" deep links to Settings on the AI sub-tab with the ?open param stripped; the header "Get started" link and the "Set up AI" indicator (amber dot only when setup is needed) both work. 26 supporting unit tests pass. Key entry + Test connection lives in Settings > AI rather than as paste fields on the page itself, with the page deep-linking straight there; recorded as the shipped design. One feel note for Dan: the first-ever editor visit stacks the Welcome changelog dialog over the deep-linked Settings panel.
 Agent: **Sonnet**. Size: M. Ships with Round 18.
 
 1. A `/get-started` page linked from the home page and shown automatically on first
