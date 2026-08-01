@@ -10,4 +10,12 @@ export const SITE_INFO = {
 	favicon: "/favicon.ico",
 };
 
-export const DEFAULT_LOGO_URL = "/logos/opencut/svg/logo.svg";
+// T18.5: designed-by-us bold wordmark reading "VibeCut" (CapCut-inspired
+// spirit, zero imitation of their actual mark). Used wherever there is room
+// for the full lockup (marketing header, home page). The old OpenCut SVGs
+// under /logos/opencut/ stay untouched (MIT attribution + /brand page).
+export const DEFAULT_LOGO_URL = "/logos/vibecut/wordmark.svg";
+
+// Compact square "V" mark for tight UI slots (editor toolbar button, footer
+// icon, favicon source) where the full wordmark would be squeezed illegible.
+export const DEFAULT_MARK_URL = "/logos/vibecut/mark.svg";

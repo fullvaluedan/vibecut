@@ -18,13 +18,13 @@ export function Hero() {
 			/>
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center">
 				<div className="inline-block text-4xl font-bold tracking-tighter md:text-[4rem]">
-					<h1>The open source</h1>
+					<h1>The AI-native</h1>
 					<Handlebars>Video editor</Handlebars>
 				</div>
 
 				<p className="text-muted-foreground mx-auto mt-10 max-w-xl text-base font-light tracking-wide sm:text-xl">
-					A simple but powerful video editor that gets the job done. Works on
-					any platform.
+					Edit, generate, and vibe. VibeCut is a fast, privacy-first video
+					editor that runs right in your browser.
 				</p>
 
 				<div className="mt-8 flex justify-center gap-8">

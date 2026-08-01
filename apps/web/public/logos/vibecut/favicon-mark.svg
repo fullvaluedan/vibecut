@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VibeCut">
+	<title>VibeCut</title>
+	<rect width="512" height="512" fill="#3E63F0"/>
+	<path
+		d="M112 150 L256 402 L400 150"
+		fill="none"
+		stroke="#FFFFFF"
+		stroke-width="76"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+	/>
+</svg>
