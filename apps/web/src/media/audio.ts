@@ -16,6 +16,7 @@ import {
 import type { AudioCapableElement } from "@/timeline/audio-state";
 import {
 	hasAnimatedVolume,
+	hasAudioFade,
 	isElementMuted,
 	resolveEffectiveAudioGain,
 } from "@/timeline/audio-state";
@@ -1279,7 +1280,12 @@ function buildWindowMixElement({
 	);
 	const sourceSampleRate = buffer.sampleRate;
 	const timelineElement = element.timelineElement;
-	const animated = hasAnimatedVolume({ element: timelineElement });
+	// T18.3: a fade ramps gain over the clip's own duration even without
+	// volume keyframes, so it needs the same per-sample `gainAt` path as
+	// animated volume (a single constant gain would skip the ramp entirely).
+	const animated =
+		hasAnimatedVolume({ element: timelineElement }) ||
+		hasAudioFade({ element: timelineElement });
 	const constantGain = element.volume;
 
 	return {

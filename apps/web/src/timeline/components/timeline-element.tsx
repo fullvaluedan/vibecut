@@ -5,6 +5,7 @@ import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
+import { AudioFadeHandles } from "./audio-fade-handles";
 import { useElementPreview } from "@/timeline/hooks/use-element-preview";
 import {
 	useKeyframeDrag,
@@ -1277,6 +1278,11 @@ function AudioElementContent({
 						color={TIMELINE_TRACK_THEME.audio.waveformColor}
 					/>
 					<AudioVolumeLine element={element} trackId={trackId} />
+					<AudioFadeHandles
+						element={element}
+						trackId={trackId}
+						pixelsPerSecond={pixelsPerSecond}
+					/>
 				</div>
 			</div>
 		);
@@ -1336,6 +1342,18 @@ function TiledMediaContent({
 		(s) => s.videoWaveformsEnabled,
 	);
 	const mediaAssets = useEditor((e) => e.media.getAssets());
+	// T18.3: gain samples (folds fade + volume) for the embedded-audio waveform
+	// below. Computed unconditionally (Rules of Hooks) - undefined for images.
+	const gainSamples = useMemo(
+		() =>
+			element.type === "video"
+				? buildWaveformGainSamples({
+						element,
+						count: WAVEFORM_GAIN_SAMPLE_COUNT,
+					})
+				: undefined,
+		[element],
+	);
 
 	const mediaAsset = mediaAssets.find((asset) => asset.id === element.mediaId);
 	const imageUrl =
@@ -1384,11 +1402,17 @@ function TiledMediaContent({
 						})}
 						sourceFile={mediaAsset?.file}
 						audioUrl={mediaAsset?.url}
+						gainSamples={gainSamples}
 						pixelsPerSecond={pixelsPerSecond}
 						clipDurationSec={videoElement.duration / TICKS_PER_SECOND}
 						retime={videoElement.retime}
 						sourceStartSec={videoElement.trimStart / TICKS_PER_SECOND}
 						color={TIMELINE_TRACK_THEME.audio.waveformColor}
+					/>
+					<AudioFadeHandles
+						element={videoElement}
+						trackId={track.id}
+						pixelsPerSecond={pixelsPerSecond}
 					/>
 				</div>
 			)}

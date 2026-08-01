@@ -6,6 +6,7 @@ import { createAudioContext, collectAudioClips } from "@/media/audio";
 import {
 	buildAudioGainAutomation,
 	hasAnimatedVolume,
+	hasAudioFade,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
 import {
@@ -478,6 +479,9 @@ export class AudioManager {
 		return (
 			this.hasCurveRetime({ clip }) ||
 			hasAnimatedVolume({ element: clip.timelineElement }) ||
+			// T18.3: a fade ramps gain over time even without volume keyframes, so
+			// it needs the same per-point automation path as animated volume.
+			hasAudioFade({ element: clip.timelineElement }) ||
 			shouldMaintainPitch({
 				rate: clip.retime?.rate ?? 1,
 				maintainPitch: clip.retime?.maintainPitch,
@@ -506,7 +510,10 @@ export class AudioManager {
 		clipGain.gain.cancelScheduledValues(startTimestamp);
 		clipGain.gain.setValueAtTime(clip.volume, startTimestamp);
 
-		if (!hasAnimatedVolume({ element: clip.timelineElement })) {
+		if (
+			!hasAnimatedVolume({ element: clip.timelineElement }) &&
+			!hasAudioFade({ element: clip.timelineElement })
+		) {
 			return;
 		}
 
