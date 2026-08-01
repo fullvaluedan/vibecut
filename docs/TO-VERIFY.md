@@ -30,10 +30,10 @@ Your four asks from the finished-video run. AGENT-VERIFIED live in-app (2026-07-
 
 ## Ripple-drag live preview (2026-07-17, commit `3d93a3d9`, branch `feat/director-eval`)
 Closes round 8's known v1 limitation: with **Ripple editing ON**, a right-handle trim now shifts the downstream clips ON SCREEN during the drag instead of them jumping at mouseup. Numerically verified in-app (3 butted clips; preview shifts tracked the drag both directions, a drag back to the origin restored exact base positions, and the commit matched the final preview to the tick). Confirm the FEEL on real footage:
-- [ ] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps.
-- [ ] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump.
-- [ ] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began.
-- [ ] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit; that path is the per-track heuristic, not this preview).
+- [x] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps. VERIFIED 2026-08-01 (round 15, T15.5): live `previewOverlay` showed the downstream clip + linked audio shifted mid-drag to match a -500px (~10s) shrink, before mouseup.
+- [x] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump. VERIFIED 2026-08-01 (round 15, T15.5): same mechanism confirmed via the magnet path (T15.2): a real +400px (~8s) extend drag pushed the downstream clip + its linked audio by the exact delta, live during the drag.
+- [x] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began. VERIFIED 2026-08-01 (round 15, T15.5): dragged a shrink back to the exact starting clientX before mouseup; preview and the final commit both matched the pre-drag baseline byte-for-byte (trimEnd/duration/startTime all reverted exactly).
+- [x] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit; that path is the per-track heuristic, not this preview). VERIFIED 2026-08-01 (round 15, T15.5): with magnet OFF and ripple OFF, a right-trim extend correctly walled at the neighbor's edge with no ripple; left-handle trims (magnet ON) pin the clip's start and clamp only at the true source limit, not the neighbor.
 
 ## Audio-separation regression on multi/selected bin drags (2026-06-24, commit `ab77bcd5`)
 Fixed: the multi-asset drag path stopped separating source audio (regression from `6ac45541`), so dragging selected clips combined audio into the video. Now separates in-batch onto a shared audio track. Drag-drop is DOM-bound → live-verify in-app:
@@ -149,7 +149,7 @@ Run **AI CUT → AI Director** on a talking-head clip with speech, then check th
 - [ ] **Doubled "now" (~5:20 in ROUGH_CUT)** — re-run AI Director; the duplicate should now be offered as a cut (gap loosened to ~1s + breath/filler step-over + chunk-seam repair).
 
 ## Timeline / editor fixes
-- [ ] **Import → V1** — importing a video lands on V1 (main), not V2, even when a V2 overlay track exists.
+- [x] **Import → V1**: importing a video lands on V1 (main), not V2, even when a V2 overlay track exists. VERIFIED 2026-08-01 (round 15, T15.5): with a V2-equivalent overlay track already present, a bin-drag drop of a second video still landed on the sole main track (ripple-inserted, no new video track created) with its audio auto-separated onto the existing audio lane.
 - [ ] **Multi-select move (forward tool)** — press **A**, then press-drag an unselected clip: it selects everything forward AND moves the group in one motion.
 - [ ] **Shift + ← / →** nudges 15 frames (configurable in Settings → Hotkeys); timeline view follows the playhead; clicking the track area doesn't move the playhead (ruler does).
 
