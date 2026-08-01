@@ -41,10 +41,39 @@ import {
 	getBookmarkPreviewOverlaySource,
 } from "@/timeline/bookmarks/index";
 import { BackgroundTranscriber } from "@/features/transcription/background-transcriber";
+import { parseOpenParam, resolveOpenParamAction } from "./deep-link-open";
+import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
+import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
+
+/**
+ * T18.5: home-page tiles ("AI Cut", "Edit by transcript", "Auto captions")
+ * deep-link here via `?open=director|transcript|captions`. Reads the param
+ * once on mount, opens the matching panel, then strips it from the URL via
+ * history.replaceState (no navigation/reload). Unknown/missing params are a
+ * no-op - see deep-link-open.ts for the pure param -> action mapping.
+ */
+function useDeepLinkOpen() {
+	useEffect(() => {
+		const url = new URL(window.location.href);
+		const param = parseOpenParam(url.searchParams.get("open"));
+		if (!param) return;
+
+		const action = resolveOpenParamAction(param);
+		if (action.store === "director") {
+			useDirectorPlanStore.getState().setDockTab("director");
+		} else {
+			useAssetsPanelStore.getState().setActiveTab(action.tab);
+		}
+
+		url.searchParams.delete("open");
+		window.history.replaceState(null, "", url.toString());
+	}, []);
+}
 
 export default function Editor() {
 	const params = useParams();
 	const projectId = params.project_id as string;
+	useDeepLinkOpen();
 
 	return (
 		<MobileGate>

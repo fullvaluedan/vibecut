@@ -57,10 +57,10 @@ export function Header() {
 							<Link href="/" className="flex items-center gap-3">
 								<Image
 									src={DEFAULT_LOGO_URL}
-									alt="VibeCut Logo"
-									className="invert dark:invert-0"
-									width={32}
-									height={32}
+									alt="VibeCut"
+									className="h-7 w-auto invert dark:invert-0"
+									width={220}
+									height={56}
 								/>
 							</Link>
 						</ContextMenuTrigger>
@@ -79,7 +79,7 @@ export function Header() {
 								onClick={() => {
 									const a = document.createElement("a");
 									a.href = DEFAULT_LOGO_URL;
-									a.download = "opencut-logo.svg";
+									a.download = "vibecut-wordmark.svg";
 									a.click();
 								}}
 							>
