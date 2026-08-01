@@ -110,6 +110,10 @@ export const ACTIONS = {
 		description: "Maximize or restore the assets panel",
 		category: "navigation",
 	},
+	"focus-assistant": {
+		description: "Focus the Assistant chat composer",
+		category: "navigation",
+	},
 	"go-to-previous-edit": {
 		description: "Move the playhead to the previous edit point",
 		category: "navigation",
@@ -257,6 +261,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["timeline-zoom-out", ["-"]],
 	["timeline-zoom-fit", ["\\"]],
 	["toggle-panel-maximize", ["`"]],
+	["focus-assistant", ["ctrl+/"]],
 	["toggle-bookmark", ["m"]],
 	["go-to-previous-edit", ["up"]],
 	["go-to-next-edit", ["down"]],
