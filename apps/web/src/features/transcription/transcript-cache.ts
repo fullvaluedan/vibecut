@@ -26,6 +26,7 @@ import { needsWordUpgrade } from "./word-upgrade";
 import { computeAudioHash } from "./audio-hash";
 import {
 	getLineageFastPathTranscript,
+	readTranscriptLineage,
 	resetTranscriptLineage,
 } from "./lineage";
 
@@ -129,6 +130,30 @@ export function getCachedTranscript(
 	editor: EditorCore,
 ): TranscriptSegmentLite[] | null {
 	return getCachedEntry(editor)?.segments ?? null;
+}
+
+/**
+ * The best available transcript for EXPORT, read-only and synchronous (never
+ * triggers a transcription). `getCachedTranscript` is hash-gated: after ANY edit
+ * (a cut, a Director apply) the hash moves, it returns null, and an export path
+ * built on it alone loses the transcript until a full re-transcription - even
+ * though the transcript lineage (T16.1) can already serve the correctly remapped
+ * post-edit segments. Falls back in order:
+ *
+ *   1. the hash-matched cache entry's segments (unchanged timeline)
+ *   2. the lineage view's segments, when the journal fully explains every edit
+ *      since the last real transcription (`readTranscriptLineage` status
+ *      "explained") - these are the same remapped segments the round-16 export
+ *      fix proved correct for txt/csv/srt
+ *   3. null - nothing can be served without a fresh transcription
+ */
+export function getExportableTranscript(
+	editor: EditorCore,
+): TranscriptSegmentLite[] | null {
+	const cached = getCachedTranscript(editor);
+	if (cached) return cached;
+	const lineage = readTranscriptLineage({ editor });
+	return lineage.status === "explained" ? lineage.segments : null;
 }
 
 /**

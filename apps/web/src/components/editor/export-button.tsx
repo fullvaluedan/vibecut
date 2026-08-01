@@ -27,7 +27,7 @@ import {
 	computeEffectiveBitrate,
 	formatBitrate,
 } from "@/export/resolution-utils";
-import { getCachedTranscript } from "@/features/transcription/transcript-cache";
+import { getExportableTranscript } from "@/features/transcription/transcript-cache";
 import { formatTranscriptSrt } from "@/features/transcription/export-transcript";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
@@ -151,8 +151,8 @@ function ExportPopover({
 	});
 	const outputPixels = outputSize.width * outputSize.height;
 
-	const cachedTranscript = getCachedTranscript(editor);
-	const hasTranscript = !!cachedTranscript && cachedTranscript.length > 0;
+	const exportableTranscript = getExportableTranscript(editor);
+	const hasTranscript = !!exportableTranscript && exportableTranscript.length > 0;
 
 	const lowBitrate = formatBitrate(
 		computeEffectiveBitrate({ quality: "low", projectPixels, outputPixels }),
@@ -255,8 +255,8 @@ function ExportPopover({
 			toast.success("Exported", { description: "Saved to your downloads." });
 		}
 
-		if (shouldExportSrt && cachedTranscript && cachedTranscript.length > 0) {
-			const srtContent = formatTranscriptSrt({ segments: cachedTranscript });
+		if (shouldExportSrt && exportableTranscript && exportableTranscript.length > 0) {
+			const srtContent = formatTranscriptSrt({ segments: exportableTranscript });
 			const srtFilename = filename.replace(/\.[^.]+$/, ".srt");
 			const srtBlob = new Blob([srtContent], { type: "text/plain" });
 			const srtUrl = URL.createObjectURL(srtBlob);
