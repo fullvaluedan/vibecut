@@ -8,6 +8,25 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 /**
+ * True when the deployment has a server-side Groq key configured (Round 21
+ * groundwork). Read fresh each call rather than cached at module load so a
+ * test (or a platform that hot-swaps env) sees the current value.
+ */
+function hasServerGroqKey(): boolean {
+	return typeof process.env.GROQ_API_KEY === "string" && process.env.GROQ_API_KEY.length > 0;
+}
+
+/**
+ * Lets the client know whether cloud transcription is available WITHOUT a
+ * device-local key, so it can attempt the cloud path even when the user never
+ * pasted a Groq key into Settings → AI. Reveals nothing else, never the key
+ * itself, never its length or shape.
+ */
+export async function GET() {
+	return NextResponse.json({ groqServerKey: hasServerGroqKey() });
+}
+
+/**
  * Cloud transcription proxy. The browser can't call Groq/Deepgram/etc. directly
  * (CORS) and the BYO key must never reach the browser STT call, so the editor
  * POSTs the extracted timeline audio (a WAV blob) here with the provider + key
@@ -19,11 +38,19 @@ export const maxDuration = 300;
  */
 export async function POST(req: NextRequest) {
 	const provider = req.headers.get("x-framecut-transcribe-provider");
-	const apiKey = req.headers.get("x-framecut-transcribe-key");
+	// The device-local (BYO) key from Settings → AI wins when present; otherwise
+	// fall back to a server-configured GROQ_API_KEY (Round 21 groundwork) so a
+	// deployment can offer cloud transcription without every user pasting their
+	// own key. Neither key is ever echoed back in a response body or a log line.
+	const headerKey = req.headers.get("x-framecut-transcribe-key");
+	const apiKey = headerKey || process.env.GROQ_API_KEY || "";
 
 	if (!apiKey) {
 		return NextResponse.json(
-			{ error: "Add your transcription API key in Settings → AI." },
+			{
+				error:
+					"No Groq key configured - add one in Settings or set GROQ_API_KEY.",
+			},
 			{ status: 401 },
 		);
 	}

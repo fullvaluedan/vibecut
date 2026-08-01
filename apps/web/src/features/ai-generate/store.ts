@@ -383,3 +383,52 @@ export function buildTranscribeHeaders(): Record<string, string> {
 	if (groqApiKey) headers["x-framecut-transcribe-key"] = groqApiKey;
 	return headers;
 }
+
+/**
+ * Whether GET /api/transcribe reports a server-configured Groq key (Round 21
+ * groundwork: a deployment-wide GROQ_API_KEY, so cloud transcription works
+ * without every user pasting their own key). Probed once and cached for the
+ * session, module-level, no re-probe on window focus. A stale cached "true"
+ * is harmless: the existing cloud-failure fallback (T16.3 G6) still catches a
+ * rejected/expired server key and drops to local transcription.
+ */
+let serverGroqKeyProbe: Promise<boolean> | null = null;
+
+function isServerGroqKeyPayload(
+	value: unknown,
+): value is { groqServerKey: boolean } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as Record<string, unknown>).groqServerKey === "boolean"
+	);
+}
+
+/** Probes (and caches) whether the server has a Groq key configured. */
+export function probeServerGroqKey(): Promise<boolean> {
+	if (!serverGroqKeyProbe) {
+		serverGroqKeyProbe = fetch("/api/transcribe")
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => (isServerGroqKeyPayload(data) ? data.groqServerKey : false))
+			.catch(() => false);
+	}
+	return serverGroqKeyProbe;
+}
+
+/** Test-only: clears the cached probe so a fresh scenario can be set up. */
+export function resetServerGroqKeyProbeForTests(): void {
+	serverGroqKeyProbe = null;
+}
+
+/**
+ * Whether a cloud-transcription attempt should be made: the user picked
+ * "cloud" AND either they have a device-local Groq key OR the server reports
+ * one configured. The device-local key is checked first so a user who
+ * already has a key never pays for the probe request.
+ */
+export async function shouldAttemptCloudTranscription(): Promise<boolean> {
+	const { transcriptionBackend, groqApiKey } = useAiSettingsStore.getState();
+	if (transcriptionBackend !== "cloud") return false;
+	if (groqApiKey) return true;
+	return probeServerGroqKey();
+}

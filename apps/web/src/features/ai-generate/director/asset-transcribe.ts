@@ -16,7 +16,7 @@ import { transcriptionService } from "@/services/transcription/service";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import {
 	buildTranscribeHeaders,
-	useAiSettingsStore,
+	shouldAttemptCloudTranscription,
 } from "@/features/ai-generate/store";
 import { parseCloudTranscript } from "@/features/transcription/transcript-cache";
 import type { MediaAsset } from "@/media/types";
@@ -174,9 +174,7 @@ export async function transcribeAsset({
 	if (isAssetCacheHit(cached, wantWords)) {
 		base = cached;
 	} else {
-		const aiSettings = useAiSettingsStore.getState();
-		const useCloud =
-			aiSettings.transcriptionBackend === "cloud" && !!aiSettings.groqApiKey;
+		const useCloud = await shouldAttemptCloudTranscription();
 		base = useCloud
 			? await transcribeViaCloud({
 					samples: decoded.samples,

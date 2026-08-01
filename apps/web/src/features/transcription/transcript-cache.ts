@@ -16,6 +16,7 @@ import { vadService } from "@/services/vad/service";
 import { concatSpeechSamples, remapBufferTimes, type ConcatSegment } from "./vad-remap";
 import {
 	buildTranscribeHeaders,
+	shouldAttemptCloudTranscription,
 	useAiSettingsStore,
 } from "@/features/ai-generate/store";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
@@ -421,8 +422,7 @@ export async function ensureTimelineTranscript({
 		// run ONE cloud attempt then ONE local attempt per call - there is no
 		// retry loop.
 		let cloudError: Error | null = null;
-		const aiSettings = useAiSettingsStore.getState();
-		if (aiSettings.transcriptionBackend === "cloud" && aiSettings.groqApiKey) {
+		if (await shouldAttemptCloudTranscription()) {
 			const startedAt = Date.now();
 			broadcastProgress({
 				phase: "transcribing",
