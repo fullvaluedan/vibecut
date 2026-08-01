@@ -22,6 +22,13 @@ import {
 	downloadBuffer,
 } from "@/export";
 import { canExport } from "@/export/can-export";
+import {
+	deriveOutputSize,
+	computeEffectiveBitrate,
+	formatBitrate,
+} from "@/export/resolution-utils";
+import { getCachedTranscript } from "@/features/transcription/transcript-cache";
+import { formatTranscriptSrt } from "@/features/transcription/export-transcript";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
 	EXPORT_FORMAT_VALUES,
@@ -130,6 +137,43 @@ function ExportPopover({
 	const [shouldIncludeAudio, setShouldIncludeAudio] = useState<boolean>(
 		DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
 	);
+	const [resolutionPreset, setResolutionPreset] = useState<"project" | "2160" | "1080" | "720">(
+		"project",
+	);
+	const [shouldExportSrt, setShouldExportSrt] = useState(false);
+
+	const canvasSize = activeProject.settings.canvasSize;
+	const projectPixels = canvasSize.width * canvasSize.height;
+	const outputSize = deriveOutputSize({
+		preset: resolutionPreset,
+		projectWidth: canvasSize.width,
+		projectHeight: canvasSize.height,
+	});
+	const outputPixels = outputSize.width * outputSize.height;
+
+	const cachedTranscript = getCachedTranscript(editor);
+	const hasTranscript = !!cachedTranscript && cachedTranscript.length > 0;
+
+	const lowBitrate = formatBitrate(
+		computeEffectiveBitrate({ quality: "low", projectPixels, outputPixels }),
+	);
+	const mediumBitrate = formatBitrate(
+		computeEffectiveBitrate({
+			quality: "medium",
+			projectPixels,
+			outputPixels,
+		}),
+	);
+	const highBitrate = formatBitrate(
+		computeEffectiveBitrate({ quality: "high", projectPixels, outputPixels }),
+	);
+	const veryHighBitrate = formatBitrate(
+		computeEffectiveBitrate({
+			quality: "very_high",
+			projectPixels,
+			outputPixels,
+		}),
+	);
 
 	const handleExport = async () => {
 		if (!activeProject) return;
@@ -162,6 +206,7 @@ function ExportPopover({
 				quality,
 				fps: activeProject.settings.fps,
 				includeAudio: shouldIncludeAudio,
+				outputSize: resolutionPreset === "project" ? undefined : outputSize,
 			},
 		});
 
@@ -210,6 +255,20 @@ function ExportPopover({
 			toast.success("Exported", { description: "Saved to your downloads." });
 		}
 
+		if (shouldExportSrt && cachedTranscript && cachedTranscript.length > 0) {
+			const srtContent = formatTranscriptSrt({ segments: cachedTranscript });
+			const srtFilename = filename.replace(/\.[^.]+$/, ".srt");
+			const srtBlob = new Blob([srtContent], { type: "text/plain" });
+			const srtUrl = URL.createObjectURL(srtBlob);
+			const srtLink = document.createElement("a");
+			srtLink.href = srtUrl;
+			srtLink.download = srtFilename;
+			document.body.appendChild(srtLink);
+			srtLink.click();
+			document.body.removeChild(srtLink);
+			URL.revokeObjectURL(srtUrl);
+		}
+
 		editor.project.clearExportState();
 		onOpenChange(false);
 	};
@@ -237,6 +296,40 @@ function ExportPopover({
 						{!isExporting && (
 							<>
 								<div className="flex flex-col">
+t							<Section
+									collapsible
+									defaultOpen={true}
+									showTopBorder={false}
+								>
+									<SectionHeader>
+										<SectionTitle>Resolution</SectionTitle>
+									</SectionHeader>
+									<SectionContent>
+										<div className="flex flex-col gap-2">
+											<select
+												value={resolutionPreset}
+												onChange={(e) => {
+													const value = e.target.value as "project" | "2160" | "1080" | "720";
+													setResolutionPreset(value);
+												}}
+												className="w-full rounded border border-input bg-background px-3 py-2 text-sm"
+											>
+												<option value="project">
+													Project size ({canvasSize.width}x{canvasSize.height})
+												</option>
+												<option value="2160">2160p</option>
+												<option value="1080">1080p</option>
+												<option value="720">720p</option>
+											</select>
+											{resolutionPreset !== "project" && (
+												<p className="text-muted-foreground text-xs">
+													Output: {outputSize.width}x{outputSize.height}
+												</p>
+											)}
+										</div>
+									</SectionContent>
+								</Section>
+
 									<Section
 										collapsible
 										defaultOpen={true}
@@ -285,20 +378,20 @@ function ExportPopover({
 											>
 												<div className="flex items-center space-x-2">
 													<RadioGroupItem value="low" id="low" />
-													<Label htmlFor="low">Low - Smallest file size</Label>
+													<Label htmlFor="low">Low ({lowBitrate})</Label>
 												</div>
 												<div className="flex items-center space-x-2">
 													<RadioGroupItem value="medium" id="medium" />
-													<Label htmlFor="medium">Medium - Balanced</Label>
+													<Label htmlFor="medium">Medium ({mediumBitrate})</Label>
 												</div>
 												<div className="flex items-center space-x-2">
 													<RadioGroupItem value="high" id="high" />
-													<Label htmlFor="high">High - Recommended</Label>
+													<Label htmlFor="high">High ({highBitrate})</Label>
 												</div>
 												<div className="flex items-center space-x-2">
 													<RadioGroupItem value="very_high" id="very_high" />
 													<Label htmlFor="very_high">
-														Very high - Largest file size
+														Very high ({veryHighBitrate})
 													</Label>
 												</div>
 											</RadioGroup>
@@ -324,6 +417,28 @@ function ExportPopover({
 											</div>
 										</SectionContent>
 									</Section>
+
+									{hasTranscript && (
+										<Section collapsible defaultOpen={true}>
+											<SectionHeader>
+												<SectionTitle>Captions</SectionTitle>
+											</SectionHeader>
+											<SectionContent>
+												<div className="flex items-center space-x-2">
+													<Checkbox
+														id="export-srt"
+														checked={shouldExportSrt}
+														onCheckedChange={(checked) =>
+															setShouldExportSrt(!!checked)
+														}
+													/>
+													<Label htmlFor="export-srt">
+														Also export captions (.srt)
+													</Label>
+												</div>
+											</SectionContent>
+										</Section>
+									)}
 								</div>
 
 								<div className="p-3 pt-0">

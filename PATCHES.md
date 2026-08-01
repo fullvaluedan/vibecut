@@ -608,3 +608,15 @@ Tests (new, ours): `timeline/__tests__/magnet.test.ts` covers the gap-close diff
 Every other file this task touched is FrameCut-owned and needs no row (verified with `git log --diff-filter=A`): `features/transcription/{lineage.ts,lineage-types.ts,detect-timeline-change.ts,seam-markers.ts,seam-window-model.ts,restore-seam.ts}` and `features/transcription/components/{assets-view.tsx,transcript-text.tsx,transcript-restore-popover.tsx}`.
 
 Tests (new, ours): `commands/timeline/track/__tests__/restore-range.test.ts` (full round trip byte-equal to pre-cut, undo/redo, interior/leading/trailing partial restores, linked-audio lockstep and fresh filler link ids, the unrecoverable-media gap, two seams in one command), `features/transcription/__tests__/restore-seam.test.ts` (plan-to-command mapping incl. multi-span seams, partial restore + journal reconciliation, undo/redo, remove-restore-remove, the window model), `features/transcription/__tests__/seam-markers.test.ts` (pipe placement at word and segment level), and `features/ai-generate/director/__tests__/restore-dock-resync.test.ts` (a restore after a Director apply flips the dock to `applied-locked` cleanly and never touches the stack afterwards).
+
+## T18.4 - Export options (2026-08-01)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/export/index.ts` | Added `ExportResolution` type and `outputSize?: ExportResolution` field to `ExportOptions` (optional output resolution override, defaulting to project size when omitted) | 2026-08-01 | Additive field; drop if output-size scaling not needed |
+| `apps/web/src/components/editor/export-button.tsx` | Export popover gains: (1) Resolution preset select (project/2160p/1080p/720p with live output-size display); (2) Quality labels updated to show effective bitrate (computed from resolution and quality via `deriveOutputSize`/`computeEffectiveBitrate`); (3) Captions section with "Also export captions (.srt)" checkbox (shown only when transcript cache has segments) + SRT export logic that downloads alongside the video | 2026-08-01 | Three feature blocks; bitrate computation is pure and testable |
+| `apps/web/src/services/renderer/scene-exporter.ts` | Added optional `outputSize?: {width,height}` to `ExportParams`; constructor uses it to override canvas dimensions when rendering (defaults to project size when omitted) | 2026-08-01 | One optional field; no behavior change when omitted |
+| `apps/web/src/core/managers/renderer-manager.ts` | `exportProject` destructures `outputSize` from options and passes it to `SceneExporter` | 2026-08-01 | Two lines (destructure + pass-through) |
+
+New FrameCut-owned files (no PATCHES.md rows needed): `apps/web/src/export/resolution-utils.ts` (utility functions `deriveOutputSize`, `computeEffectiveBitrate`, `formatBitrate` for resolution scaling and bitrate calculation) and its tests `apps/web/src/export/__tests__/resolution-utils.test.ts` (11 tests covering aspect-ratio preservation, even-rounding, quality levels, bitrate scaling).
+

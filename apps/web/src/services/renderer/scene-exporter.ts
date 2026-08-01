@@ -44,6 +44,8 @@ type ExportParams = {
 	audioBuffer?: AudioBuffer;
 	/** Streamed window mix (long timelines). Mutually exclusive with `audioBuffer`. */
 	audioChunks?: AudioChunkStream;
+	/** Optional output resolution override. Defaults to width x height if not provided. */
+	outputSize?: { width: number; height: number };
 };
 
 const qualityMap = {
@@ -79,11 +81,14 @@ export class SceneExporter extends EventEmitter<SceneExporterEvents> {
 		shouldIncludeAudio,
 		audioBuffer,
 		audioChunks,
+		outputSize,
 	}: ExportParams) {
 		super();
+		const renderWidth = outputSize?.width ?? width;
+		const renderHeight = outputSize?.height ?? height;
 		this.renderer = new CanvasRenderer({
-			width,
-			height,
+			width: renderWidth,
+			height: renderHeight,
 			fps,
 		});
 
