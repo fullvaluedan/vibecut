@@ -342,6 +342,13 @@ export interface ComputeDropTargetParams {
 	// overlap test so shifted siblings don't falsely block the group move.
 	excludeElementIds?: ReadonlySet<string>;
 	targetElementTypes?: string[];
+	// Media drops (bin drags + file drops) pull video/image toward the main (V1)
+	// track: only the overlay area above an occupied main asks for a new overlay
+	// lane. Clip drags inside the timeline leave this off (free placement).
+	preferMainTrack?: boolean;
+	// Extra height of a track beyond its base height (expanded keyframe rows), so
+	// the vertical hit-test matches what is drawn.
+	getExtraTrackHeight?: (trackIndex: number) => number;
 }
 
 export interface ClipboardItem {

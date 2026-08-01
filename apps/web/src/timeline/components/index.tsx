@@ -366,6 +366,9 @@ function TimelineImpl() {
 
 	const { isDragOver, dropTarget, dragMode, dragProps } = useTimelineDragDrop({
 		containerRef: tracksContainerRef,
+		// Only used when the tracks scroll element is missing (first paint): the
+		// container starts at the ruler, so its rect needs the header subtracted.
+		headerRef: timelineHeaderRef,
 		tracksScrollRef,
 		zoomLevel,
 	});

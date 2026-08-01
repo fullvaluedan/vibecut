@@ -13,6 +13,7 @@ import { BatchCommand } from "@/commands";
 import type { Command } from "@/commands/base-command";
 import type {
 	AudioTrack,
+	DropTarget,
 	SceneTracks,
 	VideoElement,
 	VideoTrack,
@@ -1031,9 +1032,20 @@ describe("findOccupiedLaneForInsert", () => {
 		return makeController({ tracks, assets: [] }).controller;
 	}
 
-	// Ordered tracks = [video-main (65px), audio-1 (50px)] with a 6px gap, so the
-	// audio lane spans y=[71,121). mouseY must land there to hover it.
+	// Ordered tracks = [video-main (65px), audio-1 (50px)] with a 6px gap and the
+	// 2px content padding, so the audio lane spans y=[73,123). mouseY must land
+	// there to hover it.
 	const AUDIO_LANE_Y = 90;
+
+	// A drop that resolved to a NEW track, so the resolved-lane fallback is off
+	// and these cases isolate the hovered-lane hit-test.
+	const NEW_TRACK_TARGET: DropTarget = {
+		trackIndex: 0,
+		isNewTrack: true,
+		insertPosition: null,
+		xPosition: ZERO_MEDIA_TIME,
+		targetElement: null,
+	};
 
 	test("returns the hovered audio lane id when a clip occupies the drop point", () => {
 		const found = (
@@ -1041,13 +1053,17 @@ describe("findOccupiedLaneForInsert", () => {
 				findOccupiedLaneForInsert: (args: {
 					mediaType: string;
 					dropX: number;
+					duration: number;
 					coords: { mouseX: number; mouseY: number } | null;
+					target: DropTarget;
 				}) => string | null;
 			}
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: TPS / 2 }),
+			duration: mediaTime({ ticks: TPS }),
 			coords: { mouseX: 0, mouseY: AUDIO_LANE_Y },
+			target: NEW_TRACK_TARGET,
 		});
 		expect(found).toBe("audio-1");
 	});
@@ -1058,13 +1074,17 @@ describe("findOccupiedLaneForInsert", () => {
 				findOccupiedLaneForInsert: (args: {
 					mediaType: string;
 					dropX: number;
+					duration: number;
 					coords: { mouseX: number; mouseY: number } | null;
+					target: DropTarget;
 				}) => string | null;
 			}
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: 5 * TPS }),
+			duration: mediaTime({ ticks: TPS }),
 			coords: { mouseX: 0, mouseY: AUDIO_LANE_Y },
+			target: NEW_TRACK_TARGET,
 		});
 		expect(found).toBeNull();
 	});
@@ -1107,13 +1127,17 @@ describe("findOccupiedLaneForInsert", () => {
 				findOccupiedLaneForInsert: (args: {
 					mediaType: string;
 					dropX: number;
+					duration: number;
 					coords: { mouseX: number; mouseY: number } | null;
+					target: DropTarget;
 				}) => string | null;
 			}
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: TPS / 2 }),
+			duration: mediaTime({ ticks: TPS }),
 			coords: { mouseX: 0, mouseY: 150 },
+			target: NEW_TRACK_TARGET,
 		});
 		expect(found).toBeNull();
 	});
@@ -1154,15 +1178,131 @@ describe("findOccupiedLaneForInsert", () => {
 				findOccupiedLaneForInsert: (args: {
 					mediaType: string;
 					dropX: number;
+					duration: number;
 					coords: { mouseX: number; mouseY: number } | null;
+					target: DropTarget;
 				}) => string | null;
 			}
 		).findOccupiedLaneForInsert({
 			mediaType: "audio",
 			dropX: mediaTime({ ticks: TPS / 2 }),
+			duration: mediaTime({ ticks: TPS }),
 			coords: { mouseX: 0, mouseY: 150 },
+			target: NEW_TRACK_TARGET,
 		});
 		expect(found).toBe("audio-2");
+	});
+
+	// T15.1: a video drop below the lanes / over the ruler resolves to MAIN, so
+	// the cursor is nowhere near a compatible lane. The resolved lane takes over,
+	// and "busy" there means the clip does not FIT (a too-short gap ripples too).
+	function mainTracks({
+		elements,
+	}: {
+		elements: VideoElement[];
+	}): SceneTracks {
+		return {
+			overlay: [],
+			main: {
+				id: "video-main",
+				type: "video",
+				name: "video-main",
+				muted: false,
+				hidden: false,
+				elements,
+			},
+			audio: [
+				{
+					id: "audio-1",
+					type: "audio",
+					name: "audio-1",
+					muted: false,
+					elements: [],
+				},
+			],
+		};
+	}
+
+	const MAIN_TARGET: DropTarget = {
+		trackIndex: 0,
+		isNewTrack: false,
+		insertPosition: null,
+		xPosition: ZERO_MEDIA_TIME,
+		targetElement: null,
+	};
+
+	function findLane({
+		tracks,
+		dropX,
+		duration,
+		mouseY,
+	}: {
+		tracks: SceneTracks;
+		dropX: number;
+		duration: number;
+		mouseY: number;
+	}): string | null {
+		const controller = makeController({ tracks, assets: [] }).controller;
+		return (
+			controller as unknown as {
+				findOccupiedLaneForInsert: (args: {
+					mediaType: string;
+					dropX: number;
+					duration: number;
+					coords: { mouseX: number; mouseY: number } | null;
+					target: DropTarget;
+				}) => string | null;
+			}
+		).findOccupiedLaneForInsert({
+			mediaType: "video",
+			dropX: mediaTime({ ticks: dropX }),
+			duration: mediaTime({ ticks: duration }),
+			coords: { mouseX: 0, mouseY },
+			target: MAIN_TARGET,
+		});
+	}
+
+	test("a below-the-tracks video drop ripples MAIN when a clip covers the drop point", () => {
+		const found = findLane({
+			tracks: mainTracks({
+				elements: [videoClip({ id: "a", startTime: 0, duration: 4 * TPS })],
+			}),
+			dropX: 2 * TPS,
+			duration: TPS,
+			mouseY: 400,
+		});
+		expect(found).toBe("video-main");
+	});
+
+	test("a video drop into a too-short main-track gap ripples MAIN instead of spawning a lane", () => {
+		const found = findLane({
+			// Clips at [0,1s) and [3s,4s): the 2s gap cannot hold a 3s drop at 2s.
+			tracks: mainTracks({
+				elements: [
+					videoClip({ id: "a", startTime: 0, duration: TPS }),
+					videoClip({ id: "b", startTime: 3 * TPS, duration: TPS }),
+				],
+			}),
+			dropX: 2 * TPS,
+			duration: 3 * TPS,
+			mouseY: 400,
+		});
+		expect(found).toBe("video-main");
+	});
+
+	test("a video drop into a main-track gap that fits leaves the lane alone", () => {
+		const found = findLane({
+			tracks: mainTracks({
+				elements: [
+					videoClip({ id: "a", startTime: 0, duration: TPS }),
+					videoClip({ id: "b", startTime: 6 * TPS, duration: TPS }),
+				],
+			}),
+			dropX: 2 * TPS,
+			duration: TPS,
+			mouseY: 400,
+		});
+		expect(found).toBeNull();
 	});
 });
 

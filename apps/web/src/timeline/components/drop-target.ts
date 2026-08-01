@@ -1,7 +1,11 @@
 import type { TimelineTrack, TimelineElement } from "@/timeline";
 import type { ComputeDropTargetParams, DropTarget } from "@/timeline";
 import { resolveTrackPlacement } from "@/timeline/placement";
-import { TIMELINE_TRACK_GAP_PX } from "./layout";
+import { getTrackTypeForElementType } from "@/timeline/placement/compatibility";
+import {
+	TIMELINE_CONTENT_TOP_PADDING_PX,
+	TIMELINE_TRACK_GAP_PX,
+} from "./layout";
 import { getTrackHeight } from "./track-layout";
 import {
 	mediaTime,
@@ -43,19 +47,30 @@ function findElementAtPosition({
 	return { elementId: hit.id, trackId: track.id };
 }
 
+/** Y of the first track row inside the tracks scroll content. */
+export const TRACKS_CONTENT_TOP_PX = TIMELINE_CONTENT_TOP_PADDING_PX;
+
 export function getTrackAtY({
 	mouseY,
 	tracks,
 	verticalDragDirection,
+	getExtraHeight,
 }: {
 	mouseY: number;
 	tracks: TimelineTrack[];
 	verticalDragDirection?: "up" | "down" | null;
+	// Extra height of a track beyond its base height: the expanded keyframe
+	// rows. The rows render that tall, so a hit-test that ignores them drifts by
+	// one lane height per expanded track below the cursor.
+	getExtraHeight?: (trackIndex: number) => number;
 }): { trackIndex: number; relativeY: number } | null {
-	let cumulativeHeight = 0;
+	// Rows start at TIMELINE_CONTENT_TOP_PADDING_PX, not 0 (see the track-row
+	// `top` in timeline/components/index.tsx); starting at 0 shifted every hit.
+	let cumulativeHeight = TRACKS_CONTENT_TOP_PX;
 
 	for (let i = 0; i < tracks.length; i++) {
-		const trackHeight = getTrackHeight({ type: tracks[i].type });
+		const trackHeight =
+			getTrackHeight({ type: tracks[i].type }) + (getExtraHeight?.(i) ?? 0);
 		const trackTop = cumulativeHeight;
 		const trackBottom = trackTop + trackHeight;
 
@@ -100,6 +115,27 @@ function fallbackNewTrackDropTarget({
 	};
 }
 
+function existingTrackDropTarget({
+	trackIndex,
+	adjustedStartTime,
+	xPosition,
+}: {
+	trackIndex: number;
+	adjustedStartTime: MediaTime | undefined;
+	xPosition: MediaTime;
+}): DropTarget {
+	return {
+		trackIndex,
+		isNewTrack: false,
+		insertPosition: null,
+		xPosition:
+			adjustedStartTime !== undefined
+				? roundMediaTime({ time: adjustedStartTime })
+				: xPosition,
+		targetElement: EMPTY_TARGET_ELEMENT,
+	};
+}
+
 export function computeDropTarget({
 	elementType,
 	mouseX,
@@ -115,6 +151,8 @@ export function computeDropTarget({
 	excludeElementId,
 	excludeElementIds,
 	targetElementTypes,
+	preferMainTrack,
+	getExtraTrackHeight,
 }: ComputeDropTargetParams): DropTarget {
 	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
 	const mainTrackIndex = tracks.overlay.length;
@@ -158,14 +196,53 @@ export function computeDropTarget({
 		};
 	}
 
+	// T15.1 main-track gravity, for media drops only (bin drags + file drops). A
+	// video/image drop belongs on V1 unless the pointer is clearly in the overlay
+	// area ABOVE an already-used main track. Clip drags inside the timeline leave
+	// the flag off and keep free placement.
+	const wantsMainTrack =
+		preferMainTrack === true &&
+		getTrackTypeForElementType({ elementType }) === "video";
+	const isMainTrackEmpty = tracks.main.elements.length === 0;
+	const mainTrackTarget = (): DropTarget | null => {
+		// Explicit placement: main every time, head gravity applied, and no
+		// overlap veto, so an occupied main resolves to main and the caller's
+		// insert flow opens a hole instead of the drop silently spawning a V2.
+		const result = resolveTrackPlacement({
+			tracks,
+			elementType,
+			timeSpans: [
+				{ startTime: xPosition, duration: elementDuration, excludeElementId },
+			],
+			excludeElementIds,
+			strategy: { type: "explicit", trackId: tracks.main.id },
+		});
+		if (result?.kind !== "existingTrack") return null;
+		return existingTrackDropTarget({
+			trackIndex: mainTrackIndex,
+			adjustedStartTime: result.adjustedStartTime,
+			xPosition,
+		});
+	};
+
 	const trackAtMouse = getTrackAtY({
 		mouseY,
 		tracks: orderedTracks,
 		verticalDragDirection,
+		getExtraHeight: getExtraTrackHeight,
 	});
 
 	if (!trackAtMouse) {
-		const isAboveAllTracks = mouseY < 0;
+		// The ruler/toolbar strip sits ABOVE the tracks scroll area, so a drop on
+		// it arrives as a negative mouseY (the content padding is above row 0).
+		const isAboveAllTracks = mouseY < TRACKS_CONTENT_TOP_PX;
+
+		// Above = the ruler strip, below = the empty area under the lanes. For a
+		// media drop both mean main (T15.1 causes 1 and 2), never a new track.
+		if (wantsMainTrack) {
+			const mainTarget = mainTrackTarget();
+			if (mainTarget) return mainTarget;
+		}
 
 		const placementResult = resolveTrackPlacement({
 			tracks,
@@ -182,16 +259,24 @@ export function computeDropTarget({
 				createNewTrackOnly: isAboveAllTracks,
 			},
 		});
-		const outOfBoundsResult =
-			placementResult?.kind === "newTrack" ? placementResult : null;
-		if (!outOfBoundsResult) {
+		if (!placementResult) {
 			return fallbackNewTrackDropTarget({ xPosition });
 		}
 
+		// The below-the-tracks branch asks for an EXISTING lane; that result used
+		// to be thrown away and a new top track made instead (T15.1 cause 5).
+		if (placementResult.kind === "existingTrack") {
+			return existingTrackDropTarget({
+				trackIndex: placementResult.trackIndex,
+				adjustedStartTime: placementResult.adjustedStartTime,
+				xPosition,
+			});
+		}
+
 		return {
-			trackIndex: outOfBoundsResult.insertIndex,
+			trackIndex: placementResult.insertIndex,
 			isNewTrack: true,
-			insertPosition: outOfBoundsResult.insertPosition,
+			insertPosition: placementResult.insertPosition,
 			xPosition,
 			targetElement: EMPTY_TARGET_ELEMENT,
 		};
@@ -220,7 +305,18 @@ export function computeDropTarget({
 		}
 	}
 
-	const trackHeight = getTrackHeight({ type: track.type });
+	// Main gravity for the in-bounds lanes: only the overlay area ABOVE main can
+	// ask for a new overlay lane, and only once main holds something. Everything
+	// from main downwards (main itself, the audio lanes, which can never take a
+	// video anyway) lands on main.
+	if (wantsMainTrack && (trackIndex >= mainTrackIndex || isMainTrackEmpty)) {
+		const mainTarget = mainTrackTarget();
+		if (mainTarget) return mainTarget;
+	}
+
+	const trackHeight =
+		getTrackHeight({ type: track.type }) +
+		(getExtraTrackHeight?.(trackIndex) ?? 0);
 	const placementResult = resolveTrackPlacement({
 		tracks,
 		elementType,
@@ -238,18 +334,11 @@ export function computeDropTarget({
 	}
 
 	if (placementResult.kind === "existingTrack") {
-		const adjustedXPosition =
-			placementResult.adjustedStartTime !== undefined
-				? roundMediaTime({ time: placementResult.adjustedStartTime })
-				: xPosition;
-
-		return {
+		return existingTrackDropTarget({
 			trackIndex: placementResult.trackIndex,
-			isNewTrack: false,
-			insertPosition: null,
-			xPosition: adjustedXPosition,
-			targetElement: EMPTY_TARGET_ELEMENT,
-		};
+			adjustedStartTime: placementResult.adjustedStartTime,
+			xPosition,
+		});
 	}
 
 	return {
