@@ -37,6 +37,7 @@ import type { AssistantContext } from "./context";
 import {
 	executeAssistantTurn,
 	planAssistantTurn,
+	showInsertedElement,
 	type AssistantApplyResult,
 	type AssistantExecutorEditor,
 	type AssistantTemplateLook,
@@ -224,6 +225,9 @@ export function createAssistantTurnDriver(
 		});
 		const applied = executeAssistantTurn({ plan, editor: deps.editor });
 		if (!applied) return null;
+		// Show-me mode (T17.4): outside `plan.commands`, so it is not part of the
+		// batch this undo handle reverts.
+		showInsertedElement({ calls: verdict.calls, snapshot, editor: deps.editor });
 		emit({
 			type: "applied",
 			count: applied.appliedCount,

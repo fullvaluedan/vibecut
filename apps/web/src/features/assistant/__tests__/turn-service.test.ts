@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { MediaTime } from "@/wasm";
 import type { AssistantContext } from "../context";
 import type { TimelineSnapshot } from "../snapshot";
 import type {
@@ -46,13 +47,19 @@ function call(name: string, args: Record<string, unknown>, id = name): ToolCall 
 }
 
 /** A stub stack that only records identities, exactly like the Director dock's
- * test harness. Commands are never executed. */
-function stubEditor() {
+ * test harness. Commands are never executed. `withPlayback` opts a test into
+ * the T17.4 show-me hook: a seek/pause spy on `editor.playback`, left off by
+ * default so every other test keeps exercising the "no playback stub" path. */
+function stubEditor({ withPlayback = false }: { withPlayback?: boolean } = {}) {
 	const stack: unknown[] = [];
 	const log: string[] = [];
-	return {
+	const playbackLog: string[] = [];
+	const seeks: MediaTime[] = [];
+	const base = {
 		stack,
 		log,
+		playbackLog,
+		seeks,
 		command: {
 			execute: ({ command }: { command: unknown }) => {
 				log.push("execute");
@@ -65,6 +72,17 @@ function stubEditor() {
 			},
 			peekUndoCommand: () =>
 				(stack.length ? stack[stack.length - 1] : null) as never,
+		},
+	};
+	if (!withPlayback) return base;
+	return {
+		...base,
+		playback: {
+			seek: ({ time }: { time: MediaTime }) => {
+				playbackLog.push("seek");
+				seeks.push(time);
+			},
+			pause: () => playbackLog.push("pause"),
 		},
 	};
 }
@@ -84,14 +102,16 @@ interface Harness {
 function harness({
 	responses,
 	snapshotFor = () => smallSnapshot(),
+	withPlayback = false,
 }: {
 	responses: AssistantTurnResponse[];
 	snapshotFor?: (readIndex: number) => TimelineSnapshot;
+	withPlayback?: boolean;
 }): Harness {
 	const events: Array<Record<string, unknown>> = [];
 	const requests: AssistantTurnRequest[] = [];
 	const snapshots: TimelineSnapshot[] = [];
-	const editor = stubEditor();
+	const editor = stubEditor({ withPlayback });
 	let readIndex = 0;
 	let responseIndex = 0;
 	const driver = createAssistantTurnDriver({
@@ -549,5 +569,90 @@ describe("transport failures", () => {
 describe("the snapshot fixture is what these tests think it is", () => {
 	test("the small project runs sixteen seconds", () => {
 		expect(smallSnapshot().totalDuration).toBe(sec(16));
+	});
+});
+
+describe("show-me mode: applyCalls seeks and pauses on an additive-only turn (T17.4)", () => {
+	const ADD_TEXT = call("add_text", { text: "Dan", atSec: 4, durationSec: 3 });
+
+	test("an add_text-only turn seeks the playhead to it and pauses", async () => {
+		const h = harness({
+			responses: [
+				response({ toolCalls: [ADD_TEXT] }),
+				response({ text: "Added it." }),
+			],
+			withPlayback: true,
+		});
+		await h.driver.start("add a title saying Dan at 4s");
+		const editor = h.editor as ReturnType<typeof stubEditor> & {
+			playbackLog: string[];
+			seeks: unknown[];
+		};
+		expect(editor.playbackLog).toEqual(["seek", "pause"]);
+		expect(editor.seeks).toEqual([sec(4)]);
+	});
+
+	test("show-me does not fire when the turn also destroys something", async () => {
+		const h = harness({
+			responses: [
+				response({ toolCalls: [ADD_TEXT, CUT] }),
+				response({ text: "Done." }),
+			],
+			withPlayback: true,
+		});
+		await h.driver.start("add a title and cut 1s to 2s");
+		const editor = h.editor as ReturnType<typeof stubEditor> & {
+			playbackLog: string[];
+		};
+		expect(editor.playbackLog).toEqual([]);
+	});
+
+	test("show-me does not fire for a purely destructive turn", async () => {
+		const h = harness({
+			responses: [response({ toolCalls: [CUT] }), response({ text: "Done." })],
+			withPlayback: true,
+		});
+		await h.driver.start("cut 1s to 2s");
+		const editor = h.editor as ReturnType<typeof stubEditor> & {
+			playbackLog: string[];
+		};
+		expect(editor.playbackLog).toEqual([]);
+	});
+
+	test("without a playback stub the additive-only turn still applies normally", async () => {
+		// Existing editors (most of this file's stubs) do not carry a `playback`
+		// field at all - the hook must be a no-op, not a crash.
+		const h = harness({
+			responses: [response({ toolCalls: [ADD_TEXT] }), response({ text: "Added it." })],
+		});
+		await h.driver.start("add a title saying Dan at 4s");
+		expect(h.editor.log).toEqual(["execute"]);
+	});
+
+	test("show-me also fires on the confirm() path for a held additive-only turn", async () => {
+		// Four inserts trips MAX_UNCONFIRMED_OPS, so this turn is held first.
+		const four = [
+			call("add_text", { text: "1", atSec: 1, durationSec: 1 }, "1"),
+			call("add_text", { text: "2", atSec: 2, durationSec: 1 }, "2"),
+			call("add_text", { text: "3", atSec: 3, durationSec: 1 }, "3"),
+			call("add_text", { text: "4", atSec: 0, durationSec: 1 }, "4"),
+		];
+		const h = harness({
+			responses: [
+				response({ toolCalls: four }),
+				response({ text: "Added them." }),
+			],
+			withPlayback: true,
+		});
+		await h.driver.start("add four titles");
+		expect(h.driver.isAwaitingConfirmation()).toBe(true);
+		await h.driver.confirm();
+		const editor = h.editor as ReturnType<typeof stubEditor> & {
+			playbackLog: string[];
+			seeks: unknown[];
+		};
+		expect(editor.playbackLog).toEqual(["seek", "pause"]);
+		// The earliest of the four inserts, not the first one in the call list.
+		expect(editor.seeks).toEqual([sec(0)]);
 	});
 });

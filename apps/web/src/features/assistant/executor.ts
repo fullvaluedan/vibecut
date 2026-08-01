@@ -61,6 +61,7 @@ import { UpdateBookmarkCommand } from "@/commands/scene/update-bookmark";
 import { getStyleById } from "@/features/ai-generate/styles";
 import { getMotionTemplate } from "@/features/motion-templates/templates";
 import { canRestoreDeletion } from "@/features/transcription/restore-popover-gate";
+import { applyTemplateDefaults } from "./template-defaults";
 import type { ElementRef, TimelineElement } from "@/timeline";
 import { buildTextElement } from "@/timeline/element-utils";
 import {
@@ -133,6 +134,15 @@ export interface AssistantExecutorEditor {
 		execute: (args: { command: Command }) => Command;
 		undo: () => void;
 		peekUndoCommand: () => Command | null;
+	};
+	/**
+	 * Show-me mode (T17.4): seek + pause after an additive-only turn lands, so
+	 * the user sees exactly what was inserted. Optional so tests that only
+	 * exercise the command path (no playback stub) keep working unchanged.
+	 */
+	playback?: {
+		seek: (args: { time: MediaTime }) => void;
+		pause: () => void;
 	};
 }
 
@@ -677,8 +687,18 @@ function planAddText({
 	return [new InsertElementCommand({ element, placement: { mode: "auto" } })];
 }
 
-/** `add_motion_template`: the registry builds the pieces, one insert each, the
- * same call shape the Motion templates gallery makes. */
+/**
+ * `add_motion_template`: the registry builds the pieces, one insert each, the
+ * same call shape the Motion templates gallery makes.
+ *
+ * T17.4: before the registry ever sees the model's `variables`, the gaps the
+ * model left (no corner, no accent, no color) are filled from the project's
+ * OWN palette and each template's own position defaults
+ * (`applyTemplateDefaults`), so "add a title that says X" looks designed
+ * against this project's background instead of landing the same
+ * fixed-white-on-fixed-accent look every time. Anything the model DID set
+ * passes through unchanged - the defaults only fill absent keys.
+ */
 function planAddMotionTemplate({
 	args,
 	snapshot,
@@ -695,10 +715,15 @@ function planAddMotionTemplate({
 }): Command[] {
 	const template = getMotionTemplate(args.templateId);
 	if (!template) return [];
+	const variables = applyTemplateDefaults({
+		templateId: args.templateId,
+		variables: args.variables,
+		backgroundColor: snapshot.background,
+	});
 	const elements = template.build({
 		startTime: toTicks({ seconds: args.atSec, fps: snapshot.fps }),
 		durationSec: args.durationSec,
-		variables: args.variables,
+		variables,
 		accent: look.accent,
 		canvasSize: snapshot.canvas,
 		groupId: generateUUID(),
@@ -895,4 +920,72 @@ export function executeAssistantTurn({
 		appliedCount: plan.mutatingCount,
 		undo: buildAssistantUndoHandle({ editor, batch }),
 	};
+}
+
+// --- Show-me mode (T17.4) ---------------------------------------------------
+
+/**
+ * True for a turn that is nothing but inserts - every call is `add_text` or
+ * `add_motion_template`, with no destructive or repositioning op mixed in.
+ * That is the "show me" case: there is exactly one sensible place to look
+ * (where the thing just landed), so the turn earns an automatic seek instead
+ * of leaving the user to scrub for it. An empty turn is not additive-only:
+ * there would be nothing to show.
+ */
+export function isAdditiveOnlyTurn(calls: readonly ValidatedToolCall[]): boolean {
+	return (
+		calls.length > 0 &&
+		calls.every((call) => call.name === "add_text" || call.name === "add_motion_template")
+	);
+}
+
+/**
+ * The earliest inserted element's start time across an additive-only turn's
+ * calls, on the project's frame grid. Null when the turn inserted nothing
+ * (should not happen when `isAdditiveOnlyTurn` is true, but this stays total
+ * either way rather than assuming its own precondition).
+ */
+export function earliestInsertStart({
+	calls,
+	snapshot,
+}: {
+	calls: readonly ValidatedToolCall[];
+	snapshot: TimelineSnapshot;
+}): MediaTime | null {
+	let earliest: number | null = null;
+	for (const call of calls) {
+		if (call.name !== "add_text" && call.name !== "add_motion_template") continue;
+		const ticks = toTicks({ seconds: call.args.atSec, fps: snapshot.fps }) as number;
+		if (earliest === null || ticks < earliest) earliest = ticks;
+	}
+	return earliest === null ? null : (earliest as MediaTime);
+}
+
+/**
+ * The show-me post-apply hook. Called from `turn-service.ts` AFTER
+ * `executeAssistantTurn` has already landed the batch - deliberately outside
+ * `plan.commands`, so a plain Ctrl+Z still cleanly reverts only the inserted
+ * element(s) and this never becomes part of that one undo step.
+ *
+ * Selection needs no separate step here: every insert already returns a
+ * `CommandResult.selection` (see `InsertElementCommand.execute`), and
+ * `BatchCommand`/`CommandManager` already apply the LAST one, so by the time
+ * this runs the just-inserted element is already selected and the Template
+ * Controls tab is already one click away.
+ */
+export function showInsertedElement({
+	calls,
+	snapshot,
+	editor,
+}: {
+	calls: readonly ValidatedToolCall[];
+	snapshot: TimelineSnapshot;
+	editor: AssistantExecutorEditor;
+}): void {
+	if (!editor.playback) return;
+	if (!isAdditiveOnlyTurn(calls)) return;
+	const startTime = earliestInsertStart({ calls, snapshot });
+	if (startTime === null) return;
+	editor.playback.seek({ time: startTime });
+	editor.playback.pause();
 }

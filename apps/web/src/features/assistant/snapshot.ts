@@ -15,6 +15,7 @@
  */
 
 import type { FrameRate } from "opencut-wasm";
+import { DEFAULT_BACKGROUND_COLOR } from "@/background/color";
 import type {
 	Bookmark,
 	ElementRef,
@@ -24,6 +25,7 @@ import type {
 	TimelineTrack,
 	TrackType,
 } from "@/timeline";
+import type { TBackground } from "@/project/types";
 import type { MediaTime } from "@/wasm";
 
 /** One clip, flattened out of its track so lookups are a single pass. */
@@ -105,6 +107,13 @@ export interface TimelineSnapshot {
 	projectName: string;
 	fps: FrameRate;
 	canvas: { width: number; height: number };
+	/**
+	 * The project canvas background, resolved to one hex color (T17.4's
+	 * palette source). A `"blur"` background has no single color to resolve,
+	 * so it falls back to `DEFAULT_BACKGROUND_COLOR` same as a project with no
+	 * background set yet.
+	 */
+	background: string;
 	/** Total timeline length. */
 	totalDuration: MediaTime;
 	playhead: MediaTime;
@@ -170,6 +179,14 @@ export function linkedSnapshotClips(
 	return allSnapshotClips(snapshot).filter(
 		(other) => other.id !== clip.id && other.linkId === clip.linkId,
 	);
+}
+
+/** One hex color out of the project's background setting, whatever its
+ * shape. A `"blur"` background samples the frame rather than naming a color,
+ * so there is nothing truthful to report beyond the same default a fresh
+ * project starts with. */
+export function resolveSnapshotBackground(background?: TBackground): string {
+	return background?.type === "color" ? background.color : DEFAULT_BACKGROUND_COLOR;
 }
 
 // --- Building from the live editor ----------------------------------------
@@ -278,7 +295,11 @@ export interface AssistantSnapshotEditor {
 	project: {
 		getActive: () => {
 			metadata: { id: string; name: string };
-			settings: { fps: FrameRate; canvasSize: { width: number; height: number } };
+			settings: {
+				fps: FrameRate;
+				canvasSize: { width: number; height: number };
+				background?: TBackground;
+			};
 		};
 	};
 	scenes: {
@@ -340,6 +361,7 @@ export function buildTimelineSnapshot({
 			width: project.settings.canvasSize.width,
 			height: project.settings.canvasSize.height,
 		},
+		background: resolveSnapshotBackground(project.settings.background),
 		totalDuration: editor.timeline.getTotalDuration(),
 		playhead: editor.playback.getCurrentTime(),
 		selection: editor.selection.getSelectedElements(),
