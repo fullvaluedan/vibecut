@@ -38,6 +38,7 @@
  * and if a fixture reports every fragment offered, confirm a verify response was
  * actually cached for it (`ls -t .eval-cache/verify-*.json`) before believing it.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -53,6 +54,46 @@ import {
 } from "@/features/ai-generate/director/eval/llm-adapter";
 import type { DirectorEvalFixture } from "@/features/ai-generate/director/eval/fixture-types";
 import type { TranscriptionWord } from "@/transcription/types";
+
+/* Draw-set receipt (round 16 forensics, docs/TO-VERIFY.md): the fractions this
+ * script prints depend silently on which .eval-cache draws they were computed
+ * over, which caused two false regression scares (2026-07-24, 2026-08-01).
+ * Wrap fs read/write to record the adapter's cache traffic, then print a
+ * self-certifying receipt after each run: fragments graded, swallow/offered
+ * split, NEW cache files written this run (0 means fully cached, so the
+ * numbers are comparable to any prior run with the same hash), and a short
+ * sha256 over the sorted cache keys touched. Same hash means same draw set. */
+const RECEIPT_CACHE_DIR = path.join(process.cwd(), ".eval-cache");
+const receiptReads = new Set<string>();
+const receiptWrites = new Set<string>();
+
+function recordCacheFile(target: Set<string>, file: unknown): void {
+	if (typeof file !== "string") return;
+	if (path.dirname(path.resolve(file)) !== RECEIPT_CACHE_DIR) return;
+	target.add(path.basename(file));
+}
+
+const realReadFileSync = fs.readFileSync;
+const realWriteFileSync = fs.writeFileSync;
+fs.readFileSync = ((...args: Parameters<typeof realReadFileSync>) => {
+	recordCacheFile(receiptReads, args[0]);
+	return realReadFileSync(...args);
+}) as typeof fs.readFileSync;
+fs.writeFileSync = ((...args: Parameters<typeof realWriteFileSync>) => {
+	recordCacheFile(receiptWrites, args[0]);
+	return realWriteFileSync(...args);
+}) as typeof fs.writeFileSync;
+
+/** Print the receipt that makes the fractions above safe to compare. */
+function reportReceipt(gradedCount: number, swallowed: number, label: string): void {
+	const keys = [...new Set([...receiptReads, ...receiptWrites])].sort();
+	const hash = createHash("sha256").update(keys.join("\n")).digest("hex").slice(0, 12);
+	console.log(`=== receipt (${label}) ===`);
+	console.log(`fragments graded   ${gradedCount} (${swallowed} swallowed, ${gradedCount - swallowed} offered)`);
+	console.log(`new cache files    ${receiptWrites.size} written this run (0 means fully cached, comparable)`);
+	console.log(`draw set           ${keys.length} cache keys touched, hash ${hash}`);
+	console.log("");
+}
 
 /** One graded fragment: what the join stranded, what Dan did, what we did. */
 interface GradedFragment {
@@ -223,12 +264,19 @@ async function main(): Promise<void> {
 		});
 
 	for (let runIndex = 0; runIndex < runs; runIndex++) {
+		receiptReads.clear();
+		receiptWrites.clear();
 		const graded: GradedFragment[] = [];
 		for (const fixture of fixtures) {
 			console.error(`  [${fixture.name}] run ${runIndex + 1}/${runs}...`);
 			graded.push(...(await gradeFixture({ fixture, runIndex, auth })));
 		}
 		report(graded, `runIndex ${runIndex}`);
+		reportReceipt(
+			graded.length,
+			graded.filter((g) => g.swallowed).length,
+			`runIndex ${runIndex}`,
+		);
 	}
 }
 

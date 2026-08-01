@@ -11,6 +11,7 @@
  * keeper "last", no compression, no VAD, no vision, neutral taste.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,42 @@ import {
 } from "@/features/ai-generate/director/eval/llm-adapter";
 import { buildFixtureAudioFeatures } from "@/features/ai-generate/director/eval/fixture-types";
 import type { TranscriptionWord } from "@/transcription/types";
+
+/* Draw-set receipt, same instrument as diag-join-verdicts.ts (round 16
+ * forensics): the counts below depend on which .eval-cache draws produced
+ * them. Record the adapter's cache traffic and print a receipt so two runs
+ * are comparable only when the hash matches and new files is 0. */
+const RECEIPT_CACHE_DIR = path.join(process.cwd(), ".eval-cache");
+const receiptReads = new Set<string>();
+const receiptWrites = new Set<string>();
+
+function recordCacheFile(target: Set<string>, file: unknown): void {
+	if (typeof file !== "string") return;
+	if (path.dirname(path.resolve(file)) !== RECEIPT_CACHE_DIR) return;
+	target.add(path.basename(file));
+}
+
+const realReadFileSync = fs.readFileSync;
+const realWriteFileSync = fs.writeFileSync;
+fs.readFileSync = ((...args: Parameters<typeof realReadFileSync>) => {
+	recordCacheFile(receiptReads, args[0]);
+	return realReadFileSync(...args);
+}) as typeof fs.readFileSync;
+fs.writeFileSync = ((...args: Parameters<typeof realWriteFileSync>) => {
+	recordCacheFile(receiptWrites, args[0]);
+	return realWriteFileSync(...args);
+}) as typeof fs.writeFileSync;
+
+/** Print the receipt that makes the counts above safe to compare. */
+function reportReceipt(autoRemovals: number, offeredRemovals: number): void {
+	const keys = [...new Set([...receiptReads, ...receiptWrites])].sort();
+	const hash = createHash("sha256").update(keys.join("\n")).digest("hex").slice(0, 12);
+	console.log("=== receipt ===");
+	console.log(`removals graded    ${autoRemovals + offeredRemovals} (${autoRemovals} auto, ${offeredRemovals} offered)`);
+	console.log(`new cache files    ${receiptWrites.size} written this run (0 means fully cached, comparable)`);
+	console.log(`draw set           ${keys.length} cache keys touched, hash ${hash}`);
+	console.log("");
+}
 
 const SRC =
 	"C:/Users/danom/Videos/0714 Building an app for app testers/2026-07-14 13-46-45_join the group.mp4";
@@ -217,6 +254,7 @@ async function main(): Promise<void> {
 	};
 	fs.writeFileSync(OUT, JSON.stringify(result, null, 1));
 	console.log(JSON.stringify({ opCount: result.opCount, auto: result.autoRemovalCount, offered: result.offeredRemovalCount, autoCutSeconds: result.autoCutSeconds, fragments: fragments.length, out: OUT }, null, 1));
+	reportReceipt(result.autoRemovalCount, result.offeredRemovalCount);
 
 	/* ---- Round-6 U7 assertion mode: mechanize R1-R3 and exit non-zero. ---- */
 	const { guardHallucinations } = await import(
