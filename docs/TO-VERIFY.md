@@ -2,6 +2,61 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 16: transcript x Director hands-on verification (2026-08-01, T16.4, branch `feat/director-eval`)
+
+Agent hands-on pass on real speech media (no Dan's own footage was available in this environment). Media: since no bundled speech fixture exists in the repo and synthetic tone audio (testsrc + sine) produces no real transcript, speech was generated with Windows PowerShell `System.Speech` TTS and muxed over an ffmpeg `testsrc` video (11s clip, 31-word sentence). Both browser panes used: the sandboxed preview pane could not reach any localhost port other than the declared dev server, so file injection into the Assets panel had to go through the Chrome extension bridge (`claude-in-chrome`) with the video staged at `apps/web/public/verify-speech-test.mp4` temporarily and deleted afterward (confirmed clean via `git status`).
+
+### Gates
+- G1 `bun test` apps/web: 1942 pass, 0 fail (target 1942+). PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail (target 210+). PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- G5 `diag-join-the-group.ts`: ASSERTIONS PASSED (R1a, R1b, R2, R3, band). PASS.
+- G5 `diag-join-verdicts.ts`: ran entirely against the existing `.eval-cache` (0 new cache files written, so no live LLM budget spent). Result: recall 9/16 (56%), precision 9/10 (90%), 19 word-bearing fragments graded. This is BELOW the round 16 target (recall >= 11/14, precision 11/11) and the fragment totals themselves differ from the target's implied baseline (19 graded here vs 14 CUT fragments expected), which per the "compare cache keys before crying regression" lesson from a prior round means this number may not be comparable to whatever run produced the 11/14 target. Not re-run live to avoid burning API budget; **flag for the next agent to re-run with a fresh cache-key check before treating this as a confirmed regression.**
+
+### Panel UX (T16.3) - verified
+- [x] Header shows "Transcribing..." during the run, then "Transcript ready - N words" (31 words for the test clip).
+- [x] Click a word seeks the playhead there; active-word highlight tracked the playhead during playback.
+- [x] Search highlights matching words.
+- [x] Follow-playback toggle visually ON by default (blue/active icon).
+- [ ] Auto-scroll during playback and hover-suspends-follow-then-resumes-after-2s: NOT exercised. The 11s test transcript never overflowed the panel, so there was nothing to scroll or hover-suspend. Needs a longer clip or a real project to verify.
+- [ ] Toggle state survives reload: not exercised (would need a page reload mid-session, skipped to conserve time budget).
+
+### Manual delete, pipe, restore (T16.2) - verified
+- [x] Selecting 3+ words and deleting shows a thin RED PIPE (not strikethrough) between the surviving words; timeline range removed on all tracks (V1 and A1 both split); one Ctrl+Z undoes the whole delete.
+- [x] Clicking the pipe opens a window: "Manual delete", timecodes (e.g. `00:01.3 - 00:02.3`), removed words shown struck through.
+- [x] Selecting a subset of words inside the window updates the button to "Restore N words"; clicking it re-inserts exactly that range as one undoable command, downstream clips and linked audio shift right by the restored duration, the pipe stays, and reopening the pipe shows only the still-cut words.
+- [x] Ctrl+Z on a restore reverts it (words go back into the pipe).
+- [x] "Restore all" clears the pipe, merges the clip fragments back into one, transcript reads continuous; Ctrl+Z brings the pipe back.
+- [x] A second delete immediately after a prior delete/restore/undo cycle applies with no "Timeline changed - refresh" block.
+- [ ] External edit the lineage cannot explain (check 8): trimmed the last fragment's right edge directly on the timeline. The transcript panel did NOT show a refresh-needed flag afterward, staying on "Transcript ready - N words". This may mean the lineage's source-map math correctly explained the trim (a good sign, better than full re-transcribe-on-any-change), or it may mean the stale-detection is not wired for simple trims. Recorded as-is per the check's own "expected, record it" framing; not treated as a bug without further product direction on what SHOULD count as unexplainable.
+
+### NEW BUG - export drops any segment containing a cut (T16.2/T16.3 point 4)
+Repro (minimal, confirmed twice):
+1. Transcribe a clip with 2+ sentences/segments.
+2. Select 3+ words INSIDE the first segment/sentence (leaving other words in that segment) and delete them via the transcript panel.
+3. Export as .srt (or .txt or .csv) from the panel's export menu (the three-dot menu next to Copy).
+4. The exported file is missing the ENTIRE first segment/sentence, even though the live transcript panel correctly shows that segment with only the cut words removed. Only segments that were never touched by a cut appear in the export.
+5. Confirmed NOT history-dependent: reproduces on a single fresh delete with no prior restore/undo. Confirmed the baseline (fully unedited transcript) exports correctly, and a full restore back to the unedited state also exports correctly, so the bug is specific to a segment that currently has an ACTIVE (unrestored) cut somewhere inside it.
+
+This blocks G6 quality scores for T16.2 and T16.3 below 9 (see roadmap doc statuses) and needs a code fix, not just a docs note.
+
+### Director provenance (check 9) - partially verified, live LLM available
+A working LLM provider WAS configured in this environment (Settings > AI > "Claude subscription (Claude Code)"), so this was NOT blocked.
+- [x] AI CUT > AI Director ran end to end on the test clip and proposed one op (a trailing dead-air cut, "0:09.5-0:10.1 - Trailing silence (0.8s) after the last speech").
+- [x] Apply worked ("Director's cut - applied", "Applied 1 of 1"); timeline shortened by the cut duration.
+- [x] Director dock stayed fully functional (interactive, no lock-up, no infinite spinner) after a manual transcript delete performed AFTER the Director apply, confirming the 2026-07-28 dock-resync fix still holds for this newer edit path.
+- [ ] Director-sourced red pipe with category + reason: NOT exercised. The only op the LLM proposed on this synthetic clean-TTS clip was a trailing dead-air cut with no words on either side of it, so no pipe was expected or produced (a pipe requires words removed BETWEEN two surviving words). The merged unit tests are the only coverage for the Director-provenance pipe rendering path; a real multi-take/filler-laden clip is needed to exercise this live. Recommend re-running this check against one of Dan's real recordings in a future round.
+
+### Exports (check D)
+- [x] Export menu offers .txt (with an "Include timecodes" sub-toggle), .srt, .csv; all three download correctly from the panel.
+- [ ] FAILS after a cut is active: see the new bug above. Exports on the unedited transcript, and exports after a full delete+restore-all cycle (net zero cuts), are both correct; only a transcript with an active, unrestored cut somewhere in a segment triggers the bug.
+
+### Left for Dan / a future round
+- [ ] Groq live key check: a Groq key IS stored in Settings, but running transcription with "Groq (cloud)" selected FAILED ("Transcript failed to load - Transcription was interrupted") with no clear "check your key" messaging and no fallback to in-browser. Could not tell whether the stored key is genuinely invalid/expired in this environment or whether this is a real regression in the cloud path; needs Dan to test with a known-good key.
+- [ ] Director live run on REAL footage with fillers/retakes/repeats, to actually exercise a Director-sourced pipe with category + reason (this pass only had a clean TTS clip, which gave the Director nothing to cut except trailing silence).
+- [ ] Auto-scroll and hover-suspend-follow on a transcript long enough to overflow the panel.
+- [ ] The `diag-join-verdicts.ts` recall/precision gate: re-run with a fresh cache-key comparison before treating the 9/16, 9/10 result as a confirmed regression from round 16's lineage/journal changes.
+
 ## Round 12: join cleanup, final read, and run feedback (2026-07-19, commits `51bc9bd9`..`1338ba04`, branch `feat/director-eval`)
 Built from your 2026-07-19 verdict ("the AI doesn't consider what the final product looks like when it cuts", the stranded "so...", the sliver clips). Three parts. What to check on a real run:
 - [ ] **No more sliver clips.** Tiny wordless fragments between two cuts are now swallowed automatically. Your timeline should not show those 1-2 frame orphans at cut joins any more.

@@ -195,6 +195,8 @@ Goal: Dan drops, drags, trims, extends, and deletes with zero surprises. This is
 round that makes it FEEL like CapCut.
 
 ### T15.1 Drop targeting: a video drop lands on V1 unless you clearly meant an overlay
+Status: MERGED, VERIFIED (round 15 T15.5, 2026-08-01). See docs/TO-VERIFY.md Import to V1 entry.
+
 Agent: **Opus**. Size: L (1-2 days). Worktree: yes.
 
 Behavior spec (CapCut-derived, adapted to our auto-separation):
@@ -232,6 +234,8 @@ labels. Repeat the first three with a SECOND video while an audio lane exists (t
 exact reported bug).
 
 ### T15.2 Magnetic main track (the CapCut core behavior), as a visible toggle
+Status: MERGED, VERIFIED (round 15 T15.5, 2026-08-01). Ripple-drag live preview items in docs/TO-VERIFY.md are checked.
+
 Agent: **Opus**. Size: L (2-3 days). Worktree: yes; rebases on T15.1 before merge
 (both touch placement code).
 
@@ -263,6 +267,8 @@ Director-style cut (downstream slides, audio follows, no desync badge); toggle o
 confirm free placement returns.
 
 ### T15.3 Edge-drag polish: show the user why an edge stops
+Status: MERGED, VERIFIED (round 15 T15.5, 2026-08-01).
+
 Agent: **Sonnet**. Size: M (0.5-1 day). Worktree: yes (UI-layer files, low collision).
 
 1. When a drag hits the source-media limit, clamp visually and show a subtle edge
@@ -276,6 +282,8 @@ G3: unit-test the clamp-reason computation (new pure helper). G4: drag a fresh c
 right edge (clamps with feedback), a trimmed clip's edge (extends), an image (free).
 
 ### T15.4 Track management: add/delete tracks, 8 video + 8 audio caps
+Status: MERGED, VERIFIED (round 15 T15.5, 2026-08-01).
+
 Agent: **Sonnet**. Size: M (1 day). Worktree: yes; rebases on T15.1 if placement files
 collide.
 
@@ -299,6 +307,8 @@ audio cap; prune-vs-keepWhenEmpty. G4: add tracks to both caps, delete a loaded 
 undo, confirm V1 undeletable.
 
 ### T15.5 Hands-on verification round + G6 rating
+Status: MERGED, VERIFIED (2026-08-01). Ran and closed out; see docs/TO-VERIFY.md for the itemized checks.
+
 Agent: **Sonnet** (browser driving), after T15.1-T15.4 merge. Size: M.
 
 Full pass of docs/LIVE-TEST-ISSUES.md items 5/6/10 (linked extend, head snap-back,
@@ -311,6 +321,8 @@ de-risks it.
 ## 5. Round 16 - Transcript x Director (red pipe bars + restore)
 
 ### T16.1 Transcript lineage: remember the pre-cut transcript across edits
+Status: MERGED. Hands-on VERIFIED 2026-08-01 (T16.4): a second manual delete right after a prior delete/restore/undo cycle applies immediately with no "Timeline changed - refresh" block, matching the fast-path spec. A right-edge trim on a fragment (an edit outside the word journal) did not trigger a stale/refresh flag either; recorded as a finding for T16.4, not a code change. G5 diag-join-verdicts regression check (round 16 touched the Director apply path) reads recall 9/16 (56%), precision 9/10 (90%) against cached draws, below the round 16 target of recall >= 11/14, precision 11/11; the fragment totals also differ from the target baseline (19 vs 14 word-bearing rows), so this may be a stale cache-key mismatch rather than a real regression. Flagged for the next round to re-run with a fresh cache key comparison.
+
 Agent: **Opus**. Size: L. Worktree: yes.
 
 1. Per-project "transcript lineage" record: the last full transcript (words +
@@ -328,6 +340,8 @@ G3: journal round-trip (delete -> remap -> words match); Director apply -> linea
 records accepted spans; invalidation still fires on real audio changes.
 
 ### T16.2 Red pipe bars + deleted-words window + per-word restore
+Status: MERGED. Hands-on VERIFIED 2026-08-01 (T16.4) for the manual-delete path: red pipe renders between surviving words after a 3+ word delete, the timeline range is removed on all tracks in one undo, clicking the pipe opens the deleted-words window with source "Manual delete" + timecodes + struck-through words, selecting a subset shows "Restore N words", restore reopens the exact gap and shifts downstream + linked audio, the pipe stays with only still-cut words on reopen, Ctrl+Z reverts a restore, and "Restore all" clears the pipe and merges fragments (also Ctrl+Z-able). Director-sourced pipes (category + reason) were NOT exercised live: the only fixture available in this environment was a clean TTS reading with no fillers/retakes/repeats, so the one Director op the LLM proposed was a trailing dead-air cut at the very end of the clip with no words on either side, which does not produce a pipe by design. Director dock itself was confirmed to stay fully functional (no lock-up, panel still interactive) after a manual transcript delete following an applied Director cut. BUG FOUND (new, not previously listed): SRT/TXT/CSV export silently drops the entire sentence/segment that contains any cut words, even though the live transcript panel renders that segment correctly with the cut applied; see docs/TO-VERIFY.md for repro. This blocks check D and reopens the "verify-and-fix... export SRT and TXT, confirm timecodes" portion of T16.3 point 4.
+
 Agent: **Opus**. Size: L-XL. Worktree: yes; depends on T16.1 (same lineage module),
 so it branches from T16.1's worktree branch, not from the round base.
 
@@ -355,6 +369,8 @@ transcript, click pipes, restore a phrase, undo, redo. G5 applies if any Directo
 prompt/logic changes (version-constant bump rule).
 
 ### T16.3 Transcript panel UX finishers
+Status: MERGED. Hands-on VERIFIED 2026-08-01 (T16.4) for points 1-3: header shows "Transcribing..." then "Transcript ready - N words", follow-playback toggle defaults ON (visually active), active-word highlight tracked the playhead during playback, click-word-to-seek works, search highlighting works, the restore window/button described in T16.2 renders correctly. NOT verified: auto-scroll and the hover-suspends-follow-then-resumes-after-2s behavior, because the 11s test clip's transcript never overflowed the panel height, so there was nothing to scroll; toggle-state-survives-reload also not exercised. Point 4 (Groq path with a real key) FAILED in this environment: Settings shows a Groq key already stored, but selecting "Groq (cloud)" produced "Transcript failed to load / Transcription was interrupted" with no clear message that a key problem is the cause, and no fallback to in-browser Whisper; switching the dropdown to "In browser" worked immediately. Could not tell from the UI whether the stored key is actually invalid/expired or whether this is a real regression; needs Dan's live Groq key check (already tracked in docs/TO-VERIFY.md). The SRT/TXT/CSV export bug found under T16.2 also affects this point's "export SRT and TXT, confirm timecodes" ask.
+
 Agent: **Sonnet**. Size: M. Worktree: yes (panel files only; parallel with T16.1).
 
 1. Auto-scroll follow: active word stays in view during playback (toggle, default on).
@@ -367,6 +383,8 @@ Agent: **Sonnet**. Size: M. Worktree: yes (panel files only; parallel with T16.1
    -> "Groq" anywhere it appears in UI copy or docs.
 
 ### T16.4 Round 16 verification + G6 rating + docs
+Status: DONE (this pass, 2026-08-01). Gates G1/G2/G5-join-the-group green; G5-join-verdicts below target (see T16.1 status). Hands-on browser pass completed using synthetic speech media (Windows TTS muxed over ffmpeg testsrc, since no bundled speech fixture existed). Found one new bug (stale SRT/TXT/CSV export after any word cut, see T16.2 status) that keeps T16.2 and T16.3 below a 9 on functionality. Full detail in docs/TO-VERIFY.md round 16 section.
+
 Agent: **Sonnet** (browser + rating) and **Haiku** (docs). Size: S-M.
 Full transcript workflow on real footage incl. Director apply, pipes, restore,
 exports. G6 scores for T16.1-T16.3. Docs: BRIEF feature list, findings-doc addendum
