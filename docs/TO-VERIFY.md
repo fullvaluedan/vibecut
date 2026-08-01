@@ -163,9 +163,25 @@ this session; the underlying undo/redo history mechanism itself is what was bein
 it reversed every step exactly.)
 
 ### Left for Dan / a future round (current)
-- [ ] Real Groq key success path: the error/fallback path is now proven at the network
-  level; a genuinely valid key's happy path (fast cloud transcription, word-level cuts) still
-  needs Dan's own key.
+- [x] **Real Groq key success path - DONE 2026-08-01.** A real server-side `GROQ_API_KEY`
+  (`apps/web/.env.local`) was live-verified end to end with a fresh dev server (port 3000,
+  confirmed via server logs showing `.env.local` loaded) on branch `feat/director-eval` at
+  `92d7c8c7`. Settings > AI showed "Server key detected, cloud transcription available
+  without a key", the in-app Groq key field was confirmed empty (value length 0, never typed
+  into), and the backend was set to "Groq (cloud)". A fresh 26.7s / 67-word TTS+ffmpeg clip
+  (System.Speech over an ffmpeg testsrc video, never seen by the transcript cache before) was
+  imported and transcribed. Evidence: `POST /api/transcribe` returned **200** and the
+  transcript panel read "Transcript ready - 67 words" with properly punctuated,
+  word-timestamped text within seconds of opening the Transcript tab (no visible
+  loading wait), consistent with the cloud round-trip described in the Settings copy.
+  Spot-check integration on the same clip: clicking a word seeked the playhead
+  (00:00:00:24, matching that word's position); selecting 2 words and deleting them
+  showed the expected red pipe; exporting as .srt produced correct sequential timecodes
+  and the segment containing the cut correctly shrank instead of dropping (the round-16
+  export-segment-drop fix still holds). A temp clip was staged at
+  `apps/web/public/verify-groq-fresh.mp4` for the browser-extension import bridge and
+  deleted afterward (confirmed clean via `git status`). No retries needed; the call
+  succeeded on the first attempt.
 - [ ] Director-sourced red pipe with category + reason on REAL footage with fillers,
   retakes, or repeats (this pass's synthetic clean-TTS clip gives the Director nothing to cut
   except trailing silence, so no pipe is ever produced to inspect).
