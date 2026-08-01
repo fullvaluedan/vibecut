@@ -29,7 +29,7 @@ export function shouldShowDirectorBadge({
 	busy,
 	hasSession,
 }: {
-	dockTab: "properties" | "director";
+	dockTab: "properties" | "director" | "assistant";
 	busy: boolean;
 	hasSession: boolean;
 }): boolean {

@@ -12,7 +12,7 @@
 
 import { useEffect } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowExpandIcon, ScissorIcon } from "@hugeicons/core-free-icons";
+import { ArrowExpandIcon, ScissorIcon, ChatBotIcon } from "@hugeicons/core-free-icons";
 import { Button } from "@/components/ui/button";
 import {
 	Tooltip,
@@ -24,6 +24,7 @@ import { cn } from "@/utils/ui";
 import { PropertiesPanel } from "@/components/editor/panels/properties";
 import { useEditor } from "@/editor/use-editor";
 import { useAiActivityStore } from "@/features/ai-generate/ai-activity-store";
+import { AssistantTab } from "@/features/assistant/components/assistant-tab";
 import { hasDirectorSession, shouldShowDirectorBadge } from "../dock-badge";
 import { useDirectorPlanStore } from "../director-plan-store";
 import { useDirectorTasteStore } from "../taste";
@@ -95,6 +96,23 @@ export function DirectorDockShell() {
 						</TooltipTrigger>
 						<TooltipContent side="bottom">AI CUT actions &amp; review</TooltipContent>
 					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant={dockTab === "assistant" ? "secondary" : "ghost"}
+								size="sm"
+								onClick={() => setDockTab("assistant")}
+								className={cn(
+									"h-7 gap-1.5 px-2 text-xs",
+									dockTab !== "assistant" && "text-muted-foreground",
+								)}
+							>
+								<HugeiconsIcon icon={ChatBotIcon} size={14} />
+								Assistant
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">Ask AI for an edit</TooltipContent>
+					</Tooltip>
 				</div>
 			</TooltipProvider>
 			<div
@@ -112,6 +130,14 @@ export function DirectorDockShell() {
 				)}
 			>
 				<DirectorDock />
+			</div>
+			<div
+				className={cn(
+					"min-h-0 flex-1",
+					dockTab === "assistant" ? "flex flex-col" : "hidden",
+				)}
+			>
+				<AssistantTab />
 			</div>
 		</div>
 	);

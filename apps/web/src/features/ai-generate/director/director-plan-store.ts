@@ -206,15 +206,21 @@ export function selectApplyGuardSpans({
 
 interface DirectorPlanState {
 	/**
-	 * Which tab of the persistent Director dock is focused (R1/KTD1). The dock's
-	 * visibility is no longer gated on a transient `surface` flag: "properties" and
-	 * "director" are both always mounted, and this just picks which one shows. Every
-	 * `open*` call below re-asserts "director" on run completion, and every AI CUT
-	 * action click does the same immediately (see `ai-cut-actions.ts`); while a run
-	 * is in flight and the user has switched away, the dock shell shows a badge
-	 * instead of forcing focus back.
+	 * Which tab of the persistent Director dock is focused (R1/KTD1; "assistant"
+	 * added T17.3). The dock's visibility is no longer gated on a transient
+	 * `surface` flag: all three tabs are always mounted, and this just picks which
+	 * one shows. Every `open*` call below re-asserts "director" on run completion,
+	 * and every AI CUT action click does the same immediately (see
+	 * `ai-cut-actions.ts`); while a run is in flight and the user has switched away,
+	 * the dock shell shows a badge instead of forcing focus back.
 	 */
-	dockTab: "properties" | "director";
+	dockTab: "properties" | "director" | "assistant";
+	/**
+	 * One-shot hand-off from the preview toolbar's Assistant mini-prompt (T17.3):
+	 * set together with `dockTab: "assistant"`, the Assistant tab reads this once
+	 * to seed and focus its composer, then clears it. Null the rest of the time.
+	 */
+	assistantSeedText: string | null;
 	/** "cut"/"highlight" = the docked review; "assemble" = the docked auto-assemble review. */
 	mode: "cut" | "highlight" | "assemble";
 	/**
@@ -306,7 +312,10 @@ interface DirectorPlanState {
 	/** Dismiss the error card (also cleared by every new run and every open*). */
 	clearRunError: () => void;
 	/** Focus a dock tab directly (the tab header click handler). */
-	setDockTab: (tab: "properties" | "director") => void;
+	setDockTab: (tab: "properties" | "director" | "assistant") => void;
+	/** Set (or clear, with null) the Assistant composer's pending seed text
+	 * (T17.3 mini-prompt hand-off). Does not itself switch `dockTab`. */
+	setAssistantSeedText: (text: string | null) => void;
 	/** Open the auto-assemble REVIEW, docked (auto-focuses the Director tab). */
 	openAssemble: (args: { draft: AssemblyDraft }) => void;
 	/** Replace the draft's spans (after a drop / re-include / swap) — the panel re-projects the timeline. */
@@ -388,6 +397,7 @@ interface DirectorPlanState {
 
 const CLEARED = {
 	dockTab: "properties" as const,
+	assistantSeedText: null,
 	mode: "cut" as const,
 	phase: "review" as const,
 	abShowing: "with" as const,
@@ -419,6 +429,7 @@ export const useDirectorPlanStore = create<DirectorPlanState>((set, get) => ({
 		set({ runError: { stage, message, at: Date.now() } }),
 	clearRunError: () => set({ runError: null }),
 	setDockTab: (tab) => set({ dockTab: tab }),
+	setAssistantSeedText: (text) => set({ assistantSeedText: text }),
 	openAssemble: ({ draft }) =>
 		set({ ...CLEARED, mode: "assemble", draft, dockTab: "director" }),
 	applyDraftEdit: (spans) =>
