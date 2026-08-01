@@ -8,7 +8,7 @@ Read these before doing anything else:
 Hard rules live in BRIEF.md §3. The ones most often relevant while coding:
 
 - New code goes in `packages/hf-bridge/`, `packages/taste-engine/`, or `apps/web/src/features/ai-generate/` — touching upstream-originated files is a last resort and must be logged in `PATCHES.md`.
-- The timeline is hard-capped at 4 tracks: V1, V2, Overlay, Audio.
+- The timeline is user-managed: main + up to 7 more video tracks, up to 8 audio tracks, plus text/graphic/effect lanes as needed. Users add/delete tracks via the track context menu (right-click the track-label column); main (V1) is never deletable.
 - HyperFrames is consumed via npm only, pinned to exact versions. Never vendor its source.
 - Dan is a coding novice directing the project: plain-language explanations, copy-paste commands, no raw stack traces.
 

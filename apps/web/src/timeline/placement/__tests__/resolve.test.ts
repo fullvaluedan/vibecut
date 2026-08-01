@@ -916,3 +916,109 @@ describe("resolveTrackPlacement video-track cap (MAX_VIDEO_TRACKS = 8)", () => {
 		).toMatchObject({ kind: "newTrack", trackType: "video" });
 	});
 });
+
+describe("resolveTrackPlacement audio-track cap (MAX_AUDIO_TRACKS = 8)", () => {
+	// 8 audio lanes (at the cap). a1 is empty, the rest hold a clip that
+	// overlaps the probed span, so a1 is the least-occupied lane.
+	function buildCappedAudioScene(): SceneTracks {
+		const occupied = Array.from({ length: 7 }, (_, i) =>
+			buildTrack({
+				id: `a${i + 2}`,
+				type: "audio",
+				elements: [
+					buildElement({ id: `aud-el-${i + 2}`, type: "audio", startTime: 0, duration: 100 }),
+				],
+			}),
+		);
+		return buildSceneTracks({
+			audio: [buildTrack({ id: "a1", type: "audio" }), ...occupied],
+		});
+	}
+
+	test("never fails at the cap: separation clamps onto the least-occupied lane instead of a 9th track", () => {
+		const result = resolveTrackPlacement({
+			tracks: buildCappedAudioScene(),
+			trackType: "audio",
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+			strategy: { type: "firstAvailable" },
+		});
+		expect(result).toMatchObject({
+			kind: "existingTrack",
+			trackId: "a1",
+			trackType: "audio",
+		});
+	});
+
+	test("tie-break: every lane equally occupied picks the lowest index", () => {
+		const tracks = buildSceneTracks({
+			audio: Array.from({ length: 8 }, (_, i) =>
+				buildTrack({
+					id: `a${i + 1}`,
+					type: "audio",
+					elements: [
+						buildElement({
+							id: `aud-el-${i + 1}`,
+							type: "audio",
+							startTime: 0,
+							duration: 100,
+						}),
+					],
+				}),
+			),
+		});
+		const result = resolveTrackPlacement({
+			tracks,
+			trackType: "audio",
+			timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+			strategy: { type: "firstAvailable" },
+		});
+		expect(result).toMatchObject({ kind: "existingTrack", trackId: "a1" });
+	});
+
+	test("does NOT cap video/text tracks even when audio is at the cap", () => {
+		const tracks = buildCappedAudioScene();
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "video",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "existingTrack", trackId: "video-main" });
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				elementType: "text",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "text" });
+	});
+
+	test("below the cap, audio still resolves to a new track when no lane has room", () => {
+		const tracks = buildSceneTracks({
+			audio: Array.from({ length: 3 }, (_, i) =>
+				buildTrack({
+					id: `a${i + 1}`,
+					type: "audio",
+					elements: [
+						buildElement({
+							id: `aud-el-${i + 1}`,
+							type: "audio",
+							startTime: 0,
+							duration: 100,
+						}),
+					],
+				}),
+			),
+		});
+		expect(
+			resolveTrackPlacement({
+				tracks,
+				trackType: "audio",
+				timeSpans: [buildTimeSpan({ startTime: 10, duration: 5 })],
+				strategy: { type: "firstAvailable" },
+			}),
+		).toMatchObject({ kind: "newTrack", trackType: "audio" });
+	});
+});
