@@ -4,11 +4,19 @@
  * React wiring for the Assistant chat (T17.3): the pure reducer
  * (assistant-reducer.ts) driven by an `AssistantService`'s event stream
  * (assistant-service.ts), persisted per project (assistant-history-store.ts).
- * Defaults to the MOCK service - swap `service` to integrate T17.2's real
- * executor once it lands, without touching any other file in this feature.
+ *
+ * SERVICE SELECTION (round 17 integration). Real by default: `defaultService`
+ * builds one `createRealAssistantService(editor)` per editor instance and
+ * reuses it for the component's lifetime (a fresh driver per render would
+ * drop the driver's held-confirmation and model-context state on every
+ * re-render). The mock stays reachable behind a dev-only flag
+ * (`localStorage["vibecut-assistant-mock"] === "1"`, see
+ * `real-assistant-service.ts`'s docstring) for offline demos. An explicit
+ * `serviceOverride` argument (tests, or a future caller with its own driver)
+ * always wins over both.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor } from "@/editor/use-editor";
 import {
 	applyAssistantEvent,
@@ -31,6 +39,7 @@ import {
 	type AssistantService,
 } from "./assistant-service";
 import { readAssistantHistory, writeAssistantHistory } from "./assistant-history-store";
+import { createRealAssistantService, isAssistantMockForced } from "./real-assistant-service";
 
 /** How much prior conversation the service sees per turn - enough for a
  * clarifying follow-up to make sense, cheap enough to always send. */
@@ -62,8 +71,17 @@ export interface UseAssistantChatResult {
 	cancelOps: (messageId: string) => void;
 }
 
-export function useAssistantChat(service: AssistantService = mockAssistantService): UseAssistantChatResult {
+export function useAssistantChat(serviceOverride?: AssistantService): UseAssistantChatResult {
+	const editor = useEditor();
 	const projectId = useEditor((e) => e.project.getActiveOrNull()?.metadata.id) ?? null;
+
+	// One real service per editor instance for the component's lifetime - see
+	// the file docstring. `??` short-circuits, so `createRealAssistantService`
+	// is never called at all once a `serviceOverride` (tests) is passed.
+	const service = useMemo(
+		() => serviceOverride ?? (isAssistantMockForced() ? mockAssistantService : createRealAssistantService(editor)),
+		[editor, serviceOverride],
+	);
 
 	const [state, setState] = useState<AssistantChatState>(() => createInitialAssistantChatState());
 	const loadedProjectId = useRef<string | null>(null);
