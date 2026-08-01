@@ -41,7 +41,7 @@ export const JOIN_CONTEXT_WORDS = 15;
 export const CUT_MARKER = "[CUT]";
 
 /** One kept word plus whether at least one removed word precedes it (a seam). */
-interface KeptWord {
+export interface KeptWord {
 	text: string;
 	start: number;
 	end: number;
@@ -50,19 +50,43 @@ interface KeptWord {
 	cutBefore: boolean;
 }
 
-/** Walk the transcript in order and keep every word whose midpoint is NOT inside
- * a merged accepted removal, marking each kept word that follows one or more
- * removed words (`cutBefore`: a seam). */
-function collectKeptWords({
-	ops,
+/**
+ * One uninterrupted run of REMOVED words, anchored to the survivor it precedes.
+ * The transcript lineage (T16.1) draws one red pipe per run; this module needs
+ * only the survivors, so the runs ride along for free rather than being
+ * re-derived by a second walk that could drift from this one.
+ */
+export interface RemovedWordRun {
+	/** Index into `kept` of the survivor immediately AFTER the run
+	 * (`kept.length` when the run trails the transcript). */
+	beforeKeptIndex: number;
+	words: WordTiming[];
+}
+
+/** Both sides of the removal partition, from a single ordered walk. */
+export interface WordPartition {
+	kept: KeptWord[];
+	removedRuns: RemovedWordRun[];
+}
+
+/**
+ * Walk the transcript in order and split it against already-merged removal spans:
+ * a word is REMOVED when its midpoint falls inside one (the convention shared with
+ * the join-texture layer and the virtual timeline, KTD1), and every kept word that
+ * follows one or more removed words is flagged `cutBefore` (a seam). Spans must be
+ * disjoint and sorted - pass `mergeAcceptedRemovalSpans` output, or the lineage's
+ * merged journal ranges. Pure.
+ */
+export function partitionWordsByRemovals({
 	words,
+	removedSpans,
 }: {
-	ops: readonly DirectorOp[];
 	words: readonly WordTiming[];
-}): KeptWord[] {
-	const removedSpans = mergeAcceptedRemovalSpans(ops);
+	removedSpans: readonly { startSec: number; endSec: number }[];
+}): WordPartition {
 	const kept: KeptWord[] = [];
-	let pendingCut = false;
+	const removedRuns: RemovedWordRun[] = [];
+	let pending: WordTiming[] = [];
 	for (const w of words) {
 		const removed = removedSpans.some((s) =>
 			isMidpointContained({
@@ -73,13 +97,39 @@ function collectKeptWords({
 			}),
 		);
 		if (removed) {
-			pendingCut = true;
+			pending.push(w);
 			continue;
 		}
-		kept.push({ text: w.text.trim(), start: w.start, end: w.end, cutBefore: pendingCut });
-		pendingCut = false;
+		if (pending.length > 0) {
+			removedRuns.push({ beforeKeptIndex: kept.length, words: pending });
+			pending = [];
+		}
+		kept.push({ text: w.text.trim(), start: w.start, end: w.end, cutBefore: false });
 	}
-	return kept;
+	if (pending.length > 0) {
+		removedRuns.push({ beforeKeptIndex: kept.length, words: pending });
+	}
+	for (const run of removedRuns) {
+		const survivor = kept[run.beforeKeptIndex];
+		if (survivor) survivor.cutBefore = true;
+	}
+	return { kept, removedRuns };
+}
+
+/** Walk the transcript in order and keep every word whose midpoint is NOT inside
+ * a merged accepted removal, marking each kept word that follows one or more
+ * removed words (`cutBefore`: a seam). */
+export function collectKeptWords({
+	ops,
+	words,
+}: {
+	ops: readonly DirectorOp[];
+	words: readonly WordTiming[];
+}): KeptWord[] {
+	return partitionWordsByRemovals({
+		words,
+		removedSpans: mergeAcceptedRemovalSpans(ops),
+	}).kept;
 }
 
 /** Render a run of kept words, inserting the seam marker before every word whose

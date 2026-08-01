@@ -28,6 +28,11 @@ import {
 	type ProtectedSpanSec,
 } from "./coalesce-removal-ranges";
 import { MIN_SURVIVING_CLIP_FRAMES } from "./content-word";
+import {
+	beginLineageRemoval,
+	type LineageEditor,
+	type LineageOpInput,
+} from "@/features/transcription/lineage";
 
 export interface ApplyDirectorPlanResult {
 	/** Removal ranges applied (cut + take_select). */
@@ -211,6 +216,12 @@ export interface DirectorApplyEditor {
 		};
 	};
 	command: { execute: (args: { command: Command }) => void };
+	/**
+	 * The active project, present on the real editor and absent in unit stubs. It
+	 * is the only thing the T16.1 transcript-lineage journal needs beyond `scenes`,
+	 * so an apply without it simply is not journaled.
+	 */
+	project?: LineageEditor["project"];
 }
 
 /**
@@ -309,7 +320,33 @@ export function applyDirectorPlan({
 	}
 	const command =
 		commands.length === 1 ? commands[0] : new BatchCommand(commands);
+	// T16.1: journal what this apply removes so the transcript panel keeps the cut
+	// words (red pipe bars + restore, T16.2) instead of forgetting them at the next
+	// cache invalidation. We journal the FINAL `ranges` rather than
+	// `mergeAcceptedRemovalSpans(ops)` because coalescing widens them and the
+	// rejected-span carve-out shrinks them - only the final ranges match what
+	// actually leaves the timeline. Each removal op rides along with its own span so
+	// a seam can name the cut's category and reason.
+	const lineageOps: LineageOpInput[] = ops
+		.filter((o) => o.op === "cut" || o.op === "take_select")
+		.map((o) => ({
+			id: o.id,
+			category: o.category,
+			reason: o.reason,
+			startSec: o.startSec,
+			endSec: o.endSec,
+		}));
+	const commitLineage =
+		editor.project && ranges.length > 0
+			? beginLineageRemoval({
+					editor: { project: editor.project, scenes: editor.scenes },
+					source: "director",
+					rangesTicks: ranges.map((r) => ({ start: r.start, end: r.end })),
+					ops: lineageOps,
+				})
+			: null;
 	editor.command.execute({ command });
+	commitLineage?.();
 
 	return {
 		cuts: removalCommand ? removalCommand.getRemovedCount() : 0,
@@ -361,6 +398,16 @@ export function applyHighlightPlan({
 		return { cuts: 0, removedSec: 0, appliedCommand: null };
 	}
 	const command = new RemoveRangesCommand({ ranges });
+	// Journal it like a Director cut (T16.1): a Highlight is still just removals, so
+	// the lineage can explain the result and the panel keeps the dropped words.
+	const commitLineage = editor.project
+		? beginLineageRemoval({
+				editor: { project: editor.project, scenes: editor.scenes },
+				source: "director",
+				rangesTicks: ranges.map((r) => ({ start: r.start, end: r.end })),
+			})
+		: null;
 	editor.command.execute({ command });
+	commitLineage?.();
 	return { cuts: command.getRemovedCount(), removedSec, appliedCommand: command };
 }
