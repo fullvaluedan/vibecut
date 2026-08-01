@@ -105,6 +105,14 @@ describe("assets panel store guard rail: a hidden active tab falls back to Media
 		useAssetsPanelStore.getState().setActiveTab("media");
 	});
 
+	test("setSettingsSubView is a plain, un-guarded one-shot slot (T21.1 ai-settings deep link)", () => {
+		expect(useAssetsPanelStore.getState().settingsSubView).toBeNull();
+		useAssetsPanelStore.getState().setSettingsSubView("ai");
+		expect(useAssetsPanelStore.getState().settingsSubView).toBe("ai");
+		useAssetsPanelStore.getState().setSettingsSubView(null);
+		expect(useAssetsPanelStore.getState().settingsSubView).toBeNull();
+	});
+
 	test("the store's persist config wires merge through resolveActiveTab (hidden persisted tab -> Media)", () => {
 		// Exercises the exact `merge` function the store is configured with (not
 		// a reimplementation), without needing zustand's storage-backed

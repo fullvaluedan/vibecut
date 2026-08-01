@@ -45,6 +45,18 @@ export const VISIBLE_TAB_KEYS = TAB_KEYS.filter(
 export const DEFAULT_TAB: Tab = "media";
 
 /**
+ * T21.1: the Settings tab's own sub-tab bar (Background / AI / Hotkeys /
+ * Help - see `views/settings/index.tsx`) used to be private `useState` with
+ * no way to land on a specific one from outside. The get-started page's
+ * "Add your key in Settings" deep link (`?open=ai-settings`) needs to open
+ * Settings AND select AI, so that sub-tab is now a request the store can
+ * carry across the tab switch. Not persisted - it is a one-shot instruction,
+ * consumed (reset to null) by `SettingsView` as soon as it applies.
+ */
+export const SETTINGS_SUB_VIEWS = ["background", "ai", "hotkeys", "help"] as const;
+export type SettingsSubView = (typeof SETTINGS_SUB_VIEWS)[number];
+
+/**
  * A visible tab is the only valid active tab; anything else (hidden,
  * removed, or corrupt from storage) falls back to Media instead. Used
  * both by `setActiveTab` and by the persist `merge` below, so an invalid
@@ -115,6 +127,9 @@ interface AssetsPanelStore {
 	highlightMediaId: string | null;
 	requestRevealMedia: (mediaId: string) => void;
 	clearHighlight: () => void;
+	/** One-shot request for the Settings tab's sub-tab; see the comment above. */
+	settingsSubView: SettingsSubView | null;
+	setSettingsSubView: (view: SettingsSubView | null) => void;
 
 	/* Media */
 	mediaViewMode: MediaViewMode;
@@ -149,6 +164,8 @@ export const useAssetsPanelStore = create<AssetsPanelStore>()(
 			requestRevealMedia: (mediaId) =>
 				set({ activeTab: DEFAULT_TAB, highlightMediaId: mediaId }),
 			clearHighlight: () => set({ highlightMediaId: null }),
+			settingsSubView: null,
+			setSettingsSubView: (settingsSubView) => set({ settingsSubView }),
 			mediaViewMode: "grid",
 			setMediaViewMode: (mode) => set({ mediaViewMode: mode }),
 			mediaSortBy: "name",
