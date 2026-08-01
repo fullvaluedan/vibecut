@@ -60,12 +60,17 @@ export function getGroupClampReason({
 	requestedDeltaTime,
 	minDuration,
 	rippleShrinkFloorDelta = null,
+	magnetShrinkCeilingDelta = null,
 }: {
 	members: GroupResizeMember[];
 	side: ResizeSide;
 	requestedDeltaTime: MediaTime;
 	minDuration: MediaTime;
 	rippleShrinkFloorDelta?: MediaTime | null;
+	/** Magnet LEFT handle: the pinned-start counterpart of the floor above (see
+	 * `magnetShrinkCeiling` in `timeline/magnet.ts`); when it binds, a
+	 * downstream clip that stays put is the wall, so the reason is "neighbor". */
+	magnetShrinkCeilingDelta?: MediaTime | null;
 }): GroupClampReason | null {
 	if (members.length === 0) return null;
 
@@ -103,6 +108,16 @@ export function getGroupClampReason({
 		groupMinimum = rippleShrinkFloorDelta;
 		groupMinimumReason = "neighbor";
 		groupMinimumElementId = members[0].elementId;
+	}
+
+	if (
+		side === "left" &&
+		magnetShrinkCeilingDelta != null &&
+		(groupMaximum === null || magnetShrinkCeilingDelta < groupMaximum)
+	) {
+		groupMaximum = magnetShrinkCeilingDelta;
+		groupMaximumReason = "neighbor";
+		groupMaximumElementId = members[0].elementId;
 	}
 
 	if (

@@ -25,6 +25,14 @@ interface TimelineStore {
 	toggleSnapping: () => void;
 	rippleEditingEnabled: boolean;
 	toggleRippleEditing: () => void;
+	/**
+	 * Magnetic main track (CapCut's core timeline behavior), default ON. Only
+	 * main-track clips and their linked partners auto-move. Ripple editing is a
+	 * cross-track superset, so when both are on the ripple path wins and the
+	 * magnet path is skipped (see `timeline/magnet.ts`).
+	 */
+	mainTrackMagnetEnabled: boolean;
+	toggleMainTrackMagnet: () => void;
 	videoWaveformsEnabled: boolean;
 	toggleVideoWaveforms: () => void;
 	linkedSelectionEnabled: boolean;
@@ -50,6 +58,14 @@ export const useTimelineStore = create<TimelineStore>()(
 			toggleRippleEditing: () => {
 				set((state) => ({
 					rippleEditingEnabled: !state.rippleEditingEnabled,
+				}));
+			},
+
+			mainTrackMagnetEnabled: true,
+
+			toggleMainTrackMagnet: () => {
+				set((state) => ({
+					mainTrackMagnetEnabled: !state.mainTrackMagnetEnabled,
 				}));
 			},
 
@@ -94,11 +110,12 @@ export const useTimelineStore = create<TimelineStore>()(
 			partialize: (state) => ({
 				snappingEnabled: state.snappingEnabled,
 				rippleEditingEnabled: state.rippleEditingEnabled,
+				mainTrackMagnetEnabled: state.mainTrackMagnetEnabled,
 				videoWaveformsEnabled: state.videoWaveformsEnabled,
 				linkedSelectionEnabled: state.linkedSelectionEnabled,
 				timelineNudgeFrames: state.timelineNudgeFrames,
 			}),
-			version: 2,
+			version: 3,
 			migrate: (persisted) => {
 				const p = persisted as Record<string, unknown> | null;
 				// linkedSelectionEnabled was added later — default it ON for
@@ -109,6 +126,13 @@ export const useTimelineStore = create<TimelineStore>()(
 				// timelineNudgeFrames (v2) — default for stores that predate it.
 				if (p && p.timelineNudgeFrames === undefined) {
 					p.timelineNudgeFrames = DEFAULT_TIMELINE_NUDGE_FRAMES;
+				}
+				// mainTrackMagnetEnabled (v3): existing projects open with the
+				// magnet ON (Dan, 2026-08-01). Safe with no data migration: the
+				// magnet only affects FUTURE edits, it never reflows a saved
+				// layout by itself, and the toggle is one click away.
+				if (p && p.mainTrackMagnetEnabled === undefined) {
+					p.mainTrackMagnetEnabled = true;
 				}
 				return p as never;
 			},

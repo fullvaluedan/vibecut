@@ -11,6 +11,7 @@ import {
 } from "@/timeline/controllers/resize-controller";
 import type { GroupResizeUpdate, ResizeSide } from "@/timeline/group-resize";
 import { computeRippleTrimShifts } from "@/timeline/ripple-trim";
+import { computeMagnetTrimShifts } from "@/timeline/magnet";
 import { BatchCommand } from "@/commands";
 import { UpdateElementsCommand } from "@/commands/timeline";
 import { RippleShiftElementsCommand } from "@/commands/timeline/element/ripple-shift-elements";
@@ -65,17 +66,23 @@ export function useTimelineResize({
 				});
 				return;
 			}
-			// Cross-track ripple trim (Dan's fork): ONE BatchCommand carrying the
-			// resize plus an explicit shift of every downstream element on ALL
-			// tracks (one undo). The command manager's per-track ripple heuristic
-			// is suppressed for this commit: the batch already contains the whole
-			// ripple, and the heuristic would re-shift gapped clips a second time.
-			const shifts = computeRippleTrimShifts({
+			// Ripple / magnet trim (Dan's fork): ONE BatchCommand carrying the
+			// resize plus an explicit shift of everything in scope (one undo) -
+			// every downstream element on ALL tracks for ripple editing, or the
+			// main track plus linked partners for the magnet. The command
+			// manager's ripple/magnet post-passes are suppressed for this commit:
+			// the batch already contains the whole shift, and re-deriving one
+			// would move the same clips a second time.
+			const shiftArgs = {
 				tracks: editor.scenes.getActiveScene().tracks,
 				pivotTime: ripple.pivotTime,
 				deltaTime: ripple.deltaTime,
 				excludeElementIds: ripple.excludeElementIds,
-			});
+			};
+			const shifts =
+				ripple.scope === "main-track"
+					? computeMagnetTrimShifts(shiftArgs)
+					: computeRippleTrimShifts(shiftArgs);
 			const resizeCommand = new UpdateElementsCommand({
 				updates: toElementUpdates(updates),
 			});

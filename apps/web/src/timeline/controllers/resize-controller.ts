@@ -8,6 +8,7 @@ import {
 	minMediaTime,
 	subMediaTime,
 	TICKS_PER_SECOND,
+	ZERO_MEDIA_TIME,
 } from "@/wasm";
 import {
 	computeLinkedResize,
@@ -28,6 +29,12 @@ import {
 	type RippleTrimCommit,
 	type RippleTrimTarget,
 } from "@/timeline/ripple-trim";
+import {
+	collectMagnetTrimTargets,
+	computeMagnetShrinkFloor,
+	liftMagnetNeighborBounds,
+	magnetShrinkCeiling,
+} from "@/timeline/magnet";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import {
 	buildTimelineSnapPoints,
@@ -53,6 +60,15 @@ import type { FrameRate } from "opencut-wasm";
 
 // --- Session ---
 
+interface TrimShiftContext {
+	scope: "all-tracks" | "main-track";
+	pivotTime: MediaTime;
+	shrinkFloorDelta: MediaTime | null;
+	shrinkCeilingDelta: MediaTime | null;
+	targets: RippleTrimTarget[];
+	pinnedStartById: Map<string, MediaTime> | null;
+}
+
 interface ResizeSession {
 	kind: "active";
 	side: ResizeSide;
@@ -61,16 +77,20 @@ interface ResizeSession {
 	members: GroupResizeMember[];
 	result: GroupResizeResult | null;
 	/**
-	 * Cross-track ripple trim (right handle with ripple editing ON): the
-	 * grabbed clip's OLD end (the edit point), the shrink headroom, and the
-	 * downstream snapshot (for the drag's live shift preview), all measured
-	 * at mousedown. Null = plain neighbor-clamped trim.
+	 * The auto-shift context for this trim, measured once at mousedown: the
+	 * grabbed clip's OLD end (the edit point), the headroom before a shifted
+	 * clip would hit one that stays put, and the snapshot of everything that
+	 * shifts (so the drag can preview it live). Null = plain neighbor-clamped
+	 * trim.
+	 *
+	 * Two flavors, never both (ripple editing is the superset and wins):
+	 * - `"all-tracks"`: ripple editing ON, RIGHT handle only, today's behavior.
+	 * - `"main-track"`: magnet ON, EITHER handle, scoped to main-track elements
+	 *   and their linked partners. A left-handle magnet trim also PINS each
+	 *   member's start (`pinnedStartById`) so the clip slides back and stays
+	 *   butted, and shifts downstream by the NEGATED resize delta.
 	 */
-	rippleTrim: {
-		pivotTime: MediaTime;
-		shrinkFloorDelta: MediaTime | null;
-		targets: RippleTrimTarget[];
-	} | null;
+	rippleTrim: TrimShiftContext | null;
 	/** UI-only: the real neighbor ELEMENT on each side of every member, for the
 	 * "blocked by neighbor" edge highlight. See `buildNeighborElementIds`. */
 	neighborElementIds: Map<string, { left: string | null; right: string | null }>;
@@ -259,6 +279,117 @@ function buildNeighborElementIds({
 	return result;
 }
 
+/**
+ * The magnet's trim context: everything on the MAIN track at/after the edit
+ * point plus those clips' linked partners, and the headroom before a shifted
+ * clip would land on one that stays put. A LEFT handle additionally pins the
+ * members' starts, so the trimmed clip stays butted to its left neighbor and
+ * the whole tail slides by the negated delta instead.
+ */
+function buildMagnetTrimSession({
+	tracks,
+	side,
+	pivotTime,
+	members,
+	memberElementIds,
+}: {
+	tracks: SceneTracks;
+	side: ResizeSide;
+	pivotTime: MediaTime;
+	members: GroupResizeMember[];
+	memberElementIds: ReadonlySet<string>;
+}): TrimShiftContext {
+	const targets = collectMagnetTrimTargets({
+		tracks,
+		pivotTime,
+		excludeElementIds: memberElementIds,
+	});
+	const shrinkFloorDelta = computeMagnetShrinkFloor({
+		tracks,
+		excludeElementIds: memberElementIds,
+		shiftingElementIds: new Set(targets.map((target) => target.elementId)),
+	});
+	return {
+		scope: "main-track",
+		pivotTime,
+		shrinkFloorDelta: side === "right" ? shrinkFloorDelta : null,
+		shrinkCeilingDelta:
+			side === "left" ? magnetShrinkCeiling(shrinkFloorDelta) : null,
+		targets,
+		pinnedStartById:
+			side === "left"
+				? new Map(members.map((member) => [member.elementId, member.startTime]))
+				: null,
+	};
+}
+
+/** Relax the bounds the pending auto-shift makes irrelevant (see
+ * `liftShiftingNeighborBounds` / `liftMagnetNeighborBounds`); a plain trim
+ * keeps every member's bounds exactly as measured. */
+function applyTrimBounds({
+	members,
+	side,
+	rippleTrim,
+	neighborElementIds,
+}: {
+	members: GroupResizeMember[];
+	side: ResizeSide;
+	rippleTrim: TrimShiftContext | null;
+	neighborElementIds: ReadonlyMap<
+		string,
+		{ left: string | null; right: string | null }
+	>;
+}): GroupResizeMember[] {
+	if (!rippleTrim) return members;
+	if (rippleTrim.scope === "all-tracks") {
+		return liftShiftingNeighborBounds({
+			members,
+			pivotTime: rippleTrim.pivotTime,
+		});
+	}
+	return liftMagnetNeighborBounds({
+		members,
+		side,
+		shiftingElementIds: new Set(
+			rippleTrim.targets.map((target) => target.elementId),
+		),
+		neighborElementIds,
+	});
+}
+
+/** Magnet LEFT trims write each member's committed start straight back over
+ * the resize patch: the head trim changes the clip's content, never its
+ * position, and the gap it would have opened is closed by the tail shift. */
+function pinMemberStarts({
+	updates,
+	pinnedStartById,
+}: {
+	updates: GroupResizeUpdate[];
+	pinnedStartById: Map<string, MediaTime> | null;
+}): GroupResizeUpdate[] {
+	if (!pinnedStartById) return updates;
+	return updates.map((update) => {
+		const pinnedStart = pinnedStartById.get(update.elementId);
+		return pinnedStart === undefined
+			? update
+			: { ...update, patch: { ...update.patch, startTime: pinnedStart } };
+	});
+}
+
+/** The direction downstream material moves for the current drag: a right-hand
+ * trim carries the resize delta as-is, a magnet left trim negates it. */
+function trimShiftDelta({
+	side,
+	deltaTime,
+}: {
+	side: ResizeSide;
+	deltaTime: MediaTime;
+}): MediaTime {
+	return side === "left"
+		? subMediaTime({ a: ZERO_MEDIA_TIME, b: deltaTime })
+		: deltaTime;
+}
+
 function hasResizeChanges({
 	members,
 	result,
@@ -366,8 +497,13 @@ export class ResizeController {
 		// handle drag shifts all downstream material at commit, so shifting
 		// neighbors stop clamping the extend (a neighbor parked before the edit
 		// point still binds) and the shrink is floored by the tightest track's
-		// straddler headroom, both measured once at mousedown. Left-handle trims
-		// keep today's per-track heuristic ripple.
+		// straddler headroom, both measured once at mousedown.
+		//
+		// Magnetic main track (T15.2) is the same machinery scoped to the main
+		// track plus linked partners, on BOTH handles. Ripple editing is the
+		// cross-track superset, so it takes precedence and the magnet stands
+		// down whenever both toggles are on - that is what stops anything from
+		// being shifted twice.
 		const pivotTime = addMediaTime({
 			a: element.startTime,
 			b: element.duration,
@@ -375,22 +511,40 @@ export class ResizeController {
 		const memberElementIds = new Set(
 			members.map((member) => member.elementId),
 		);
+		const neighborElementIds = buildNeighborElementIds({
+			tracks,
+			selectedElements: [ref, ...linkedRefs],
+		});
+		const timelineState = useTimelineStore.getState();
 		const rippleTrim =
-			side === "right" && useTimelineStore.getState().rippleEditingEnabled
+			side === "right" && timelineState.rippleEditingEnabled
 				? {
+						scope: "all-tracks" as const,
 						pivotTime,
 						shrinkFloorDelta: computeRippleShrinkFloor({
 							tracks,
 							pivotTime,
 							excludeElementIds: memberElementIds,
 						}),
+						shrinkCeilingDelta: null,
 						targets: collectRippleTrimTargets({
 							tracks,
 							pivotTime,
 							excludeElementIds: memberElementIds,
 						}),
+						pinnedStartById: null,
 					}
-				: null;
+				: !timelineState.rippleEditingEnabled &&
+						timelineState.mainTrackMagnetEnabled &&
+						members.some((member) => member.trackId === tracks.main.id)
+					? buildMagnetTrimSession({
+							tracks,
+							side,
+							pivotTime,
+							members,
+							memberElementIds,
+						})
+					: null;
 
 		this.config.discardPreview();
 
@@ -399,18 +553,15 @@ export class ResizeController {
 			side,
 			startX: event.clientX,
 			fps,
-			members: rippleTrim
-				? liftShiftingNeighborBounds({
-						members,
-						pivotTime: rippleTrim.pivotTime,
-					})
-				: members,
+			members: applyTrimBounds({
+				members,
+				side,
+				rippleTrim,
+				neighborElementIds,
+			}),
 			result: null,
 			rippleTrim,
-			neighborElementIds: buildNeighborElementIds({
-				tracks,
-				selectedElements: [ref, ...linkedRefs],
-			}),
+			neighborElementIds,
 		};
 		this.cursorLock = lockGestureCursor({ cursor: "ew-resize" });
 		this.activate();
@@ -524,6 +675,8 @@ export class ResizeController {
 			requestedDeltaTime,
 			minDuration: getMinDurationForFps(session.fps),
 			rippleShrinkFloorDelta: session.rippleTrim?.shrinkFloorDelta ?? null,
+			magnetShrinkCeilingDelta:
+				session.rippleTrim?.shrinkCeilingDelta ?? null,
 		});
 		if (!clamp) return null;
 
@@ -565,31 +718,39 @@ export class ResizeController {
 				? {
 						rippleTrim: {
 							shrinkFloorDelta: session.rippleTrim.shrinkFloorDelta,
+							shrinkCeilingDelta: session.rippleTrim.shrinkCeilingDelta,
 						},
 					}
 				: {}),
 		});
 
-		session.result = result;
+		const memberUpdates = pinMemberStarts({
+			updates: result.updates,
+			pinnedStartById: session.rippleTrim?.pinnedStartById ?? null,
+		});
+		session.result = { deltaTime: result.deltaTime, updates: memberUpdates };
 		this.config.onClampReasonChange?.(
 			this.computeClampFeedback({ session, requestedDeltaTime: deltaTime }),
 		);
-		// Ripple live preview: downstream clips shift on screen during the drag
-		// instead of jumping at commit. Emitted even at zero delta, so a drag
+		// Ripple/magnet live preview: the shifted clips move on screen during the
+		// drag instead of jumping at commit. Emitted even at zero delta, so a drag
 		// back to the origin overwrites stale shifted overlay positions.
 		const previewUpdates: ResizePreviewUpdate[] = session.rippleTrim
 			? [
-					...result.updates,
+					...memberUpdates,
 					...shiftRippleTrimTargets({
 						targets: session.rippleTrim.targets,
-						deltaTime: result.deltaTime,
+						deltaTime: trimShiftDelta({
+							side: session.side,
+							deltaTime: result.deltaTime,
+						}),
 					}).map(({ trackId, elementId, newStartTime }) => ({
 						trackId,
 						elementId,
 						patch: { startTime: newStartTime },
 					})),
 				]
-			: result.updates;
+			: memberUpdates;
 		this.config.previewElements(previewUpdates);
 	}
 
@@ -603,14 +764,18 @@ export class ResizeController {
 			session.result &&
 			hasResizeChanges({ members: session.members, result: session.result })
 		) {
-			const ripple =
+			const ripple: RippleTrimCommit | null =
 				session.rippleTrim && session.result.deltaTime !== 0
 					? {
 							pivotTime: session.rippleTrim.pivotTime,
-							deltaTime: session.result.deltaTime,
+							deltaTime: trimShiftDelta({
+								side: session.side,
+								deltaTime: session.result.deltaTime,
+							}),
 							excludeElementIds: new Set(
 								session.members.map((member) => member.elementId),
 							),
+							scope: session.rippleTrim.scope,
 						}
 					: null;
 			this.config.commitElements(session.result.updates, ripple);

@@ -38,14 +38,24 @@ export interface RippleTrimTarget {
 	baseStartTime: MediaTime;
 }
 
-/** The context a right-handle ripple commit carries from the drag session. */
+/** The context a ripple/magnet trim commit carries from the drag session. */
 export interface RippleTrimCommit {
 	/** The grabbed clip's OLD end: the edit point downstream of which shifts. */
 	pivotTime: MediaTime;
-	/** The final (clamped + snapped) resize delta; sign = shift direction. */
+	/**
+	 * The final shift delta, already signed for the direction downstream must
+	 * move (a magnet LEFT trim negates the resize delta, because it pins the
+	 * clip's start and closes the gap by pulling everything after it back).
+	 */
 	deltaTime: MediaTime;
 	/** The resized members; they move via their own patches, never the shift. */
 	excludeElementIds: ReadonlySet<string>;
+	/**
+	 * Which elements the commit shifts: `"all-tracks"` is ripple editing's
+	 * cross-track sweep, `"main-track"` is the magnet (main-track elements plus
+	 * their linked partners only). See `timeline/magnet.ts`.
+	 */
+	scope: "all-tracks" | "main-track";
 }
 
 function orderedTracks(tracks: SceneTracks) {
