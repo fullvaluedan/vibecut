@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PanelView } from "@/components/editor/panels/assets/views/base-panel";
 import {
 	Section,
@@ -16,24 +16,39 @@ import { ShortcutsEditor } from "@/actions/components/shortcuts-dialog";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { HelpContent } from "./help";
+import {
+	SETTINGS_SUB_VIEWS,
+	useAssetsPanelStore,
+	type SettingsSubView,
+} from "@/components/editor/panels/assets/assets-panel-store";
 
 // "Project info" moved to a chip popover next to ZoomSelect in the preview
 // toolbar (menu IA audit: project name/frame-rate/aspect belong near the
 // canvas they describe, not buried in Settings). See
 // apps/web/src/preview/components/project-info-chip.tsx.
-type SettingsView = "background" | "ai" | "hotkeys" | "help";
+type SettingsView = SettingsSubView;
 
 function isSettingsView(value: string): value is SettingsView {
-	return (
-		value === "background" ||
-		value === "ai" ||
-		value === "hotkeys" ||
-		value === "help"
-	);
+	return (SETTINGS_SUB_VIEWS as readonly string[]).includes(value);
 }
 
 export function SettingsView() {
-	const [view, setView] = useState<SettingsView>("background");
+	// T21.1: the get-started page's "Add your key in Settings" deep link asks
+	// for the AI sub-tab specifically (`?open=ai-settings` -> assets-panel-store
+	// `settingsSubView`). Read it once for the initial tab so a fresh mount
+	// (switching to Settings for the first time after the deep link fires)
+	// lands directly on AI; the effect below also covers the case where this
+	// component is already mounted when the request arrives, and consumes the
+	// request afterward so a later manual visit to Settings is unaffected.
+	const requestedSubView = useAssetsPanelStore((s) => s.settingsSubView);
+	const setSettingsSubView = useAssetsPanelStore((s) => s.setSettingsSubView);
+	const [view, setView] = useState<SettingsView>(requestedSubView ?? "background");
+
+	useEffect(() => {
+		if (!requestedSubView) return;
+		setView(requestedSubView);
+		setSettingsSubView(null);
+	}, [requestedSubView, setSettingsSubView]);
 
 	return (
 		<PanelView

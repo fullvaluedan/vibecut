@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { parseOpenParam, resolveOpenParamAction } from "../deep-link-open";
 
 describe("parseOpenParam", () => {
-	test("accepts director/transcript/captions", () => {
+	test("accepts director/transcript/captions/ai-settings", () => {
 		expect(parseOpenParam("director")).toBe("director");
 		expect(parseOpenParam("transcript")).toBe("transcript");
 		expect(parseOpenParam("captions")).toBe("captions");
+		expect(parseOpenParam("ai-settings")).toBe("ai-settings");
 	});
 
 	test("ignores unknown values", () => {
@@ -36,6 +37,14 @@ describe("resolveOpenParamAction", () => {
 		expect(resolveOpenParamAction("captions")).toEqual({
 			store: "assets",
 			tab: "captions",
+		});
+	});
+
+	test("ai-settings opens the assets Settings tab on its AI sub-tab", () => {
+		expect(resolveOpenParamAction("ai-settings")).toEqual({
+			store: "assets",
+			tab: "settings",
+			settingsSubView: "ai",
 		});
 	});
 });

@@ -51,6 +51,9 @@ import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-pa
  * once on mount, opens the matching panel, then strips it from the URL via
  * history.replaceState (no navigation/reload). Unknown/missing params are a
  * no-op - see deep-link-open.ts for the pure param -> action mapping.
+ *
+ * T21.1: also handles `ai-settings` (the get-started page's "Add your key in
+ * Settings" button) - opens the Settings tab AND requests its AI sub-tab.
  */
 function useDeepLinkOpen() {
 	useEffect(() => {
@@ -63,6 +66,9 @@ function useDeepLinkOpen() {
 			useDirectorPlanStore.getState().setDockTab("director");
 		} else {
 			useAssetsPanelStore.getState().setActiveTab(action.tab);
+			if (action.tab === "settings") {
+				useAssetsPanelStore.getState().setSettingsSubView(action.settingsSubView);
+			}
 		}
 
 		url.searchParams.delete("open");
