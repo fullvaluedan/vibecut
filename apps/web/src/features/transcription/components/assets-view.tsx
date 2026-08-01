@@ -241,7 +241,12 @@ export function TranscriptView() {
 			// and drop the pipes rather than misplace them.
 			const takeWords = view.words.length > 0;
 			if (takeWords) setWords(view.words);
-			if (view.segments.length > 0) setSegments(view.segments);
+			// Segments are what the Export menu serializes (txt/srt/csv all read them),
+			// so they always come from the same view the panel renders - including the
+			// empty view a cut-everything timeline produces. The old "only when
+			// non-empty" guard left the previous segments in place there, so Export
+			// wrote a transcript the timeline no longer contained.
+			setSegments(view.segments);
 			setSeams(takeWords || currentWords.length === 0 ? view.seams : []);
 			setLineageExplained(true);
 			setSelection(null);

@@ -40,6 +40,21 @@ Repro (minimal, confirmed twice):
 
 This blocks G6 quality scores for T16.2 and T16.3 below 9 (see roadmap doc statuses) and needs a code fix, not just a docs note.
 
+**FIXED (G6 reopen) - live re-verify pending.** Root cause: `viewFromRecord` in
+`features/transcription/lineage.ts` decided a segment's fate by testing the SEGMENT's own
+midpoint against the merged removal spans, so a cut in the middle of a sentence contained
+that sentence's midpoint and dropped the whole segment. The panel hid it (it renders the
+view's `words`); the Export menu did not (txt/srt/csv all serialize `segments`). Segments
+are now derived from the same word journal the words are: a segment survives while any of
+its words do, its text and bounds shrink to the surviving extent, and only a segment with
+nothing left is dropped. Word-less captures shrink from the journal ranges directly.
+`components/assets-view.tsx` now also adopts the view's segments unconditionally, so a
+cut-everything timeline can no longer export a stale transcript. Covered by
+`features/transcription/__tests__/lineage-export-segments.test.ts`.
+Re-verify with the repro above, plus: delete inside the LAST segment; delete a span
+crossing a segment boundary; delete a whole segment (it should vanish from the export);
+restore all and confirm the export matches the pre-delete file exactly.
+
 ### Director provenance (check 9) - partially verified, live LLM available
 A working LLM provider WAS configured in this environment (Settings > AI > "Claude subscription (Claude Code)"), so this was NOT blocked.
 - [x] AI CUT > AI Director ran end to end on the test clip and proposed one op (a trailing dead-air cut, "0:09.5-0:10.1 - Trailing silence (0.8s) after the last speech").
