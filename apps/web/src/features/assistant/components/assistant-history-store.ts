@@ -59,9 +59,17 @@ function getStorage(): HistoryStorage {
 	return storage;
 }
 
-/** Test seam: drop the cached storage probe (and any in-memory fallback data). */
+/** Test seam: install a fresh in-memory store. Deliberately does NOT re-probe
+ * `localStorage`: other test suites in the same bun process can leave a leaked
+ * global stub behind, and re-probing would cache it (order-dependent failures). */
 export function resetAssistantHistoryStorageForTests(): void {
-	storage = null;
+	const memory = new Map<string, string>();
+	storage = {
+		getItem: (key) => memory.get(key) ?? null,
+		setItem: (key, value) => {
+			memory.set(key, value);
+		},
+	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
