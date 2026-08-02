@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use gpu::{FULLSCREEN_SHADER_SOURCE, GpuContext};
+use gpu::{GpuContext, FULLSCREEN_SHADER_SOURCE};
 use thiserror::Error;
 use wgpu::util::DeviceExt;
 
@@ -9,6 +9,9 @@ use crate::{EffectPass, UniformValue};
 
 const GAUSSIAN_BLUR_SHADER_ID: &str = "gaussian-blur";
 const GAUSSIAN_BLUR_SHADER_SOURCE: &str = include_str!("shaders/gaussian_blur.wgsl");
+
+const COLOR_ADJUST_SHADER_ID: &str = "color-adjust";
+const COLOR_ADJUST_SHADER_SOURCE: &str = include_str!("shaders/color_adjust.wgsl");
 
 /// Number of f32 slots every effect shader can address, indexed 0..SCALAR_SLOT_COUNT.
 pub const SCALAR_SLOT_COUNT: usize = 12;
@@ -74,27 +77,74 @@ struct EffectShader {
     schema: UniformSchema,
 }
 
-const EFFECT_SHADERS: &[EffectShader] = &[EffectShader {
-    id: GAUSSIAN_BLUR_SHADER_ID,
-    source: GAUSSIAN_BLUR_SHADER_SOURCE,
-    schema: UniformSchema {
-        shader: GAUSSIAN_BLUR_SHADER_ID,
-        uniforms: &[
-            UniformBinding {
-                name: "u_sigma",
-                slot: UniformSlot::Scalar { index: 0 },
-            },
-            UniformBinding {
-                name: "u_step",
-                slot: UniformSlot::Scalar { index: 1 },
-            },
-            UniformBinding {
-                name: "u_direction",
-                slot: UniformSlot::Vec2 { index: 0 },
-            },
-        ],
+const EFFECT_SHADERS: &[EffectShader] = &[
+    EffectShader {
+        id: GAUSSIAN_BLUR_SHADER_ID,
+        source: GAUSSIAN_BLUR_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: GAUSSIAN_BLUR_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_sigma",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_step",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_direction",
+                    slot: UniformSlot::Vec2 { index: 0 },
+                },
+            ],
+        },
     },
-}];
+    EffectShader {
+        id: COLOR_ADJUST_SHADER_ID,
+        source: COLOR_ADJUST_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: COLOR_ADJUST_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_exposure",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_temperature",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_tint",
+                    slot: UniformSlot::Scalar { index: 2 },
+                },
+                UniformBinding {
+                    name: "u_contrast",
+                    slot: UniformSlot::Scalar { index: 3 },
+                },
+                UniformBinding {
+                    name: "u_highlights",
+                    slot: UniformSlot::Scalar { index: 4 },
+                },
+                UniformBinding {
+                    name: "u_shadows",
+                    slot: UniformSlot::Scalar { index: 5 },
+                },
+                UniformBinding {
+                    name: "u_saturation",
+                    slot: UniformSlot::Scalar { index: 6 },
+                },
+                UniformBinding {
+                    name: "u_brightness",
+                    slot: UniformSlot::Scalar { index: 7 },
+                },
+                UniformBinding {
+                    name: "u_sharpen",
+                    slot: UniformSlot::Scalar { index: 8 },
+                },
+            ],
+        },
+    },
+];
 
 fn find_effect_shader(shader: &str) -> Option<&'static EffectShader> {
     EFFECT_SHADERS.iter().find(|entry| entry.id == shader)
@@ -631,11 +681,11 @@ mod tests {
     #[test]
     fn rejects_an_unregistered_shader() {
         let mut pass = blur_pass(1.0, 1.0, [1.0, 0.0]);
-        pass.shader = "color-adjust".to_string();
+        pass.shader = "not-a-real-shader".to_string();
         let error = pack_effect_uniforms(&pass, 16, 16).expect_err("unknown shader");
         assert!(matches!(
             error,
-            EffectsError::UnknownEffectShader { ref shader } if shader == "color-adjust"
+            EffectsError::UnknownEffectShader { ref shader } if shader == "not-a-real-shader"
         ));
     }
 
@@ -705,6 +755,71 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The color-adjust shader's 9 scalar slots (0..8), packed in declaration
+    /// order: exposure, temperature, tint, contrast, highlights, shadows,
+    /// saturation, brightness, sharpen. Mirrors the mapping documented in
+    /// apps/web/src/effects/definitions/color-adjust.ts and the WGSL comment
+    /// in shaders/color_adjust.wgsl.
+    fn color_adjust_pass(values: [f32; 9]) -> EffectPass {
+        let [exposure, temperature, tint, contrast, highlights, shadows, saturation, brightness, sharpen] =
+            values;
+        EffectPass {
+            shader: COLOR_ADJUST_SHADER_ID.to_string(),
+            uniforms: HashMap::from([
+                ("u_exposure".to_string(), UniformValue::Number(exposure)),
+                (
+                    "u_temperature".to_string(),
+                    UniformValue::Number(temperature),
+                ),
+                ("u_tint".to_string(), UniformValue::Number(tint)),
+                ("u_contrast".to_string(), UniformValue::Number(contrast)),
+                ("u_highlights".to_string(), UniformValue::Number(highlights)),
+                ("u_shadows".to_string(), UniformValue::Number(shadows)),
+                ("u_saturation".to_string(), UniformValue::Number(saturation)),
+                ("u_brightness".to_string(), UniformValue::Number(brightness)),
+                ("u_sharpen".to_string(), UniformValue::Number(sharpen)),
+            ]),
+        }
+    }
+
+    #[test]
+    fn packs_color_adjust_uniforms() {
+        let packed = pack_effect_uniforms(
+            &color_adjust_pass([0.5, 0.2, -0.1, 0.3, -0.2, 0.4, 1.5, 0.05, 0.6]),
+            1920,
+            1080,
+        )
+        .expect("color-adjust packs");
+
+        assert_eq!(packed.resolution, [1920.0, 1080.0]);
+        // scalars[0]: exposure, temperature, tint, contrast.
+        assert_eq!(packed.scalars[0], [0.5, 0.2, -0.1, 0.3]);
+        // scalars[1]: highlights, shadows, saturation, brightness.
+        assert_eq!(packed.scalars[1], [-0.2, 0.4, 1.5, 0.05]);
+        // scalars[2]: sharpen, then unused.
+        assert_eq!(packed.scalars[2], [0.6, 0.0, 0.0, 0.0]);
+        // color-adjust declares no vec2/vec4 uniforms.
+        assert_eq!(packed.direction, [0.0; 2]);
+        assert_eq!(packed.direction_b, [0.0; 2]);
+        assert_eq!(packed.color, [0.0; 4]);
+    }
+
+    #[test]
+    fn color_adjust_neutral_values_pack_to_zeroed_scalars_except_saturation() {
+        // Neutral in shader-space is all-zero EXCEPT saturation, whose
+        // identity multiplier is 1.0 (see buildPasses's UI -> shader mapping:
+        // saturation = 1 + ui/100).
+        let packed = pack_effect_uniforms(
+            &color_adjust_pass([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            16,
+            16,
+        )
+        .expect("color-adjust packs");
+        assert_eq!(packed.scalars[0], [0.0; 4]);
+        assert_eq!(packed.scalars[1], [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(packed.scalars[2], [0.0; 4]);
     }
 
     #[test]
