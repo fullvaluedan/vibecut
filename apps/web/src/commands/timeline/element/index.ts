@@ -6,6 +6,7 @@ export { UpdateElementsCommand } from "./update-elements";
 export { ToggleSourceAudioSeparationCommand } from "./toggle-source-audio-separation";
 export { UnlinkElementsCommand } from "./unlink-elements";
 export { MoveElementCommand } from "./move-elements";
+export { SetElementTransitionCommand } from "./transitions";
 
 export * from "./keyframes";
 export * from "./effects";

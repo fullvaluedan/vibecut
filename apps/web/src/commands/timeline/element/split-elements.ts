@@ -50,6 +50,18 @@ export class SplitElementsCommand extends Command {
 		// ganged with each other while the left halves keep the original id.
 		// Mirrors the drag-drop straddle-split precedent (computeStraddleSplit).
 		const freshLinkIdByGroup = new Map<string, string>();
+
+		// T19.3: a split keeps each transition on the boundary it was authored
+		// against. The LEFT half inherits the element's fields, so a HEAD
+		// transition rides along with the join it belongs to, but its tail is now
+		// the fresh cut, so any tail fade leaves it. The freshly minted RIGHT
+		// half starts on a HARD CUT (the brand-new cut the user just made is not
+		// the old join) and inherits the tail fade, which is still its tail.
+		// The generic reconciler cannot make this call on its own: the right half
+		// legitimately abuts the left half, so an inherited `transitionIn` would
+		// look valid.
+		const dropTailTransition = { transitionOut: undefined } as const;
+		const dropHeadTransition = { transitionIn: undefined } as const;
 		const rightSideLinkId = (
 			linkId: string | undefined,
 		): { linkId?: string } => {
@@ -177,6 +189,7 @@ export class SplitElementsCommand extends Command {
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 							...rightSideLinkId(element.linkId),
+							...dropHeadTransition,
 						},
 					];
 				} else {
@@ -194,6 +207,7 @@ export class SplitElementsCommand extends Command {
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
+							...dropTailTransition,
 						},
 						{
 							...element,
@@ -206,6 +220,7 @@ export class SplitElementsCommand extends Command {
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 							...rightSideLinkId(element.linkId),
+							...dropHeadTransition,
 						},
 					];
 				}

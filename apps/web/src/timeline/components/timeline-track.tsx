@@ -12,6 +12,7 @@ import {
 import type { TimelineTrack } from "@/timeline";
 import type { TimelineElement as TimelineElementType } from "@/timeline";
 import { TIMELINE_LAYERS } from "./layers";
+import { TransitionJoinLayer } from "./transition-joins";
 import type { ElementDragSlice, ElementDragView } from "@/timeline";
 import { useEditor } from "@/editor/use-editor";
 import { useGapSelectionStore } from "@/timeline/gap-selection-store";
@@ -251,6 +252,11 @@ export function TimelineTrackContent({
 
 	const isDragging = dragView.kind === "dragging";
 
+	// T19.3: transitions are a MAIN-TRACK feature (CapCut parity), so only V1
+	// grows the join chip/bracket layer.
+	const isMainTrack =
+		editor.scenes.getActiveSceneOrNull()?.tracks.main.id === track.id;
+
 	// Force-include the active drag target(s) so a clip dragged out of the visible
 	// window stays mounted (unmounting it mid-drag breaks the drag). memberTimeOffsets
 	// is keyed by dragged element id, so it doubles as the `.has(id)` lookup.
@@ -356,6 +362,9 @@ export function TimelineTrackContent({
 							/>
 						);
 					})
+				)}
+				{isMainTrack && !isDragging && (
+					<TransitionJoinLayer track={track} zoomLevel={zoomLevel} />
 				)}
 			</div>
 		</div>

@@ -3,6 +3,7 @@ import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
 import type { RetimeCurve } from "@/retime/curve";
+import type { TransitionSpec } from "@/timeline/transitions/types";
 import type { MediaTime } from "@/wasm";
 
 export type ElementRef = {
@@ -167,6 +168,16 @@ export interface VideoElement extends BaseTimelineElement {
 	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
+	/**
+	 * T19.3 transitions. `transitionIn` governs this clip's HEAD boundary
+	 * (a join with the clip on its left, or a head fade against nothing);
+	 * `transitionOut` is the tail fade, and only exists on a clip with no
+	 * abutting right neighbour. Absent means "hard cut", so every project
+	 * written before this round loads unchanged with no migration. See
+	 * `timeline/transitions/types.ts` for the full ownership rule.
+	 */
+	transitionIn?: TransitionSpec;
+	transitionOut?: TransitionSpec;
 	/** FrameCut: set on AI-generated HyperFrames clips; enables re-render and template swap. */
 	framecutAi?: {
 		compId: string;
@@ -195,6 +206,9 @@ export interface ImageElement extends BaseTimelineElement {
 	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
+	/** T19.3: see the matching fields on `VideoElement`. */
+	transitionIn?: TransitionSpec;
+	transitionOut?: TransitionSpec;
 	/**
 	 * VibeCut (W7): per-instance color override for a solid-color media asset
 	 * (see media/types.ts MediaAsset.solidColor). Undefined means "use the
