@@ -1,5 +1,0 @@
-[install]
-# bun 1.3 defaults monorepos to the pnpm-style isolated linker (symlinks into
-# node_modules/.bun). Turbopack on Windows cannot resolve packages through
-# those links and the dev server fails to boot — keep the classic hoisted layout.
-linker = "hoisted"
