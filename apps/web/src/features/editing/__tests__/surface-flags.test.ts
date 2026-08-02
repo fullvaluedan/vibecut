@@ -10,10 +10,8 @@ import {
 } from "@/features/editing/surface-flags";
 
 describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)", () => {
-	test("the hidden left-panel tab list matches the roadmap doc exactly (T19.4a: sounds unhidden)", () => {
-		expect([...HIDDEN_ASSET_TABS].sort()).toEqual(
-			["effects", "hyperframes"].sort(),
-		);
+	test("the hidden left-panel tab list matches the roadmap doc exactly (T19.4b: effects unhidden)", () => {
+		expect([...HIDDEN_ASSET_TABS].sort()).toEqual(["hyperframes"].sort());
 	});
 
 	test("kept-visible tabs are never in the hidden list", () => {
@@ -25,6 +23,7 @@ describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)",
 			"transcript",
 			"settings",
 			"sounds",
+			"effects",
 		] as const) {
 			expect(HIDDEN_ASSET_TABS).not.toContain(kept);
 		}

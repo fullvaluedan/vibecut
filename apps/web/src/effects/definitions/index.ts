@@ -2,11 +2,19 @@ import { effectsRegistry } from "../registry";
 import { blurEffectDefinition } from "./blur";
 import { chromaKeyEffectDefinition } from "./chroma-key";
 import { colorAdjustEffectDefinition } from "./color-adjust";
+import { glowEffectDefinition } from "./glow";
+import { noiseEffectDefinition } from "./noise";
+import { pixelateEffectDefinition } from "./pixelate";
+import { vignetteEffectDefinition } from "./vignette";
 
 const defaultEffects = [
 	blurEffectDefinition,
 	colorAdjustEffectDefinition,
 	chromaKeyEffectDefinition,
+	pixelateEffectDefinition,
+	vignetteEffectDefinition,
+	glowEffectDefinition,
+	noiseEffectDefinition,
 ];
 
 export function registerDefaultEffects(): void {
