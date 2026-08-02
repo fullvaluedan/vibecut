@@ -62,7 +62,7 @@ import {
 	invokeAction,
 } from "@/actions";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
-import { resolveStickerId } from "@/stickers";
+import { resolveStickerId } from "@/stickers/resolver";
 import { buildGraphicPreviewUrl } from "@/graphics";
 import Image from "next/image";
 import {

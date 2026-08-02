@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -25,7 +25,11 @@ import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { useSoundSearch } from "@/sounds/use-sound-search";
 import { useSoundsStore } from "@/sounds/sounds-store";
 import { HeygenSoundsView } from "@/sounds/components/heygen-sounds";
-import type { SavedSound, SoundEffect } from "@/sounds/types";
+import {
+	FREESOUND_NOT_CONFIGURED_ERROR,
+	type SavedSound,
+	type SoundEffect,
+} from "@/sounds/types";
 import { cn } from "@/utils/ui";
 import {
 	FavouriteIcon,
@@ -83,10 +87,12 @@ function SoundEffectsView() {
 		showCommercialOnly,
 		toggleCommercialFilter,
 		hasLoaded,
+		needsFreesoundApiKey,
 		setTopSoundEffects,
 		setLoading,
 		setError,
 		setHasLoaded,
+		setNeedsFreesoundApiKey,
 		setCurrentPage,
 		setHasNextPage,
 		setTotalCount,
@@ -103,9 +109,7 @@ function SoundEffectsView() {
 	});
 
 	const [playingId, setPlayingId] = useState<number | null>(null);
-	const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(
-		null,
-	);
+	const audioRef = useRef<HTMLAudioElement | null>(null);
 
 	const { scrollAreaRef, handleScroll } = useInfiniteScroll({
 		onLoadMore: loadMore,
@@ -117,8 +121,22 @@ function SoundEffectsView() {
 		loadSavedSounds();
 	}, [loadSavedSounds]);
 
+	// Stop any playing preview on unmount (also fires on sub-tab switch: Radix
+	// TabsContent unmounts inactive panels by default).
 	useEffect(() => {
-		if (hasLoaded) {
+		return () => {
+			audioRef.current?.pause();
+		};
+	}, []);
+
+	const lastTopSoundsCommercialOnlyRef = useRef(showCommercialOnly);
+
+	useEffect(() => {
+		const commercialOnlyChanged =
+			lastTopSoundsCommercialOnlyRef.current !== showCommercialOnly;
+		lastTopSoundsCommercialOnlyRef.current = showCommercialOnly;
+
+		if (hasLoaded && !commercialOnlyChanged) {
 			return;
 		}
 
@@ -131,8 +149,14 @@ function SoundEffectsView() {
 					setError({ error: null });
 				}
 
+				const topSoundsParams = new URLSearchParams({
+					page_size: "50",
+					sort: "downloads",
+					commercial_only: showCommercialOnly.toString(),
+				});
+
 				const response = await fetch(
-					"/api/sounds/search?page_size=50&sort=downloads",
+					`/api/sounds/search?${topSoundsParams.toString()}`,
 				);
 
 				if (!shouldIgnore) {
@@ -141,6 +165,9 @@ function SoundEffectsView() {
 					}
 
 					const data = await response.json();
+					setNeedsFreesoundApiKey({
+						needsKey: data.error === FREESOUND_NOT_CONFIGURED_ERROR,
+					});
 					setTopSoundEffects({ sounds: data.results });
 					setHasLoaded({ loaded: true });
 
@@ -163,7 +190,7 @@ function SoundEffectsView() {
 			}
 		};
 
-		const timeoutId = setTimeout(fetchTopSounds, 100, {});
+		const timeoutId = setTimeout(fetchTopSounds, 100);
 
 		return () => {
 			shouldIgnore = true;
@@ -171,10 +198,12 @@ function SoundEffectsView() {
 		};
 	}, [
 		hasLoaded,
+		showCommercialOnly,
 		setTopSoundEffects,
 		setLoading,
 		setError,
 		setHasLoaded,
+		setNeedsFreesoundApiKey,
 		setCurrentPage,
 		setHasNextPage,
 		setTotalCount,
@@ -189,7 +218,7 @@ function SoundEffectsView() {
 			scrollAreaRef.current?.scrollTo({ top: scrollPosition });
 		};
 
-		const timeoutId = setTimeout(restoreScrollPosition, 100, {});
+		const timeoutId = setTimeout(restoreScrollPosition, 100);
 
 		return () => clearTimeout(timeoutId);
 	}, [scrollPosition, scrollAreaRef]);
@@ -206,12 +235,12 @@ function SoundEffectsView() {
 
 	const playSound = ({ sound }: { sound: SoundEffect }) => {
 		if (playingId === sound.id) {
-			audioElement?.pause();
+			audioRef.current?.pause();
 			setPlayingId(null);
 			return;
 		}
 
-		audioElement?.pause();
+		audioRef.current?.pause();
 
 		if (sound.previewUrl) {
 			const audio = new Audio(sound.previewUrl);
@@ -226,7 +255,7 @@ function SoundEffectsView() {
 				setPlayingId(null);
 			});
 
-			setAudioElement(audio);
+			audioRef.current = audio;
 			setPlayingId(sound.id);
 		}
 	};
@@ -278,31 +307,43 @@ function SoundEffectsView() {
 					onScrollCapture={handleScrollWithPosition}
 				>
 					<div className="flex flex-col gap-4">
-						{isLoading && !searchQuery && (
-							<div className="text-muted-foreground text-sm">
-								Loading sounds...
+						{needsFreesoundApiKey ? (
+							<div className="text-muted-foreground text-sm text-balance">
+								Sound search needs a free Freesound API key - add
+								FREESOUND_API_KEY to apps/web/.env.local (get one at
+								freesound.org/apiv2/apply)
 							</div>
-						)}
-						{isSearching && searchQuery && (
-							<div className="text-muted-foreground text-sm">Searching...</div>
-						)}
-						{displayedSounds.map((sound) => (
-							<AudioItem
-								key={sound.id}
-								sound={sound}
-								isPlaying={playingId === sound.id}
-								onPlay={playSound}
-							/>
-						))}
-						{!isLoading && !isSearching && displayedSounds.length === 0 && (
-							<div className="text-muted-foreground text-sm">
-								{searchQuery ? "No sounds found" : "No sounds available"}
-							</div>
-						)}
-						{isLoadingMore && (
-							<div className="text-muted-foreground py-4 text-center text-sm">
-								Loading more sounds...
-							</div>
+						) : (
+							<>
+								{isLoading && !searchQuery && (
+									<div className="text-muted-foreground text-sm">
+										Loading sounds...
+									</div>
+								)}
+								{isSearching && searchQuery && (
+									<div className="text-muted-foreground text-sm">
+										Searching...
+									</div>
+								)}
+								{displayedSounds.map((sound) => (
+									<AudioItem
+										key={sound.id}
+										sound={sound}
+										isPlaying={playingId === sound.id}
+										onPlay={playSound}
+									/>
+								))}
+								{!isLoading && !isSearching && displayedSounds.length === 0 && (
+									<div className="text-muted-foreground text-sm">
+										{searchQuery ? "No sounds found" : "No sounds available"}
+									</div>
+								)}
+								{isLoadingMore && (
+									<div className="text-muted-foreground py-4 text-center text-sm">
+										Loading more sounds...
+									</div>
+								)}
+							</>
 						)}
 					</div>
 				</ScrollArea>
@@ -321,9 +362,7 @@ function SavedSoundsView() {
 	} = useSoundsStore();
 
 	const [playingId, setPlayingId] = useState<number | null>(null);
-	const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(
-		null,
-	);
+	const audioRef = useRef<HTMLAudioElement | null>(null);
 
 	const [showClearDialog, setShowClearDialog] = useState(false);
 
@@ -331,14 +370,22 @@ function SavedSoundsView() {
 		loadSavedSounds();
 	}, [loadSavedSounds]);
 
+	// Stop any playing preview on unmount (also fires on sub-tab switch: Radix
+	// TabsContent unmounts inactive panels by default).
+	useEffect(() => {
+		return () => {
+			audioRef.current?.pause();
+		};
+	}, []);
+
 	const playSound = ({ sound }: { sound: SoundEffect }) => {
 		if (playingId === sound.id) {
-			audioElement?.pause();
+			audioRef.current?.pause();
 			setPlayingId(null);
 			return;
 		}
 
-		audioElement?.pause();
+		audioRef.current?.pause();
 
 		if (sound.previewUrl) {
 			const audio = new Audio(sound.previewUrl);
@@ -353,7 +400,7 @@ function SavedSoundsView() {
 				setPlayingId(null);
 			});
 
-			setAudioElement(audio);
+			audioRef.current = audio;
 			setPlayingId(sound.id);
 		}
 	};

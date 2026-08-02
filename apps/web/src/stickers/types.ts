@@ -1,47 +1,11 @@
-import type { STICKER_CATEGORIES } from "@/stickers/categories";
-
-export type StickerCategory = keyof typeof STICKER_CATEGORIES;
-
-export interface StickerItem {
-	id: string;
-	provider: string;
-	name: string;
-	previewUrl: string;
-	metadata: Record<string, unknown>;
-}
-
-export interface StickerSearchResult {
-	items: StickerItem[];
-	total: number;
-	hasMore: boolean;
-}
-
-export interface StickerBrowseSection {
-	id: string;
-	title?: string;
-	items: StickerItem[];
-	hasMore?: boolean;
-	layout?: "grid" | "row";
-	action?: {
-		type: "see-all";
-		category?: StickerCategory;
-		sectionId?: string;
-	};
-}
-
-export interface StickerBrowseResult {
-	sections: StickerBrowseSection[];
-}
-
-export interface StickerProviderSearchOptions {
-	limit?: number;
-}
-
-export interface StickerProviderBrowseOptions {
-	page?: number;
-	limit?: number;
-}
-
+/**
+ * Trimmed T19.4a (stickers prune): the browse/search API (index.ts) and its
+ * provider-side implementations (logos.ts, shapes.ts, the browse/search half
+ * of flags.ts) were deleted as dead code (zero callers). What remains is the
+ * resolve spine - `resolveStickerId` needs a provider that can turn a sticker
+ * ID into a URL, nothing else - kept because legacy projects still contain
+ * sticker elements that must resolve + render + export.
+ */
 export interface StickerResolveOptions {
 	width?: number;
 	height?: number;
@@ -49,18 +13,6 @@ export interface StickerResolveOptions {
 
 export interface StickerProvider {
 	id: string;
-	search({
-		query,
-		options,
-	}: {
-		query: string;
-		options?: StickerProviderSearchOptions;
-	}): Promise<StickerSearchResult>;
-	browse({
-		options,
-	}: {
-		options?: StickerProviderBrowseOptions;
-	}): Promise<StickerBrowseResult>;
 	resolveUrl({
 		stickerId,
 		options,

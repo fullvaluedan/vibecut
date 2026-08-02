@@ -2,6 +2,7 @@ import { webEnv } from "@/env/web";
 import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { checkRateLimit } from "@/auth/rate-limit";
+import { FREESOUND_NOT_CONFIGURED_ERROR } from "@/sounds/types";
 
 const searchParamsSchema = z.object({
 	q: z.string().max(500, "Query too long").optional(),
@@ -12,7 +13,13 @@ const searchParamsSchema = z.object({
 		.enum(["downloads", "rating", "created", "score"])
 		.default("downloads"),
 	min_rating: z.coerce.number().min(0).max(5).default(3),
-	commercial_only: z.coerce.boolean().default(true),
+	// z.coerce.boolean() runs JS `Boolean(value)`, so the string "false" (a
+	// non-empty string) coerces to true - the exact no-op bug this fixes.
+	// Parse the literal "true"/"false" text the client sends instead.
+	commercial_only: z
+		.enum(["true", "false"])
+		.optional()
+		.transform((value) => value !== "false"),
 });
 
 const freesoundResultSchema = z.object({
@@ -87,6 +94,14 @@ const apiResponseSchema = z.object({
 	sort: z.string(),
 	minRating: z.number().optional(),
 });
+
+const FREESOUND_API_KEY_PLACEHOLDER = "your_api_key_here";
+
+/** True once Dan has swapped the .env.local placeholder for a real Freesound key. */
+function isFreesoundApiKeyConfigured(): boolean {
+	const key = webEnv.FREESOUND_API_KEY;
+	return Boolean(key) && key !== FREESOUND_API_KEY_PLACEHOLDER;
+}
 
 function buildSortParameter({ query, sort }: { query?: string; sort: string }) {
 	if (!query) return `${sort}_desc`;
@@ -163,6 +178,7 @@ export async function GET(request: NextRequest) {
 			page_size: searchParams.get("page_size") || undefined,
 			sort: searchParams.get("sort") || undefined,
 			min_rating: searchParams.get("min_rating") || undefined,
+			commercial_only: searchParams.get("commercial_only") || undefined,
 		});
 
 		if (!validationResult.success) {
@@ -194,6 +210,18 @@ export async function GET(request: NextRequest) {
 				},
 				{ status: 501 },
 			);
+		}
+
+		if (!isFreesoundApiKeyConfigured()) {
+			return NextResponse.json({
+				error: FREESOUND_NOT_CONFIGURED_ERROR,
+				message:
+					"Sound search needs a free Freesound API key - add FREESOUND_API_KEY to apps/web/.env.local (get one at freesound.org/apiv2/apply)",
+				count: 0,
+				next: null,
+				previous: null,
+				results: [],
+			});
 		}
 
 		const baseUrl = "https://freesound.org/apiv2/search/text/";
