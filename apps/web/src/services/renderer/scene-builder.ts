@@ -1,4 +1,9 @@
 import type { SceneTracks, TimelineTrack } from "@/timeline";
+import {
+	buildTransitionRenderPlan,
+	EMPTY_TRANSITION_PLAN,
+	type TransitionRenderPlan,
+} from "@/timeline/transitions";
 import type { MediaAsset } from "@/media/types";
 import { RootNode } from "./nodes/root-node";
 import { VideoNode } from "./nodes/video-node";
@@ -37,16 +42,24 @@ function buildTrackNodes({
 	mediaMap,
 	canvasSize,
 	isPreview,
+	mainTrackId,
+	transitionPlan,
 }: {
 	tracks: TimelineTrack[];
 	mediaMap: Map<string, MediaAsset>;
 	canvasSize: TCanvasSize;
 	isPreview?: boolean;
+	/** T19.3: transitions are a MAIN-TRACK feature; other lanes ignore the plan. */
+	mainTrackId?: string;
+	transitionPlan: TransitionRenderPlan;
 }): AnyBaseNode[] {
 	const nodes: AnyBaseNode[] = [];
 
 	for (const track of tracks) {
 		const elements = getVisibleSortedElements({ track });
+		const isMainTrack = track.id === mainTrackId;
+		const transitionsFor = ({ elementId }: { elementId: string }) =>
+			isMainTrack ? transitionPlan.rolesByElementId.get(elementId) : undefined;
 
 		for (const element of elements) {
 			if (element.type === "effect") {
@@ -96,6 +109,11 @@ function buildTrackNodes({
 							blendMode: readBlendModeFromParams({ params: element.params }),
 							effects: element.effects ?? [],
 							masks: element.masks ?? [],
+							transitions: transitionsFor({ elementId: element.id }),
+							...(isMainTrack &&
+							transitionPlan.secondarySinkElementIds.has(element.id)
+								? { decodeConsumerId: element.id }
+								: {}),
 						}),
 					);
 				}
@@ -120,6 +138,7 @@ function buildTrackNodes({
 							blendMode: readBlendModeFromParams({ params: element.params }),
 							effects: element.effects ?? [],
 							masks: element.masks ?? [],
+							transitions: transitionsFor({ elementId: element.id }),
 						}),
 					);
 				} else if (element.type === "image" && mediaAsset.type === "image") {
@@ -137,6 +156,7 @@ function buildTrackNodes({
 							blendMode: readBlendModeFromParams({ params: element.params }),
 							effects: element.effects ?? [],
 							masks: element.masks ?? [],
+							transitions: transitionsFor({ elementId: element.id }),
 							...(isPreview && {
 								maxSourceSize: PREVIEW_MAX_IMAGE_SIZE,
 							}),
@@ -194,6 +214,31 @@ function buildTrackNodes({
 						blendMode: readBlendModeFromParams({ params: element.params }),
 						effects: element.effects ?? [],
 						masks: element.masks ?? [],
+					}),
+				);
+			}
+		}
+
+		if (isMainTrack) {
+			// T19.3 dip to black/white: no source overlap, just a full-canvas
+			// colour layer whose alpha ramps 0 -> 1 -> 0 across the cut. Pushed
+			// AFTER the main track's own clips so it covers them, and still
+			// inside the main track's slot so it never blankets an overlay
+			// title (CapCut behaviour: a main-track transition is main-track).
+			for (const dip of transitionPlan.dipLayers) {
+				nodes.push(
+					new SolidColorNode({
+						color: dip.color,
+						duration: dip.durationTicks,
+						timeOffset: dip.startTicks,
+						trimStart: 0,
+						trimEnd: 0,
+						transform: buildTransformFromParams({ params: {} }),
+						opacity: 1,
+						blendMode: "normal",
+						effects: [],
+						masks: [],
+						transitions: { head: dip.ramp },
 					}),
 				);
 			}
@@ -308,11 +353,18 @@ export function buildScene({
 	const orderedTracksBottomToTop = visibleTracks.slice().reverse();
 	const mainTrack = tracks.main.hidden ? undefined : tracks.main;
 
+	// T19.3: ONE plan serves preview and export, because both go through here.
+	const transitionPlan = mainTrack
+		? buildTransitionRenderPlan({ elements: mainTrack.elements })
+		: EMPTY_TRANSITION_PLAN;
+
 	const allNodes = buildTrackNodes({
 		tracks: orderedTracksBottomToTop,
 		mediaMap,
 		canvasSize,
 		isPreview,
+		mainTrackId: mainTrack?.id,
+		transitionPlan,
 	});
 
 	if (background.type === "blur") {
