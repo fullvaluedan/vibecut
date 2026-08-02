@@ -38,7 +38,7 @@ import { OcShapesIcon } from "@/components/icons";
 import { isSolidColorAsset } from "@/media/solid-color";
 
 const BLENDING_PARAM_KEYS = ["opacity", "blendMode"] as const;
-const AUDIO_PARAM_KEYS = ["volume", "muted"] as const;
+const AUDIO_PARAM_KEYS = ["volume", "muted", "fadeInSec", "fadeOutSec"] as const;
 const TEXT_PARAM_KEYS = [
 	"content",
 	"fontFamily",

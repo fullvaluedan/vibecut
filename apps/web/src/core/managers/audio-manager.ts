@@ -6,6 +6,7 @@ import { createAudioContext, collectAudioClips } from "@/media/audio";
 import {
 	buildAudioGainAutomation,
 	hasAnimatedVolume,
+	hasAudioFade,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
 import {
@@ -302,6 +303,13 @@ export class AudioManager {
 			if (combinedRate !== 1) {
 				node.playbackRate.value = combinedRate;
 			}
+			// T18.2: this iterator plays each buffer through a single constant
+			// `node.playbackRate` (see `combinedRate` above), which can't track a
+			// curve's varying rate. `shouldUsePreparedClipBuffer` (below) routes
+			// every curve-active clip through `schedulePreparedClip` instead - a
+			// pre-baked buffer that already has the curve resampled into it and
+			// plays back at a flat rate - so this iterator never actually handles
+			// a curve clip; nothing further to do here.
 			const clipGain = audioContext.createGain();
 			clipGain.gain.value = clip.volume;
 			node.connect(clipGain);
@@ -478,6 +486,9 @@ export class AudioManager {
 		return (
 			this.hasCurveRetime({ clip }) ||
 			hasAnimatedVolume({ element: clip.timelineElement }) ||
+			// T18.3: a fade ramps gain over time even without volume keyframes, so
+			// it needs the same per-point automation path as animated volume.
+			hasAudioFade({ element: clip.timelineElement }) ||
 			shouldMaintainPitch({
 				rate: clip.retime?.rate ?? 1,
 				maintainPitch: clip.retime?.maintainPitch,
@@ -485,9 +496,14 @@ export class AudioManager {
 		);
 	}
 
+	/** T18.2: a curve retime always routes through the prepared-buffer path
+	 * (`schedulePreparedClip`) - the buffer is baked once via
+	 * `renderRetimedBuffer`/`buildResampledBuffer`, which resamples exactly
+	 * along the curve, and is then played back at a flat rate. That's the
+	 * only way live preview audio can track a curve, since a plain
+	 * `AudioBufferSourceNode.playbackRate` is a single constant. */
 	private hasCurveRetime({ clip }: { clip: AudioClipSource }): boolean {
-		const mode = (clip.retime as { mode?: unknown } | undefined)?.mode;
-		return mode === "curve";
+		return clip.retime?.curve !== undefined;
 	}
 
 	private scheduleClipGainAutomation({
@@ -506,7 +522,10 @@ export class AudioManager {
 		clipGain.gain.cancelScheduledValues(startTimestamp);
 		clipGain.gain.setValueAtTime(clip.volume, startTimestamp);
 
-		if (!hasAnimatedVolume({ element: clip.timelineElement })) {
+		if (
+			!hasAnimatedVolume({ element: clip.timelineElement }) &&
+			!hasAudioFade({ element: clip.timelineElement })
+		) {
 			return;
 		}
 

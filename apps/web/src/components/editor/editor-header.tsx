@@ -16,7 +16,7 @@ import { FaDiscord } from "react-icons/fa6";
 import { ExportButton } from "./export-button";
 import { FeedbackPopover } from "@/feedback/components/feedback-popover";
 import { ThemeToggle } from "../theme-toggle";
-import { DEFAULT_LOGO_URL } from "@/site/brand";
+import { DEFAULT_MARK_URL } from "@/site/brand";
 import { SOCIAL_LINKS } from "@/site/social";
 import { toast } from "sonner";
 import { useEditor } from "@/editor/use-editor";
@@ -94,8 +94,8 @@ function ProjectDropdown() {
 				<DropdownMenuTrigger asChild>
 					<Button variant="ghost" size="icon" className="p-1 rounded-sm size-8">
 						<Image
-							src={DEFAULT_LOGO_URL}
-							alt="Project thumbnail"
+							src={DEFAULT_MARK_URL}
+							alt="VibeCut"
 							width={32}
 							height={32}
 							className="invert dark:invert-0 size-5"

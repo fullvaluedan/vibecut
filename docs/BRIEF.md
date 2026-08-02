@@ -60,7 +60,7 @@ Eventually a public product. Built solo + Claude Code, orchestrated by Hermes.
    - `apps/web/src/features/ai-generate/` — generation panel UI
    - Modifications to upstream-originated files are a last resort, kept minimal, and **every modified upstream file is logged in `PATCHES.md`** (path, reason, date, port notes).
 2. **Never fork or vendor HyperFrames source.** npm only.
-3. **Track cap is law:** the timeline never exceeds V1, V2, Overlay, Audio. The importer flattens rather than creating track 5.
+3. **Track model (superseded 2026-08-01):** the timeline is user-managed - main + up to 7 more video tracks, up to 8 audio tracks, plus text/graphic/effect lanes as needed. Users add/delete tracks via the track context menu (right-click the track-label column); main (V1) is never deletable. The old "never exceeds V1, V2, Overlay, Audio, importer flattens rather than creating track 5" rule no longer applies - see `docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md` §1.3.
 4. **Taste telemetry never leaves the device.** Only anonymized recipes are ever uploaded (Phase 7, opt-in).
 5. **Pin everything.** HyperFrames packages at exact versions in `package.json`. Renderer determinism depends on it.
 6. Dan is a coding novice directing the project: explain decisions in plain language in PR descriptions and session summaries, give him copy-paste commands, never assume he'll debug raw stack traces.

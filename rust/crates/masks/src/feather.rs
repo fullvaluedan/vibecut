@@ -11,6 +11,11 @@ pub struct ApplyMaskFeatherOptions<'a> {
     pub width: u32,
     pub height: u32,
     pub feather: f32,
+    /// Signed pixels of boundary growth: positive grows the mask outward,
+    /// negative shrinks it inward, zero is a plain feather. Applied as a bias on
+    /// the signed distance field, so it costs nothing beyond the feather pass
+    /// that already runs.
+    pub expansion: f32,
 }
 
 pub struct MaskFeatherPipeline {
@@ -26,7 +31,7 @@ pub struct MaskFeatherPipeline {
 struct DistanceUniformBuffer {
     resolution: [f32; 2],
     feather_half: f32,
-    _padding: f32,
+    expansion: f32,
 }
 
 impl MaskFeatherPipeline {
@@ -158,6 +163,7 @@ impl MaskFeatherPipeline {
             width,
             height,
             feather,
+            expansion,
         }: ApplyMaskFeatherOptions<'_>,
     ) -> wgpu::Texture {
         let mut encoder =
@@ -174,6 +180,7 @@ impl MaskFeatherPipeline {
                 width,
                 height,
                 feather,
+                expansion,
             },
         );
         context.queue().submit([encoder.finish()]);
@@ -189,6 +196,7 @@ impl MaskFeatherPipeline {
             width,
             height,
             feather,
+            expansion,
         }: ApplyMaskFeatherOptions<'_>,
     ) -> wgpu::Texture {
         let sdf = self
@@ -242,7 +250,7 @@ impl MaskFeatherPipeline {
                     contents: bytemuck::bytes_of(&DistanceUniformBuffer {
                         resolution: [width as f32, height as f32],
                         feather_half: feather / 2.0,
-                        _padding: 0.0,
+                        expansion,
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });

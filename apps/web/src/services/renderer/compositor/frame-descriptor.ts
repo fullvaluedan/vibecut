@@ -2,6 +2,7 @@ import { drawCssBackground } from "@/gradients";
 import { getMaskDefinition } from "@/masks";
 import { MASK_EXPANSION_OPACITY_RENDERED } from "@/masks/types";
 import { incrementCounter } from "@/diagnostics/render-perf";
+import { getCropPixelRect, isNoOpCrop } from "@/rendering/crop";
 import type { AnyBaseNode } from "../nodes/base-node";
 import type { CanvasRenderer } from "../canvas-renderer";
 import { createCanvasSurface } from "../canvas-utils";
@@ -251,20 +252,53 @@ async function collectVisualSourceNode({
 				? renderer.height
 				: (node.resolved as ResolvedVisualSourceNodeState).sourceHeight;
 
+	// T18.1 crop: video/image only, applied BEFORE transform/scale (standard
+	// video-editor order) by cropping the decoded source into a smaller
+	// canvas and uploading THAT as the texture - the transform below then
+	// computes contain-scale/position off the cropped dimensions, so it
+	// behaves exactly as if the cropped rect were the source's natural size.
+	// No wasm-compositor change needed: crop is a pre-upload canvas step.
+	const isCroppable = node instanceof VideoNode || node instanceof ImageNode;
+	const crop = isCroppable ? node.params.crop : undefined;
+	let croppedSource = source;
+	let croppedWidth = sourceWidth;
+	let croppedHeight = sourceHeight;
+	if (crop && !isNoOpCrop(crop)) {
+		const rect = getCropPixelRect({ sourceWidth, sourceHeight, crop });
+		const { canvas, context } = createCanvasSurface({
+			width: rect.width,
+			height: rect.height,
+		});
+		context.drawImage(
+			source,
+			rect.x,
+			rect.y,
+			rect.width,
+			rect.height,
+			0,
+			0,
+			rect.width,
+			rect.height,
+		);
+		croppedSource = canvas;
+		croppedWidth = rect.width;
+		croppedHeight = rect.height;
+	}
+
 	const textureId = `${path}:source`;
 	textures.set(textureId, {
 		kind: "external",
 		id: textureId,
-		source,
-		width: sourceWidth,
-		height: sourceHeight,
+		source: croppedSource,
+		width: croppedWidth,
+		height: croppedHeight,
 	});
 
 	const transform = computeVisualTransform({
 		renderer,
 		resolved: node.resolved,
-		sourceWidth,
-		sourceHeight,
+		sourceWidth: croppedWidth,
+		sourceHeight: croppedHeight,
 	});
 	const { mask, strokeLayer } = buildMaskArtifacts({
 		node,
@@ -543,9 +577,9 @@ function buildMaskArtifacts({
 			textureId: maskTextureId,
 			feather,
 			inverted: mask.params.inverted,
-			// Plumbed to the wasm boundary but held at the no-op values until the
-			// compositor can consume them (see MASK_EXPANSION_OPACITY_RENDERED). Flip
-			// the flag in the same change that ships a wasm build reading these.
+			// Live as of opencut-wasm 0.3.0. The flag stays as the kill switch: if
+			// apps/web is ever repinned to an older wasm, these fall back to the
+			// no-op values (0, 1) instead of being silently ignored.
 			expansion: MASK_EXPANSION_OPACITY_RENDERED
 				? (mask.params.expansion ?? 0)
 				: 0,

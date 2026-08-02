@@ -15,11 +15,24 @@ OpenCut-app/OpenCut at tag `v0.3.0` (commit
 that tag as of this notice:
 
 - `rust/crates/masks/src/sdf.rs`
-- `rust/crates/masks/src/feather.rs`
 - `rust/crates/masks/src/masks.rs`
 - `rust/crates/masks/src/shaders/jfa_init.wgsl`
 - `rust/crates/masks/src/shaders/jfa_step.wgsl`
-- `rust/crates/masks/src/shaders/jfa_distance.wgsl`
+
+These two have diverged (round 19 T19.0, 2026-08-02), by one additive field
+each. Re-diff them against `v0.3.0` before adopting anything upstream:
+
+- `rust/crates/masks/src/feather.rs`: `ApplyMaskFeatherOptions` gains
+  `expansion: f32`, threaded into `DistanceUniformBuffer` in place of its
+  trailing `_padding` word (the struct size and alignment are unchanged).
+- `rust/crates/masks/src/shaders/jfa_distance.wgsl`: the matching
+  `DistanceUniforms._padding` becomes `expansion`, and the signed distance is
+  biased by it before the `smoothstep` threshold. At `expansion == 0` the shader
+  computes exactly what it did upstream.
+
+Both carry the mask `expansion` param (grow/shrink the boundary without
+softening it) end to end; see `MASK_EXPANSION_OPACITY_RENDERED` in
+`apps/web/src/masks/types.ts`.
 
 Upstream: https://github.com/OpenCut-app/OpenCut (MIT). OpenCut removed this
 crate from its default branch after `v0.3.0` (commit "chore: clean state",

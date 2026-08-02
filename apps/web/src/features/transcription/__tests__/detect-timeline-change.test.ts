@@ -62,3 +62,50 @@ describe("timelineChangedWhileStale", () => {
 		expect(afterUndo).toBe(true);
 	});
 });
+
+describe("timelineChangedWhileStale - lineage-aware branch (T16.1 note 2)", () => {
+	test("an explained lineage never blocks, however far the hash moved", () => {
+		expect(
+			timelineChangedWhileStale({
+				stale: true,
+				liveHash: "hashA",
+				expectedHash: "hashB",
+				lineageExplained: true,
+			}),
+		).toBe(false);
+	});
+
+	test("the same delete -> undo -> delete case is ALLOWED once a lineage explains it", () => {
+		// The pre-T16.1 guard blocks this (see the regression above), because the
+		// local words described the pre-undo timeline. With a lineage the panel
+		// re-derives its words from the live timeline on every read, so the coords
+		// are correct and a further delete is safe.
+		expect(
+			timelineChangedWhileStale({
+				stale: true,
+				liveHash: "hashA",
+				expectedHash: "hashB",
+				lineageExplained: true,
+			}),
+		).toBe(false);
+	});
+
+	test("a missing or unexplainable lineage keeps the old guard exactly", () => {
+		expect(
+			timelineChangedWhileStale({
+				stale: true,
+				liveHash: "hashA",
+				expectedHash: "hashB",
+				lineageExplained: false,
+			}),
+		).toBe(true);
+		// Omitting the flag entirely is the same as false (pre-T16.2 callers).
+		expect(
+			timelineChangedWhileStale({
+				stale: true,
+				liveHash: "hashA",
+				expectedHash: "hashB",
+			}),
+		).toBe(true);
+	});
+});

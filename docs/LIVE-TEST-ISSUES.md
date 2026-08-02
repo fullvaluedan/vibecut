@@ -43,9 +43,19 @@ Dan's directive: keep the list current, fix nothing until he says so.
 
 ## Editor / timeline (blocks hand-fixing the cuts)
 
-5. **Linked clip extend broken.** Cannot extend/trim video and its audio together.
-6. **Clip movement broken.** Cannot move a clip away from the head of the timeline —
-   it snaps back. General movement jank. (Editor-core / upstream behavior.)
+5. FIXED/VERIFIED 2026-08-01 (round 15, T15.5 hands-on pass): a real right-handle
+   extend drag on a linked video+audio pair grows both together in one gesture
+   (magnet ON, ripples the downstream neighbor + its linked audio by the exact
+   drag delta; magnet OFF walls at the neighbor with a visible edge highlight).
+   Left-handle trim in/out also keeps the pair synced. **Linked clip extend broken.**
+   Cannot extend/trim video and its audio together.
+6. FIXED/VERIFIED 2026-08-01 (round 15, T15.5 hands-on pass): a plain body-drag
+   move of a non-first main-track clip away from its position (e.g. 30s -> ~40s)
+   lands where dropped, no snap-back; `startTime` matched the drag delta exactly.
+   (The first clip snapping to 0 on a move is deliberate, unchanged, per
+   TO-VERIFY.md.) **Clip movement broken.** Cannot move a clip away from the head
+   of the timeline: it snaps back. General movement jank. (Editor-core / upstream
+   behavior.)
 
 ## Product / flow
 
@@ -64,7 +74,12 @@ Dan's directive: keep the list current, fix nothing until he says so.
    paraphrase-level groups (members NOT near-verbatim by whole-line similarity)
    demote to review; near-verbatim groups keep AUTO. Mirrors the U4 gate philosophy
    at mapRedundancyGroups. THE remaining cut-quality lever.
-10. **Clip stretch/extend is terrible** (extends item 5): stretching a video cut
+10. FIXED/VERIFIED 2026-08-01 (round 15, T15.5 hands-on pass): the magnetic
+    main track (T15.2) is exactly this fix: a right-edge extend drag ripples
+    every downstream main-track clip AND its linked audio automatically (no
+    manual per-clip moves), and `document.body.innerText` after the operation
+    contained no "sync"/"desync"/"out of sync" text anywhere, so no stray badge.
+    **Clip stretch/extend is terrible** (extends item 5): stretching a video cut
     forces manually moving every downstream piece, then moving audio and video
     separately (no linked ripple), and then a "frame out of sync" notification
     appears on the clip BEHIND the edit, which should not happen. Reference

@@ -13,7 +13,12 @@ import type {
 	PlacementSubject,
 	PlacementTimeSpan,
 } from "./types";
-import { isAtVideoTrackCap, lastVideoTrackId } from "./track-cap";
+import {
+	isAtAudioTrackCap,
+	isAtVideoTrackCap,
+	lastVideoTrackId,
+	leastOccupiedAudioTrackId,
+} from "./track-cap";
 import { ZERO_MEDIA_TIME } from "@/wasm";
 
 type ResolveTrackPlacementParams = PlacementSubject & {
@@ -163,7 +168,54 @@ export function resolveTrackPlacement(
 		});
 	}
 
+	// Hard cap: never resolve to a 9th audio track. Audio separation must NEVER
+	// fail at the cap, so instead of clamping onto one fixed lane (video's rule),
+	// this reuses whichever existing audio lane has the FEWEST elements
+	// overlapping the clip's own span. Covers every caller that goes through
+	// `resolveTrackPlacement` (drops, ripple-insert, toggle-source-audio-
+	// separation) - the few call sites that build an `AddTrackCommand` for audio
+	// directly are capped in the command itself. See `track-cap.ts`.
+	if (
+		result?.kind === "newTrack" &&
+		result.trackType === "audio" &&
+		isAtAudioTrackCap(params.tracks)
+	) {
+		return clampToLeastOccupiedAudioTrack({
+			tracks: params.tracks,
+			timeSpans: params.timeSpans,
+		});
+	}
+
 	return result;
+}
+
+function clampToLeastOccupiedAudioTrack({
+	tracks,
+	timeSpans,
+}: {
+	tracks: SceneTracks;
+	timeSpans: PlacementTimeSpan[];
+}): PlacementResult | null {
+	const firstSpan = timeSpans[0];
+	if (!firstSpan) {
+		return null;
+	}
+	const trackId = leastOccupiedAudioTrackId({
+		tracks,
+		span: { startTime: firstSpan.startTime, duration: firstSpan.duration },
+	});
+	const orderedTracks = [...tracks.overlay, tracks.main, ...tracks.audio];
+	const trackIndex = orderedTracks.findIndex((track) => track.id === trackId);
+	if (trackIndex < 0) {
+		return null;
+	}
+
+	return buildExistingTrackResult({
+		track: orderedTracks[trackIndex],
+		trackIndex,
+		tracks,
+		timeSpans,
+	});
 }
 
 function clampToExistingVideoTrack({

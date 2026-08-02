@@ -11,7 +11,10 @@ import {
 	getTrackPlacementByDisplayIndex,
 	getTrackPlacementById,
 } from "./track-placement";
-import { remainingVideoTrackBudget } from "@/timeline/placement/track-cap";
+import {
+	remainingAudioTrackBudget,
+	remainingVideoTrackBudget,
+} from "@/timeline/placement/track-cap";
 import { isUnderHeadGravity } from "@/timeline/head-gravity";
 import { planCollapsedNewTracks } from "./collapse-new-tracks";
 import {
@@ -172,14 +175,16 @@ function resolveNewTrackMove({
 				Math.min(anchorInsertIndex - anchorMemberIndex, tracks.overlay.length),
 			);
 
-	// Collapse to one new track per DISTINCT SOURCE TRACK and cap new VIDEO
-	// tracks to the remaining budget (pure logic in collapse-new-tracks.ts):
-	// Track-Select-Forward grabbing N clips off a single track creates ONE new
-	// track, never N, and a move can never push past MAX_VIDEO_TRACKS. Members
-	// whose source track is capped out keep their current lane.
+	// Collapse to one new track per DISTINCT SOURCE TRACK and cap new VIDEO and
+	// AUDIO tracks to their remaining budgets (pure logic in
+	// collapse-new-tracks.ts): Track-Select-Forward grabbing N clips off a
+	// single track creates ONE new track, never N, and a move can never push
+	// past MAX_VIDEO_TRACKS or MAX_AUDIO_TRACKS. Members whose source track is
+	// capped out keep their current lane.
 	const { createTracks, newTrackIdBySourceTrackId } = planCollapsedNewTracks({
 		sortedMembers,
 		videoBudget: remainingVideoTrackBudget(tracks),
+		audioBudget: remainingAudioTrackBudget(tracks),
 		blockStartIndex,
 		newTrackIds,
 	});

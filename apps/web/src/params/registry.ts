@@ -11,10 +11,12 @@ import type {
 } from "@/timeline";
 import { DEFAULTS } from "@/timeline/defaults";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "@/timeline/audio-constants";
+import { resolveFadePair } from "@/timeline/audio-fade";
 import {
 	CORNER_RADIUS_MAX,
 	CORNER_RADIUS_MIN,
 } from "@/text/background";
+import { TICKS_PER_SECOND } from "@/wasm";
 
 export type ElementParamDefinition<TKey extends string = string> =
 	ParamDefinition<TKey> & {
@@ -154,6 +156,45 @@ const visualElementParams: ElementParamDefinition[] = [
 	},
 ];
 
+/**
+ * Writes one fade field, clamping BOTH fields so they never cross: the field
+ * being written wins (matches the drag-handle behavior), the other one
+ * shrinks if there isn't room left in the clip's current duration. See
+ * `resolveFadePair` (T18.3).
+ */
+function writeFadeSec({
+	element,
+	value,
+	priority,
+}: {
+	element: TimelineElement;
+	value: ParamValue;
+	priority: "fadeIn" | "fadeOut";
+}): TimelineElement {
+	const durationSec = element.duration / TICKS_PER_SECOND;
+	const currentFadeIn =
+		typeof element.params.fadeInSec === "number" ? element.params.fadeInSec : 0;
+	const currentFadeOut =
+		typeof element.params.fadeOutSec === "number" ? element.params.fadeOutSec : 0;
+	const requested = typeof value === "number" ? value : 0;
+
+	const resolved = resolveFadePair({
+		fadeInSec: priority === "fadeIn" ? requested : currentFadeIn,
+		fadeOutSec: priority === "fadeOut" ? requested : currentFadeOut,
+		durationSec,
+		priority,
+	});
+
+	return {
+		...element,
+		params: {
+			...element.params,
+			fadeInSec: resolved.fadeInSec,
+			fadeOutSec: resolved.fadeOutSec,
+		},
+	};
+}
+
 const audioElementParams: ElementParamDefinition[] = [
 	{
 		key: "volume",
@@ -170,6 +211,28 @@ const audioElementParams: ElementParamDefinition[] = [
 		type: "boolean",
 		default: false,
 		keyframable: false,
+	},
+	{
+		key: "fadeInSec",
+		label: "Fade in (s)",
+		type: "number",
+		default: 0,
+		min: 0,
+		step: 0.1,
+		keyframable: false,
+		write: ({ element, value }) =>
+			writeFadeSec({ element, value, priority: "fadeIn" }),
+	},
+	{
+		key: "fadeOutSec",
+		label: "Fade out (s)",
+		type: "number",
+		default: 0,
+		min: 0,
+		step: 0.1,
+		keyframable: false,
+		write: ({ element, value }) =>
+			writeFadeSec({ element, value, priority: "fadeOut" }),
 	},
 ];
 

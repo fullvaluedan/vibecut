@@ -78,6 +78,10 @@ export const ACTIONS = {
 		description: "Split and remove right",
 		category: "editing",
 	},
+	"freeze-frame": {
+		description: "Freeze frame: split at playhead and hold this frame for 3s",
+		category: "editing",
+	},
 	"delete-selected": {
 		description: "Delete current selection",
 		category: "editing",
@@ -108,6 +112,10 @@ export const ACTIONS = {
 	},
 	"toggle-panel-maximize": {
 		description: "Maximize or restore the assets panel",
+		category: "navigation",
+	},
+	"focus-assistant": {
+		description: "Focus the Assistant chat composer",
 		category: "navigation",
 	},
 	"go-to-previous-edit": {
@@ -257,6 +265,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["timeline-zoom-out", ["-"]],
 	["timeline-zoom-fit", ["\\"]],
 	["toggle-panel-maximize", ["`"]],
+	["focus-assistant", ["ctrl+/"]],
 	["toggle-bookmark", ["m"]],
 	["go-to-previous-edit", ["up"]],
 	["go-to-next-edit", ["down"]],

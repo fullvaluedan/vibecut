@@ -11,14 +11,13 @@ import type { Tab } from "@/components/editor/panels/assets/assets-panel-store";
 
 /**
  * Left-panel tab keys hidden from the tab rail and the fallback logic in
- * `assets-panel-store.tsx`. HyperFrames is parked (D6); Sounds and Effects
- * are hidden because they are not useful right now (D4).
+ * `assets-panel-store.tsx`. HyperFrames is parked (D6). Effects unhidden
+ * T19.4b once the registry held >= 5 effects (blur, color adjust, pixelate,
+ * vignette, glow, noise). Sounds unhidden T19.4a once its two bugs were
+ * fixed (loadMore TypeError, no-op commercial-license filter) and a
+ * friendly no-key state was added for the Freesound sub-tab.
  */
-export const HIDDEN_ASSET_TABS: readonly Tab[] = [
-	"hyperframes",
-	"sounds",
-	"effects",
-];
+export const HIDDEN_ASSET_TABS: readonly Tab[] = ["hyperframes"];
 
 /**
  * RUN HYPERFRAMES toolbar cluster in `timeline/components/timeline-toolbar.tsx`:
@@ -32,8 +31,14 @@ export const HIDE_RUN_HYPERFRAMES_CLUSTER = true;
 /** The "Run through HyperFrames" clip context-menu item (per-clip generation). */
 export const HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM = true;
 
-/** The assistant prompt box mounted in the preview toolbar. */
-export const HIDE_ASSISTANT_PROMPT = true;
+/**
+ * Retired T17.3: the preview-toolbar prompt box is now the Assistant
+ * mini-prompt (`assistant-prompt.tsx`), which opens/focuses the new Assistant
+ * dock tab pre-filled instead of firing a one-shot request itself. Kept as a
+ * const (rather than deleted) for the same revert-in-one-line discipline as
+ * the flags below, even though it is no longer part of the roadmap D4/D6 set.
+ */
+export const HIDE_ASSISTANT_PROMPT = false;
 
 /** The HyperFrames drafts panel takeover of the empty inspector. */
 export const HIDE_HYPERFRAMES_DRAFTS_PANEL = true;

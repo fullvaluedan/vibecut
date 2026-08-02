@@ -2,6 +2,8 @@ import type { ElementAnimations } from "@/animation/types";
 import type { Effect } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { ParamValues } from "@/params";
+import type { RetimeCurve } from "@/retime/curve";
+import type { TransitionSpec } from "@/timeline/transitions/types";
 import type { MediaTime } from "@/wasm";
 
 export type ElementRef = {
@@ -87,6 +89,39 @@ export interface SceneTracks {
 export interface RetimeConfig {
 	rate: number;
 	maintainPitch?: boolean;
+	/**
+	 * T18.1: play the trimmed source span back-to-front. Defaults to false
+	 * (absent), so a project serialized before this field existed loads with
+	 * forward playback unchanged. UI + validator constrain `rate` to 1 while
+	 * `reversed` is true (see speed-tab.tsx) - reverse + a non-1 rate is not
+	 * exercised by the renderer.
+	 */
+	reversed?: boolean;
+	/**
+	 * T18.2: an optional piecewise-linear speed profile that supersedes the
+	 * constant `rate` when present (see retime/curve.ts for the integration
+	 * math). Absent means constant-rate retime, exactly as before this field
+	 * existed - full backward compatibility for old projects. UI + validator
+	 * keep `curve` and `reversed` mutually exclusive in v1 (see
+	 * speed-tab.tsx): a curve always plays forward, and toggling Reverse
+	 * clears any active curve.
+	 */
+	curve?: RetimeCurve;
+}
+
+/**
+ * T18.1 crop: a per-clip crop rect in FRACTIONS of the source's own width/
+ * height (0..1), applied before transform/scale (standard video-editor
+ * order). Absent/undefined means "no crop" - this keeps old projects
+ * loading unchanged (see crop/types.ts round-trip test). Not routed through
+ * the keyframe registry (params/registry.ts): v1 ships non-keyframable,
+ * see docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md T18.1 for why.
+ */
+export interface CropRect {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
 }
 
 interface BaseAudioElement extends BaseTimelineElement {
@@ -130,8 +165,19 @@ export interface VideoElement extends BaseTimelineElement {
 	isSourceAudioEnabled?: boolean;
 	hidden?: boolean;
 	retime?: RetimeConfig;
+	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
+	/**
+	 * T19.3 transitions. `transitionIn` governs this clip's HEAD boundary
+	 * (a join with the clip on its left, or a head fade against nothing);
+	 * `transitionOut` is the tail fade, and only exists on a clip with no
+	 * abutting right neighbour. Absent means "hard cut", so every project
+	 * written before this round loads unchanged with no migration. See
+	 * `timeline/transitions/types.ts` for the full ownership rule.
+	 */
+	transitionIn?: TransitionSpec;
+	transitionOut?: TransitionSpec;
 	/** FrameCut: set on AI-generated HyperFrames clips; enables re-render and template swap. */
 	framecutAi?: {
 		compId: string;
@@ -157,8 +203,12 @@ export interface ImageElement extends BaseTimelineElement {
 	type: "image";
 	mediaId: string;
 	hidden?: boolean;
+	crop?: CropRect;
 	effects?: Effect[];
 	masks?: Mask[];
+	/** T19.3: see the matching fields on `VideoElement`. */
+	transitionIn?: TransitionSpec;
+	transitionOut?: TransitionSpec;
 	/**
 	 * VibeCut (W7): per-instance color override for a solid-color media asset
 	 * (see media/types.ts MediaAsset.solidColor). Undefined means "use the
@@ -232,6 +282,13 @@ export const MASKABLE_ELEMENT_TYPES = elementTypes("video", "image", "graphic");
 export type MaskableElement = Extract<
 	TimelineElement,
 	{ type: (typeof MASKABLE_ELEMENT_TYPES)[number] }
+>;
+
+export const CROPPABLE_ELEMENT_TYPES = elementTypes("video", "image");
+
+export type CroppableElement = Extract<
+	TimelineElement,
+	{ type: (typeof CROPPABLE_ELEMENT_TYPES)[number] }
 >;
 
 export const RETIMABLE_ELEMENT_TYPES = elementTypes("video", "audio");
@@ -342,6 +399,13 @@ export interface ComputeDropTargetParams {
 	// overlap test so shifted siblings don't falsely block the group move.
 	excludeElementIds?: ReadonlySet<string>;
 	targetElementTypes?: string[];
+	// Media drops (bin drags + file drops) pull video/image toward the main (V1)
+	// track: only the overlay area above an occupied main asks for a new overlay
+	// lane. Clip drags inside the timeline leave this off (free placement).
+	preferMainTrack?: boolean;
+	// Extra height of a track beyond its base height (expanded keyframe rows), so
+	// the vertical hit-test matches what is drawn.
+	getExtraTrackHeight?: (trackIndex: number) => number;
 }
 
 export interface ClipboardItem {

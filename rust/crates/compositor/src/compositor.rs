@@ -19,6 +19,12 @@ const LAYER_SHADER_SOURCE: &str = include_str!("shaders/layer.wgsl");
 const BLEND_SHADER_SOURCE: &str = include_str!("shaders/blend.wgsl");
 const MASK_SHADER_SOURCE: &str = include_str!("shaders/mask.wgsl");
 
+/// Feather width (px) forced on when a mask carries a non-zero expansion, so the
+/// moved boundary keeps a one-pixel antialiased edge. A mask with feather 0 and
+/// expansion 0 never reaches the distance-field pass at all, so this cannot
+/// change existing output.
+const MIN_EXPANSION_FEATHER: f32 = 1.0;
+
 pub struct RenderFrameOptions<'a, 'surface> {
     pub frame: &'a FrameDescriptor,
     pub surface: &'a wgpu::Surface<'surface>,
@@ -71,7 +77,8 @@ struct BlendUniformBuffer {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct MaskUniformBuffer {
     inverted: f32,
-    _padding: [f32; 3],
+    opacity: f32,
+    _padding: [f32; 2],
 }
 
 impl Compositor {
@@ -328,7 +335,7 @@ impl Compositor {
                     scene = self.apply_effect_groups(
                         context,
                         &mut encoder,
-                        &scene,
+                        scene,
                         frame.width,
                         frame.height,
                         effect_pass_groups,
@@ -384,7 +391,7 @@ impl Compositor {
                     scene = self.apply_effect_groups(
                         context,
                         &mut encoder,
-                        &scene,
+                        scene,
                         frame.width,
                         frame.height,
                         effect_pass_groups,
@@ -430,16 +437,14 @@ impl Compositor {
             layer,
         );
 
-        if !layer.effect_pass_groups.is_empty() {
-            current = self.apply_effect_groups(
-                context,
-                encoder,
-                &current,
-                frame.width,
-                frame.height,
-                &layer.effect_pass_groups,
-            )?;
-        }
+        current = self.apply_effect_groups(
+            context,
+            encoder,
+            current,
+            frame.width,
+            frame.height,
+            &layer.effect_pass_groups,
+        )?;
 
         if let Some(mask) = &layer.mask {
             let mask_source = self.textures.get(&mask.texture_id).ok_or_else(|| {
@@ -448,7 +453,19 @@ impl Compositor {
                 }
             })?;
             let mask_source_texture = mask_source.texture().clone();
-            let mask_texture = if mask.feather > 0.0 {
+            // A non-zero expansion has to go through the signed-distance pass
+            // even when the user asked for no feather: growing or shrinking a
+            // boundary is a distance-field operation, and the raw mask canvas
+            // carries no distance information. MIN_EXPANSION_FEATHER then keeps
+            // the moved edge one pixel wide so it stays antialiased instead of
+            // turning into stair-steps.
+            let needs_distance_field = mask.feather > 0.0 || mask.expansion != 0.0;
+            let mask_texture = if needs_distance_field {
+                let feather = if mask.expansion != 0.0 {
+                    mask.feather.max(MIN_EXPANSION_FEATHER)
+                } else {
+                    mask.feather
+                };
                 self.masks.apply_mask_feather_with_encoder(
                     context,
                     encoder,
@@ -456,7 +473,8 @@ impl Compositor {
                         mask: &mask_source_texture,
                         width: frame.width,
                         height: frame.height,
-                        feather: mask.feather,
+                        feather,
+                        expansion: mask.expansion,
                     },
                 )
             } else {
@@ -474,6 +492,7 @@ impl Compositor {
                 &current,
                 &mask_texture,
                 mask.inverted,
+                mask.opacity,
                 frame.width,
                 frame.height,
             );
@@ -482,17 +501,29 @@ impl Compositor {
         Ok(current)
     }
 
+    /// Runs a layer's (or the scene's) effect chain. Takes the source texture BY
+    /// VALUE so that a chain with nothing to run can hand it straight back:
+    /// otherwise every all-defaults layer paid for a full-resolution
+    /// `copy_texture` blit that the chain then never read.
     fn apply_effect_groups(
         &mut self,
         context: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::Texture,
+        source: wgpu::Texture,
         width: u32,
         height: u32,
         effect_pass_groups: &[Vec<EffectPassDescriptor>],
     ) -> Result<wgpu::Texture, CompositorError> {
-        let mut current = self.copy_texture(context, encoder, source, width, height);
+        if effect_pass_groups.iter().all(|group| group.is_empty()) {
+            return Ok(source);
+        }
+        let mut current = self.copy_texture(context, encoder, &source, width, height);
         for group in effect_pass_groups {
+            // An effect at neutral settings resolves to zero passes JS-side. The
+            // effects crate treats an empty pass list as an error, so skip it.
+            if group.is_empty() {
+                continue;
+            }
             let passes = map_effect_passes(group);
             current = self.effects.apply_with_encoder(
                 context,
@@ -649,6 +680,7 @@ impl Compositor {
         layer_texture: &wgpu::Texture,
         mask_texture: &wgpu::Texture,
         inverted: bool,
+        opacity: f32,
         width: u32,
         height: u32,
     ) -> wgpu::Texture {
@@ -698,7 +730,8 @@ impl Compositor {
                     label: Some("compositor-mask-uniform-buffer"),
                     contents: bytemuck::bytes_of(&MaskUniformBuffer {
                         inverted: if inverted { 1.0 } else { 0.0 },
-                        _padding: [0.0; 3],
+                        opacity: opacity.clamp(0.0, 1.0),
+                        _padding: [0.0; 2],
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });

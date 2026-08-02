@@ -37,8 +37,19 @@ import type { ElementDragView, DropTarget } from "@/timeline";
 import { TimelineTrackContent } from "./timeline-track";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { TimelineToolRail } from "./tool-rail";
-import { AddTrackCommand } from "@/commands/timeline";
+import { AddTrackCommand, RemoveTrackCommand } from "@/commands/timeline";
 import { MoveTrackCommand } from "@/commands/timeline/track/move-track";
+import {
+	MAX_AUDIO_TRACKS,
+	MAX_VIDEO_TRACKS,
+	isAtAudioTrackCap,
+	isAtVideoTrackCap,
+} from "@/timeline/placement/track-cap";
+import {
+	computeAddAudioBelowIndex,
+	computeAddVideoAboveIndex,
+} from "@/timeline/track-menu-actions";
+import { DeleteTrackDialog } from "./delete-track-dialog";
 import { SelectionBox } from "@/selection/selection-box";
 import { useBoxSelect } from "@/selection/hooks/use-box-select";
 import { SnapIndicator } from "./snap-indicator";
@@ -84,7 +95,10 @@ import {
 } from "@/timeline/bookmarks/index";
 import { useEdgeAutoScroll } from "@/timeline/hooks/use-edge-auto-scroll";
 import { useInitialScrollBottom } from "@/timeline/hooks/use-initial-scroll-bottom";
-import { useTimelineResize } from "@/timeline/hooks/use-timeline-resize";
+import {
+	useTimelineResize,
+	type ResizeClampFeedback,
+} from "@/timeline/hooks/use-timeline-resize";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useEditor } from "@/editor/use-editor";
 import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
@@ -169,6 +183,8 @@ function TimelineImpl() {
 	const [currentSnapPoint, setCurrentSnapPoint] = useState<SnapPoint | null>(
 		null,
 	);
+	const [resizeClampFeedback, setResizeClampFeedback] =
+		useState<ResizeClampFeedback | null>(null);
 	const { width: tracksContainerWidth } = useContainerSize({
 		containerRef: tracksContainerRef,
 	});
@@ -198,6 +214,13 @@ function TimelineImpl() {
 		setCurrentSnapPoint(snapPoint);
 	}, []);
 
+	const handleClampReasonChange = useCallback(
+		(feedback: ResizeClampFeedback | null) => {
+			setResizeClampFeedback(feedback);
+		},
+		[],
+	);
+
 	const timelineDuration = timeline.getTotalDuration() || 0;
 	const containerWidth = tracksContainerWidth || FALLBACK_CONTAINER_WIDTH;
 	const minZoomLevel = getTimelineZoomMin({
@@ -220,6 +243,7 @@ function TimelineImpl() {
 	const { isResizing, handleResizeStart } = useTimelineResize({
 		zoomLevel,
 		onSnapPointChange: handleSnapPointChange,
+		onClampReasonChange: handleClampReasonChange,
 	});
 
 	const expandedElementIds = useTimelineStore((s) => s.expandedElementIds);
@@ -366,6 +390,9 @@ function TimelineImpl() {
 
 	const { isDragOver, dropTarget, dragMode, dragProps } = useTimelineDragDrop({
 		containerRef: tracksContainerRef,
+		// Only used when the tracks scroll element is missing (first paint): the
+		// container starts at the ruler, so its rect needs the header subtracted.
+		headerRef: timelineHeaderRef,
 		tracksScrollRef,
 		zoomLevel,
 	});
@@ -607,6 +634,7 @@ function TimelineImpl() {
 										isDragOver={isDragOver}
 										dropTarget={dropTarget}
 										isInsertMode={isInsertMode}
+										resizeClampFeedback={resizeClampFeedback}
 									/>
 								)}
 							</div>
@@ -683,6 +711,58 @@ function TrackLabelsPanel({
 		[tracks, expandedElementIds],
 	);
 
+	// T15.4: right-click track management (add/delete), gated on the video/
+	// audio caps. Delete asks first when the track holds clips; a track with
+	// zero elements deletes immediately (nothing to confirm).
+	const mainTrackId = scene?.tracks.main.id ?? null;
+	const atVideoCap = scene ? isAtVideoTrackCap(scene.tracks) : false;
+	const atAudioCap = scene ? isAtAudioTrackCap(scene.tracks) : false;
+	const [pendingDeleteTrackId, setPendingDeleteTrackId] = useState<
+		string | null
+	>(null);
+	const pendingDeleteTrack = tracks.find(
+		(track) => track.id === pendingDeleteTrackId,
+	);
+
+	const addVideoTrackAbove = (clickedTrackId: string) => {
+		if (!scene) return;
+		editor.command.execute({
+			command: new AddTrackCommand({
+				type: "video",
+				index: computeAddVideoAboveIndex({
+					tracks: scene.tracks,
+					clickedTrackId,
+				}),
+				keepWhenEmpty: true,
+			}),
+		});
+	};
+
+	const addAudioTrackBelow = (clickedTrackId: string) => {
+		if (!scene) return;
+		editor.command.execute({
+			command: new AddTrackCommand({
+				type: "audio",
+				index: computeAddAudioBelowIndex({
+					tracks: scene.tracks,
+					clickedTrackId,
+				}),
+				keepWhenEmpty: true,
+			}),
+		});
+	};
+
+	const requestDeleteTrack = (trackId: string) => {
+		if (trackId === mainTrackId) return;
+		const track = tracks.find((candidate) => candidate.id === trackId);
+		if (!track) return;
+		if (track.elements.length === 0) {
+			editor.command.execute({ command: new RemoveTrackCommand(trackId) });
+			return;
+		}
+		setPendingDeleteTrackId(trackId);
+	};
+
 	// Premiere-style track names: main = V1, video overlays count upward
 	// (V2, V3...), audio counts downward (A1, A2...). Other overlay kinds get
 	// their own series (T1, G1, FX1).
@@ -710,6 +790,7 @@ function TrackLabelsPanel({
 	}, [scene]);
 
 	return (
+		<>
 		<div
 			className="flex shrink-0 flex-col border-r"
 			style={{ width: `${TIMELINE_TRACK_LABELS_COLUMN_WIDTH_PX}px` }}
@@ -728,60 +809,105 @@ function TrackLabelsPanel({
 							{tracks.map((track, index) => {
 								const expandedRows = trackExpandedRowsMap[index];
 								const baseHeight = getTrackHeight({ type: track.type });
+								const isMainTrack = track.id === mainTrackId;
 
 								return (
-									<div
-										key={track.id}
-										className={cn(
-											"group flex flex-col",
-											tracksWithSelection.has(track.id) &&
-												SELECTED_TRACK_ROW_CLASS,
-										)}
-										style={{
-											height: `${baseHeight + getTrackExpansionHeight(index)}px`,
-										}}
-									>
-										<div
-											className="flex shrink-0 items-center justify-end gap-2 px-3"
-											style={{ height: `${baseHeight}px` }}
-										>
-											<span className="bg-foreground/10 text-foreground/70 mr-auto rounded px-1 text-[0.6rem] font-semibold">
-												{trackBadges.get(track.id) ?? ""}
-											</span>
-											{canTrackHaveAudio(track) && (
-												<TrackToggleIcon
-													isOff={track.muted}
-													icons={{
-														on: VolumeHighIcon,
-														off: VolumeOffIcon,
+									<ContextMenu key={track.id}>
+										<ContextMenuTrigger asChild>
+											<div
+												className={cn(
+													"group flex flex-col",
+													tracksWithSelection.has(track.id) &&
+														SELECTED_TRACK_ROW_CLASS,
+												)}
+												style={{
+													height: `${baseHeight + getTrackExpansionHeight(index)}px`,
+												}}
+											>
+												<div
+													className="flex shrink-0 items-center justify-end gap-2 px-3"
+													style={{ height: `${baseHeight}px` }}
+												>
+													<span className="bg-foreground/10 text-foreground/70 mr-auto rounded px-1 text-[0.6rem] font-semibold">
+														{trackBadges.get(track.id) ?? ""}
+													</span>
+													{canTrackHaveAudio(track) && (
+														<TrackToggleIcon
+															isOff={track.muted}
+															icons={{
+																on: VolumeHighIcon,
+																off: VolumeOffIcon,
+															}}
+															onClick={() =>
+																editor.timeline.toggleTrackMute({
+																	trackId: track.id,
+																})
+															}
+														/>
+													)}
+													{canTrackBeHidden(track) && (
+														<TrackToggleIcon
+															isOff={track.hidden}
+															icons={{
+																on: ViewIcon,
+																off: ViewOffSlashIcon,
+															}}
+															onClick={() =>
+																editor.timeline.toggleTrackVisibility({
+																	trackId: track.id,
+																})
+															}
+														/>
+													)}
+													<TrackIcon track={track} />
+												</div>
+												{expandedRows.length > 0 && (
+													<PropertyTree rows={expandedRows} />
+												)}
+											</div>
+										</ContextMenuTrigger>
+										<ContextMenuContent className="w-52">
+											<div title={atVideoCap ? `Track limit reached (${MAX_VIDEO_TRACKS})` : undefined}>
+												<ContextMenuItem
+													icon={<HugeiconsIcon icon={TaskAdd02Icon} />}
+													disabled={atVideoCap}
+													onClick={(event: React.MouseEvent) => {
+														event.stopPropagation();
+														addVideoTrackAbove(track.id);
 													}}
-													onClick={() =>
-														editor.timeline.toggleTrackMute({
-															trackId: track.id,
-														})
-													}
-												/>
-											)}
-											{canTrackBeHidden(track) && (
-												<TrackToggleIcon
-													isOff={track.hidden}
-													icons={{
-														on: ViewIcon,
-														off: ViewOffSlashIcon,
+												>
+													Add video track
+												</ContextMenuItem>
+											</div>
+											<div title={atAudioCap ? `Track limit reached (${MAX_AUDIO_TRACKS})` : undefined}>
+												<ContextMenuItem
+													icon={<HugeiconsIcon icon={TaskAdd02Icon} />}
+													disabled={atAudioCap}
+													onClick={(event: React.MouseEvent) => {
+														event.stopPropagation();
+														addAudioTrackBelow(track.id);
 													}}
-													onClick={() =>
-														editor.timeline.toggleTrackVisibility({
-															trackId: track.id,
-														})
-													}
-												/>
+												>
+													Add audio track
+												</ContextMenuItem>
+											</div>
+											{!isMainTrack && (
+												<>
+													<ContextMenuSeparator />
+													<ContextMenuItem
+														icon={<HugeiconsIcon icon={Delete02Icon} />}
+														variant="destructive"
+														onClick={(event: React.MouseEvent) => {
+															event.stopPropagation();
+															requestDeleteTrack(track.id);
+														}}
+													>
+														Delete track
+													</ContextMenuItem>
+												</>
 											)}
-											<TrackIcon track={track} />
-										</div>
-										{expandedRows.length > 0 && (
-											<PropertyTree rows={expandedRows} />
-										)}
-									</div>
+										</ContextMenuContent>
+									</ContextMenu>
 								);
 							})}
 						</div>
@@ -795,6 +921,21 @@ function TrackLabelsPanel({
 				}}
 			/>
 		</div>
+		<DeleteTrackDialog
+			isOpen={pendingDeleteTrack != null}
+			onOpenChange={(open) => {
+				if (!open) setPendingDeleteTrackId(null);
+			}}
+			onConfirm={() => {
+				if (!pendingDeleteTrackId) return;
+				editor.command.execute({
+					command: new RemoveTrackCommand(pendingDeleteTrackId),
+				});
+				setPendingDeleteTrackId(null);
+			}}
+			elementCount={pendingDeleteTrack?.elements.length ?? 0}
+		/>
+		</>
 	);
 }
 
@@ -821,6 +962,7 @@ function TimelineTrackRows({
 	isDragOver,
 	dropTarget,
 	isInsertMode,
+	resizeClampFeedback,
 }: {
 	mainTrackId: string | null;
 	zoomLevel: number;
@@ -841,6 +983,7 @@ function TimelineTrackRows({
 	isDragOver: boolean;
 	dropTarget: DropTarget | null;
 	isInsertMode: boolean;
+	resizeClampFeedback: ResizeClampFeedback | null;
 }) {
 	const timeline = useEditor((e) => e.timeline);
 	const editor = useEditor();
@@ -925,6 +1068,7 @@ function TimelineTrackRows({
 										? (dropTarget?.targetElement?.elementId ?? null)
 										: null
 								}
+								resizeClampFeedback={resizeClampFeedback}
 							/>
 						</div>
 					</ContextMenuTrigger>

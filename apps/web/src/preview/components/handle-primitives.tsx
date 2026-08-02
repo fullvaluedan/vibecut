@@ -137,7 +137,7 @@ export function EdgeHandle({
 	onPointerMove,
 	onPointerUp,
 }: {
-	edge: "right" | "left" | "bottom";
+	edge: "right" | "left" | "bottom" | "top";
 	screen: { x: number; y: number };
 	rotation: number;
 	onPointerDown: (event: React.PointerEvent) => void;

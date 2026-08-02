@@ -7,7 +7,7 @@
  * row, Scale gets a Uniform Scale checkbox like Premiere's Motion effect.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
 	getKeyframeAtTime,
 	hasKeyframesForPath,
@@ -22,6 +22,7 @@ import { NumberField } from "@/components/ui/number-field";
 import {
 	Section,
 	SectionContent,
+	SectionField,
 	SectionFields,
 	SectionHeader,
 	SectionTitle,
@@ -45,17 +46,20 @@ import {
 	writeElementParamValue,
 	type ElementParamDefinition,
 } from "@/params/registry";
-import type { TimelineElement, VisualElement } from "@/timeline";
+import type { CropRect, TimelineElement, VisualElement } from "@/timeline";
 import type { MediaTime } from "@/wasm";
 import { formatNumberForDisplay } from "@/utils/math";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	ArrowLeft01Icon,
 	ArrowRight01Icon,
+	CropIcon,
 	KeyframeIcon,
 	StopWatchIcon,
 } from "@hugeicons/core-free-icons";
 import { cn } from "@/utils/ui";
+import { clampCropRect, isNoOpCrop, NO_CROP } from "@/rendering/crop";
+import { useCropModeStore } from "@/preview/crop-mode-store";
 
 const POSITION_X = "transform.positionX";
 const POSITION_Y = "transform.positionY";
@@ -1051,6 +1055,185 @@ function AudioToolsRow({ ctx }: { ctx: RowContext }) {
 	);
 }
 
+/**
+ * T18.1 crop: fractions display/edit as whole percentages (0-99). Deliberately
+ * NOT routed through the keyframe registry (params/registry.ts) - crop is
+ * v1-scoped to non-keyframable (see the CropRect doc comment in
+ * timeline/types.ts): the registry's animation-path machinery assumes a
+ * numeric ParamValue per key, and a 4-field rect with its own clamp-pair
+ * coupling (left+right, top+bottom) didn't fit that cleanly without either
+ * splitting into 4 separate registry params (losing the "one rect" model the
+ * renderer and serialization both use) or adding rect-aware channel support
+ * to the registry (real work, real risk, for a v1 feature). Ship simple now;
+ * revisit if keyframed crop becomes a real ask.
+ */
+function cropFractionToPercentDisplay(value: number): string {
+	return formatNumberForDisplay({ value: value * 100, fractionDigits: 0 });
+}
+
+function parseCropPercentInput({ input }: { input: string }): number | null {
+	const parsed = parseFloat(input);
+	if (Number.isNaN(parsed)) return null;
+	return Math.min(99, Math.max(0, parsed)) / 100;
+}
+
+function useCropFieldDraft({
+	crop,
+	pendingCropRef,
+	field,
+	onPreview,
+	onCommit,
+}: {
+	crop: CropRect;
+	pendingCropRef: React.MutableRefObject<CropRect>;
+	field: keyof CropRect;
+	onPreview: (crop: CropRect) => void;
+	onCommit: () => void;
+}) {
+	return usePropertyDraft({
+		displayValue: cropFractionToPercentDisplay(crop[field]),
+		parse: (input) => parseCropPercentInput({ input }),
+		onPreview: (value) => {
+			const next = { ...pendingCropRef.current, [field]: value };
+			pendingCropRef.current = next;
+			onPreview(next);
+		},
+		onCommit,
+	});
+}
+
+/**
+ * Non-keyframable Crop group: a plain SectionField list (not the Row/
+ * Stopwatch keyframe machinery the fx groups above use), plus a Crop button
+ * that toggles on-canvas crop handles (`preview/components/crop-handles.tsx`)
+ * via `crop-mode-store`. Hooks run unconditionally so a selection change
+ * between croppable/non-croppable element types never reorders them (same
+ * discipline as the Audio group's volumeState above); the section itself
+ * just doesn't render for non-croppable types.
+ */
+function CropGroup({
+	element,
+	trackId,
+}: {
+	element: VisualElement;
+	trackId: string;
+}) {
+	const editor = useEditor();
+	const cropElementId = useCropModeStore((s) => s.elementId);
+	const enterCropMode = useCropModeStore((s) => s.enter);
+	const exitCropMode = useCropModeStore((s) => s.exit);
+	const isCroppable = element.type === "video" || element.type === "image";
+	const rawCrop =
+		element.type === "video" || element.type === "image"
+			? (element.crop ?? NO_CROP)
+			: NO_CROP;
+	const crop = clampCropRect(rawCrop);
+	const pendingCropRef = useRef(crop);
+	const isCropMode = isCroppable && cropElementId === element.id;
+
+	const commitCrop = () => {
+		const next = pendingCropRef.current;
+		editor.timeline.updateElementCrop({
+			trackId,
+			elementId: element.id,
+			crop: isNoOpCrop(next) ? undefined : clampCropRect(next),
+		});
+	};
+	const previewCrop = (next: CropRect) => {
+		editor.timeline.previewElementCrop({
+			trackId,
+			elementId: element.id,
+			crop: next,
+		});
+	};
+
+	const leftDraft = useCropFieldDraft({
+		crop,
+		pendingCropRef,
+		field: "left",
+		onPreview: previewCrop,
+		onCommit: commitCrop,
+	});
+	const topDraft = useCropFieldDraft({
+		crop,
+		pendingCropRef,
+		field: "top",
+		onPreview: previewCrop,
+		onCommit: commitCrop,
+	});
+	const rightDraft = useCropFieldDraft({
+		crop,
+		pendingCropRef,
+		field: "right",
+		onPreview: previewCrop,
+		onCommit: commitCrop,
+	});
+	const bottomDraft = useCropFieldDraft({
+		crop,
+		pendingCropRef,
+		field: "bottom",
+		onPreview: previewCrop,
+		onCommit: commitCrop,
+	});
+
+	if (!isCroppable) return null;
+
+	const fields: Array<{
+		label: string;
+		draft: ReturnType<typeof useCropFieldDraft>;
+	}> = [
+		{ label: "Left", draft: leftDraft },
+		{ label: "Top", draft: topDraft },
+		{ label: "Right", draft: rightDraft },
+		{ label: "Bottom", draft: bottomDraft },
+	];
+
+	return (
+		<Section collapsible sectionKey={`${element.id}:crop`}>
+			<SectionHeader
+				actions={
+					<Button
+						variant={isCropMode ? "secondary" : "ghost"}
+						size="icon"
+						aria-label={isCropMode ? "Exit crop mode" : "Crop"}
+						aria-pressed={isCropMode}
+						onClick={() =>
+							isCropMode ? exitCropMode() : enterCropMode(element.id)
+						}
+					>
+						<HugeiconsIcon icon={CropIcon} />
+					</Button>
+				}
+			>
+				<SectionTitle>Crop</SectionTitle>
+			</SectionHeader>
+			<SectionContent>
+				<SectionFields>
+					{fields.map(({ label, draft }) => (
+						<SectionField key={label} label={label}>
+							<NumberField
+								value={draft.displayValue}
+								suffix="%"
+								onFocus={() => {
+									pendingCropRef.current = crop;
+									draft.onFocus();
+								}}
+								onChange={draft.onChange}
+								onBlur={draft.onBlur}
+								onCancel={draft.onCancel}
+								isDefault={isNoOpCrop(crop)}
+							/>
+						</SectionField>
+					))}
+				</SectionFields>
+				<p className="text-muted-foreground px-1 pt-2 text-[0.65rem]">
+					Crop applies before Motion's scale/position. Not keyframable yet.
+				</p>
+			</SectionContent>
+		</Section>
+	);
+}
+
 export function EffectControlsTab({
 	element,
 	trackId,
@@ -1171,6 +1354,7 @@ export function EffectControlsTab({
 					state={rotationState}
 				/>
 			</FxGroup>
+			<CropGroup element={element} trackId={trackId} />
 			<FxGroup
 				title="Opacity"
 				sectionKey="effect-controls:opacity"

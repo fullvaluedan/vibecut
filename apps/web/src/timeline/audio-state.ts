@@ -1,6 +1,8 @@
 import { hasKeyframesForPath } from "@/animation/keyframe-query";
 import { resolveNumberAtTime } from "@/animation/values";
+import { isRetimeReversed } from "@/retime/rate";
 import { VOLUME_DB_MAX, VOLUME_DB_MIN } from "./audio-constants";
+import { clampFadesToDuration, computeFadeGain } from "./audio-fade";
 import type { TimelineElement } from "./types";
 const DEFAULT_STEP_SECONDS = 1 / 60;
 
@@ -51,6 +53,56 @@ export function hasAnimatedVolume({
 
 import { TICKS_PER_SECOND } from "@/wasm";
 
+/** Raw (unclamped) fadeInSec as stored on the element; absent = 0. */
+function getRawFadeInSec({ element }: { element: AudioCapableElement }): number {
+	const value = element.params.fadeInSec;
+	return typeof value === "number" ? value : 0;
+}
+
+/** Raw (unclamped) fadeOutSec as stored on the element; absent = 0. */
+function getRawFadeOutSec({ element }: { element: AudioCapableElement }): number {
+	const value = element.params.fadeOutSec;
+	return typeof value === "number" ? value : 0;
+}
+
+/**
+ * Effective (clamped-to-duration) fade in seconds. Used by both the fade
+ * handles/numeric field (so the UI always shows a value that fits the
+ * current clip) and the gain math. A trim that shrinks the clip shorter than
+ * the stored fade shows up here automatically - see `clampFadesToDuration`.
+ */
+export function getElementFadeInSec({
+	element,
+}: {
+	element: AudioCapableElement;
+}): number {
+	return clampFadesToDuration({
+		fadeInSec: getRawFadeInSec({ element }),
+		fadeOutSec: getRawFadeOutSec({ element }),
+		durationSec: element.duration / TICKS_PER_SECOND,
+	}).fadeInSec;
+}
+
+/** Effective (clamped-to-duration) fade out seconds. See `getElementFadeInSec`. */
+export function getElementFadeOutSec({
+	element,
+}: {
+	element: AudioCapableElement;
+}): number {
+	return clampFadesToDuration({
+		fadeInSec: getRawFadeInSec({ element }),
+		fadeOutSec: getRawFadeOutSec({ element }),
+		durationSec: element.duration / TICKS_PER_SECOND,
+	}).fadeOutSec;
+}
+
+/** Whether this element has any effective fade in or out. */
+export function hasAudioFade({ element }: { element: AudioCapableElement }): boolean {
+	return (
+		getElementFadeInSec({ element }) > 0 || getElementFadeOutSec({ element }) > 0
+	);
+}
+
 export function resolveEffectiveAudioGain({
 	element,
 	trackMuted = false,
@@ -60,7 +112,15 @@ export function resolveEffectiveAudioGain({
 	trackMuted?: boolean;
 	localTime: number;
 }): number {
-	if (trackMuted || isElementMuted({ element })) {
+	// T18.1 reverse: CapCut mutes audio while a clip plays backward (reversed
+	// audio has no clean way to sound "right", so it's silenced rather than
+	// rendered garbled). Single choke point shared by preview waveform gain,
+	// live playback, and export (media/audio.ts calls this for both).
+	if (
+		trackMuted ||
+		isElementMuted({ element }) ||
+		isRetimeReversed({ retime: element.retime })
+	) {
 		return 0;
 	}
 
@@ -71,7 +131,17 @@ export function resolveEffectiveAudioGain({
 		localTime: Math.round(localTime * TICKS_PER_SECOND),
 	});
 
-	return dBToLinear(resolvedDb);
+	// The fade is a volume RAMP that multiplies the resolved dB-based gain -
+	// it never overwrites it, so a fade composes with both the static volume
+	// value and any volume keyframes (T18.3).
+	const fadeGain = computeFadeGain({
+		localTimeSec: localTime,
+		durationSec: element.duration / TICKS_PER_SECOND,
+		fadeInSec: getRawFadeInSec({ element }),
+		fadeOutSec: getRawFadeOutSec({ element }),
+	});
+
+	return dBToLinear(resolvedDb) * fadeGain;
 }
 
 export function buildWaveformGainSamples({

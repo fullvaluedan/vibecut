@@ -22,6 +22,12 @@ import {
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
 import { videoCache } from "@/services/video-cache/service";
+import {
+	clampTransitionSourceTicks,
+	isTransitionExtendedTime,
+	resolveTransitionClipTime,
+	resolveTransitionOpacityFactor,
+} from "./transition-window";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -129,6 +135,7 @@ function resolveEffectPassGroups({
 				effectParams: resolvedParams,
 				width,
 				height,
+				time: localTime,
 			});
 		});
 }
@@ -144,8 +151,18 @@ function resolveVisualState({
 	sourceWidth: number;
 	sourceHeight: number;
 }): ResolvedVisualNodeState | null {
-	const clipTime = context.time - params.timeOffset;
-	if (clipTime < 0 || clipTime >= params.duration) {
+	// T19.3: the ONLY change to the visibility gate. Without a transition role
+	// this is byte-for-byte the old test (`clipTime in [0, duration)`); with one
+	// it also admits the transition window, where the clip renders outside its
+	// own span. `getElementLocalTime` below already clamps to [0, duration], so
+	// an extended frame holds the boundary's animated values.
+	const clipTime = resolveTransitionClipTime({
+		timeOffset: params.timeOffset,
+		duration: params.duration,
+		transitions: params.transitions,
+		time: context.time,
+	});
+	if (clipTime === null) {
 		return null;
 	}
 
@@ -159,11 +176,18 @@ function resolveVisualState({
 		animations: params.animations,
 		localTime,
 	});
-	const opacity = resolveOpacityAtTime({
-		baseOpacity: params.opacity,
-		animations: params.animations,
-		localTime,
-	});
+	// The transition ramp MULTIPLIES the authored opacity instead of replacing
+	// it, so a clip with user opacity keyframes keeps them through a dissolve.
+	const opacity =
+		resolveOpacityAtTime({
+			baseOpacity: params.opacity,
+			animations: params.animations,
+			localTime,
+		}) *
+		resolveTransitionOpacityFactor({
+			transitions: params.transitions,
+			time: context.time,
+		});
 	const containScale = Math.min(
 		context.renderer.width / sourceWidth,
 		context.renderer.height / sourceHeight,
@@ -196,21 +220,45 @@ async function resolveVideoNode({
 	node: VideoNode;
 	context: ResolveContext;
 }): Promise<ResolvedVisualSourceNodeState | null> {
-	const clipTime = context.time - node.params.timeOffset;
-	if (clipTime < 0 || clipTime >= node.params.duration) {
+	const clipTime = resolveTransitionClipTime({
+		timeOffset: node.params.timeOffset,
+		duration: node.params.duration,
+		transitions: node.params.transitions,
+		time: context.time,
+	});
+	if (clipTime === null) {
 		return null;
 	}
 
-	const sourceTimeTicks =
+	const rawSourceTimeTicks =
 		node.params.trimStart +
 		getSourceTimeAtClipTime({
 			clipTime,
 			retime: node.params.retime,
+			clipDuration: node.params.duration,
 		});
+	// Inside the clip's own span this is the untouched pre-T19.3 path. Only a
+	// transition extension (clipTime outside [0, duration)) goes through the
+	// clamp, which is what turns "no trimmed-away source left" into an
+	// edge-held freeze frame instead of an out-of-range seek.
+	const sourceTimeTicks = isTransitionExtendedTime({
+		timeOffset: node.params.timeOffset,
+		duration: node.params.duration,
+		time: context.time,
+	})
+		? clampTransitionSourceTicks({
+				ticks: rawSourceTimeTicks,
+				trimStart: node.params.trimStart,
+				trimEnd: node.params.trimEnd,
+				duration: node.params.duration,
+				retime: node.params.retime,
+			})
+		: rawSourceTimeTicks;
 	let frame: Awaited<ReturnType<typeof videoCache.getFrameAt>>;
 	try {
 		frame = await videoCache.getFrameAt({
 			mediaId: node.params.mediaId,
+			consumerId: node.params.decodeConsumerId,
 			file: node.params.file,
 			time: mediaTimeToSeconds({
 				time: roundMediaTime({ time: sourceTimeTicks }),
@@ -462,6 +510,7 @@ async function resolveBackdropSource({
 			getSourceTimeAtClipTime({
 				clipTime,
 				retime: node.params.retime,
+				clipDuration: node.params.duration,
 			});
 		const frame = await videoCache.getFrameAt({
 			mediaId: node.params.mediaId,
@@ -508,6 +557,7 @@ function resolveEffectLayerNode({
 		effectParams: node.params.effectParams,
 		width: context.renderer.width,
 		height: context.renderer.height,
+		time: time - node.params.timeOffset,
 	});
 	if (passes.length === 0) {
 		return null;

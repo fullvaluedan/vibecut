@@ -43,11 +43,13 @@ describe("hidden-panel default list (Dan's 2026-07-19 roadmap decision D4/D6, W2
 		}
 	});
 
-	test("VISIBLE_TAB_KEYS is exactly Media, Text, Shapes, Captions, Transcript, Settings", () => {
+	test("VISIBLE_TAB_KEYS is exactly Media, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings (T19.4b: effects unhidden)", () => {
 		expect(VISIBLE_TAB_KEYS).toEqual([
 			"media",
+			"sounds",
 			"text",
 			"shapes",
+			"effects",
 			"captions",
 			"transcript",
 			"settings",
@@ -103,6 +105,14 @@ describe("assets panel store guard rail: a hidden active tab falls back to Media
 		useAssetsPanelStore.getState().setActiveTab("captions");
 		expect(useAssetsPanelStore.getState().activeTab).toBe("captions");
 		useAssetsPanelStore.getState().setActiveTab("media");
+	});
+
+	test("setSettingsSubView is a plain, un-guarded one-shot slot (T21.1 ai-settings deep link)", () => {
+		expect(useAssetsPanelStore.getState().settingsSubView).toBeNull();
+		useAssetsPanelStore.getState().setSettingsSubView("ai");
+		expect(useAssetsPanelStore.getState().settingsSubView).toBe("ai");
+		useAssetsPanelStore.getState().setSettingsSubView(null);
+		expect(useAssetsPanelStore.getState().settingsSubView).toBeNull();
 	});
 
 	test("the store's persist config wires merge through resolveActiveTab (hidden persisted tab -> Media)", () => {

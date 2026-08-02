@@ -5,6 +5,8 @@ import {
 	DragDropController,
 	type DragDropConfig,
 } from "@/timeline/controllers/drag-drop-controller";
+import { computeTrackExpansionHeight } from "@/timeline/components/expanded-layout";
+import { useTimelineStore } from "@/timeline/timeline-store";
 
 interface UseTimelineDragDropProps {
 	containerRef: RefObject<HTMLDivElement | null>;
@@ -32,13 +34,26 @@ export function useTimelineDragDrop({
 		getSceneTracks: () => editor.scenes.getActiveScene().tracks,
 		getCurrentPlayheadTime: () => editor.playback.getCurrentTime(),
 		getMediaAssets: () => editor.media.getAssets(),
+		// Read live (not through the React snapshot): the drop hit-test needs the
+		// same row heights the timeline is currently drawing, expansions included.
+		getExtraTrackHeight: (trackIndex) => {
+			const sceneTracks = editor.scenes.getActiveScene().tracks;
+			const track = [
+				...sceneTracks.overlay,
+				sceneTracks.main,
+				...sceneTracks.audio,
+			][trackIndex];
+			if (!track) return 0;
+			return computeTrackExpansionHeight({
+				track,
+				expandedElementIds: useTimelineStore.getState().expandedElementIds,
+			});
+		},
 		dragSource: editor.timeline.dragSource,
 		addMediaAsset: (args) => editor.media.addMediaAsset(args),
 		executeCommand: (command) => editor.command.execute({ command }),
 		insertElement: (args) => editor.timeline.insertElement(args),
 		addClipEffect: (args) => editor.timeline.addClipEffect(args),
-		separateSourceAudio: (args) =>
-			editor.timeline.toggleSourceAudioSeparation(args),
 	};
 	const configRef = useCommittedRef(config);
 	const [controller] = useState(() => new DragDropController({ configRef }));

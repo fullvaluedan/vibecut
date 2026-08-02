@@ -8,13 +8,8 @@ import { generateUUID } from "@/utils/id";
 import { EditorCore } from "@/core";
 import { isRetimableElement } from "@/timeline";
 import { splitAnimationsAtTime } from "@/animation";
-import { getSourceSpanAtClipTime } from "@/retime";
-import {
-	addMediaTime,
-	type MediaTime,
-	roundMediaTime,
-	subMediaTime,
-} from "@/wasm";
+import { computeSplitTrimBoundaries, getSourceSpanAtClipTime } from "@/retime";
+import { type MediaTime, roundMediaTime, subMediaTime } from "@/wasm";
 
 export class SplitElementsCommand extends Command {
 	private savedState: SceneTracks | null = null;
@@ -55,6 +50,18 @@ export class SplitElementsCommand extends Command {
 		// ganged with each other while the left halves keep the original id.
 		// Mirrors the drag-drop straddle-split precedent (computeStraddleSplit).
 		const freshLinkIdByGroup = new Map<string, string>();
+
+		// T19.3: a split keeps each transition on the boundary it was authored
+		// against. The LEFT half inherits the element's fields, so a HEAD
+		// transition rides along with the join it belongs to, but its tail is now
+		// the fresh cut, so any tail fade leaves it. The freshly minted RIGHT
+		// half starts on a HARD CUT (the brand-new cut the user just made is not
+		// the old join) and inherits the tail fade, which is still its tail.
+		// The generic reconciler cannot make this call on its own: the right half
+		// legitimately abuts the left half, so an inherited `transitionIn` would
+		// look valid.
+		const dropTailTransition = { transitionOut: undefined } as const;
+		const dropHeadTransition = { transitionIn: undefined } as const;
 		const rightSideLinkId = (
 			linkId: string | undefined,
 		): { linkId?: string } => {
@@ -139,20 +146,25 @@ export class SplitElementsCommand extends Command {
 				});
 				let splitResult: TimelineElement[];
 
-				const leftTrimEnd = addMediaTime({
-					a: element.trimEnd,
-					b: rightSourceSpan,
-				});
-				const rightTrimStart = addMediaTime({
-					a: element.trimStart,
-					b: leftSourceSpan,
-				});
+				// T18.1: a reversed clip reads its trimmed span back-to-front, so the
+				// timeline-left half actually owns the source's TAIL - see the
+				// doc comment on computeSplitTrimBoundaries for why the boundaries
+				// swap sides instead of just adding to the same field as forward.
+				const { leftTrimStart, leftTrimEnd, rightTrimStart, rightTrimEnd } =
+					computeSplitTrimBoundaries({
+						trimStart: element.trimStart,
+						trimEnd: element.trimEnd,
+						leftSourceSpan,
+						rightSourceSpan,
+						retime: retimeRef,
+					});
 
 				if (this.retainSide === "left") {
 					splitResult = [
 						{
 							...element,
 							duration: leftVisibleDuration,
+							trimStart: leftTrimStart,
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
@@ -172,10 +184,12 @@ export class SplitElementsCommand extends Command {
 							startTime: this.splitTime,
 							duration: rightVisibleDuration,
 							trimStart: rightTrimStart,
+							trimEnd: rightTrimEnd,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 							...rightSideLinkId(element.linkId),
+							...dropHeadTransition,
 						},
 					];
 				} else {
@@ -188,10 +202,12 @@ export class SplitElementsCommand extends Command {
 						{
 							...element,
 							duration: leftVisibleDuration,
+							trimStart: leftTrimStart,
 							trimEnd: leftTrimEnd,
 							name: `${element.name} (left)`,
 							animations: leftAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
+							...dropTailTransition,
 						},
 						{
 							...element,
@@ -199,10 +215,12 @@ export class SplitElementsCommand extends Command {
 							startTime: this.splitTime,
 							duration: rightVisibleDuration,
 							trimStart: rightTrimStart,
+							trimEnd: rightTrimEnd,
 							name: `${element.name} (right)`,
 							animations: rightAnimations,
 							...(retimeRef !== undefined ? { retime: retimeRef } : {}),
 							...rightSideLinkId(element.linkId),
+							...dropHeadTransition,
 						},
 					];
 				}

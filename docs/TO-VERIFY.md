@@ -2,6 +2,487 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 19: transitions, color adjust, chroma key, dormant surfaces (2026-08-02, T19.5, branch `feat/director-eval`, tip `21ae6e59`)
+
+Closing verifier pass for T19.0, T19.1, T19.2, T19.3, T19.4a and T19.4b. Round 19 is **NOT done**: four tasks reopen (T19.0, T19.3, T19.4a captions, T19.4b).
+
+**Environment notes for the next verifier.** Screenshots were unavailable the whole session (`Browser pane is not displayed, so the page is not compositing frames`), so every visual claim below is a pixel measurement taken through the app's own render path: `editor.renderer.createSnapshot()` at a seeked playhead, decoded back into a canvas and reduced to mean RGB, luminance standard deviation, a Laplacian edge score, or named corner pixels. That call runs the same CanvasRenderer the preview and the export use, so the numbers are the real composited frame, not a DOM approximation. Two consequences of the non-compositing pane, both artifacts and not product bugs: CSS opacity transitions never advance (a hovered element reports `opacity: 0` forever, so the hover-reveal chip had to be confirmed by finishing the stalled `CSSTransition` and reading the end value, which is 1), and the preview canvas reports a negative `y` in `getBoundingClientRect`. Synthetic `element.click()` works for plain buttons but NOT for Radix `TabsTrigger`, which needs a full pointerdown/pointerup/click sequence; an earlier read of "the Sounds sub-tabs do not switch" was that, not a defect. Test media was generated with ffmpeg into the scratchpad (`testsrc2` + sine for a normal clip, a solid `0x2040A0` plate for a background, and a `0x00B140` green plate with a moving `testsrc2` inset for chroma key).
+
+**One environment change was required to verify anything GPU-side, and it is itself the biggest finding of the round.** See defect R19-1.
+
+### Gates
+- G1 `bun test` apps/web: 2690 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- Rust `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu wasm-pack test --node rust/crates/effects`: 21 pass, 0 fail. PASS.
+
+### G6 scores
+
+| Feature | Functionality | Quality | Verdict |
+| --- | --- | --- | --- |
+| T19.0 wasm foundation (schema uniforms, mask expansion/opacity) | 6 | 7 | REOPEN (R19-1) |
+| T19.3 transitions v1 (dissolve family) | 8 | 7 | REOPEN (R19-2) |
+| T19.1 Adjust effect + 8 filter presets | 9 | 9 | PASS |
+| T19.2 chroma key + eyedropper | 9 | 8 | PASS (R19-5 minor) |
+| T19.4b pixelate/vignette/glow/noise + effects tab unhidden | 9 | 6 | REOPEN (R19-3) |
+| T19.4a sounds fix + unhide | 9 | 8 | PASS (R19-6 minor) |
+| T19.4a stickers prune + 12 caption looks | 8 | 6 | REOPEN (R19-4) |
+
+### Defects (these reopen tasks)
+
+**R19-1 (T19.0, blocking): the local wasm link never reaches `apps/web`, so the whole round's shader work is dead in the app as merged.**
+`apps/web/node_modules/opencut-wasm` is a real directory containing the published npm **0.2.10** (3,037,899 bytes, dated Jun 7), not a symlink. Node/bun resolution from `apps/web` finds it before the hoisted root `node_modules/opencut-wasm` symlink that `bun link opencut-wasm` creates, so the documented local-dev loop silently does nothing. `rust/wasm/README.md` states the opposite ("From the repo root it links into the hoisted `node_modules/opencut-wasm`, which is where `apps/web` resolves it") and that claim is false on this checkout. Both `package.json` and `apps/web/package.json` still pin `"opencut-wasm": "^0.2.10"`.
+Repro on a clean checkout: start `bun run dev:web`, put a video clip on V1, select it, open the clip Effects tab, and add the Adjust effect. The preview goes blank and the console shows `Failed to apply effects: Missing uniform 'u_sigma' for shader 'color-adjust'` (0.2.10's schema table has no color-adjust entry, so packing falls through to blur's). With all-neutral params it instead shows `Failed to apply effects: At least one effect pass is required`. Chroma key, pixelate, vignette, glow and noise fail the same way, and `MASK_EXPANSION_OPACITY_RENDERED = true` is now sending two `LayerMaskDescriptor` fields the resolved 0.2.10 compositor does not implement.
+Confirmation: the served chunk `.../5bcb1_opencut-wasm_opencut_wasm_bg_11d1fd06.wasm` was byte-identical to the 0.2.10 npm copy (md5 `9c2c8f54...`) and contained zero occurrences of the string `color-adjust`, while `rust/wasm/pkg/opencut_wasm_bg.wasm` (md5 `e2b42a2b...`, version 0.3.0) contains it.
+Workaround used for the rest of this pass (local only, not committed): replaced `apps/web/node_modules/opencut-wasm` with a directory junction to `rust/wasm/pkg`, deleted `apps/web/.next`, and restarted the dev server. After that the served chunk becomes `rust_wasm_pkg_opencut_wasm_bg_11d1fd06.wasm` with md5 `e2b42a2b...` and every shader below works.
+Fix: either publish 0.3.0 and repin both package.json files (Dan-owed, see below), or make the documented dev loop actually take (link into `apps/web` too, or add a `resolutions`/workspace override), and correct the README's Windows notes. Until one of those lands, `MASK_EXPANSION_OPACITY_RENDERED` is true against a compositor that cannot honour it.
+
+**R19-2 (T19.3): a cross dissolve dips about 25 percent dark at its midpoint.**
+`plan.ts` gives the outgoing neighbour a `direction: "out"` ramp and the incoming neighbour a `direction: "in"` ramp, so BOTH layers are at 0.5 opacity halfway through. Over-compositing those against the black canvas yields `B*p + A*(1-p)^2`, which is `0.75*A` at `p = 0.5` when the two sides carry similar pictures, instead of the `0.5*A + 0.5*B` a dissolve should produce.
+Repro: put one clip on V1, split it once so the two halves are the same source, apply Cross dissolve 1.0s to the join, and scrub frame by frame. Measured mean RGB across the window, effects and masks stripped: 9.2s `[126,127,129]`, 9.5s `[126,127,129]`, 9.75s `[105,101,106]`, 10.0s `[93,96,94]`, 10.25s `[100,104,103]`, 10.5s `[123,128,128]`. The predicted `0.75 * 127 = 95` matches the measured 93 to 96 exactly.
+It is not specific to same-source joins. On a `0x2040A0` plate crossfading into testsrc2 with a 1.0s dissolve, the midpoint measured `[68,81,104]` where a linear blend would be `[77,96,143]`; the over-composite prediction `[69,80,103]` matches to within 1 level per channel.
+It is in the export too, so this is not a preview-only artifact: the exported frame at the same midpoint measured `[95,93,93]` against the preview's `[95,94,98]`.
+Why the tests missed it: `transition-window.test.ts` asserts the per-layer opacity FACTOR (0.5 each at the midpoint), which is exactly the buggy value; nothing asserts the composited luminance.
+Fix: only one side should ramp. Hold the outgoing neighbour at full opacity through the window and ramp the incoming neighbour 0 to 1 over it, so the standard `A over B` dissolve falls out. Add a composited-luminance assertion (flat mean across the window for two identical sources) so the regression cannot come back.
+
+**R19-3 (T19.4b): 6 of the 7 tiles in the newly unhidden Effects browser are pixel-identical to the unprocessed source.**
+`effects/components/assets-view.tsx` renders each tile with `params: {}`, so each effect previews at its declared defaults. Blur defaults to `radius: 15` and shows a blurred tile; every other effect is neutral at its defaults (`pixelate.blockSize: 1`, `vignette.amount: 0`, `glow.intensity: 0`, `noise.amount: 0`, all nine color-adjust params `0`, and chroma key's default `#00FF00` misses any non-green preview image). The result is a grid where Adjust, Chroma key, Pixelate, Vignette, Glow and Noise all show the same untouched picture, so nothing in the browser tells you what any of them do.
+Repro: open the left-rail Effects tab and compare the tiles. Measured: all 7 tiles average `[152,147,145]`; a 64x64 FNV hash of the pixel data is `3296002120` for Blur and `1100898576` for all six others, stable across an 8 second settle.
+This directly contradicts the unhide criterion in the plan ("Unhide the effects tab (flag + test) once >= 5 effects render distinct live preview tiles").
+Fix: give each definition a small `previewParams` bundle (or have the preview service substitute a demonstrative value when `isNeutral` is true for the effect) and pass it instead of `{}`. The per-preset thumbnails in T19.1 already do exactly this correctly and can be the model.
+
+**R19-4 (T19.4a captions): caption looks bleed in both directions, including through "Plain".**
+The 6 new looks (Outline Pop, Drop Shadow, Broadcast, Minimal Mono, Highlighter, Cinema Bar) each set the full stroke, shadow and background param set. The 6 original looks (Plain, Neon Accent, Pill Karaoke, Weight Shift, Editorial, Highlight) were never updated and set none of `strokeWidth`, `shadowBlur`, `shadowOffsetX`, `shadowOffsetY` or (mostly) `letterSpacing`. Since `applyStyle` merges (`{ ...el.params, ...style.params }`), whatever the new looks wrote survives every later old look.
+Repro A (new leaking into old): hand-make four text elements named "Caption 1".."Caption 4" on an overlay text track, open the Captions tab, click Broadcast, then Neon Accent, then Plain. After Plain the caption still carries `letterSpacing=2 shadowBlur=8 shadowOffsetY=2 background.color=#1a1a1a background.cornerRadius=2 background.paddingX=12`, all of them Broadcast's. "Plain" is the reset look and it leaves an 8px drop shadow and 2px letter spacing on the text.
+Repro B (old leaking into new): click Weight Shift (`letterSpacing=1.5`), then Outline Pop. Outline Pop correctly sets `strokeWidth=6` and zeroes the shadow, but `letterSpacing=1.5` persists because Outline Pop does not declare it.
+This is precisely the "every look sets everything it controls (merge-not-reset bleed)" rule the plan wrote for this task.
+Fix: define one canonical key set for caption looks and have all 12 entries write every key in it (or reset to defaults before merging the look).
+
+**R19-5 (T19.2, minor): Escape out of the eyedropper also deselects the clip.**
+`preview/components/eyedropper-overlay.tsx` registers its own `document` keydown listener for Escape and does not stop propagation, so the global `cancel-interaction` action (`actions/use-editor-actions.ts`) also fires and falls through to `deselect-all`. Repro: select a green-screen clip, Effects tab, Cutout, Pick color, press Escape. The pick cancels correctly, but the clip is deselected and the whole inspector drops to "It's empty here", so retrying the pick means reselecting the clip first. Fix: add the eyedropper store to the `cancel-interaction` chain the gap-selection and place-tool stores already use, so Escape is consumed once.
+
+**R19-6 (T19.4a sounds, minor, pre-existing): a rate-limiter outage hides the friendly no-key state.**
+`GET /api/sounds/search` calls `checkRateLimit` before anything else, and `auth/rate-limit.ts` has no try/catch. With `bun run dev:web` and no `docker compose up` (both are documented run modes in CLAUDE.md), Upstash at `http://localhost:8079` is not running, the call throws `ECONNREFUSED`, the route returns a bare 500, and the Sound effects tab shows the generic "No sounds available" instead of the Freesound message this task shipped. Starting `redis` + `serverless-redis-http` makes the friendly state appear immediately. Not introduced by R19, but it is the failure mode standing directly in front of R19's headline deliverable. Fix: wrap the limiter call so an unreachable limiter fails open.
+
+### A. Transitions v1 (T19.3) - PASS except R19-2
+Fixture: `bg.mp4` 0-6s, `clipA.mp4` split at 10s into two same-source halves 6-10s and 10-14s, `green.mp4` 14-20s on V1, giving one same-source join and two cross-source joins plus an open head and tail.
+- [x] Hovering a main-track join reveals the chip. The chip carries `opacity-0 group-hover:opacity-100`, the parent carries `group`, and under a real CDP hover the element matches `.group-hover\:opacity-100:is(:where(.group):hover *)` and its `CSSTransition` for opacity is running with an end value of 1. It reads 0 only because the pane is not compositing, so the transition never advances.
+- [x] Clicking the chip opens the mini-picker. At a join it offers exactly Cross dissolve / Dip to black / Dip to white, duration presets 0.25s / 0.5s / 1s plus a custom seconds field, and the honest note "Audio cuts at the join for now.". At the open head and the tail it offers exactly Fade.
+- [x] Applying Cross dissolve 0.5s writes `transitionIn` on the right neighbour and draws the bracket at x=650 width=25px, which is 0.5s at the current 50px/s zoom centred on the join. The chip's title becomes "Cross dissolve 0.5s" and its aria-label becomes "Edit Cross dissolve".
+- [x] Scrubbing frame by frame through the crossfade shows BOTH clips, never a black flash. Mid-transition frames are a genuine blend of the two sources.
+- [ ] But the blend is 25 percent too dark at the midpoint. See R19-2.
+- [x] Same-source smoothness (the video-cache fix): playback from 9.0s ran to 13.03s in 4.04s of wall clock, crossing the same-source join at 10s at real time with no stall. Rendering frame by frame across the join cost 1167ms mean / 1245ms max per snapshot versus 1090ms / 1134ms for a matched no-transition control, so the crossfade adds about 78ms (7 percent), nowhere near the ~600ms boundary-prefetch stall class. Note these absolute numbers are dominated by `createSnapshot` building a fresh CanvasRenderer per call; the delta is the meaningful figure. `videoCache.getStats()` is not exposed on `window`, so the secondary-sink count itself is unit-proven only (`video-cache/__tests__/transition-sinks.test.ts`, in the 2690).
+- [x] Dip to black at the bg -> clipA join: measured mean RGB 5.4s `[28,66,164]` (the plate), 5.75s `[14,33,82]`, 6.00s `[0,0,0]` exactly, 6.25s `[62,64,63]`, 6.6s `[123,129,127]`.
+- [x] Dip to white at the clipA -> green join: 13.6s `[128,123,138]`, 13.875s `[190,191,190]`, 14.00s `[255,255,255]` exactly, 14.125s `[137,201,164]`, 14.4s `[20,147,73]`.
+- [x] Fade at the timeline head: 0.0s `[0,0,0]`, 0.125s `[7,17,41]`, 0.25s `[14,33,82]`, 0.4s `[22,53,131]`, 0.6s `[28,66,164]`. Fade at the tail: 19.6s `[17,117,59]` down to 19.98s `[1,10,5]`.
+- [x] Right-clicking an applied badge removes the transition; one Ctrl+Z restores it with the same id, kind and duration.
+- [x] Changing the duration from 0.5s to 0.25s via a preset chip is ONE undo back to 0.5s.
+- [x] Destroying a join (dragging the right clip off the main track) removes both that join's transition and the tail fade that lived on it; one undo restores both.
+- [x] Splitting INSIDE the right neighbour keeps the transition on the ORIGINAL join and does not duplicate it onto the new join. Undo restores.
+- [x] Full page reload: all four transitions persist with their kinds and durations intact (no serializer work needed, as designed).
+- [x] Export parity. Exported the 20s timeline: 20.016s duration, 640x360, 30fps, h264 + aac. Extracted frames match the preview at every transition: 0.00s `[4,0,5]`, 0.25s `[14,32,88]`, 5.40s `[28,64,161]`, 6.00s `[4,0,5]`, 10.00s `[95,93,93]` (preview `[95,94,98]`), 14.00s `[255,252,255]`, 19.90s `[6,26,17]`.
+
+### B. Adjust effect + filter presets (T19.1) - PASS 9/9
+Measured at 8.0s on a testsrc2 clip, neutral baseline mean RGB `[123,129,126]`.
+- [x] All 9 params render, and setting a param back to 0 returns EXACTLY to `[123,129,126]` every time (checked after each one, 9 for 9).
+- [x] brightness +60 `[164,181,166]`; saturation -100 `[127,127,127]` (perfectly grey); temperature +80 `[125,129,96]` (blue pulled down); tint +80 `[123,98,126]` (green pulled down); highlights -80 `[89,68,102]`; shadows +80 `[141,163,139]`.
+- [x] contrast and sharpen correctly preserve the mean, so they were measured on luminance spread and edge energy instead: contrast +70 raises standard deviation 56.4 -> 66.1 and contrast -70 drops it to 16.9; sharpen 100 raises the Laplacian edge score 1.2 -> 3.2 with the mean unchanged at 126.8.
+- [x] exposure is declared in stops (-3..3) and behaves as `2^stops` inside that range: 0 -> mean 126.8, +2 -> 161.7 with 3.1 percent clipping. Values well outside the declared range saturate, which is correct for the mapping and not reachable from the UI slider.
+- [x] All 8 preset chips (Vivid, Film, Mono, Warm, Cool, Fade, Punch, Golden) render DISTINCT live thumbnails, and the thumbnails are right: Mono `[150,150,150]`, Warm `[162,149,134]`, Cool `[136,150,152]`, Golden `[158,135,124]`, Fade `[160,157,156]`, all with different pixel hashes.
+- [x] Clicking each chip applies a distinct sensible bundle and changes the rendered frame accordingly: Fade drops luminance spread to 36.7, Punch and Vivid raise it past 65, Mono reaches 73.9.
+- [x] Keyframing brightness from -90 to +90 across the clip animates linearly: 6.5s mean 59.6, 7.25s 89.8, 8.0s 126.8, 8.75s 164.6, 9.5s 200.2. Note effect-param keyframe times are element-relative and clamp to the element duration.
+- [x] Export spot-check: exported frames at 7.0s and 9.0s measured `[82,76,86]` and `[163,178,166]` against preview `[83,76,86]` and `[164,181,166]`.
+
+### C. Chroma key + eyedropper (T19.2) - PASS 9/8, R19-5 minor
+Fixture: the `0x00B140` green plate with a moving inset on V2 over the `0x2040A0` plate on V1.
+- [x] The Cutout section sits at the very top of the per-clip Effects tab, above the effect list, and is visible in the empty state.
+- [x] "Enable chroma key" adds a real `chroma-key` effect instance (`keyColor:#00FF00, similarity:20, smoothness:10, spill:50, shadow:0`) whose params then appear in the list below. No parallel state.
+- [x] With the default pure-green key the `0x00B140` plate is correctly NOT removed, which is exactly what the eyedropper is for.
+- [x] Pick color arms the overlay ("Picking... (Esc)"), and the magnifier follows the cursor: moving to 15%/20% put it at `left 113.5px top 89.6px` and moving to 70%/70% put it at `465.5px, 269.6px`, visibility flipping from hidden to visible, with the live hex readout showing `#00993E`.
+- [x] It samples the DECODED source, not the composited canvas: the readout is `#00993E`, the decoded value of the plate, and picking succeeded on a clip whose composited pixels were already keyed out.
+- [x] Clicking the green plate sets `keyColor` to `#00993E` and the plate keys out COMPLETELY. All four corners went from the green plate to `[28,66,164]`, the V1 background, with the inset still drawn at the centre. Picking mode exits on the click.
+- [x] Escape cancels a second attempt: the overlay disarms and the key colour is untouched (R19-5 is that it also deselects the clip).
+- [x] Clicking outside the clip refuses gracefully. With the clip scaled to 40 percent, a click in the far corner left `keyColor` unchanged, stayed armed for a retry, and raised the toast "That point is outside the clip / Click inside the clip's own picture to pick a colour."
+- [x] Params tune correctly, measured as the percentage of green-dominant pixels left and the percentage showing the background through: similarity 0 -> 3.0 percent green residue / 85.7 percent background, 5 -> 3.0 / 85.8, 20 -> 0.1 / 89.2, 60 -> 0.0 / 95.5, 100 -> 0.0 / 100 (keys everything, as expected at the extreme). smoothness 0 -> 2.4 percent residue, 80 -> 0.0. spill and shadow both move the frame measurably on this fixture.
+- [x] Export spot-check for the alpha convention: the keyed-out region measured `[14,32,80]` in the export against `[14,33,82]` in the preview, a 1 to 2 level h264 quantisation difference. The edges are NOT darker in the export, so no premultiplied-alpha regression.
+
+### D. New effects and the unhidden Effects tab (T19.4b) - functionality PASS, tiles REOPEN
+- [x] The left-rail Effects tab is visible (`HIDDEN_ASSET_TABS` is `["hyperframes"]`) and lists 7 effects: Blur, Adjust, Chroma key, Pixelate, Vignette, Glow, Noise.
+- [ ] The tiles are not distinct. See R19-3.
+- [x] Each of the four new effects applies to a clip and scrubs visibly, measured at 12.0s against a `mean 126.8 / std 56.3 / edge 1.3` baseline: pixelate blockSize 1 -> identity, 20 -> edge 0.7, 60 -> edge 0.5; vignette amount 0 -> identity, 60 -> mean 77.1, 100 -> mean 44.0; glow intensity 0 -> identity, 60 -> mean 129.4 std 59.4, 100 -> mean 130.4 std 60.1; noise amount 0 -> identity, 50 -> edge 5.5, 100 -> edge 8.8.
+- [x] Every one of them is a true identity at its neutral default, which matters because that is the early-out path.
+- [x] Noise visibly reseeds frame to frame. On a SOLID-colour clip so the source contributes nothing: two frames 1/30s apart differ by mean absolute 2.99 per channel with noise off and 51.51 with noise on, and noise on versus off at the same instant differs by 33.42.
+- [x] Noise is also deterministic per timestamp: rendering the SAME frame twice with noise on gives a difference of exactly 0.00, which is what export reproducibility needs.
+- [x] Keyframing a new effect's param animates: vignette amount 0 to 100 across the clip measured mean 124.3, 104.6, 84.9, 65.2, 45.6 at evenly spaced times, perfectly linear.
+
+### E. Mask expansion and opacity, the long-parked canary (T19.0) - PASS on the local 0.3.0 build
+`MASK_EXPANSION_OPACITY_RENDERED` is now `true` and both fields genuinely render. Measured on an ellipse mask over a solid `[28,66,164]` plate, as the percentage of the frame still lit and the colour of a corner pixel that is outside the ellipse.
+- [x] Expansion grows and shrinks the boundary: 0 -> 25.8 percent visible, +40 -> 36.1, +80 -> 50.3, -40 -> 19.0, and back to 0 -> exactly 25.8 again.
+- [x] Opacity partially reveals the masked-out area: at 1.0 the corner is `[0,0,0]` (fully hidden), at 0.5 it is `[14,33,82]` which is exactly half of the source `[28,66,164]`, at 0.0 it is `[28,66,164]` (mask has no effect), and back at 1.0 the frame returns to 25.8 percent visible.
+- [x] It survives export: the same half-strength masked region measured `[14,32,80]` in the exported file.
+- [ ] None of this is reachable on a clean checkout. See R19-1.
+
+### F. Sounds tab (T19.4a) - PASS 9/8
+- [x] "Sounds" is visible in the left rail (`HIDDEN_ASSET_TABS` no longer contains it).
+- [x] All three sub-tabs switch correctly under a real pointer sequence.
+- [x] Sound effects shows the friendly no-key state, not an empty grid and not a crash: "Sound search needs a free Freesound API key - add FREESOUND_API_KEY to apps/web/.env.local (get one at freesound.org/apiv2/apply)". `apps/web/.env.local` holds the `your_api_key_here` placeholder, which the route's `isFreesoundApiKeyConfigured` correctly rejects, and `GET /api/sounds/search` returns `{"error":"freesound_not_configured", ...}` with an empty result set rather than an error status.
+- [x] Music & SFX degrades gracefully on its own terms: "Music & SFX search uses HeyGen's audio library. Add your HeyGen API key in Settings > AI > Integrations to enable it."
+- [x] Saved shows its proper empty state: "No saved sounds / Click the heart icon on any sound to save it here". Hearting a sound needs a live result, so that is Dan-owed.
+- [x] Both audited bugs are fixed at source. `commercial_only` is now parsed as `z.enum(["true","false"]).transform(v => v !== "false")` with the `z.coerce.boolean()` trap documented in a comment, the filter is applied in `applyEffectsFilters`, and the client sends it on the INITIAL fetch (observed as `?page_size=50&sort=downloads&commercial_only=true`). `loadMore` now builds a `URLSearchParams` instead of the positional-args call that used to throw.
+- [ ] Live search, live load-more and the commercial filter's effect on real results need a real Freesound key. Dan-owed.
+- Note: R19-6 above, the failure mode that hides all of this when the rate limiter is unreachable.
+
+### G. Caption looks (T19.4a) - functionality PASS, bleed REOPEN
+- [x] All 12 looks are present in the Captions tab: Plain, Neon Accent, Pill Karaoke, Weight Shift, Editorial, Highlight, and the 6 new ones Outline Pop, Drop Shadow, Broadcast, Minimal Mono, Highlighter, Cinema Bar. The grid count stays even.
+- [x] Every look applies to all elements named "Caption N" on an overlay text track and raises the "Styled N captions as X" toast.
+- [x] The 6 new looks each fully set what they control. Outline Pop writes `strokeWidth=6` and zeroes `shadowBlur`/`shadowOffsetY`; Broadcast writes its own background, letterSpacing, stroke and shadow set.
+- [x] One undo reverts a whole restyle across all 4 captions at once (they go into one `BatchCommand`), confirmed by reading all four elements after the undo.
+- [ ] Param bleed between the old and new looks, in both directions. See R19-4.
+
+### H. Stickers prune sanity (T19.4a) - PASS
+- [x] The app builds, typechecks and runs (all four gates green), so nothing the prune removed was load-bearing for startup.
+- [x] There is NO stickers tab. The left rail is exactly Media, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings, and no UI anywhere offers a sticker browser.
+- [x] The resolver spine survives as planned: `resolver.ts`, `registry.ts`, `sticker-id.ts`, `intrinsic-size.ts`, `types.ts` and `providers/{index,flags,countries-data}.ts` remain; `index.ts` browse/search (317 lines), `categories.ts`, `providers/logos.ts`, `providers/shapes.ts` and most of `providers/flags.ts` are gone.
+- [x] Legacy projects with sticker elements still resolve: `stickers/__tests__/legacy-project-resolve.test.ts` is present and green inside the 2690.
+
+### Dan-owed (Round 19)
+1. **npm publish `opencut-wasm` 0.3.0 and repin both `package.json` files** (needs his npm auth; checklist in `rust/wasm/README.md`). Until then nothing in T19.0/T19.1/T19.2/T19.4b renders on a clean checkout. See R19-1 for the interim workaround and for why the documented local-link loop does not currently substitute for this.
+2. **A real Freesound API key** (free, 2 minutes) to unlock live sound search, load-more and the commercial filter.
+3. **An Anthropic key** for the live prompt-to-edit assistant (carried from R17).
+4. **The crop-keyframes decision** (carried; defer still recommended).
+5. **Feel checks on real footage**: whether a 0.5s dissolve reads right on his own cuts, whether the 8 Adjust presets flatter real skin tones, and whether a chroma key on a real green screen holds up at the hair line. All of the above was measured on synthetic ffmpeg fixtures.
+
+## Round 17 (Assistant) + T21.1 onboarding verification (2026-08-01, T17.5, branch `feat/director-eval`, tip `6702b2dc`)
+
+Closing verifier pass for T17.1-T17.4 (the prompt-to-edit Assistant) and T21.1 (the /get-started onboarding page). Freeze frame was deliberately OUT of scope (a parallel worktree agent owns that fix). Environment: dev server on localhost:3000 via the launch entry; screenshots were unavailable the whole session (Browser pane not compositing), so every interactive check ran on DOM reads and DOM-dispatched clicks/keys, and synthetic pointer clicks from the computer tool silently no-oped (documented below so the next verifier does not chase it). Fresh-profile state was simulated by clearing the pane's localStorage and deleting its two leftover "New project" IndexedDB test projects from earlier agent sessions (no real footage or Dan data involved).
+
+### Gates
+- G1 `bun test` apps/web: 2446 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+
+### A. Assistant chat UI, mock mode (T17.3) - PASS
+Mock driven via `localStorage["vibecut-assistant-mock"] = "1"` (the documented dev-only flag in real-assistant-service.ts).
+- [x] Assistant tab present in the right dock (Properties | Director | Assistant); empty state shows the three example chips; a chip pre-fills the composer (send is a deliberate second click, so the user can edit first).
+- [x] "Cut the silence at the start": streamed reply bubble, then "Applied: 3 changes" chip with an Undo link; Undo invokes the service undo handle (a no-op in mock mode by design; in real mode it drives the command-stack undo, guarded by canUndo so a stale/double click cannot corrupt the stack).
+- [x] "speed up the second clip": proposed-ops confirmation card with per-op icons + timecodes ("Set clip "B-roll 2" to 2x speed", "Shift everything after it 3s earlier"), composer disabled while held; Confirm morphs the card in place into "Applied: 2 changes" and re-enables the composer; Cancel path is client-side (unit-covered, reducer tests).
+- [x] "cut the boring part": clarifying question grounded in a concrete range ("The section from 2:10-2:45 has three long pauses...") with two quick-reply chips; clicking one sends it as the next user turn and consumes the chips.
+- [x] Unmatched prompt: plain capability reply, no edit event.
+- [x] "do something impossible": friendly error bubble ("I can't do that here - it's outside what this editor can change..."), composer re-enables, no raw error anywhere.
+- [x] Ctrl+/ from the Properties tab switches the dock to Assistant and focuses the composer (verified via panel CSS class + activeElement).
+- [x] Escape blurs the composer back to the global shortcut scope (activeElement returns to body).
+- [x] Preview-toolbar mini-prompt: typing + Enter opens the Assistant tab with the text pre-filled and focused, and clears the mini input.
+- [x] History survives reload: all five bubble kinds (user, text, applied chip, clarifying, error) restored per project after a full page reload, and again after switching mock -> real mode.
+
+### B. Real mode, no Anthropic key (graceful block) - PASS
+- [x] With the mock flag OFF and no key anywhere, sending a prompt POSTs `/api/assistant/edit`, the route answers 400, and the chat shows exactly "The assistant needs an Anthropic key - add one in Settings > AI." as a friendly bubble; no hang, no raw error, composer re-enables. This is the expected state of this environment: apps/web/.env.local has no ANTHROPIC_API_KEY, and Dan's own provider mode is Claude Code, which this route does not support yet (it needs Anthropic tool calling). The live-LLM turn is therefore Dan-owed (see below), and per the round mission this block is a key-availability fact, not a defect.
+
+### C. Executor spot evidence (no live LLM) - PASS
+- [x] Per-file unit counts (all green, part of the 2446): executor 43, turn-service 28, tools 67, context 20, snapshot 15, op-summary 13, director-dock-coexistence 5, template-catalog 2, template-defaults 12, adapter (real-assistant-service) 13, reducer 28, history-store 9.
+- [x] Code read: a whole turn's commands execute as ONE `new BatchCommand(plan.commands)` (features/assistant/executor.ts, applyAssistantTurn) so one Ctrl+Z reverts a whole prompt.
+- [x] Code read: confirmation thresholds are strict greater-than - MAX_UNCONFIRMED_OPS = 3 and MAX_UNCONFIRMED_DESTRUCTIVE_SEC = 10, `needsConfirmation` fires on `> 3` mutating ops or `> 10` removed seconds (features/assistant/turn-service.ts).
+
+### D. Onboarding page, T21.1 - PASS
+- [x] Fresh profile: /projects shows the dismissible first-run banner ("New here? See how VibeCut works - 2 minutes.") linking to /get-started; Dismiss writes `vibecut-onboarding-dismissed=1` and the banner stays gone across reload. Banner is correctly absent once a project exists.
+- [x] /get-started renders the intro, the 3-step flow (Import / Let AI cut it / Polish and export), and the three tool cards (AI Cut, Edit by transcript, Auto captions) with plain-language explainers.
+- [x] Pre-project: all three "Try it" buttons AND both "Add your key in Settings" buttons disabled with title "Create a project first", plus the inline hint line. Post-project: all enabled, hint gone.
+- [x] Provider cards reflect real state: Anthropic "Connected. Using your Claude subscription on this device (the Claude Code app), no key needed." (claude-code mode wording); Groq "Connected. This VibeCut deployment already has a shared Groq key..." (the env's server GROQ_API_KEY, detected via the probe). Get-a-key links only render when not connected.
+- [x] Privacy note present ("Bring your own keys, they stay on this device").
+- [x] "Add your key in Settings" deep link: routes to `/editor/<id>?open=ai-settings`, lands on the assets panel's Settings tab on the AI sub-view (Claude subscription card + transcription provider options visible), and the `?open` param is stripped from the URL.
+- [x] "Get started" header link on /projects; the "Set up AI" indicator links to /get-started#connect-ai, shows the amber warning dot only when setup is needed, and its tooltip flips to "AI is set up" when both providers resolve connected (as they do in this env).
+- [x] Unit evidence: 26 pass across get-started provider-status/page tests, first-run-banner.test.ts, deep-link-open.test.ts.
+- Note (not a defect): on the very first editor visit, the "Welcome to VibeCut" changelog dialog opens on top of the deep-linked Settings panel; after closing it the panel is there. Worth a glance from Dan for feel.
+
+### E. Template polish, T17.4 - PASS on unit + code evidence
+The mock path never inserts a real template (its `applied` events are scripted), and the real insert path needs a live LLM turn, so this feature is scored on unit + code evidence per the round mission.
+- [x] template-defaults.test.ts: 12 pass. Absent "accent" fields fill from the project-derived accent (color-utils.deriveAccent), absent "color" from the contrast-safe foreground, kinetic-title's font defaults to Anton, enum position fields take the template's declared preset; LLM-supplied variables always win; duration falls back to each template's defaultDurationSec in validateInsertTiming.
+- [x] Show-me mode: `showInsertedElement` seeks the playhead to the earliest inserted element's start and pauses, only for additive-only turns (executor.ts; dedicated describe blocks in executor.test.ts); the inserted element ends up selected because every insert command already returns a `CommandResult.selection`.
+- [ ] The actual LOOK of a prompted template on real footage (designed, not default-stamped) is Dan-owed with the live-LLM run below.
+
+### G6 scores (round 17 + T21.1)
+| Feature | Functionality | Quality | Verdict |
+|---|---|---|---|
+| T17.1+T17.2 assistant engine (schema, executor, turn service) | 9 | 9 | DONE (live-LLM turn Dan-owed, not a defect) |
+| T17.3 chat UI + real-service integration | 9 | 9 | DONE |
+| T17.4 template polish | 9 | 9 | DONE (visual look Dan-owed) |
+| T21.1 onboarding page | 9 | 9 | DONE |
+
+### Left for Dan (round 17 + T21.1)
+- [ ] THE live-LLM Assistant run (the one check nobody else can do): give the assistant route an Anthropic key, then run the conversation script for real ("delete the second clip", "extend the intro clip by 2 seconds", "add a lower third saying Hello at 0:30", "speed up clip 3 to 2x", one ambiguous ask, one impossible ask) and confirm each lands on the timeline with one Ctrl+Z per turn. Two ways to provide the key: (1) paste a device key in the editor under Settings > AI (Anthropic API key field, stays in this browser), or (2) add `ANTHROPIC_API_KEY=sk-ant-...` to `apps/web/.env.local` and restart the dev server. Your current Claude Code subscription mode does NOT cover this route yet; that gap is tracked for T21.2 provider work, not as a round-17 defect.
+- [ ] Judge a prompted motion template's look on real footage (T17.4's whole point): "add a title that says ..." should come out palette-matched and sensibly placed, with the playhead parked on it for inspection.
+- [ ] The Welcome-dialog-over-Settings first-visit layering (note in section D): fine per this pass, but see if it feels wrong on first run.
+- Carried from round 18 (unchanged, still owed): real-footage freeze/reverse/crop feel, export playback with sound, speed-curve pitch listen, freeze-desync re-listen once the parallel fix lands.
+
+## Round 18: parity quick wins + VibeCut home verification (2026-08-01, T18.6, branch `feat/director-eval`, tip `70cb9fb5`)
+
+Closing verifier pass for T18.1-T18.5. Media: 38.07s clip, 88-word System.Speech TTS muxed over an ffmpeg testsrc video, staged temporarily at `apps/web/public/verify-r18.mp4` for the sandboxed preview pane and deleted afterward (git status confirmed clean). Screenshots were unavailable the whole session (Browser pane not compositing), so verification ran on DOM reads, editor state via `window.__vibeEditor`, and export file readback (ffprobe, frame extraction, volumedetect). Two environment shims, both page-side only, no code edits: requestAnimationFrame mapped to setTimeout (the hidden tab never fires rAF, which otherwise stalls the media-import toast pipeline), and the exported blobs were POSTed to a temporary localhost receiver to reach ffprobe on disk.
+
+### Gates
+- G1 `bun test` apps/web: 2405 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+
+### A. Freeze frame (T18.1) - PASS with one real defect
+- [x] Playhead at 2s, toolbar button: clip splits at exactly 2s, a real captured 1280x720 PNG still (ephemeral asset, kept out of the media bin) is inserted for 3s, downstream video clips shift right 3s, ONE undo reverts the whole batch.
+- [x] Context-menu "Freeze frame" on the clip does the identical thing.
+- [x] Playhead off-clip: toast "Move the playhead over a video clip to freeze it".
+- [x] Export proof: frames at t=3.5 and t=4.9 are the identical source-2.0s frame (testsrc digit "2", frozen gradient bar); video resumes correctly after the still.
+- [x] **NEW BUG (reopens T18.1): the linked separated audio does NOT shift.** The video track ripples +3s but the audio clip stays at its old position, so every word after the freeze plays 3s early relative to picture, and no desync badge appears. Confirmed in live state (audio track untouched by the freeze batch) and audible/measurable in the exported file. `buildFreezeFrameBatch` ripples only the target track.
+- [x] FIXED and RE-VERIFIED 2026-08-01 (fix `3e81c839`, re-rate at tip `f00edced`): the linked audio now splits at the freeze point in the same SplitElementsCommand call and its right half rides the ripple. Live state after a 2s freeze on a 38.07s clip: the audio right half starts at tick 600000, exactly where the video right half starts, both share one fresh linkId, trims mirror the video. A second freeze at 10s split the already-split halves again correctly (both lanes at 1560000). No desync badge rendered. An unlinked voice clip on its own audio lane spanning the freeze point did not move. One undo reverted each freeze to a byte-identical timeline snapshot (JSON compare), including removal of the ephemeral still asset from the bin. Gates at re-rate: apps/web `bun test` 2452 pass 0 fail, `tsc --noEmit` 0 errors.
+
+### B. Reverse (T18.1 + T18.2 trim fix) - PASS
+- [x] Speed tab Reverse toggle sets retime.reversed on the clip AND its linked audio; Speed field shows 1.00 and disables; the tooltip "Audio is muted while reversed" is on the Reverse row (code-confirmed; hover not reproducible in the automated pane).
+- [x] Audio silent while reversed: resolveEffectiveAudioGain returns 0 for reversed clips, the single choke point shared by preview and export, unit-tested.
+- [x] Split a reversed clip at 2s: frame-continuous at the cut (left half source window [36.07, 38.07] played backward, right half [0, 36.07]; both meet at source 36.07).
+- [x] Reversed trim directions, live-dragged on the real handles: LEFT edge drag ate the source TAIL (trimEnd 2 to 3, trimStart untouched), RIGHT edge drag ate the source HEAD (trimStart 0 to 1, trimEnd untouched). This is the T18.2 fix working in the UI, not just in compute-resize tests.
+- [x] Export proof of backward playback: timeline 14.0 shows source frame 19, timeline 16.0 shows source frame 17 (testsrc counter read from extracted frames).
+- [ ] Backward playback during live SCRUB: preview canvas renders black in this non-compositing pane (WebGL draw loop tied to visibility), so scrubbing visuals are Dan-owed; the export proof above covers the sampling math end to end.
+
+### C. Crop (T18.1) - PASS except keyframability
+- [x] Transform tab Crop group (Left/Top/Right/Bottom %): typing Left 10 commits crop.left 0.1 live, one undo clears it.
+- [x] Crop button toggles handle mode: exactly 4 edge-handle buttons plus a dim-mask SVG overlay appear (the transform handles are replaced); Escape exits the mode (overlay gone).
+- [x] The drag pipeline (previewElementCrop live layer, commitPreview as ONE undoable command, undo restores) verified through the same manager calls the handles drive; the raw on-canvas pointer gesture could not be exercised because screenToCanvas depends on the degenerate hidden-pane viewport (Dan-owed feel check).
+- [x] Old project loads uncropped: the 8-clip round-16 project opens with crop null on every element, no errors; also unit-tested (crop-serialization).
+- [ ] **Spec gap (reopens T18.1 alongside the freeze bug): crop is not keyframable.** The UI says "Crop applies before Motion's scale/position. Not keyframable yet." while the roadmap line says keyframable. Implement or have Dan descope.
+- Re-rate note 2026-08-01: crop keyframability was a pre-authorized v1 descope per the T18.1 task brief (ship non-keyframable and say so). It is Dan's open decision, not a defect; the re-rate scores against the descoped spec. The line above stays open for Dan.
+
+### D. Speed curves (T18.2) - PASS
+- [x] All 7 chips present. Each preset applied a distinct curve and retimed the 38.07s clip correctly: Montage 30.45s (6 pts), Hero 45.32s (5 pts), Bullet 15.60s (5 pts), Jump Cut 14.45s (8 pts), Flash In 27.69s (3 pts), Flash Out 27.69s (3 pts), Custom 38.07s editable 3-point flat curve.
+- [x] Graph point drag: middle point pulled up committed rate 2.73 at t=0.5, duration 38.07s to 20.43s, one undo step. The graph tracks the pointer live; the timeline duration commits on release.
+- [x] Reverse while a curve is active clears the curve (retime becomes rate 1 reversed, duration back to 38.07s).
+- [x] Audio follows: the linked audio element carries the identical curve points in state; the renderer-sync unit test (curve-renderer-sync.test.ts) pins preview-vs-export sampling at inflections, per-frame, monotonic.
+- [x] Export proof: the Bullet-curved tail shows source frame 26 at timeline 25 (2s into the segment), i.e. compression is real in the file.
+- [ ] Audible pitch behavior (curve + Change pitch toggle) needs speakers: Dan-owed.
+
+### E. Audio fade handles (T18.3) - PASS
+- [x] Top-left corner handle drag inward committed fadeInSec 2.0 (matches drag px at current zoom); top-right set fadeOutSec; the fade curve overlay renders on the clip.
+- [x] One undo per drag: undo reverted only the fade-out drag (fade-in stayed 2), redo restored it.
+- [x] Audio tab numeric fields mirror the handles (read 2/2 after the drags); typing a value commits on blur.
+- [x] Cannot cross: fade-in 40 on the 38.07s clip clamped to the full duration and forced fade-out to 0 (the edited side has priority, resolveFadePair).
+- [x] Trim shorter than fades: effective values clamp at read time via clampFadesToDuration (raw params kept, unit-tested), verified with a live 4s trim.
+- [x] Export proof: first exported second measures mean -33.0 dB vs -20.6 dB steady state, the 5s fade-in ramp is in the mixdown. (The tail window was silent source audio, so the fade-out ramp was not measurable on this clip.)
+
+### F. Export options (T18.4) - PASS
+- [x] Popover: resolution picker Project size (1280x720) / 2160p / 1080p / 720p with a live "Output: WxH" label (3840x2160 and 1280x720 both observed).
+- [x] Bitrate labels scale with resolution: 2/6/12/24 Mbps at 720p, 18/54/108/216 Mbps at 2160p (9x pixels, 9x bitrate).
+- [x] "Also export captions (.srt)" appears when a transcript exists AND still appears after deleting words (lineage-aware follow-up).
+- [x] Export at 1080p (non-native) with SRT checked: exactly two files (New project.mp4 1920x1080@30 h264+aac, duration 38.06s; New project.srt). The SRT reflects the cut: the deleted word is gone, its segment shrank instead of dropping (round-16 fix holds through the export dialog), and the surviving second segment's timecode matches where that word's audio actually plays on the edited timeline.
+- [x] The composite project (freeze + reverse + curve + fades) exported with all four effects verifiably present in the file (see sections A/B/D/E export-proof lines).
+- Note: the in-browser Whisper transcript of this synthetic TTS clip was a 4-word hallucination ("Thank you. Thank you."), enough to exercise the SRT flow but not a rich remap test; the heavy SRT remap coverage remains round 16's live pass plus unit tests.
+
+### G. VibeCut home + wordmark (T18.5) - PASS
+- [x] /projects shows the VibeCut wordmark (own SVG, /logos/vibecut/wordmark.svg, weight-900 text, invert/dark:invert-0 theme handling) and the hero tiles: New project / AI Cut / Edit by transcript / Auto captions, each with a description.
+- [x] Deep links: AI Cut opened the newest project with the Director dock active ("AI CUT: review and cut the whole video" panel) and the URL stripped to /editor/id; Edit by transcript opened with the Transcript panel showing; both live-verified.
+- [x] Favicon files replaced in the T18.5 commit (b3b1f6eb); /favicon.ico serves the new 827-byte mark.
+- [x] Footer says VibeCut (component text: "VibeCut", current-year copyright).
+- [ ] Disabled-tiles-with-hint on a profile with zero projects: not reproducible live without deleting Dan's existing projects; deriveHeroTileStates and the deep-link param logic are unit-tested (hero-tiles.test.ts, deep-link-open.test.ts) in the passing suite. Dan-owed only if he cares to see the empty state.
+- [ ] Dark/light visual readability: markup handles both themes but no screenshot was possible this session.
+
+### G6 scores (round 18)
+| Feature | Functionality | Quality | Verdict |
+|---|---|---|---|
+| T18.1 freeze + reverse + crop | 9 | 9 | DONE, re-rated 2026-08-01 after fix `3e81c839` (tip `f00edced`); crop keyframes stay Dan's call |
+| T18.2 speed curves | 9 | 9 | DONE |
+| T18.3 audio fade handles | 9 | 9 | DONE |
+| T18.4 export options | 9 | 9 | DONE |
+| T18.5 VibeCut home + wordmark | 9 | 9 | DONE |
+
+Re-rate 2026-08-01: T18.1 re-scored 9/9 at tip `f00edced` after the freeze linked-audio fix (`3e81c839`); evidence on the section A and C lines above. The round 18 G6 gate is now met.
+
+### Left for Dan (round 18)
+- [ ] Real-footage freeze/reverse/crop FEEL: scrub over a freeze still, drag the 4 crop handles on canvas, reverse a real clip and listen for the mute, judge the cut texture at a reversed split. The automated pane cannot composite the preview canvas, so all visual-feel checks here are yours.
+- [ ] Export playback on your machine: play an exported MP4 end to end with sound (this pass verified the file contents via ffprobe and extracted frames, not a human viewing).
+- [ ] Speed curve pitch: play a curved clip with Change pitch on and off and confirm the audio chipmunks vs stays natural.
+- [ ] Hero tiles empty state: on a fresh profile (no projects) the three AI tiles should render disabled with a hint until the first project exists.
+- [ ] The freeze-frame desync fix, once landed, needs a re-listen on real footage (dialog before AND after a freeze staying in lip sync).
+
+## Round 16: transcript x Director hands-on verification (2026-08-01, T16.4, branch `feat/director-eval`)
+
+Agent hands-on pass on real speech media (no Dan's own footage was available in this environment). Media: since no bundled speech fixture exists in the repo and synthetic tone audio (testsrc + sine) produces no real transcript, speech was generated with Windows PowerShell `System.Speech` TTS and muxed over an ffmpeg `testsrc` video (11s clip, 31-word sentence). Both browser panes used: the sandboxed preview pane could not reach any localhost port other than the declared dev server, so file injection into the Assets panel had to go through the Chrome extension bridge (`claude-in-chrome`) with the video staged at `apps/web/public/verify-speech-test.mp4` temporarily and deleted afterward (confirmed clean via `git status`).
+
+### Gates
+- G1 `bun test` apps/web: 1942 pass, 0 fail (target 1942+). PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail (target 210+). PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- G5 `diag-join-the-group.ts`: ASSERTIONS PASSED (R1a, R1b, R2, R3, band). PASS.
+- G5 `diag-join-verdicts.ts`: ran entirely against the existing `.eval-cache` (0 new cache files written, so no live LLM budget spent). Result: recall 9/16 (56%), precision 9/10 (90%), 19 word-bearing fragments graded. This is BELOW the round 16 target (recall >= 11/14, precision 11/11) and the fragment totals themselves differ from the target's implied baseline (19 graded here vs 14 CUT fragments expected), which per the "compare cache keys before crying regression" lesson from a prior round means this number may not be comparable to whatever run produced the 11/14 target. Not re-run live to avoid burning API budget; **flag for the next agent to re-run with a fresh cache-key check before treating this as a confirmed regression.**
+
+### Panel UX (T16.3) - verified
+- [x] Header shows "Transcribing..." during the run, then "Transcript ready - N words" (31 words for the test clip).
+- [x] Click a word seeks the playhead there; active-word highlight tracked the playhead during playback.
+- [x] Search highlights matching words.
+- [x] Follow-playback toggle visually ON by default (blue/active icon).
+- [ ] Auto-scroll during playback and hover-suspends-follow-then-resumes-after-2s: NOT exercised. The 11s test transcript never overflowed the panel, so there was nothing to scroll or hover-suspend. Needs a longer clip or a real project to verify.
+- [ ] Toggle state survives reload: not exercised (would need a page reload mid-session, skipped to conserve time budget).
+
+### Manual delete, pipe, restore (T16.2) - verified
+- [x] Selecting 3+ words and deleting shows a thin RED PIPE (not strikethrough) between the surviving words; timeline range removed on all tracks (V1 and A1 both split); one Ctrl+Z undoes the whole delete.
+- [x] Clicking the pipe opens a window: "Manual delete", timecodes (e.g. `00:01.3 - 00:02.3`), removed words shown struck through.
+- [x] Selecting a subset of words inside the window updates the button to "Restore N words"; clicking it re-inserts exactly that range as one undoable command, downstream clips and linked audio shift right by the restored duration, the pipe stays, and reopening the pipe shows only the still-cut words.
+- [x] Ctrl+Z on a restore reverts it (words go back into the pipe).
+- [x] "Restore all" clears the pipe, merges the clip fragments back into one, transcript reads continuous; Ctrl+Z brings the pipe back.
+- [x] A second delete immediately after a prior delete/restore/undo cycle applies with no "Timeline changed - refresh" block.
+- [ ] External edit the lineage cannot explain (check 8): trimmed the last fragment's right edge directly on the timeline. The transcript panel did NOT show a refresh-needed flag afterward, staying on "Transcript ready - N words". This may mean the lineage's source-map math correctly explained the trim (a good sign, better than full re-transcribe-on-any-change), or it may mean the stale-detection is not wired for simple trims. Recorded as-is per the check's own "expected, record it" framing; not treated as a bug without further product direction on what SHOULD count as unexplainable.
+
+### NEW BUG - export drops any segment containing a cut (T16.2/T16.3 point 4)
+Repro (minimal, confirmed twice):
+1. Transcribe a clip with 2+ sentences/segments.
+2. Select 3+ words INSIDE the first segment/sentence (leaving other words in that segment) and delete them via the transcript panel.
+3. Export as .srt (or .txt or .csv) from the panel's export menu (the three-dot menu next to Copy).
+4. The exported file is missing the ENTIRE first segment/sentence, even though the live transcript panel correctly shows that segment with only the cut words removed. Only segments that were never touched by a cut appear in the export.
+5. Confirmed NOT history-dependent: reproduces on a single fresh delete with no prior restore/undo. Confirmed the baseline (fully unedited transcript) exports correctly, and a full restore back to the unedited state also exports correctly, so the bug is specific to a segment that currently has an ACTIVE (unrestored) cut somewhere inside it.
+
+This blocks G6 quality scores for T16.2 and T16.3 below 9 (see roadmap doc statuses) and needs a code fix, not just a docs note.
+
+**FIXED (G6 reopen) - live re-verify pending.** Root cause: `viewFromRecord` in
+`features/transcription/lineage.ts` decided a segment's fate by testing the SEGMENT's own
+midpoint against the merged removal spans, so a cut in the middle of a sentence contained
+that sentence's midpoint and dropped the whole segment. The panel hid it (it renders the
+view's `words`); the Export menu did not (txt/srt/csv all serialize `segments`). Segments
+are now derived from the same word journal the words are: a segment survives while any of
+its words do, its text and bounds shrink to the surviving extent, and only a segment with
+nothing left is dropped. Word-less captures shrink from the journal ranges directly.
+`components/assets-view.tsx` now also adopts the view's segments unconditionally, so a
+cut-everything timeline can no longer export a stale transcript. Covered by
+`features/transcription/__tests__/lineage-export-segments.test.ts`.
+Re-verify with the repro above, plus: delete inside the LAST segment; delete a span
+crossing a segment boundary; delete a whole segment (it should vanish from the export);
+restore all and confirm the export matches the pre-delete file exactly.
+
+### Director provenance (check 9) - partially verified, live LLM available
+A working LLM provider WAS configured in this environment (Settings > AI > "Claude subscription (Claude Code)"), so this was NOT blocked.
+- [x] AI CUT > AI Director ran end to end on the test clip and proposed one op (a trailing dead-air cut, "0:09.5-0:10.1 - Trailing silence (0.8s) after the last speech").
+- [x] Apply worked ("Director's cut - applied", "Applied 1 of 1"); timeline shortened by the cut duration.
+- [x] Director dock stayed fully functional (interactive, no lock-up, no infinite spinner) after a manual transcript delete performed AFTER the Director apply, confirming the 2026-07-28 dock-resync fix still holds for this newer edit path.
+- [ ] Director-sourced red pipe with category + reason: NOT exercised. The only op the LLM proposed on this synthetic clean-TTS clip was a trailing dead-air cut with no words on either side of it, so no pipe was expected or produced (a pipe requires words removed BETWEEN two surviving words). The merged unit tests are the only coverage for the Director-provenance pipe rendering path; a real multi-take/filler-laden clip is needed to exercise this live. Recommend re-running this check against one of Dan's real recordings in a future round.
+
+### Exports (check D)
+- [x] Export menu offers .txt (with an "Include timecodes" sub-toggle), .srt, .csv; all three download correctly from the panel.
+- [ ] FAILS after a cut is active: see the new bug above. Exports on the unedited transcript, and exports after a full delete+restore-all cycle (net zero cuts), are both correct; only a transcript with an active, unrestored cut somewhere in a segment triggers the bug.
+
+### Left for Dan / a future round (superseded by the G6 re-rate below; kept for history)
+- [ ] Groq live key check: a Groq key IS stored in Settings, but running transcription with "Groq (cloud)" selected FAILED ("Transcript failed to load - Transcription was interrupted") with no clear "check your key" messaging and no fallback to in-browser. Could not tell whether the stored key is genuinely invalid/expired in this environment or whether this is a real regression in the cloud path; needs Dan to test with a known-good key.
+- [ ] Director live run on REAL footage with fillers/retakes/repeats, to actually exercise a Director-sourced pipe with category + reason (this pass only had a clean TTS clip, which gave the Director nothing to cut except trailing silence).
+- [ ] Auto-scroll and hover-suspend-follow on a transcript long enough to overflow the panel.
+- [ ] The `diag-join-verdicts.ts` recall/precision gate: re-run with a fresh cache-key comparison before treating the 9/16, 9/10 result as a confirmed regression from round 16's lineage/journal changes.
+
+## Round 16 G6 RE-RATE (2026-08-01, T16.4 re-rate, tip `97a61dfa`)
+
+Second agent pass after the round-16 G6 fix cycle, re-checking the three defects that kept
+T16.1-T16.3 below 9. New media this pass: a 41s clip, 6 sentences / 113 words (long enough
+to overflow the transcript panel), Windows `System.Speech` TTS muxed over an ffmpeg
+`testsrc` video via the `claude-in-chrome` bridge (file staged at
+`apps/web/public/verify-speech-test.mp4`, deleted after, confirmed clean via `git status`).
+
+### Gates
+- G1 `bun test` apps/web: 1976 pass, 0 fail. PASS (up from 1942, matches the 14 new export
+  tests + 20 new Groq-fallback tests from the fix cycle).
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- G5 diag gate: NOT re-run, per the fix-cycle's own cross-commit forensics. The prior
+  round's recall 9/16 / precision 9/10 reading was diagnosed as an instrumentation
+  artifact, not a real regression: running `diag-join-verdicts.ts` at the pre-round-15
+  commit and at tip, with the `.eval-cache` held fixed, produced byte-identical diag
+  output. The re-baselined reproducible number is recall 12/16, precision 12/13, 19
+  fragments. This defect is CLOSED; do not re-run it again without a fresh cache-key
+  reason to suspect drift.
+
+### EXPORT BUG RE-VERIFIED - PASS
+Repro from the original bug report, plus the two additional scenarios the fix note asked
+for. All four confirmed on the live app, not just unit tests:
+- [x] Baseline (unedited) export of .txt/.srt/.csv: all 6 sentences present, correct
+  timecodes, SRT numbered 1-6.
+- [x] Delete 5 words inside the FIRST sentence ("the Round 16 Re -Verification" cut from
+  "Welcome to **the Round 16 Re -Verification** Pass for the video editor."): re-exported
+  .txt/.srt/.csv all show "Welcome to Pass for the video editor." as segment 1, all 6
+  segments still present, timecodes shifted down by the cut duration, SRT still numbered
+  1-6 from the top.
+- [x] Delete a 4-word span CROSSING the segment 1/segment 2 boundary ("video editor. This
+  clip"): both segments shrink independently and stay as two separate rows ("Welcome to
+  Pass for the" / "contains several full sentences...") - neither segment is dropped, they
+  are not merged into one row.
+- [x] Restore-all after both deletes: exported .txt/.srt/.csv are BYTE-IDENTICAL to the
+  baseline files (diffed with `diff`, zero output on all three).
+
+This closes the "export drops any segment containing a cut" bug from the previous pass.
+Root-cause fix (`viewFromRecord` deriving segments from the word journal instead of a
+segment-midpoint test) holds under a boundary-crossing case the original repro did not
+cover.
+
+### GROQ ERROR PATH RE-VERIFIED - PASS
+Settings > AI > Transcribe on "Groq (cloud)" with an invalid key (`gsk_invalid_test`)
+stored, then a genuinely fresh transcription attempt (cache cleared, no prior "current
+value" for the timeline's audio hash). Confirmed at the network level, not just the UI:
+intercepted the `fetch` call and captured `POST /api/transcribe -> 401,
+{"error":"Groq key rejected - check your key."}` in 200ms, immediately followed by a normal
+local-Whisper transcription that completed to "Transcript ready - 113 words" - a plain
+transcript, not an error screen, not a hang. The UI's own progress line for this moment
+(`${cloudError.message} - using local transcription...`, i.e. "Groq key rejected - check
+your key. - using local transcription...") is broadcast by the same code path that produced
+the captured network response; it was too fast (well under a second) to catch as DOM text
+in this automated pass, but the network proof plus the visible fallback-then-success outcome
+together confirm the fix works end to end. Cloud transcription was disabled and the test key
+cleared afterward (Settings back to "In browser", key field empty).
+
+### AUTO-SCROLL FOLLOW - PARTIALLY VERIFIED
+- [x] Overflow condition reproduced: with the 113-word / 41s clip and the transcript panel
+  at its normal size the content did not overflow (551px content in a 551px box), so the
+  panel was zoomed via `document.documentElement.style.fontSize` (a genuine
+  content-vs-viewport ratio change, not a code edit) until the transcript genuinely
+  overflowed its scroll container (337px content in a 309px box).
+- [x] Follow-playback toggle is ON by default.
+- [x] Toggle state survives reload: turned OFF, reloaded the page, confirmed it read back
+  OFF from `localStorage`; turned back ON to restore the default.
+- [ ] Live scroll-tracks-playback, hover-suspends-follow, and manual-scroll-suspends-then-
+  resumes-after-2s were NOT exercised this pass. The automated browser tab used
+  (`claude-in-chrome`) reported `document.hidden: true` / `document.hasFocus(): false` for
+  the whole session, which throttles the app's requestAnimationFrame-driven playback timer
+  in Chrome; clicking Play advanced the displayed time by under one frame and then froze,
+  reproducibly, across multiple fresh page loads. This reads as a tab-visibility artifact of
+  the automation environment, not a product defect: the pure suspend/resume timing logic
+  (`isFollowSuspended` in `features/transcription/follow-playback-suspend.ts`) is unit-tested
+  (5 cases: idle, pointer-over, within-window, resumes-after-window, exact-boundary) and
+  passing in the G1 gate above. Per the round's own "unit-proven code paths don't block the
+  score" allowance, this is recorded as a Dan-owed live check, not a new defect.
+
+### SPOT-CHECK - PASS
+One manual delete (5 words) -> red pipe appears -> restore 2 of the 5 words -> pipe stays
+(only the remaining 3 cut words shown on reopen) -> restore all -> pipe gone (0 pipes in the
+DOM) -> undo chain: three `command.undo()` calls trace exactly back through
+113 -> 110 -> 108 -> 113 words, i.e. restore-all undone, then restore-2 undone, then the
+original delete undone, landing back on the clean 113-word baseline with zero pipes. (Undo
+was driven through the editor's own `command.undo()` API rather than the Ctrl+Z key
+combination - keyboard-shortcut delivery was unreliable through the automation bridge in
+this session; the underlying undo/redo history mechanism itself is what was being tested and
+it reversed every step exactly.)
+
+### Left for Dan / a future round (current)
+- [x] **Real Groq key success path - DONE 2026-08-01.** A real server-side `GROQ_API_KEY`
+  (`apps/web/.env.local`) was live-verified end to end with a fresh dev server (port 3000,
+  confirmed via server logs showing `.env.local` loaded) on branch `feat/director-eval` at
+  `92d7c8c7`. Settings > AI showed "Server key detected, cloud transcription available
+  without a key", the in-app Groq key field was confirmed empty (value length 0, never typed
+  into), and the backend was set to "Groq (cloud)". A fresh 26.7s / 67-word TTS+ffmpeg clip
+  (System.Speech over an ffmpeg testsrc video, never seen by the transcript cache before) was
+  imported and transcribed. Evidence: `POST /api/transcribe` returned **200** and the
+  transcript panel read "Transcript ready - 67 words" with properly punctuated,
+  word-timestamped text within seconds of opening the Transcript tab (no visible
+  loading wait), consistent with the cloud round-trip described in the Settings copy.
+  Spot-check integration on the same clip: clicking a word seeked the playhead
+  (00:00:00:24, matching that word's position); selecting 2 words and deleting them
+  showed the expected red pipe; exporting as .srt produced correct sequential timecodes
+  and the segment containing the cut correctly shrank instead of dropping (the round-16
+  export-segment-drop fix still holds). A temp clip was staged at
+  `apps/web/public/verify-groq-fresh.mp4` for the browser-extension import bridge and
+  deleted afterward (confirmed clean via `git status`). No retries needed; the call
+  succeeded on the first attempt.
+- [ ] Director-sourced red pipe with category + reason on REAL footage with fillers,
+  retakes, or repeats (this pass's synthetic clean-TTS clip gives the Director nothing to cut
+  except trailing silence, so no pipe is ever produced to inspect).
+- [ ] Live scroll-follow-during-playback, hover-suspend, and manual-scroll-suspend on a real,
+  focused browser tab (see AUTO-SCROLL FOLLOW above - blocked on tab visibility in this
+  automated pass, not unit-test coverage).
+
 ## Round 12: join cleanup, final read, and run feedback (2026-07-19, commits `51bc9bd9`..`1338ba04`, branch `feat/director-eval`)
 Built from your 2026-07-19 verdict ("the AI doesn't consider what the final product looks like when it cuts", the stranded "so...", the sliver clips). Three parts. What to check on a real run:
 - [ ] **No more sliver clips.** Tiny wordless fragments between two cuts are now swallowed automatically. Your timeline should not show those 1-2 frame orphans at cut joins any more.
@@ -30,10 +511,10 @@ Your four asks from the finished-video run. AGENT-VERIFIED live in-app (2026-07-
 
 ## Ripple-drag live preview (2026-07-17, commit `3d93a3d9`, branch `feat/director-eval`)
 Closes round 8's known v1 limitation: with **Ripple editing ON**, a right-handle trim now shifts the downstream clips ON SCREEN during the drag instead of them jumping at mouseup. Numerically verified in-app (3 butted clips; preview shifts tracked the drag both directions, a drag back to the origin restored exact base positions, and the commit matched the final preview to the tick). Confirm the FEEL on real footage:
-- [ ] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps.
-- [ ] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump.
-- [ ] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began.
-- [ ] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit; that path is the per-track heuristic, not this preview).
+- [x] **Shrink:** ripple ON, drag a clip's right handle LEFT → everything downstream (all tracks) slides left WITH the drag, keeping spacing; release → nothing jumps. VERIFIED 2026-08-01 (round 15, T15.5): live `previewOverlay` showed the downstream clip + linked audio shifted mid-drag to match a -500px (~10s) shrink, before mouseup.
+- [x] **Extend:** drag the right handle RIGHT → downstream slides right during the drag; release → no jump. VERIFIED 2026-08-01 (round 15, T15.5): same mechanism confirmed via the magnet path (T15.2): a real +400px (~8s) extend drag pushed the downstream clip + its linked audio by the exact delta, live during the drag.
+- [x] **Bail-out:** mid-drag, come back to where you started → everything sits exactly where it began. VERIFIED 2026-08-01 (round 15, T15.5): dragged a shrink back to the exact starting clientX before mouseup; preview and the final commit both matched the pre-drag baseline byte-for-byte (trimEnd/duration/startTime all reverted exactly).
+- [x] **Unchanged paths:** ripple OFF right-trim, and any LEFT-handle trim, behave exactly as before (left-handle ripple still applies only at commit; that path is the per-track heuristic, not this preview). VERIFIED 2026-08-01 (round 15, T15.5): with magnet OFF and ripple OFF, a right-trim extend correctly walled at the neighbor's edge with no ripple; left-handle trims (magnet ON) pin the clip's start and clamp only at the true source limit, not the neighbor.
 
 ## Audio-separation regression on multi/selected bin drags (2026-06-24, commit `ab77bcd5`)
 Fixed: the multi-asset drag path stopped separating source audio (regression from `6ac45541`), so dragging selected clips combined audio into the video. Now separates in-batch onto a shared audio track. Drag-drop is DOM-bound → live-verify in-app:
@@ -149,7 +630,7 @@ Run **AI CUT → AI Director** on a talking-head clip with speech, then check th
 - [ ] **Doubled "now" (~5:20 in ROUGH_CUT)** — re-run AI Director; the duplicate should now be offered as a cut (gap loosened to ~1s + breath/filler step-over + chunk-seam repair).
 
 ## Timeline / editor fixes
-- [ ] **Import → V1** — importing a video lands on V1 (main), not V2, even when a V2 overlay track exists.
+- [x] **Import → V1**: importing a video lands on V1 (main), not V2, even when a V2 overlay track exists. VERIFIED 2026-08-01 (round 15, T15.5): with a V2-equivalent overlay track already present, a bin-drag drop of a second video still landed on the sole main track (ripple-inserted, no new video track created) with its audio auto-separated onto the existing audio lane.
 - [ ] **Multi-select move (forward tool)** — press **A**, then press-drag an unselected clip: it selects everything forward AND moves the group in one motion.
 - [ ] **Shift + ← / →** nudges 15 frames (configurable in Settings → Hotkeys); timeline view follows the playhead; clicking the track area doesn't move the playhead (ruler does).
 

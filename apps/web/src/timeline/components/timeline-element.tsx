@@ -5,6 +5,7 @@ import { useEditor } from "@/editor/use-editor";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
+import { AudioFadeHandles } from "./audio-fade-handles";
 import { useElementPreview } from "@/timeline/hooks/use-element-preview";
 import {
 	useKeyframeDrag,
@@ -61,7 +62,7 @@ import {
 	invokeAction,
 } from "@/actions";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
-import { resolveStickerId } from "@/stickers";
+import { resolveStickerId } from "@/stickers/resolver";
 import { buildGraphicPreviewUrl } from "@/graphics";
 import Image from "next/image";
 import {
@@ -80,6 +81,7 @@ import {
 	EraserIcon,
 	Link02Icon,
 	Unlink02Icon,
+	SnowIcon,
 } from "@hugeicons/core-free-icons";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
 import { runHyperframesOnClip } from "@/features/ai-generate/run-hyperframes-scoped";
@@ -87,7 +89,9 @@ import {
 	removeAllKeyframes,
 	removeAttributes,
 } from "@/features/editing/remove-attributes";
+import { freezeFrameAtPlayhead } from "@/features/editing/freeze-frame";
 import { HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM } from "@/features/editing/surface-flags";
+import { toast } from "sonner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
 import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
@@ -103,6 +107,8 @@ import {
 	getExpansionHeight,
 	type ExpandedRow,
 } from "./expanded-layout";
+import { TIMELINE_LAYERS } from "./layers";
+import type { ClampReason, ResizeSide } from "@/timeline/group-resize";
 
 const KEYFRAME_INDICATOR_MIN_WIDTH_PX = 40;
 const ELEMENT_RING_WIDTH_PX = 1.5;
@@ -223,6 +229,20 @@ export function getDisplayShortcut({ action }: { action: TAction }) {
 	});
 }
 
+/**
+ * CapCut-style "why did the edge stop" decoration for THIS element, resolved
+ * per-clip by `resolveResizeClampVisual` in `timeline-track.tsx` from the
+ * drag-level `ResizeClampFeedback`. `"dragged"` flashes this element's OWN
+ * edge (it is the clip being dragged, clamped by its own source/min-duration
+ * limit); `"neighbor"` highlights this element's near edge (it is the clip
+ * blocking a neighbor-clamped drag on an ADJACENT clip). `side` is always the
+ * edge of THIS element to decorate, already resolved to the right side for
+ * either case.
+ */
+export type ResizeClampVisual =
+	| { kind: "dragged"; side: ResizeSide; reason: ClampReason }
+	| { kind: "neighbor"; side: ResizeSide };
+
 interface TimelineElementProps {
 	element: TimelineElementType;
 	track: TimelineTrack;
@@ -251,6 +271,10 @@ interface TimelineElementProps {
 	 */
 	drag: ElementDragSlice | null;
 	isDropTarget?: boolean;
+	/** `null` is a stable reference (same perf invariant as `drag` above): only
+	 * the dragged clip and, at most, one blocked neighbor ever receive a
+	 * non-null value during a resize. */
+	resizeClamp?: ResizeClampVisual | null;
 }
 
 function TimelineElementImpl({
@@ -263,6 +287,7 @@ function TimelineElementImpl({
 	onElementClick,
 	drag,
 	isDropTarget = false,
+	resizeClamp = null,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
 	const editor = useEditor();
@@ -434,6 +459,7 @@ function TimelineElementImpl({
 							onResizeStart={onResizeStart}
 							isDropTarget={isDropTarget}
 							isNarrowClip={elementWidth < NARROW_CLIP_WIDTH_PX}
+							resizeClamp={resizeClamp}
 						/>
 						<AvSyncBadge element={element} />
 						{isSelected && (
@@ -461,6 +487,28 @@ function TimelineElementImpl({
 					>
 						Split
 					</ActionMenuItem>
+					{element.type === "video" && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={SnowIcon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								void freezeFrameAtPlayhead({
+									editor,
+									elementRef: { trackId: track.id, elementId: element.id },
+								}).then((result) => {
+									if (result.status === "no-target") {
+										toast.error(
+											"Move the playhead over this clip to freeze it",
+										);
+									} else if (result.status === "capture-failed") {
+										toast.error("Couldn't capture that frame");
+									}
+								});
+							}}
+						>
+							Freeze frame
+						</ContextMenuItem>
+					)}
 					<CopyMenuItem />
 					{selectedElements.length === 1 && (
 						<ActionMenuItem
@@ -670,6 +718,7 @@ function ElementInner({
 	onResizeStart,
 	isDropTarget = false,
 	isNarrowClip = false,
+	resizeClamp = null,
 }: {
 	element: TimelineElementType;
 	displayElement?: TimelineElementType;
@@ -694,6 +743,7 @@ function ElementInner({
 	}) => void;
 	isDropTarget?: boolean;
 	isNarrowClip?: boolean;
+	resizeClamp?: ResizeClampVisual | null;
 }) {
 	const visibleElement = displayElement ?? element;
 	const isReducedOpacity =
@@ -780,6 +830,52 @@ function ElementInner({
 						isNarrowClip={isNarrowClip}
 					/>
 				</>
+			)}
+
+			{/*
+			  Not gated behind isSelected: the "neighbor" case decorates the clip
+			  BLOCKING an adjacent selected clip's drag, which is very often not
+			  itself selected.
+			*/}
+			{resizeClamp && <ResizeClampIndicator visual={resizeClamp} />}
+		</div>
+	);
+}
+
+const CLAMP_REASON_LABEL: Record<ClampReason, string> = {
+	"source-limit": "No more footage",
+	"min-duration": "Shortest length",
+	neighbor: "At the edge",
+};
+
+/**
+ * The CapCut-style "why did the edge stop" overlay for one clip: a pulsing
+ * bar on the relevant edge, plus (for the dragged clip only) a small tooltip
+ * label near the handle. Purely visual, `pointer-events-none` throughout so
+ * it never intercepts the drag it is reacting to.
+ */
+function ResizeClampIndicator({ visual }: { visual: ResizeClampVisual }) {
+	const isLeft = visual.side === "left";
+	const isNeighbor = visual.kind === "neighbor";
+
+	return (
+		<div
+			className={cn(
+				"pointer-events-none absolute top-0 bottom-0 w-1 animate-pulse",
+				isNeighbor ? "bg-destructive/70" : "bg-primary/80",
+				isLeft ? "left-0" : "right-0",
+			)}
+			style={{ zIndex: TIMELINE_LAYERS.resizeClamp }}
+		>
+			{!isNeighbor && (
+				<div
+					className={cn(
+						"bg-popover text-popover-foreground border-border/50 absolute -top-6 rounded-sm border px-1.5 py-0.5 text-[10px] whitespace-nowrap shadow-sm",
+						isLeft ? "left-0" : "right-0",
+					)}
+				>
+					{CLAMP_REASON_LABEL[visual.reason]}
+				</div>
 			)}
 		</div>
 	);
@@ -1207,6 +1303,11 @@ function AudioElementContent({
 						color={TIMELINE_TRACK_THEME.audio.waveformColor}
 					/>
 					<AudioVolumeLine element={element} trackId={trackId} />
+					<AudioFadeHandles
+						element={element}
+						trackId={trackId}
+						pixelsPerSecond={pixelsPerSecond}
+					/>
 				</div>
 			</div>
 		);
@@ -1266,6 +1367,18 @@ function TiledMediaContent({
 		(s) => s.videoWaveformsEnabled,
 	);
 	const mediaAssets = useEditor((e) => e.media.getAssets());
+	// T18.3: gain samples (folds fade + volume) for the embedded-audio waveform
+	// below. Computed unconditionally (Rules of Hooks) - undefined for images.
+	const gainSamples = useMemo(
+		() =>
+			element.type === "video"
+				? buildWaveformGainSamples({
+						element,
+						count: WAVEFORM_GAIN_SAMPLE_COUNT,
+					})
+				: undefined,
+		[element],
+	);
 
 	const mediaAsset = mediaAssets.find((asset) => asset.id === element.mediaId);
 	const imageUrl =
@@ -1314,11 +1427,17 @@ function TiledMediaContent({
 						})}
 						sourceFile={mediaAsset?.file}
 						audioUrl={mediaAsset?.url}
+						gainSamples={gainSamples}
 						pixelsPerSecond={pixelsPerSecond}
 						clipDurationSec={videoElement.duration / TICKS_PER_SECOND}
 						retime={videoElement.retime}
 						sourceStartSec={videoElement.trimStart / TICKS_PER_SECOND}
 						color={TIMELINE_TRACK_THEME.audio.waveformColor}
+					/>
+					<AudioFadeHandles
+						element={videoElement}
+						trackId={track.id}
+						pixelsPerSecond={pixelsPerSecond}
 					/>
 				</div>
 			)}

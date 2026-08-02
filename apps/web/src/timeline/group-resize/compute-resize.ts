@@ -1,3 +1,4 @@
+import type { FrameRate } from "opencut-wasm";
 import {
 	getSourceSpanAtClipTime,
 	getTimelineDurationForSourceSpan,
@@ -23,6 +24,24 @@ import type {
 	GroupResizeUpdate,
 	ResizeSide,
 } from "./types";
+
+/** One frame's `MediaTime` duration at the given project fps. Shared by
+ * `computeLinkedResize` (the min-duration floor/ceiling) and by
+ * `clamp-reason.ts` (which needs the identical value to classify a clamp the
+ * same way this file computes it). */
+export function getMinDurationForFps(fps: FrameRate): MediaTime {
+	return mediaTime({
+		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
+	});
+}
+
+/**
+ * The floor for a left-side drag whose positional bounds have been lifted
+ * (magnet pins the start) on an element with no source limit at all - an image
+ * or a text clip, which can grow forever. An hour of ticks is far beyond any
+ * real drag, so it reads as "unbounded" without needing a nullable minimum.
+ */
+const UNBOUNDED_LEFT_DELTA = mediaTime({ ticks: -3600 * TICKS_PER_SECOND });
 
 /**
  * Resize a SINGLE clip (the grabbed one), clamped solely by that clip's own
@@ -60,9 +79,7 @@ export function computeLinkedResize({
 	fps,
 	rippleTrim,
 }: ComputeLinkedResizeArgs): GroupResizeResult {
-	const minDuration = mediaTime({
-		ticks: Math.round((TICKS_PER_SECOND * fps.denominator) / fps.numerator),
-	});
+	const minDuration = getMinDurationForFps(fps);
 	const membersMinimumDeltaTime = members.reduce<MediaTime>(
 		(minimum, member) =>
 			maxMediaTime({
@@ -82,7 +99,7 @@ export function computeLinkedResize({
 					b: rippleTrim.shrinkFloorDelta,
 				})
 			: membersMinimumDeltaTime;
-	const maximumDeltaTime = members.reduce<MediaTime | null>(
+	const membersMaximumDeltaTime = members.reduce<MediaTime | null>(
 		(maximum, member) => {
 			const memberMaximum = getMaximumAllowedDeltaTime({
 				member,
@@ -95,6 +112,17 @@ export function computeLinkedResize({
 		},
 		null,
 	);
+	// Magnet shrink ceiling: a LEFT-handle magnet trim pins the member's start,
+	// so the gap it closes downstream is driven by a POSITIVE delta. Same
+	// straddler headroom as the right-handle floor above, just the other sign.
+	const magnetCeiling =
+		side === "left" ? (rippleTrim?.shrinkCeilingDelta ?? null) : null;
+	const maximumDeltaTime =
+		magnetCeiling === null
+			? membersMaximumDeltaTime
+			: membersMaximumDeltaTime === null
+				? magnetCeiling
+				: minMediaTime({ a: membersMaximumDeltaTime, b: magnetCeiling });
 
 	const clampedDeltaTime =
 		maximumDeltaTime === null
@@ -140,6 +168,56 @@ export function computeLinkedResize({
 	};
 }
 
+/**
+ * T18.2 (T18.1 follow-up): which trim field a timeline-side resize consumes.
+ * Forward playback reads the trimmed span front-to-back, so trimming the
+ * timeline HEAD (`side: "left"`) advances into the source from its own head
+ * (`trimStart` grows) and trimming the timeline TAIL (`side: "right"`) chops
+ * from the source's own tail (`trimEnd` grows) - the pre-T18.2 behavior,
+ * unchanged for every non-reversed clip.
+ *
+ * A REVERSED clip reads the span back-to-front (see retime/resolve.ts): its
+ * timeline HEAD (clipTime 0) samples the LAST instant of the visible span,
+ * and its timeline TAIL samples the FIRST. So trimming the timeline head of
+ * a reversed clip removes frames that were reading near the source's TAIL -
+ * `trimEnd` should grow, not `trimStart` - and trimming the timeline tail
+ * removes frames reading near the source's HEAD, growing `trimStart`
+ * instead. This is exactly the mirror `computeSplitTrimBoundaries` already
+ * applies for a reversed split; this is the same swap for a resize/trim
+ * drag (verified in group-resize/__tests__/compute-resize.test.ts "reversed
+ * trim").
+ */
+function getReversedAwareTrimSide({
+	member,
+	side,
+}: {
+	member: GroupResizeMember;
+	side: ResizeSide;
+}): "trimStart" | "trimEnd" {
+	const reversed = member.retime?.reversed === true;
+	if (reversed) {
+		return side === "left" ? "trimEnd" : "trimStart";
+	}
+	return side === "left" ? "trimStart" : "trimEnd";
+}
+
+/**
+ * The same head/tail swap as `getReversedAwareTrimSide`, expressed as the
+ * two trim VALUES rather than a field name - `getResizeBoundBreakdown` needs
+ * to plug the right one into its span arithmetic for both the left and
+ * right branch, not just decide which field a patch writes to.
+ */
+function getReversedAwareTrimFields({
+	member,
+}: {
+	member: GroupResizeMember;
+}): { headField: MediaTime; tailField: MediaTime } {
+	const reversed = member.retime?.reversed === true;
+	return reversed
+		? { headField: member.trimEnd, tailField: member.trimStart }
+		: { headField: member.trimStart, tailField: member.trimEnd };
+}
+
 function buildResizeUpdate({
 	member,
 	side,
@@ -153,32 +231,55 @@ function buildResizeUpdate({
 		member,
 		clipDelta: deltaTime,
 	});
+	const trimSide = getReversedAwareTrimSide({ member, side });
 
 	if (side === "left") {
+		const trimStart =
+			trimSide === "trimStart"
+				? maxMediaTime({
+						a: ZERO_MEDIA_TIME,
+						b: addMediaTime({ a: member.trimStart, b: sourceDelta }),
+					})
+				: member.trimStart;
+		const trimEnd =
+			trimSide === "trimEnd"
+				? maxMediaTime({
+						a: ZERO_MEDIA_TIME,
+						b: addMediaTime({ a: member.trimEnd, b: sourceDelta }),
+					})
+				: member.trimEnd;
 		return {
 			trackId: member.trackId,
 			elementId: member.elementId,
-		patch: {
-			trimStart: maxMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: addMediaTime({ a: member.trimStart, b: sourceDelta }),
-			}),
-			trimEnd: member.trimEnd,
-			startTime: addMediaTime({ a: member.startTime, b: deltaTime }),
-			duration: subMediaTime({ a: member.duration, b: deltaTime }),
-		},
+			patch: {
+				trimStart,
+				trimEnd,
+				startTime: addMediaTime({ a: member.startTime, b: deltaTime }),
+				duration: subMediaTime({ a: member.duration, b: deltaTime }),
+			},
 		};
 	}
 
+	const trimStart =
+		trimSide === "trimStart"
+			? maxMediaTime({
+					a: ZERO_MEDIA_TIME,
+					b: subMediaTime({ a: member.trimStart, b: sourceDelta }),
+				})
+			: member.trimStart;
+	const trimEnd =
+		trimSide === "trimEnd"
+			? maxMediaTime({
+					a: ZERO_MEDIA_TIME,
+					b: subMediaTime({ a: member.trimEnd, b: sourceDelta }),
+				})
+			: member.trimEnd;
 	return {
 		trackId: member.trackId,
 		elementId: member.elementId,
 		patch: {
-			trimStart: member.trimStart,
-			trimEnd: maxMediaTime({
-				a: ZERO_MEDIA_TIME,
-				b: subMediaTime({ a: member.trimEnd, b: sourceDelta }),
-			}),
+			trimStart,
+			trimEnd,
 			startTime: member.startTime,
 			duration: addMediaTime({ a: member.duration, b: deltaTime }),
 		},
@@ -194,35 +295,7 @@ function getMinimumAllowedDeltaTime({
 	side: ResizeSide;
 	minDuration: MediaTime;
 }): MediaTime {
-	if (side === "right") {
-		return subMediaTime({ a: minDuration, b: member.duration });
-	}
-
-	const leftNeighborFloor =
-		member.leftNeighborBound !== null
-			? subMediaTime({ a: member.leftNeighborBound, b: member.startTime })
-			: subMediaTime({ a: ZERO_MEDIA_TIME, b: member.startTime });
-	if (member.sourceDuration == null) {
-		return leftNeighborFloor;
-	}
-
-	const maximumSourceExtension = subMediaTime({
-		a: getDurationForVisibleSourceSpan({
-			member,
-			sourceSpan: addMediaTime({
-				a: getVisibleSourceSpanForDuration({
-					member,
-					duration: member.duration,
-				}),
-				b: member.trimStart,
-			}),
-		}),
-		b: member.duration,
-	});
-	return maxMediaTime({
-		a: leftNeighborFloor,
-		b: subMediaTime({ a: ZERO_MEDIA_TIME, b: maximumSourceExtension }),
-	});
+	return getResizeBoundBreakdown({ member, side, minDuration }).minimum;
 }
 
 function getMaximumAllowedDeltaTime({
@@ -234,36 +307,155 @@ function getMaximumAllowedDeltaTime({
 	side: ResizeSide;
 	minDuration: MediaTime;
 }): MediaTime | null {
-	if (side === "left") {
-		return subMediaTime({ a: member.duration, b: minDuration });
+	return getResizeBoundBreakdown({ member, side, minDuration }).maximum;
+}
+
+/** Why a bound is where it is: `clamp-reason.ts` reports this straight to the
+ * UI, so the three values here ARE the three reasons CapCut-style feedback
+ * distinguishes. */
+export type ResizeBoundReason = "source-limit" | "neighbor" | "min-duration";
+
+export interface ResizeBoundBreakdown {
+	minimum: MediaTime;
+	minimumReason: ResizeBoundReason;
+	/** `null` = unbounded (no neighbor, and either no source limit applies -
+	 * images/text - or the source limit doesn't cap this direction). */
+	maximum: MediaTime | null;
+	maximumReason: ResizeBoundReason | null;
+}
+
+/**
+ * The single source of truth for a member's per-side resize bounds, split
+ * into the value AND which constraint produced it. `getMinimumAllowedDeltaTime`
+ * / `getMaximumAllowedDeltaTime` above are thin wrappers over this (so the
+ * clamp math itself is defined exactly once); `clamp-reason.ts` calls this
+ * directly to classify a drag that has run into a bound.
+ *
+ * `member.sourceDurationRequired` (VIDEO/AUDIO elements) distinguishes a real
+ * "no more footage" limit from a data anomaly: a required sourceDuration that
+ * is missing (metadata not loaded yet) is treated as ZERO extra headroom
+ * instead of unbounded, so playback never runs into non-existent source.
+ * Images/text never set this flag, so a missing sourceDuration on them keeps
+ * meaning "genuinely no source limit" (free extension), exactly as before.
+ */
+export function getResizeBoundBreakdown({
+	member,
+	side,
+	minDuration,
+}: {
+	member: GroupResizeMember;
+	side: ResizeSide;
+	minDuration: MediaTime;
+}): ResizeBoundBreakdown {
+	if (side === "right") {
+		const minimum = subMediaTime({ a: minDuration, b: member.duration });
+		const rightNeighborCeiling =
+			member.rightNeighborBound === null
+				? null
+				: subMediaTime({
+						a: member.rightNeighborBound,
+						b: addMediaTime({ a: member.startTime, b: member.duration }),
+					});
+
+		if (member.sourceDuration == null && !member.sourceDurationRequired) {
+			return {
+				minimum,
+				minimumReason: "min-duration",
+				maximum: rightNeighborCeiling,
+				maximumReason: rightNeighborCeiling === null ? null : "neighbor",
+			};
+		}
+
+		const sourceDurationCeiling =
+			member.sourceDuration == null
+				? ZERO_MEDIA_TIME
+				: subMediaTime({
+						a: getDurationForVisibleSourceSpan({
+							member,
+							sourceSpan: subMediaTime({
+								a: getSourceDuration({ member }),
+								// T18.2 (T18.1 follow-up): the right handle grows the
+								// TAIL field (see `getReversedAwareTrimFields`) - which is
+								// unspent source once the HEAD field is subtracted from the
+								// total. Non-reversed head field = trimStart (unchanged);
+								// reversed head field = trimEnd.
+								b: getReversedAwareTrimFields({ member }).headField,
+							}),
+						}),
+						b: member.duration,
+					});
+		if (rightNeighborCeiling === null) {
+			return {
+				minimum,
+				minimumReason: "min-duration",
+				maximum: sourceDurationCeiling,
+				maximumReason: "source-limit",
+			};
+		}
+		return {
+			minimum,
+			minimumReason: "min-duration",
+			maximum: minMediaTime({ a: rightNeighborCeiling, b: sourceDurationCeiling }),
+			maximumReason:
+				rightNeighborCeiling <= sourceDurationCeiling ? "neighbor" : "source-limit",
+		};
 	}
 
-	const rightNeighborCeiling =
-		member.rightNeighborBound === null
-			? null
+	// side === "left"
+	const maximum = subMediaTime({ a: member.duration, b: minDuration });
+	// `null` = no positional floor at all: the magnet pins this member's start,
+	// so the left neighbor and the timeline-zero wall are both irrelevant and
+	// only the source extent can stop the drag.
+	const leftNeighborFloor = member.leftBoundLifted
+		? null
+		: member.leftNeighborBound !== null
+			? subMediaTime({ a: member.leftNeighborBound, b: member.startTime })
+			: subMediaTime({ a: ZERO_MEDIA_TIME, b: member.startTime });
+
+	if (member.sourceDuration == null && !member.sourceDurationRequired) {
+		return {
+			minimum: leftNeighborFloor ?? UNBOUNDED_LEFT_DELTA,
+			minimumReason: leftNeighborFloor === null ? "source-limit" : "neighbor",
+			maximum,
+			maximumReason: "min-duration",
+		};
+	}
+
+	const maximumSourceExtension =
+		member.sourceDuration == null
+			? ZERO_MEDIA_TIME
 			: subMediaTime({
-					a: member.rightNeighborBound,
-					b: addMediaTime({ a: member.startTime, b: member.duration }),
+					a: getDurationForVisibleSourceSpan({
+						member,
+						sourceSpan: addMediaTime({
+							a: getVisibleSourceSpanForDuration({
+								member,
+								duration: member.duration,
+							}),
+							// T18.2 (T18.1 follow-up): the left handle grows the HEAD
+							// field (see `getReversedAwareTrimFields`) - non-reversed
+							// head field = trimStart (unchanged); reversed head field =
+							// trimEnd.
+							b: getReversedAwareTrimFields({ member }).headField,
+						}),
+					}),
+					b: member.duration,
 				});
-	if (member.sourceDuration == null) {
-		return rightNeighborCeiling;
+	const sourceFloor = subMediaTime({ a: ZERO_MEDIA_TIME, b: maximumSourceExtension });
+	if (leftNeighborFloor === null) {
+		return {
+			minimum: sourceFloor,
+			minimumReason: "source-limit",
+			maximum,
+			maximumReason: "min-duration",
+		};
 	}
-
-	const maximumVisibleSourceSpan = subMediaTime({
-		a: getSourceDuration({ member }),
-		b: member.trimStart,
-	});
-	const maximumDuration = getDurationForVisibleSourceSpan({
-		member,
-		sourceSpan: maximumVisibleSourceSpan,
-	});
-	const sourceDurationCeiling = subMediaTime({
-		a: maximumDuration,
-		b: member.duration,
-	});
-	return rightNeighborCeiling === null
-		? sourceDurationCeiling
-		: minMediaTime({ a: rightNeighborCeiling, b: sourceDurationCeiling });
+	return {
+		minimum: maxMediaTime({ a: leftNeighborFloor, b: sourceFloor }),
+		minimumReason: leftNeighborFloor >= sourceFloor ? "neighbor" : "source-limit",
+		maximum,
+		maximumReason: "min-duration",
+	};
 }
 
 function getSourceDeltaForClipDelta({

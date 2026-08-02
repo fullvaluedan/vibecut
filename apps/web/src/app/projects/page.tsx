@@ -16,6 +16,21 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEditor } from "@/editor/use-editor";
 import { useProjectsStore } from "./store";
+import {
+	AI_TOOL_TILE_IDS,
+	deriveHeroTileStates,
+	getMostRecentProject,
+	HERO_TILE_OPEN_PARAM,
+	type HeroTileId,
+} from "./hero-tiles";
+import {
+	markOnboardingDismissed,
+	readOnboardingDismissed,
+	shouldShowFirstRunBanner,
+} from "./first-run-banner";
+import { needsAiSetupWarning } from "../get-started/provider-status";
+import { probeServerGroqKey, useAiSettingsStore } from "@/features/ai-generate/store";
+import { DEFAULT_LOGO_URL } from "@/site/brand";
 import type {
 	TProjectMetadata,
 	TProjectSortKey,
@@ -23,7 +38,7 @@ import type {
 } from "@/project/types";
 import { formatTimecode, mediaTimeToSeconds } from "opencut-wasm";
 import { formatDate } from "@/utils/date";
-import { HugeiconsIcon } from "@hugeicons/react";
+import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -45,6 +60,11 @@ import {
 	Edit03Icon,
 	ArrowDown02Icon,
 	InformationCircleIcon,
+	ScissorIcon,
+	Note01Icon,
+	ClosedCaptionIcon,
+	Cancel01Icon,
+	MagicWand05Icon,
 } from "@hugeicons/core-free-icons";
 import { OcVideoIcon } from "@/components/icons";
 import { Label } from "@/components/ui/label";
@@ -96,6 +116,7 @@ export default function ProjectsPage() {
 	const projectsToDisplay = useEditor((e) =>
 		e.project.getFilteredAndSortedProjects({ searchQuery, sortOption }),
 	);
+	const savedProjects = useEditor((e) => e.project.getSavedProjects());
 
 	useEffect(() => {
 		if (!editor.project.getIsInitialized()) {
@@ -109,6 +130,8 @@ export default function ProjectsPage() {
 			<StoragePersistenceDialog />
 			<ChangelogNotification />
 			<ProjectsHeader />
+			<FirstRunBanner hasProjects={savedProjects.length > 0} />
+			<HeroTiles savedProjects={savedProjects} />
 			<ProjectsToolbar projectIds={projectsToDisplay.map((p) => p.id)} />
 			<main className="mx-auto px-4 pt-2 pb-6 flex flex-col gap-4">
 				{isLoading || !isInitialized ? (
@@ -144,6 +167,24 @@ function ProjectsHeader() {
 		<header className="sticky top-0 z-20 px-8 bg-background flex flex-col gap-2">
 			<div className="flex items-center justify-between h-16 pt-2">
 				<div className="flex items-center gap-5">
+					<Link href="/" className="flex shrink-0 items-center" aria-label="VibeCut home">
+						<Image
+							src={DEFAULT_LOGO_URL}
+							alt="VibeCut"
+							width={220}
+							height={56}
+							className="h-6 w-auto invert dark:invert-0"
+						/>
+					</Link>
+					<div className="hidden items-center gap-4 sm:flex">
+						<Link
+							href="/get-started"
+							className="text-muted-foreground hover:text-foreground text-xs font-medium"
+						>
+							Get started
+						</Link>
+						<SetupAiIndicator />
+					</div>
 					<Breadcrumb>
 						<BreadcrumbList>
 							<BreadcrumbItem>
@@ -189,6 +230,197 @@ function ProjectsHeader() {
 			</div>
 			<SearchBar className="block md:hidden mb-4" />
 		</header>
+	);
+}
+
+/**
+ * T21.1: warns (a small amber dot, not an error) when no transcription-
+ * capable cloud path exists yet - no Groq device key AND no server key.
+ * Local (in-browser) Whisper always works regardless, so this is phrased as
+ * optional but recommended, never blocking. Links to the get-started page's
+ * "Connect your AI" section.
+ */
+function SetupAiIndicator() {
+	const groqApiKey = useAiSettingsStore((s) => s.groqApiKey);
+	const [serverKeyDetected, setServerKeyDetected] = useState(false);
+
+	useEffect(() => {
+		let cancelled = false;
+		probeServerGroqKey().then((hasKey) => {
+			if (!cancelled) setServerKeyDetected(hasKey);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	const needsSetup = needsAiSetupWarning({ groqApiKey, serverKeyDetected });
+
+	return (
+		<Link
+			href="/get-started#connect-ai"
+			className="text-muted-foreground hover:text-foreground relative flex items-center gap-1.5 text-xs font-medium"
+			title={
+				needsSetup
+					? "Cloud transcription is optional but recommended - set up AI"
+					: "AI is set up"
+			}
+		>
+			<HugeiconsIcon icon={MagicWand05Icon} className="size-3.5" />
+			Set up AI
+			{needsSetup && (
+				<span
+					className="bg-amber-500 absolute -top-0.5 -right-2 size-1.5 rounded-full"
+					aria-hidden="true"
+				/>
+			)}
+		</Link>
+	);
+}
+
+/**
+ * T21.1: dismissible banner shown only pre-first-project and only if never
+ * dismissed (see first-run-banner.ts). No auto-redirect - a plain link to
+ * /get-started. Defaults to hidden (dismissed=true) until the localStorage
+ * check runs, avoiding a flash on every load once the user has dismissed it.
+ */
+function FirstRunBanner({ hasProjects }: { hasProjects: boolean }) {
+	const [dismissed, setDismissed] = useState(true);
+
+	useEffect(() => {
+		setDismissed(readOnboardingDismissed());
+	}, []);
+
+	if (!shouldShowFirstRunBanner({ hasProjects, dismissed })) return null;
+
+	const handleDismiss = () => {
+		markOnboardingDismissed();
+		setDismissed(true);
+	};
+
+	return (
+		<div className="mx-8 mt-2 flex items-center justify-between gap-3 rounded-md border bg-accent/30 px-4 py-2.5">
+			<p className="text-sm">
+				New here?{" "}
+				<Link
+					href="/get-started"
+					className="font-medium underline underline-offset-2"
+				>
+					See how VibeCut works
+				</Link>{" "}
+				- 2 minutes.
+			</p>
+			<Button
+				variant="ghost"
+				size="icon"
+				className="size-7 shrink-0"
+				onClick={handleDismiss}
+				aria-label="Dismiss"
+			>
+				<HugeiconsIcon icon={Cancel01Icon} className="size-4" />
+			</Button>
+		</div>
+	);
+}
+
+const HERO_TILE_CONTENT: Record<
+	HeroTileId,
+	{ label: string; description: string; icon: IconSvgElement }
+> = {
+	"new-project": {
+		label: "New project",
+		description: "Start a blank timeline",
+		icon: PlusSignIcon,
+	},
+	"ai-cut": {
+		label: "AI Cut",
+		description: "Director drafts a cut for you",
+		icon: ScissorIcon,
+	},
+	transcript: {
+		label: "Edit by transcript",
+		description: "Cut by editing the words",
+		icon: Note01Icon,
+	},
+	captions: {
+		label: "Auto captions",
+		description: "Generate styled captions",
+		icon: ClosedCaptionIcon,
+	},
+};
+
+/**
+ * T18.5: CapCut-style entry row above the project grid. "New project" always
+ * works; the three AI tiles deep-link the most recently updated project via
+ * `/editor/<id>?open=<panel>` (see `hero-tiles.ts` / `deep-link-open.ts`) and
+ * render disabled with a hint until at least one project exists.
+ */
+function HeroTiles({ savedProjects }: { savedProjects: TProjectMetadata[] }) {
+	const editor = useEditor();
+	const router = useRouter();
+	const tileStates = deriveHeroTileStates({
+		hasProjects: savedProjects.length > 0,
+	});
+
+	const handleCreateProject = async () => {
+		try {
+			const projectId = await editor.project.createNewProject({
+				name: "New project",
+			});
+			router.push(`/editor/${projectId}`);
+		} catch (error) {
+			toast.error("Failed to create project", {
+				description:
+					error instanceof Error ? error.message : "Please try again",
+			});
+		}
+	};
+
+	const openMostRecentProject = (tileId: HeroTileId) => {
+		const mostRecent = getMostRecentProject(savedProjects);
+		if (!mostRecent) return;
+		const openParam = HERO_TILE_OPEN_PARAM[tileId];
+		const query = openParam ? `?open=${openParam}` : "";
+		router.push(`/editor/${mostRecent.id}${query}`);
+	};
+
+	const handleTileClick = (tileId: HeroTileId) => {
+		if (tileId === "new-project") {
+			handleCreateProject();
+			return;
+		}
+		openMostRecentProject(tileId);
+	};
+
+	return (
+		<div className="px-8 pt-2 pb-1">
+			<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+				{tileStates.map((tile) => {
+					const content = HERO_TILE_CONTENT[tile.id];
+					return (
+						<button
+							key={tile.id}
+							type="button"
+							disabled={tile.disabled}
+							title={tile.hint ?? undefined}
+							onClick={() => handleTileClick(tile.id)}
+							className={cn(
+								"flex flex-col items-start gap-2 rounded-md border p-4 text-left transition-colors",
+								tile.disabled
+									? "cursor-not-allowed opacity-50"
+									: "hover:bg-accent hover:border-accent-foreground/20",
+							)}
+						>
+							<HugeiconsIcon icon={content.icon} className="text-primary size-5" />
+							<span className="text-sm font-medium">{content.label}</span>
+							<span className="text-muted-foreground text-xs">
+								{tile.hint ?? content.description}
+							</span>
+						</button>
+					);
+				})}
+			</div>
+		</div>
 	);
 }
 

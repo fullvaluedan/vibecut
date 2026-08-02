@@ -3,7 +3,8 @@
 import { useCallback } from "react";
 import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
-import { TimelineElement } from "./timeline-element";
+import { TimelineElement, type ResizeClampVisual } from "./timeline-element";
+import type { ResizeClampFeedback } from "@/timeline/hooks/use-timeline-resize";
 import {
 	useVisibleClips,
 	type VisibleWindow,
@@ -11,6 +12,7 @@ import {
 import type { TimelineTrack } from "@/timeline";
 import type { TimelineElement as TimelineElementType } from "@/timeline";
 import { TIMELINE_LAYERS } from "./layers";
+import { TransitionJoinLayer } from "./transition-joins";
 import type { ElementDragSlice, ElementDragView } from "@/timeline";
 import { useEditor } from "@/editor/use-editor";
 import { useGapSelectionStore } from "@/timeline/gap-selection-store";
@@ -49,6 +51,31 @@ interface TimelineTrackContentProps {
 	onTrackMouseUp?: (event: React.MouseEvent) => void;
 	shouldIgnoreClick?: () => boolean;
 	targetElementId?: string | null;
+	resizeClampFeedback?: ResizeClampFeedback | null;
+}
+
+/**
+ * Resolves the shared drag-level `ResizeClampFeedback` down to a per-element
+ * decoration: `"dragged"` only for the exact clip being dragged (flash its
+ * own edge), `"neighbor"` only for the exact clip identified as the wall
+ * (highlight its NEAR edge, i.e. the side facing the dragged clip - the
+ * opposite of the drag side). Every other clip gets `null`.
+ */
+function resolveResizeClampVisual({
+	feedback,
+	elementId,
+}: {
+	feedback: ResizeClampFeedback | null | undefined;
+	elementId: string;
+}): ResizeClampVisual | null {
+	if (!feedback) return null;
+	if (feedback.kind === "dragged") {
+		return feedback.elementId === elementId
+			? { kind: "dragged", side: feedback.side, reason: feedback.reason }
+			: null;
+	}
+	if (feedback.neighborElementId !== elementId) return null;
+	return { kind: "neighbor", side: feedback.side === "left" ? "right" : "left" };
 }
 
 export function TimelineTrackContent({
@@ -63,6 +90,7 @@ export function TimelineTrackContent({
 	onTrackMouseUp,
 	shouldIgnoreClick,
 	targetElementId = null,
+	resizeClampFeedback = null,
 }: TimelineTrackContentProps) {
 	const { isElementSelected } = useElementSelection();
 	const editor = useEditor();
@@ -224,6 +252,11 @@ export function TimelineTrackContent({
 
 	const isDragging = dragView.kind === "dragging";
 
+	// T19.3: transitions are a MAIN-TRACK feature (CapCut parity), so only V1
+	// grows the join chip/bracket layer.
+	const isMainTrack =
+		editor.scenes.getActiveSceneOrNull()?.tracks.main.id === track.id;
+
 	// Force-include the active drag target(s) so a clip dragged out of the visible
 	// window stays mounted (unmounting it mid-drag breaks the drag). memberTimeOffsets
 	// is keyed by dragged element id, so it doubles as the `.has(id)` lookup.
@@ -322,9 +355,16 @@ export function TimelineTrackContent({
 								onElementClick={handleClipClick}
 								drag={drag}
 								isDropTarget={element.id === targetElementId}
+								resizeClamp={resolveResizeClampVisual({
+									feedback: resizeClampFeedback,
+									elementId: element.id,
+								})}
 							/>
 						);
 					})
+				)}
+				{isMainTrack && !isDragging && (
+					<TransitionJoinLayer track={track} zoomLevel={zoomLevel} />
 				)}
 			</div>
 		</div>

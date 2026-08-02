@@ -2,7 +2,7 @@ import type { CreateTimelineElement, TimelineElement } from "@/timeline";
 import { isRetimableElement } from "@/timeline";
 import { splitAnimationsAtTime } from "@/animation";
 import { generateUUID } from "@/utils/id";
-import { getSourceSpanAtClipTime } from "@/retime";
+import { computeSplitTrimBoundaries, getSourceSpanAtClipTime } from "@/retime";
 import {
 	addMediaTime,
 	type MediaTime,
@@ -75,6 +75,7 @@ export interface StraddleSplit {
 	headPatch: {
 		id: string;
 		duration: MediaTime;
+		trimStart: MediaTime;
 		trimEnd: MediaTime;
 		animations: TimelineElement["animations"];
 	};
@@ -137,6 +138,20 @@ export function computeStraddleSplit({
 		a: totalSourceSpan,
 		b: headSourceSpan,
 	});
+	// T18.1: head=left/tail=right of the split - a reversed clip reads its
+	// span back-to-front, so head/tail swap which trim boundary is new vs.
+	// inherited (see computeSplitTrimBoundaries doc comment).
+	const {
+		leftTrimStart: headTrimStart,
+		leftTrimEnd: headTrimEnd,
+		rightTrimStart: tailTrimStart,
+	} = computeSplitTrimBoundaries({
+		trimStart: element.trimStart,
+		trimEnd: element.trimEnd,
+		leftSourceSpan: headSourceSpan,
+		rightSourceSpan: tailSourceSpan,
+		retime,
+	});
 	const { leftAnimations, rightAnimations } = splitAnimationsAtTime({
 		animations: element.animations,
 		splitTime: headVisibleDuration,
@@ -147,7 +162,7 @@ export function computeStraddleSplit({
 		...rest,
 		startTime: addMediaTime({ a: insertStart, b: shiftDuration }),
 		duration: tailVisibleDuration,
-		trimStart: addMediaTime({ a: element.trimStart, b: headSourceSpan }),
+		trimStart: tailTrimStart,
 		animations: rightAnimations,
 		// A fresh linkId (or none): never share the straddler's gang with the tail.
 		...(element.linkId !== undefined ? { linkId: generateUUID() } : {}),
@@ -156,7 +171,8 @@ export function computeStraddleSplit({
 		headPatch: {
 			id: element.id,
 			duration: headVisibleDuration,
-			trimEnd: addMediaTime({ a: element.trimEnd, b: tailSourceSpan }),
+			trimStart: headTrimStart,
+			trimEnd: headTrimEnd,
 			animations: leftAnimations,
 		},
 		tail,

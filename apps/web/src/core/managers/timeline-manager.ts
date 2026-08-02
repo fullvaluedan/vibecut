@@ -7,12 +7,18 @@ import type {
 	TimelineTrack,
 	TimelineElement,
 	RetimeConfig,
+	CropRect,
 	ElementRef,
 } from "@/timeline";
 import { calculateTotalDuration } from "@/timeline";
 import { findLinkedPartners } from "@/timeline/link-elements";
 import { TimelineDragSource } from "@/timeline/drag-source";
 import { findTrackInSceneTracks } from "@/timeline/track-element-update";
+import {
+	reconcileSceneTransitions,
+	type TransitionField,
+	type TransitionSpec,
+} from "@/timeline/transitions";
 import { lastFrameMediaTime, type MediaTime, ZERO_MEDIA_TIME } from "@/wasm";
 import {
 	canElementBeHidden,
@@ -61,6 +67,7 @@ import {
 	UpsertEffectParamKeyframeCommand,
 	RemoveEffectParamKeyframeCommand,
 	ToggleSourceAudioSeparationCommand,
+	SetElementTransitionCommand,
 } from "@/commands/timeline";
 import type { InsertElementParams } from "@/commands/timeline/element/insert-element";
 import type {
@@ -203,6 +210,39 @@ export class TimelineManager {
 		});
 	}
 
+	/** T18.1: commit a crop rect (one undo step, mirrors updateElementRetime). */
+	updateElementCrop({
+		trackId,
+		elementId,
+		crop,
+		pushHistory = true,
+	}: {
+		trackId: string;
+		elementId: string;
+		crop: CropRect | undefined;
+		pushHistory?: boolean;
+	}): void {
+		this.updateElements({
+			updates: [{ trackId, elementId, patch: { crop } }],
+			pushHistory,
+		});
+	}
+
+	/** Live preview while dragging a crop handle or editing a Crop field. */
+	previewElementCrop({
+		trackId,
+		elementId,
+		crop,
+	}: {
+		trackId: string;
+		elementId: string;
+		crop: CropRect | undefined;
+	}): void {
+		this.previewElements({
+			updates: [{ trackId, elementId, updates: { crop } }],
+		});
+	}
+
 	moveElements({
 		moves,
 		createTracks,
@@ -321,6 +361,31 @@ export class TimelineManager {
 
 	unlinkElements({ linkId }: { linkId: string }): void {
 		const command = new UnlinkElementsCommand({ linkId });
+		this.editor.command.execute({ command });
+	}
+
+	/**
+	 * T19.3: apply, re-time or remove (spec: null) a boundary transition. One
+	 * undo entry per call, and the reconciler normalises it inside the same
+	 * scope (see SetElementTransitionCommand).
+	 */
+	setElementTransition({
+		trackId,
+		elementId,
+		field,
+		spec,
+	}: {
+		trackId: string;
+		elementId: string;
+		field: TransitionField;
+		spec: TransitionSpec | null;
+	}): void {
+		const command = new SetElementTransitionCommand({
+			trackId,
+			elementId,
+			field,
+			spec,
+		});
 		this.editor.command.execute({ command });
 	}
 
@@ -981,13 +1046,20 @@ export class TimelineManager {
 	updateTracks(newTracks: SceneTracks): void {
 		this.previewOverlay.clear();
 		this.previewTracks = null;
-		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
+		// T19.3: the transition survive/die pass. Same reasoning as the selection
+		// prune below - this is the single track-swap chokepoint, so delete,
+		// move, ripple, magnet, trim and drag-drop all get the rules (a
+		// transition dies with its join, is clamped when a neighbour is trimmed
+		// short, and never survives a hop off the main track) without any of
+		// them knowing transitions exist. Identity-stable when nothing changed.
+		const reconciledTracks = reconcileSceneTransitions({ tracks: newTracks });
+		this.editor.scenes.updateSceneTracks({ tracks: reconciledTracks });
 		// Prune selection refs to the elements that still exist, so a command that
 		// removed or re-minted a selected clip can't leave a stale ref tinting an
 		// empty track row (phantom highlight). Single chokepoint = fixes every
 		// current and future offender at once.
 		this.editor.selection.reconcileWithLiveElements({
-			livePairs: collectLiveElementPairs(newTracks),
+			livePairs: collectLiveElementPairs(reconciledTracks),
 		});
 		this.notify();
 	}

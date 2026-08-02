@@ -16,12 +16,19 @@ import { vadService } from "@/services/vad/service";
 import { concatSpeechSamples, remapBufferTimes, type ConcatSegment } from "./vad-remap";
 import {
 	buildTranscribeHeaders,
+	shouldAttemptCloudTranscription,
 	useAiSettingsStore,
 } from "@/features/ai-generate/store";
 import { DEFAULT_TRANSCRIPTION_SAMPLE_RATE } from "@/transcription/audio";
 import { selectAnalysisModel } from "@/transcription/analysis-model";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { needsWordUpgrade } from "./word-upgrade";
+import { computeAudioHash } from "./audio-hash";
+import {
+	getLineageFastPathTranscript,
+	readTranscriptLineage,
+	resetTranscriptLineage,
+} from "./lineage";
 
 export interface TranscriptSegmentLite {
 	start: number;
@@ -75,42 +82,13 @@ export const useTranscriptStatusStore = create<TranscriptStatusStore>(
 /**
  * Hash of everything that affects the timeline's WORDS: which media plays
  * when, with what trims. Volume/effects/text don't change the transcript.
+ *
+ * The hash itself lives in `audio-hash.ts` (T16.1) so the transcript lineage can
+ * compute it without importing this whole pipeline; this stays the name every
+ * existing caller uses.
  */
 export function computeTimelineAudioHash(editor: EditorCore): string {
-	const tracks = editor.scenes.getActiveScene().tracks;
-	const parts: string[] = [];
-	for (const track of [tracks.main, ...tracks.overlay, ...tracks.audio]) {
-		for (const el of track.elements) {
-			const obj = el as {
-				type: string;
-				mediaId?: string;
-				startTime: number;
-				duration: number;
-				trimStart?: number;
-				trimEnd?: number;
-				isSourceAudioEnabled?: boolean;
-			};
-			if (obj.type !== "video" && obj.type !== "audio") continue;
-			if (obj.type === "video" && obj.isSourceAudioEnabled === false) continue;
-			parts.push(
-				[
-					obj.mediaId ?? "",
-					Math.round(obj.startTime),
-					Math.round(obj.duration),
-					Math.round(obj.trimStart ?? 0),
-					Math.round(obj.trimEnd ?? 0),
-				].join(":"),
-			);
-		}
-	}
-	parts.sort();
-	// djb2 over the joined string — collision-safe enough for a local cache.
-	let hash = 5381;
-	const joined = parts.join("|");
-	for (let i = 0; i < joined.length; i++) {
-		hash = ((hash << 5) + hash + joined.charCodeAt(i)) | 0;
-	}
-	return `${parts.length}-${(hash >>> 0).toString(36)}`;
+	return computeAudioHash({ tracks: editor.scenes.getActiveScene().tracks });
 }
 
 function readCache(): Record<string, CacheEntry> {
@@ -152,6 +130,30 @@ export function getCachedTranscript(
 	editor: EditorCore,
 ): TranscriptSegmentLite[] | null {
 	return getCachedEntry(editor)?.segments ?? null;
+}
+
+/**
+ * The best available transcript for EXPORT, read-only and synchronous (never
+ * triggers a transcription). `getCachedTranscript` is hash-gated: after ANY edit
+ * (a cut, a Director apply) the hash moves, it returns null, and an export path
+ * built on it alone loses the transcript until a full re-transcription - even
+ * though the transcript lineage (T16.1) can already serve the correctly remapped
+ * post-edit segments. Falls back in order:
+ *
+ *   1. the hash-matched cache entry's segments (unchanged timeline)
+ *   2. the lineage view's segments, when the journal fully explains every edit
+ *      since the last real transcription (`readTranscriptLineage` status
+ *      "explained") - these are the same remapped segments the round-16 export
+ *      fix proved correct for txt/csv/srt
+ *   3. null - nothing can be served without a fresh transcription
+ */
+export function getExportableTranscript(
+	editor: EditorCore,
+): TranscriptSegmentLite[] | null {
+	const cached = getCachedTranscript(editor);
+	if (cached) return cached;
+	const lineage = readTranscriptLineage({ editor });
+	return lineage.status === "explained" ? lineage.segments : null;
 }
 
 /**
@@ -204,6 +206,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * True for a fetch() call that never reached a server at all (offline, DNS,
+ * TLS) - a plain browser TypeError, not an HTTP response. Distinguished from
+ * an HTTP failure so the message says "check your connection" instead of
+ * repeating a status code that was never returned (T16.3 G6).
+ */
+function isNetworkFetchError(error: unknown): boolean {
+	return error instanceof TypeError && /fetch/i.test(error.message);
+}
+
+/**
+ * Turn a caught cloud-transcription error into a plain-language Error. The
+ * /api/transcribe route already returns a friendly `error` string keyed off
+ * the real Groq status (see route.ts + providers/groq.ts), so most errors
+ * arrive here already actionable; this only has to handle the request never
+ * reaching the route at all.
+ */
+function describeCloudTranscribeFailure(error: unknown): Error {
+	if (isNetworkFetchError(error)) {
+		return new Error(
+			"Could not reach the transcription service - check your internet connection.",
+		);
+	}
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
  * Parse the /api/transcribe response (a normalized TranscriptionResult) into the
  * cache's lite shape, dropping malformed entries. The route already normalized
  * it; this re-validates at the boundary and keeps only the fields we cache.
@@ -239,6 +267,42 @@ export function parseCloudTranscript(payload: unknown): {
 		}
 	}
 	return { segments, words: words.length > 0 ? words : undefined };
+}
+
+/**
+ * Every REAL transcription re-bases the transcript lineage (T16.1): the fresh
+ * transcript becomes the capture and the removal journal starts empty. That is
+ * also the reset the cannot-explain path needs - we only get here when the journal
+ * could not account for the timeline, so the old journal is meaningless. Wrapped
+ * because the lineage is an optimization: it must never fail a transcription.
+ */
+function captureLineage({
+	editor,
+	hash,
+	segments,
+	words,
+	wordsUnavailable,
+	sourceTotalSec,
+}: {
+	editor: EditorCore;
+	hash: string;
+	segments: readonly TranscriptSegmentLite[];
+	words?: readonly TranscriptWordLite[];
+	wordsUnavailable?: boolean;
+	sourceTotalSec: number;
+}): void {
+	try {
+		resetTranscriptLineage({
+			editor,
+			hash,
+			segments,
+			words: words ?? [],
+			wordsUnavailable,
+			sourceTotalSec,
+		});
+	} catch {
+		// Lineage is best-effort; a failure here must not lose the transcript.
+	}
 }
 
 export async function ensureTimelineTranscript({
@@ -279,6 +343,28 @@ export async function ensureTimelineTranscript({
 
 	const hash = computeTimelineAudioHash(editor);
 	const projectId = editor.project.getActive().metadata.id;
+
+	// LINEAGE FAST PATH (T16.1). The hash moved, but if every change since the last
+	// full transcription was a REMOVAL the journal recorded, the surviving words are
+	// derivable - remap them instead of re-transcribing minutes of audio. Anything
+	// the journal cannot explain (new media, a trim, a move) returns null here and
+	// falls through to the real transcription below, which resets the lineage.
+	const fastPath = getLineageFastPathTranscript({ editor, wantWords });
+	if (fastPath) {
+		writeCache(projectId, {
+			hash,
+			segments: fastPath.segments,
+			words: fastPath.words,
+			wordsUnavailable: fastPath.wordsUnavailable,
+			createdAt: Date.now(),
+		});
+		return {
+			segments: fastPath.segments,
+			words: fastPath.words,
+			wordsUnavailable: fastPath.wordsUnavailable,
+			fromCache: true,
+		};
+	}
 
 	const abortable = <T>(promise: Promise<T>): Promise<T> => {
 		if (!signal) return promise;
@@ -351,8 +437,17 @@ export async function ensureTimelineTranscript({
 		// instead of decoding + running Whisper in the browser. Fast, accurate,
 		// and always word-level (re-arms the Director's word detectors), so
 		// `wantWords` is always satisfied and `wordsUnavailable` never trips.
-		const aiSettings = useAiSettingsStore.getState();
-		if (aiSettings.transcriptionBackend === "cloud" && aiSettings.groqApiKey) {
+		//
+		// GRACEFUL FALLBACK (T16.3 G6 reopen): a cloud failure of ANY kind (bad
+		// key, rate limit, oversized upload, offline, Groq down) must not dead-end
+		// the transcript - it falls through to the local in-browser path below
+		// instead of throwing. `cloudError` carries the plain-language reason so
+		// the fallback's status line can say why, and so a local failure too can
+		// report both instead of just "the fallback also broke." This can only
+		// run ONE cloud attempt then ONE local attempt per call - there is no
+		// retry loop.
+		let cloudError: Error | null = null;
+		if (await shouldAttemptCloudTranscription()) {
 			const startedAt = Date.now();
 			broadcastProgress({
 				phase: "transcribing",
@@ -379,20 +474,29 @@ export async function ensureTimelineTranscript({
 				};
 				// Refuse an oversized upload instead of letting Groq 413. Only the raw
 				// WAV fallback on long content can reach this; a compressed blob is
-				// single-digit MB. Fail with an actionable message (points at the
-				// in-browser backend) rather than a raw "413 Request Entity Too Large".
+				// single-digit MB. This now falls back to the in-browser backend
+				// automatically (below) instead of just telling the user to switch.
 				const sizeCheck = checkTranscribeUploadSize(upload.blob.size);
 				if (!sizeCheck.ok) throw new Error(sizeCheck.error);
 				const form = new FormData();
 				form.append("audio", upload.blob, upload.filename);
-				const response = await abortable(
-					fetch("/api/transcribe", {
-						method: "POST",
-						headers: buildTranscribeHeaders(),
-						body: form,
-						signal,
-					}),
-				);
+				// Deliberately NOT signal-gated: this run may be shared with a JOINED
+				// caller (see the join logic above `run` is invoked from) whose own
+				// signal has nothing to do with this one. Wiring this fetch to
+				// whichever caller happened to START the run meant that caller
+				// unmounting (a tab switch, or React StrictMode's dev-only double
+				// mount/unmount/remount) killed the upload for every joiner too, with
+				// a bare "Cancelled" that had nothing to do with Groq or the key
+				// (T16.3 G6 reopen - the most likely cause of the reported "FAILED
+				// OUTRIGHT" with no actionable message). Each caller still bails on
+				// its OWN wait early via its own `abortable(thisRun)`/`abortable(current)`
+				// wrap further down; only the underlying request itself is no longer
+				// tied to any single caller's lifetime.
+				const response = await fetch("/api/transcribe", {
+					method: "POST",
+					headers: buildTranscribeHeaders(),
+					body: form,
+				});
 				if (!response.ok) {
 					const detail: unknown = await response.json().catch(() => null);
 					const message =
@@ -409,10 +513,23 @@ export async function ensureTimelineTranscript({
 					wordsUnavailable: undefined,
 					createdAt: Date.now(),
 				});
+				captureLineage({
+					editor,
+					hash,
+					segments,
+					words,
+					sourceTotalSec: totalDuration / TICKS_PER_SECOND,
+				});
 				return { segments, words, wordsUnavailable: undefined };
+			} catch (error) {
+				cloudError = describeCloudTranscribeFailure(error);
 			} finally {
 				clearInterval(cloudTicker);
 			}
+			broadcastProgress({
+				phase: "transcribing",
+				detail: `${cloudError.message} - using local transcription...`,
+			});
 		}
 
 		const { samples, sampleRate } = await decodeAudioToFloat32({
@@ -552,7 +669,27 @@ export async function ensureTimelineTranscript({
 				wordsUnavailable,
 				createdAt: Date.now(),
 			});
+			captureLineage({
+				editor,
+				hash,
+				segments,
+				words,
+				wordsUnavailable,
+				sourceTotalSec: totalDuration / TICKS_PER_SECOND,
+			});
 			return { segments, words, wordsUnavailable };
+		} catch (localError) {
+			// The fallback itself failed too - report BOTH reasons. Without the
+			// cloud reason here this would just look like a fresh, unrelated local
+			// failure and hide that the cloud path ever ran.
+			if (cloudError) {
+				const localMessage =
+					localError instanceof Error ? localError.message : String(localError);
+				throw new Error(
+					`${cloudError.message} Local transcription also failed: ${localMessage}`,
+				);
+			}
+			throw localError;
 		} finally {
 			stopTicker();
 		}

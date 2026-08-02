@@ -1,0 +1,13 @@
+<svg width="220" height="56" viewBox="0 0 220 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="VibeCut">
+	<title>VibeCut</title>
+	<text
+		x="110"
+		y="41"
+		text-anchor="middle"
+		font-family="Inter, 'Arial Black', 'Helvetica Neue', system-ui, sans-serif"
+		font-weight="900"
+		font-size="34"
+		letter-spacing="-0.5"
+		fill="currentColor"
+	><tspan>Vibe</tspan><tspan fill="currentColor" fill-opacity="0.6">Cut</tspan></text>
+</svg>

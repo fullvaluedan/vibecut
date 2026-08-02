@@ -1,5 +1,5 @@
 import { PitchShifter } from "soundtouchjs";
-import { clampRetimeRate, shouldMaintainPitch } from "@/retime/rate";
+import { clampRetimeRate, shouldUsePitchPreservedRetimeBuffer } from "@/retime/rate";
 import type { RetimeConfig } from "@/timeline";
 import { getSourceTimeAtClipTime } from "./resolve";
 
@@ -56,7 +56,8 @@ function buildResampledBuffer({
 		for (let i = 0; i < outputLength; i++) {
 			const clipTime = i / targetSampleRate;
 			const sourceTime =
-				trimStart + getSourceTimeAtClipTime({ clipTime, retime });
+				trimStart +
+				getSourceTimeAtClipTime({ clipTime, retime, clipDuration });
 			outputData[i] = sampleLinear({
 				channelData: sourceData,
 				position: sourceTime * sourceBuffer.sampleRate,
@@ -157,9 +158,16 @@ export async function renderRetimedBuffer({
 }): Promise<AudioBuffer> {
 	const targetSampleRate = audioContext.sampleRate;
 	const rate = clampRetimeRate({ rate: retime?.rate ?? 1 });
+	// T18.2: a curve retime never uses the single-rate pitch shifter (see
+	// shouldUsePitchPreservedRetimeBuffer's doc comment in retime/rate.ts) -
+	// it always falls through to buildResampledBuffer below, which follows
+	// the curve exactly via getSourceTimeAtClipTime.
 	const usePitchPreservation =
-		shouldMaintainPitch({ rate, maintainPitch }) &&
-		Math.abs(rate - 1) > RATE_EPSILON;
+		shouldUsePitchPreservedRetimeBuffer({
+			rate,
+			maintainPitch,
+			hasCurve: retime?.curve !== undefined,
+		}) && Math.abs(rate - 1) > RATE_EPSILON;
 
 	if (usePitchPreservation) {
 		return buildPitchPreservedBuffer({
