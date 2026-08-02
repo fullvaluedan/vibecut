@@ -2,6 +2,156 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 19: transitions, color adjust, chroma key, dormant surfaces (2026-08-02, T19.5, branch `feat/director-eval`, tip `21ae6e59`)
+
+Closing verifier pass for T19.0, T19.1, T19.2, T19.3, T19.4a and T19.4b. Round 19 is **NOT done**: four tasks reopen (T19.0, T19.3, T19.4a captions, T19.4b).
+
+**Environment notes for the next verifier.** Screenshots were unavailable the whole session (`Browser pane is not displayed, so the page is not compositing frames`), so every visual claim below is a pixel measurement taken through the app's own render path: `editor.renderer.createSnapshot()` at a seeked playhead, decoded back into a canvas and reduced to mean RGB, luminance standard deviation, a Laplacian edge score, or named corner pixels. That call runs the same CanvasRenderer the preview and the export use, so the numbers are the real composited frame, not a DOM approximation. Two consequences of the non-compositing pane, both artifacts and not product bugs: CSS opacity transitions never advance (a hovered element reports `opacity: 0` forever, so the hover-reveal chip had to be confirmed by finishing the stalled `CSSTransition` and reading the end value, which is 1), and the preview canvas reports a negative `y` in `getBoundingClientRect`. Synthetic `element.click()` works for plain buttons but NOT for Radix `TabsTrigger`, which needs a full pointerdown/pointerup/click sequence; an earlier read of "the Sounds sub-tabs do not switch" was that, not a defect. Test media was generated with ffmpeg into the scratchpad (`testsrc2` + sine for a normal clip, a solid `0x2040A0` plate for a background, and a `0x00B140` green plate with a moving `testsrc2` inset for chroma key).
+
+**One environment change was required to verify anything GPU-side, and it is itself the biggest finding of the round.** See defect R19-1.
+
+### Gates
+- G1 `bun test` apps/web: 2690 pass, 0 fail. PASS.
+- G1 `bun test` hf-bridge: 210 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- Rust `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu wasm-pack test --node rust/crates/effects`: 21 pass, 0 fail. PASS.
+
+### G6 scores
+
+| Feature | Functionality | Quality | Verdict |
+| --- | --- | --- | --- |
+| T19.0 wasm foundation (schema uniforms, mask expansion/opacity) | 6 | 7 | REOPEN (R19-1) |
+| T19.3 transitions v1 (dissolve family) | 8 | 7 | REOPEN (R19-2) |
+| T19.1 Adjust effect + 8 filter presets | 9 | 9 | PASS |
+| T19.2 chroma key + eyedropper | 9 | 8 | PASS (R19-5 minor) |
+| T19.4b pixelate/vignette/glow/noise + effects tab unhidden | 9 | 6 | REOPEN (R19-3) |
+| T19.4a sounds fix + unhide | 9 | 8 | PASS (R19-6 minor) |
+| T19.4a stickers prune + 12 caption looks | 8 | 6 | REOPEN (R19-4) |
+
+### Defects (these reopen tasks)
+
+**R19-1 (T19.0, blocking): the local wasm link never reaches `apps/web`, so the whole round's shader work is dead in the app as merged.**
+`apps/web/node_modules/opencut-wasm` is a real directory containing the published npm **0.2.10** (3,037,899 bytes, dated Jun 7), not a symlink. Node/bun resolution from `apps/web` finds it before the hoisted root `node_modules/opencut-wasm` symlink that `bun link opencut-wasm` creates, so the documented local-dev loop silently does nothing. `rust/wasm/README.md` states the opposite ("From the repo root it links into the hoisted `node_modules/opencut-wasm`, which is where `apps/web` resolves it") and that claim is false on this checkout. Both `package.json` and `apps/web/package.json` still pin `"opencut-wasm": "^0.2.10"`.
+Repro on a clean checkout: start `bun run dev:web`, put a video clip on V1, select it, open the clip Effects tab, and add the Adjust effect. The preview goes blank and the console shows `Failed to apply effects: Missing uniform 'u_sigma' for shader 'color-adjust'` (0.2.10's schema table has no color-adjust entry, so packing falls through to blur's). With all-neutral params it instead shows `Failed to apply effects: At least one effect pass is required`. Chroma key, pixelate, vignette, glow and noise fail the same way, and `MASK_EXPANSION_OPACITY_RENDERED = true` is now sending two `LayerMaskDescriptor` fields the resolved 0.2.10 compositor does not implement.
+Confirmation: the served chunk `.../5bcb1_opencut-wasm_opencut_wasm_bg_11d1fd06.wasm` was byte-identical to the 0.2.10 npm copy (md5 `9c2c8f54...`) and contained zero occurrences of the string `color-adjust`, while `rust/wasm/pkg/opencut_wasm_bg.wasm` (md5 `e2b42a2b...`, version 0.3.0) contains it.
+Workaround used for the rest of this pass (local only, not committed): replaced `apps/web/node_modules/opencut-wasm` with a directory junction to `rust/wasm/pkg`, deleted `apps/web/.next`, and restarted the dev server. After that the served chunk becomes `rust_wasm_pkg_opencut_wasm_bg_11d1fd06.wasm` with md5 `e2b42a2b...` and every shader below works.
+Fix: either publish 0.3.0 and repin both package.json files (Dan-owed, see below), or make the documented dev loop actually take (link into `apps/web` too, or add a `resolutions`/workspace override), and correct the README's Windows notes. Until one of those lands, `MASK_EXPANSION_OPACITY_RENDERED` is true against a compositor that cannot honour it.
+
+**R19-2 (T19.3): a cross dissolve dips about 25 percent dark at its midpoint.**
+`plan.ts` gives the outgoing neighbour a `direction: "out"` ramp and the incoming neighbour a `direction: "in"` ramp, so BOTH layers are at 0.5 opacity halfway through. Over-compositing those against the black canvas yields `B*p + A*(1-p)^2`, which is `0.75*A` at `p = 0.5` when the two sides carry similar pictures, instead of the `0.5*A + 0.5*B` a dissolve should produce.
+Repro: put one clip on V1, split it once so the two halves are the same source, apply Cross dissolve 1.0s to the join, and scrub frame by frame. Measured mean RGB across the window, effects and masks stripped: 9.2s `[126,127,129]`, 9.5s `[126,127,129]`, 9.75s `[105,101,106]`, 10.0s `[93,96,94]`, 10.25s `[100,104,103]`, 10.5s `[123,128,128]`. The predicted `0.75 * 127 = 95` matches the measured 93 to 96 exactly.
+It is not specific to same-source joins. On a `0x2040A0` plate crossfading into testsrc2 with a 1.0s dissolve, the midpoint measured `[68,81,104]` where a linear blend would be `[77,96,143]`; the over-composite prediction `[69,80,103]` matches to within 1 level per channel.
+It is in the export too, so this is not a preview-only artifact: the exported frame at the same midpoint measured `[95,93,93]` against the preview's `[95,94,98]`.
+Why the tests missed it: `transition-window.test.ts` asserts the per-layer opacity FACTOR (0.5 each at the midpoint), which is exactly the buggy value; nothing asserts the composited luminance.
+Fix: only one side should ramp. Hold the outgoing neighbour at full opacity through the window and ramp the incoming neighbour 0 to 1 over it, so the standard `A over B` dissolve falls out. Add a composited-luminance assertion (flat mean across the window for two identical sources) so the regression cannot come back.
+
+**R19-3 (T19.4b): 6 of the 7 tiles in the newly unhidden Effects browser are pixel-identical to the unprocessed source.**
+`effects/components/assets-view.tsx` renders each tile with `params: {}`, so each effect previews at its declared defaults. Blur defaults to `radius: 15` and shows a blurred tile; every other effect is neutral at its defaults (`pixelate.blockSize: 1`, `vignette.amount: 0`, `glow.intensity: 0`, `noise.amount: 0`, all nine color-adjust params `0`, and chroma key's default `#00FF00` misses any non-green preview image). The result is a grid where Adjust, Chroma key, Pixelate, Vignette, Glow and Noise all show the same untouched picture, so nothing in the browser tells you what any of them do.
+Repro: open the left-rail Effects tab and compare the tiles. Measured: all 7 tiles average `[152,147,145]`; a 64x64 FNV hash of the pixel data is `3296002120` for Blur and `1100898576` for all six others, stable across an 8 second settle.
+This directly contradicts the unhide criterion in the plan ("Unhide the effects tab (flag + test) once >= 5 effects render distinct live preview tiles").
+Fix: give each definition a small `previewParams` bundle (or have the preview service substitute a demonstrative value when `isNeutral` is true for the effect) and pass it instead of `{}`. The per-preset thumbnails in T19.1 already do exactly this correctly and can be the model.
+
+**R19-4 (T19.4a captions): caption looks bleed in both directions, including through "Plain".**
+The 6 new looks (Outline Pop, Drop Shadow, Broadcast, Minimal Mono, Highlighter, Cinema Bar) each set the full stroke, shadow and background param set. The 6 original looks (Plain, Neon Accent, Pill Karaoke, Weight Shift, Editorial, Highlight) were never updated and set none of `strokeWidth`, `shadowBlur`, `shadowOffsetX`, `shadowOffsetY` or (mostly) `letterSpacing`. Since `applyStyle` merges (`{ ...el.params, ...style.params }`), whatever the new looks wrote survives every later old look.
+Repro A (new leaking into old): hand-make four text elements named "Caption 1".."Caption 4" on an overlay text track, open the Captions tab, click Broadcast, then Neon Accent, then Plain. After Plain the caption still carries `letterSpacing=2 shadowBlur=8 shadowOffsetY=2 background.color=#1a1a1a background.cornerRadius=2 background.paddingX=12`, all of them Broadcast's. "Plain" is the reset look and it leaves an 8px drop shadow and 2px letter spacing on the text.
+Repro B (old leaking into new): click Weight Shift (`letterSpacing=1.5`), then Outline Pop. Outline Pop correctly sets `strokeWidth=6` and zeroes the shadow, but `letterSpacing=1.5` persists because Outline Pop does not declare it.
+This is precisely the "every look sets everything it controls (merge-not-reset bleed)" rule the plan wrote for this task.
+Fix: define one canonical key set for caption looks and have all 12 entries write every key in it (or reset to defaults before merging the look).
+
+**R19-5 (T19.2, minor): Escape out of the eyedropper also deselects the clip.**
+`preview/components/eyedropper-overlay.tsx` registers its own `document` keydown listener for Escape and does not stop propagation, so the global `cancel-interaction` action (`actions/use-editor-actions.ts`) also fires and falls through to `deselect-all`. Repro: select a green-screen clip, Effects tab, Cutout, Pick color, press Escape. The pick cancels correctly, but the clip is deselected and the whole inspector drops to "It's empty here", so retrying the pick means reselecting the clip first. Fix: add the eyedropper store to the `cancel-interaction` chain the gap-selection and place-tool stores already use, so Escape is consumed once.
+
+**R19-6 (T19.4a sounds, minor, pre-existing): a rate-limiter outage hides the friendly no-key state.**
+`GET /api/sounds/search` calls `checkRateLimit` before anything else, and `auth/rate-limit.ts` has no try/catch. With `bun run dev:web` and no `docker compose up` (both are documented run modes in CLAUDE.md), Upstash at `http://localhost:8079` is not running, the call throws `ECONNREFUSED`, the route returns a bare 500, and the Sound effects tab shows the generic "No sounds available" instead of the Freesound message this task shipped. Starting `redis` + `serverless-redis-http` makes the friendly state appear immediately. Not introduced by R19, but it is the failure mode standing directly in front of R19's headline deliverable. Fix: wrap the limiter call so an unreachable limiter fails open.
+
+### A. Transitions v1 (T19.3) - PASS except R19-2
+Fixture: `bg.mp4` 0-6s, `clipA.mp4` split at 10s into two same-source halves 6-10s and 10-14s, `green.mp4` 14-20s on V1, giving one same-source join and two cross-source joins plus an open head and tail.
+- [x] Hovering a main-track join reveals the chip. The chip carries `opacity-0 group-hover:opacity-100`, the parent carries `group`, and under a real CDP hover the element matches `.group-hover\:opacity-100:is(:where(.group):hover *)` and its `CSSTransition` for opacity is running with an end value of 1. It reads 0 only because the pane is not compositing, so the transition never advances.
+- [x] Clicking the chip opens the mini-picker. At a join it offers exactly Cross dissolve / Dip to black / Dip to white, duration presets 0.25s / 0.5s / 1s plus a custom seconds field, and the honest note "Audio cuts at the join for now.". At the open head and the tail it offers exactly Fade.
+- [x] Applying Cross dissolve 0.5s writes `transitionIn` on the right neighbour and draws the bracket at x=650 width=25px, which is 0.5s at the current 50px/s zoom centred on the join. The chip's title becomes "Cross dissolve 0.5s" and its aria-label becomes "Edit Cross dissolve".
+- [x] Scrubbing frame by frame through the crossfade shows BOTH clips, never a black flash. Mid-transition frames are a genuine blend of the two sources.
+- [ ] But the blend is 25 percent too dark at the midpoint. See R19-2.
+- [x] Same-source smoothness (the video-cache fix): playback from 9.0s ran to 13.03s in 4.04s of wall clock, crossing the same-source join at 10s at real time with no stall. Rendering frame by frame across the join cost 1167ms mean / 1245ms max per snapshot versus 1090ms / 1134ms for a matched no-transition control, so the crossfade adds about 78ms (7 percent), nowhere near the ~600ms boundary-prefetch stall class. Note these absolute numbers are dominated by `createSnapshot` building a fresh CanvasRenderer per call; the delta is the meaningful figure. `videoCache.getStats()` is not exposed on `window`, so the secondary-sink count itself is unit-proven only (`video-cache/__tests__/transition-sinks.test.ts`, in the 2690).
+- [x] Dip to black at the bg -> clipA join: measured mean RGB 5.4s `[28,66,164]` (the plate), 5.75s `[14,33,82]`, 6.00s `[0,0,0]` exactly, 6.25s `[62,64,63]`, 6.6s `[123,129,127]`.
+- [x] Dip to white at the clipA -> green join: 13.6s `[128,123,138]`, 13.875s `[190,191,190]`, 14.00s `[255,255,255]` exactly, 14.125s `[137,201,164]`, 14.4s `[20,147,73]`.
+- [x] Fade at the timeline head: 0.0s `[0,0,0]`, 0.125s `[7,17,41]`, 0.25s `[14,33,82]`, 0.4s `[22,53,131]`, 0.6s `[28,66,164]`. Fade at the tail: 19.6s `[17,117,59]` down to 19.98s `[1,10,5]`.
+- [x] Right-clicking an applied badge removes the transition; one Ctrl+Z restores it with the same id, kind and duration.
+- [x] Changing the duration from 0.5s to 0.25s via a preset chip is ONE undo back to 0.5s.
+- [x] Destroying a join (dragging the right clip off the main track) removes both that join's transition and the tail fade that lived on it; one undo restores both.
+- [x] Splitting INSIDE the right neighbour keeps the transition on the ORIGINAL join and does not duplicate it onto the new join. Undo restores.
+- [x] Full page reload: all four transitions persist with their kinds and durations intact (no serializer work needed, as designed).
+- [x] Export parity. Exported the 20s timeline: 20.016s duration, 640x360, 30fps, h264 + aac. Extracted frames match the preview at every transition: 0.00s `[4,0,5]`, 0.25s `[14,32,88]`, 5.40s `[28,64,161]`, 6.00s `[4,0,5]`, 10.00s `[95,93,93]` (preview `[95,94,98]`), 14.00s `[255,252,255]`, 19.90s `[6,26,17]`.
+
+### B. Adjust effect + filter presets (T19.1) - PASS 9/9
+Measured at 8.0s on a testsrc2 clip, neutral baseline mean RGB `[123,129,126]`.
+- [x] All 9 params render, and setting a param back to 0 returns EXACTLY to `[123,129,126]` every time (checked after each one, 9 for 9).
+- [x] brightness +60 `[164,181,166]`; saturation -100 `[127,127,127]` (perfectly grey); temperature +80 `[125,129,96]` (blue pulled down); tint +80 `[123,98,126]` (green pulled down); highlights -80 `[89,68,102]`; shadows +80 `[141,163,139]`.
+- [x] contrast and sharpen correctly preserve the mean, so they were measured on luminance spread and edge energy instead: contrast +70 raises standard deviation 56.4 -> 66.1 and contrast -70 drops it to 16.9; sharpen 100 raises the Laplacian edge score 1.2 -> 3.2 with the mean unchanged at 126.8.
+- [x] exposure is declared in stops (-3..3) and behaves as `2^stops` inside that range: 0 -> mean 126.8, +2 -> 161.7 with 3.1 percent clipping. Values well outside the declared range saturate, which is correct for the mapping and not reachable from the UI slider.
+- [x] All 8 preset chips (Vivid, Film, Mono, Warm, Cool, Fade, Punch, Golden) render DISTINCT live thumbnails, and the thumbnails are right: Mono `[150,150,150]`, Warm `[162,149,134]`, Cool `[136,150,152]`, Golden `[158,135,124]`, Fade `[160,157,156]`, all with different pixel hashes.
+- [x] Clicking each chip applies a distinct sensible bundle and changes the rendered frame accordingly: Fade drops luminance spread to 36.7, Punch and Vivid raise it past 65, Mono reaches 73.9.
+- [x] Keyframing brightness from -90 to +90 across the clip animates linearly: 6.5s mean 59.6, 7.25s 89.8, 8.0s 126.8, 8.75s 164.6, 9.5s 200.2. Note effect-param keyframe times are element-relative and clamp to the element duration.
+- [x] Export spot-check: exported frames at 7.0s and 9.0s measured `[82,76,86]` and `[163,178,166]` against preview `[83,76,86]` and `[164,181,166]`.
+
+### C. Chroma key + eyedropper (T19.2) - PASS 9/8, R19-5 minor
+Fixture: the `0x00B140` green plate with a moving inset on V2 over the `0x2040A0` plate on V1.
+- [x] The Cutout section sits at the very top of the per-clip Effects tab, above the effect list, and is visible in the empty state.
+- [x] "Enable chroma key" adds a real `chroma-key` effect instance (`keyColor:#00FF00, similarity:20, smoothness:10, spill:50, shadow:0`) whose params then appear in the list below. No parallel state.
+- [x] With the default pure-green key the `0x00B140` plate is correctly NOT removed, which is exactly what the eyedropper is for.
+- [x] Pick color arms the overlay ("Picking... (Esc)"), and the magnifier follows the cursor: moving to 15%/20% put it at `left 113.5px top 89.6px` and moving to 70%/70% put it at `465.5px, 269.6px`, visibility flipping from hidden to visible, with the live hex readout showing `#00993E`.
+- [x] It samples the DECODED source, not the composited canvas: the readout is `#00993E`, the decoded value of the plate, and picking succeeded on a clip whose composited pixels were already keyed out.
+- [x] Clicking the green plate sets `keyColor` to `#00993E` and the plate keys out COMPLETELY. All four corners went from the green plate to `[28,66,164]`, the V1 background, with the inset still drawn at the centre. Picking mode exits on the click.
+- [x] Escape cancels a second attempt: the overlay disarms and the key colour is untouched (R19-5 is that it also deselects the clip).
+- [x] Clicking outside the clip refuses gracefully. With the clip scaled to 40 percent, a click in the far corner left `keyColor` unchanged, stayed armed for a retry, and raised the toast "That point is outside the clip / Click inside the clip's own picture to pick a colour."
+- [x] Params tune correctly, measured as the percentage of green-dominant pixels left and the percentage showing the background through: similarity 0 -> 3.0 percent green residue / 85.7 percent background, 5 -> 3.0 / 85.8, 20 -> 0.1 / 89.2, 60 -> 0.0 / 95.5, 100 -> 0.0 / 100 (keys everything, as expected at the extreme). smoothness 0 -> 2.4 percent residue, 80 -> 0.0. spill and shadow both move the frame measurably on this fixture.
+- [x] Export spot-check for the alpha convention: the keyed-out region measured `[14,32,80]` in the export against `[14,33,82]` in the preview, a 1 to 2 level h264 quantisation difference. The edges are NOT darker in the export, so no premultiplied-alpha regression.
+
+### D. New effects and the unhidden Effects tab (T19.4b) - functionality PASS, tiles REOPEN
+- [x] The left-rail Effects tab is visible (`HIDDEN_ASSET_TABS` is `["hyperframes"]`) and lists 7 effects: Blur, Adjust, Chroma key, Pixelate, Vignette, Glow, Noise.
+- [ ] The tiles are not distinct. See R19-3.
+- [x] Each of the four new effects applies to a clip and scrubs visibly, measured at 12.0s against a `mean 126.8 / std 56.3 / edge 1.3` baseline: pixelate blockSize 1 -> identity, 20 -> edge 0.7, 60 -> edge 0.5; vignette amount 0 -> identity, 60 -> mean 77.1, 100 -> mean 44.0; glow intensity 0 -> identity, 60 -> mean 129.4 std 59.4, 100 -> mean 130.4 std 60.1; noise amount 0 -> identity, 50 -> edge 5.5, 100 -> edge 8.8.
+- [x] Every one of them is a true identity at its neutral default, which matters because that is the early-out path.
+- [x] Noise visibly reseeds frame to frame. On a SOLID-colour clip so the source contributes nothing: two frames 1/30s apart differ by mean absolute 2.99 per channel with noise off and 51.51 with noise on, and noise on versus off at the same instant differs by 33.42.
+- [x] Noise is also deterministic per timestamp: rendering the SAME frame twice with noise on gives a difference of exactly 0.00, which is what export reproducibility needs.
+- [x] Keyframing a new effect's param animates: vignette amount 0 to 100 across the clip measured mean 124.3, 104.6, 84.9, 65.2, 45.6 at evenly spaced times, perfectly linear.
+
+### E. Mask expansion and opacity, the long-parked canary (T19.0) - PASS on the local 0.3.0 build
+`MASK_EXPANSION_OPACITY_RENDERED` is now `true` and both fields genuinely render. Measured on an ellipse mask over a solid `[28,66,164]` plate, as the percentage of the frame still lit and the colour of a corner pixel that is outside the ellipse.
+- [x] Expansion grows and shrinks the boundary: 0 -> 25.8 percent visible, +40 -> 36.1, +80 -> 50.3, -40 -> 19.0, and back to 0 -> exactly 25.8 again.
+- [x] Opacity partially reveals the masked-out area: at 1.0 the corner is `[0,0,0]` (fully hidden), at 0.5 it is `[14,33,82]` which is exactly half of the source `[28,66,164]`, at 0.0 it is `[28,66,164]` (mask has no effect), and back at 1.0 the frame returns to 25.8 percent visible.
+- [x] It survives export: the same half-strength masked region measured `[14,32,80]` in the exported file.
+- [ ] None of this is reachable on a clean checkout. See R19-1.
+
+### F. Sounds tab (T19.4a) - PASS 9/8
+- [x] "Sounds" is visible in the left rail (`HIDDEN_ASSET_TABS` no longer contains it).
+- [x] All three sub-tabs switch correctly under a real pointer sequence.
+- [x] Sound effects shows the friendly no-key state, not an empty grid and not a crash: "Sound search needs a free Freesound API key - add FREESOUND_API_KEY to apps/web/.env.local (get one at freesound.org/apiv2/apply)". `apps/web/.env.local` holds the `your_api_key_here` placeholder, which the route's `isFreesoundApiKeyConfigured` correctly rejects, and `GET /api/sounds/search` returns `{"error":"freesound_not_configured", ...}` with an empty result set rather than an error status.
+- [x] Music & SFX degrades gracefully on its own terms: "Music & SFX search uses HeyGen's audio library. Add your HeyGen API key in Settings > AI > Integrations to enable it."
+- [x] Saved shows its proper empty state: "No saved sounds / Click the heart icon on any sound to save it here". Hearting a sound needs a live result, so that is Dan-owed.
+- [x] Both audited bugs are fixed at source. `commercial_only` is now parsed as `z.enum(["true","false"]).transform(v => v !== "false")` with the `z.coerce.boolean()` trap documented in a comment, the filter is applied in `applyEffectsFilters`, and the client sends it on the INITIAL fetch (observed as `?page_size=50&sort=downloads&commercial_only=true`). `loadMore` now builds a `URLSearchParams` instead of the positional-args call that used to throw.
+- [ ] Live search, live load-more and the commercial filter's effect on real results need a real Freesound key. Dan-owed.
+- Note: R19-6 above, the failure mode that hides all of this when the rate limiter is unreachable.
+
+### G. Caption looks (T19.4a) - functionality PASS, bleed REOPEN
+- [x] All 12 looks are present in the Captions tab: Plain, Neon Accent, Pill Karaoke, Weight Shift, Editorial, Highlight, and the 6 new ones Outline Pop, Drop Shadow, Broadcast, Minimal Mono, Highlighter, Cinema Bar. The grid count stays even.
+- [x] Every look applies to all elements named "Caption N" on an overlay text track and raises the "Styled N captions as X" toast.
+- [x] The 6 new looks each fully set what they control. Outline Pop writes `strokeWidth=6` and zeroes `shadowBlur`/`shadowOffsetY`; Broadcast writes its own background, letterSpacing, stroke and shadow set.
+- [x] One undo reverts a whole restyle across all 4 captions at once (they go into one `BatchCommand`), confirmed by reading all four elements after the undo.
+- [ ] Param bleed between the old and new looks, in both directions. See R19-4.
+
+### H. Stickers prune sanity (T19.4a) - PASS
+- [x] The app builds, typechecks and runs (all four gates green), so nothing the prune removed was load-bearing for startup.
+- [x] There is NO stickers tab. The left rail is exactly Media, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings, and no UI anywhere offers a sticker browser.
+- [x] The resolver spine survives as planned: `resolver.ts`, `registry.ts`, `sticker-id.ts`, `intrinsic-size.ts`, `types.ts` and `providers/{index,flags,countries-data}.ts` remain; `index.ts` browse/search (317 lines), `categories.ts`, `providers/logos.ts`, `providers/shapes.ts` and most of `providers/flags.ts` are gone.
+- [x] Legacy projects with sticker elements still resolve: `stickers/__tests__/legacy-project-resolve.test.ts` is present and green inside the 2690.
+
+### Dan-owed (Round 19)
+1. **npm publish `opencut-wasm` 0.3.0 and repin both `package.json` files** (needs his npm auth; checklist in `rust/wasm/README.md`). Until then nothing in T19.0/T19.1/T19.2/T19.4b renders on a clean checkout. See R19-1 for the interim workaround and for why the documented local-link loop does not currently substitute for this.
+2. **A real Freesound API key** (free, 2 minutes) to unlock live sound search, load-more and the commercial filter.
+3. **An Anthropic key** for the live prompt-to-edit assistant (carried from R17).
+4. **The crop-keyframes decision** (carried; defer still recommended).
+5. **Feel checks on real footage**: whether a 0.5s dissolve reads right on his own cuts, whether the 8 Adjust presets flatter real skin tones, and whether a chroma key on a real green screen holds up at the hair line. All of the above was measured on synthetic ffmpeg fixtures.
+
 ## Round 17 (Assistant) + T21.1 onboarding verification (2026-08-01, T17.5, branch `feat/director-eval`, tip `6702b2dc`)
 
 Closing verifier pass for T17.1-T17.4 (the prompt-to-edit Assistant) and T21.1 (the /get-started onboarding page). Freeze frame was deliberately OUT of scope (a parallel worktree agent owns that fix). Environment: dev server on localhost:3000 via the launch entry; screenshots were unavailable the whole session (Browser pane not compositing), so every interactive check ran on DOM reads and DOM-dispatched clicks/keys, and synthetic pointer clicks from the computer tool silently no-oped (documented below so the next verifier does not chase it). Fresh-profile state was simulated by clearing the pane's localStorage and deleting its two leftover "New project" IndexedDB test projects from earlier agent sessions (no real footage or Dan data involved).

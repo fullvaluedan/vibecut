@@ -232,3 +232,40 @@ Estimate: ~5-7 agent-days wall-clock with the above parallelism.
 5. Ratify the same-lane ripple decision from his chip session (memory:
    t18-1-same-lane-ripple-decision; that session's fix is unmerged and flagged a
    main-merge test breakage - NOT touched by this round).
+
+## 5. T19.5 verification status (2026-08-02, tip 21ae6e59)
+
+Gates: apps/web `bun test` 2690 pass / 0 fail. hf-bridge `bun test` 210 pass / 0
+fail. `bunx tsc --noEmit` from apps/web: 0 errors. `wasm-pack test --node
+rust/crates/effects`: 21 pass / 0 fail. All four PASS.
+
+Per-task status (evidence and repro steps in docs/TO-VERIFY.md, Round 19 section):
+
+- T19.0 wasm effects foundation: **REOPENED**. The Rust work is correct and the
+  mask expansion/opacity canary renders end to end once the local build is
+  actually loaded. It is not loaded as merged: `apps/web/node_modules/opencut-wasm`
+  is a real directory holding the published 0.2.10, so it shadows the root
+  `bun link` the README tells you to make, and both package.json files still pin
+  `^0.2.10`. Result on a clean checkout: every T19.1/T19.2/T19.4b shader throws
+  at runtime and adding an Adjust effect breaks the preview. Scores 6 / 7.
+- T19.1 color adjust effect + filter presets: **PASS**, 9 / 9.
+- T19.2 chroma key effect + eyedropper: **PASS with one minor defect** (Escape
+  cancels the pick and also deselects the clip). Scores 9 / 8.
+- T19.3 transitions v1: **REOPENED**. Everything in the spec works, including
+  same-source crossfade smoothness and export parity, but a cross dissolve
+  composites both neighbours with ramped opacity, so the blend loses about 25
+  percent of its luminance at the midpoint. Scores 8 / 7.
+- T19.4a sounds: **PASS**, 9 / 8 (one pre-existing robustness note on the
+  rate-limit call in the sounds route).
+- T19.4a stickers prune + caption looks: **REOPENED**. The prune is clean, but
+  the 6 original caption looks were never updated to reset the stroke, shadow
+  and letterSpacing params the 6 new looks introduce, so styles bleed in both
+  directions, including through "Plain". Scores 8 / 6.
+- T19.4b effects registry expansion + unhide: **REOPENED**. All four effects
+  render, scrub and keyframe correctly, but 6 of the 7 browser tiles are
+  pixel-identical to the unprocessed source because the tile renders with empty
+  params and every effect except blur is neutral at its defaults. The stated
+  unhide criterion (at least 5 effects rendering distinct live tiles) is not met.
+  Scores 9 / 6.
+
+Round 19 is NOT done. Four tasks reopen: T19.0, T19.3, T19.4a captions, T19.4b.
