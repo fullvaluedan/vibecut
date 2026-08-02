@@ -27,6 +27,7 @@ import { cn } from "@/utils/ui";
 import { Separator } from "@/components/ui/separator";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { HIDDEN_ASSET_TABS } from "@/features/editing/surface-flags";
+import { CutoutSection } from "./cutout-section";
 
 export function StandaloneEffectTab({
 	element,
@@ -146,6 +147,9 @@ export function ClipEffectsTab({
 			<div className="border-b px-3.5 h-11 shrink-0 flex items-center">
 				<SectionTitle>Effects</SectionTitle>
 			</div>
+			{/* T19.2: chroma key gets a named entry point here (CapCut calls it
+			    Cutout); it adds/removes the ordinary effect instance below. */}
+			<CutoutSection element={element} trackId={trackId} />
 			{effects.length === 0 ? (
 				<EmptyView />
 			) : (
