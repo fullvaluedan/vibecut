@@ -12,3 +12,9 @@ bytemuck = { version = "1.25.0", features = ["derive"] }
 gpu = { version = "0.1.0", path = "../gpu" }
 thiserror = "2.0.18"
 wgpu = "29.0.1"
+
+# The uniform-schema tests run under `wasm-pack test --node rust/crates/effects`.
+# Plain `cargo test` needs a host linker, which the Windows dev box does not have
+# (no MSVC toolchain); the wasm32 target links with the bundled LLD instead.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.53"

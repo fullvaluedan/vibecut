@@ -23,6 +23,9 @@ bun.lockb
 
 target/
 
+# wasm-pack output (`bun run build:wasm`); published to npm, never committed
+rust/wasm/pkg/
+
 .cargo-tools/
 
 rust-migration-notes.md.claude/worktrees/

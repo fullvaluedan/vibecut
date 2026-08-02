@@ -2,7 +2,6 @@
 
 import type { MaskableElement } from "@/timeline";
 import type { Mask, MaskType, TextMask } from "@/masks/types";
-import { MASK_EXPANSION_OPACITY_RENDERED } from "@/masks/types";
 import type { NumberParamDefinition, SelectParamDefinition } from "@/params";
 import {
 	buildDefaultMaskInstance,
@@ -600,36 +599,32 @@ function MaskParamsFields({
 			</SectionField>
 
 			{/* Expansion (grow/shrink independent of feather) and mask Opacity sit
-			    beside Feather. They are gated because the renderer half needs an
-			    opencut-wasm rebuild to consume them; see MASK_EXPANSION_OPACITY_RENDERED. */}
-			{MASK_EXPANSION_OPACITY_RENDERED ? (
-				<>
-					<SectionField label="Expansion">
-						<MaskNumberField
-							icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
-							param={getNumberParamDefinition({
-								definition,
-								key: "expansion",
-							})}
-							value={mask.params.expansion ?? 0}
-							onPreview={previewNumberParam("expansion")}
-							onCommit={onCommit}
-						/>
-					</SectionField>
-					<SectionField label="Opacity">
-						<MaskNumberField
-							icon="%"
-							param={getNumberParamDefinition({
-								definition,
-								key: "opacity",
-							})}
-							value={mask.params.opacity ?? 1}
-							onPreview={previewNumberParam("opacity")}
-							onCommit={onCommit}
-						/>
-					</SectionField>
-				</>
-			) : null}
+			    beside Feather. Both render for real as of opencut-wasm 0.3.0; see
+			    MASK_EXPANSION_OPACITY_RENDERED. */}
+			<SectionField label="Expansion">
+				<MaskNumberField
+					icon={<HugeiconsIcon icon={ArrowExpandIcon} />}
+					param={getNumberParamDefinition({
+						definition,
+						key: "expansion",
+					})}
+					value={mask.params.expansion ?? 0}
+					onPreview={previewNumberParam("expansion")}
+					onCommit={onCommit}
+				/>
+			</SectionField>
+			<SectionField label="Opacity">
+				<MaskNumberField
+					icon="%"
+					param={getNumberParamDefinition({
+						definition,
+						key: "opacity",
+					})}
+					value={mask.params.opacity ?? 1}
+					onPreview={previewNumberParam("opacity")}
+					onCommit={onCommit}
+				/>
+			</SectionField>
 
 			<SectionField label="Stroke">
 				<div className="flex flex-col gap-2">

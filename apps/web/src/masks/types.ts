@@ -21,18 +21,22 @@ export type BuiltinMaskType =
 export type MaskType = BuiltinMaskType | "freeform";
 
 /**
- * Gates the `expansion` and `opacity` mask params end to end (Masks tab rows +
- * the values threaded into the GPU frame descriptor).
+ * True since `opencut-wasm` 0.3.0 (round 19 T19.0), which is the first build
+ * whose compositor reads the two `LayerMaskDescriptor` fields:
  *
- * Set to false because APPLYING them needs the Rust/wgsl compositor to read the
- * two new LayerMaskDescriptor fields: expansion biases the JFA signed-distance
- * threshold (rust/crates/masks/src/shaders/jfa_distance.wgsl) and opacity scales
- * the mask alpha. Those live in the published `opencut-wasm` package, which
- * cannot be rebuilt here (no Rust/wasm toolchain; the package is npm-pinned). The
- * params, defaults, UI, and descriptor plumbing are all wired; flip this to true
- * in the same change that ships an opencut-wasm build consuming the new fields.
+ * - `expansion` biases the JFA signed distance before it is thresholded
+ *   (`rust/crates/masks/src/shaders/jfa_distance.wgsl`), so it grows or shrinks
+ *   the boundary without softening it. A non-zero expansion forces the
+ *   distance-field pass on even at feather 0.
+ * - `opacity` scales mask strength in `rust/crates/compositor/src/shaders/mask.wgsl`,
+ *   mixing the masked alpha back towards 1 (0 = mask has no effect).
+ *
+ * Kept as the single kill switch at the wasm boundary
+ * (`services/renderer/compositor/frame-descriptor.ts`): set it back to false if
+ * apps/web is ever repinned to an `opencut-wasm` older than 0.3.0, and the two
+ * params degrade to their no-op values instead of rendering wrong.
  */
-export const MASK_EXPANSION_OPACITY_RENDERED = false;
+export const MASK_EXPANSION_OPACITY_RENDERED = true;
 
 export interface BaseMaskParams {
 	feather: number;

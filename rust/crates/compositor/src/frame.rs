@@ -58,6 +58,19 @@ pub struct LayerMaskDescriptor {
     pub texture_id: String,
     pub feather: f32,
     pub inverted: bool,
+    /// Signed pixels of boundary growth: positive grows the mask outward,
+    /// negative shrinks it inward. Defaults to 0 so a descriptor serialized
+    /// before this field existed still deserializes to the old behaviour.
+    #[serde(default)]
+    pub expansion: f32,
+    /// Mask strength in 0..1: 1 applies the mask fully, 0 leaves the layer
+    /// untouched. Defaults to 1 (NOT to f32::default()) for the same reason.
+    #[serde(default = "default_mask_opacity")]
+    pub opacity: f32,
+}
+
+fn default_mask_opacity() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

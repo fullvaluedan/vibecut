@@ -40,8 +40,9 @@ export type LayerMaskDescriptor = {
 	feather: number;
 	inverted: boolean;
 	// Grow/shrink the boundary (SDF-threshold bias) and mask strength (0..1).
-	// Consumed by the wasm compositor; see MASK_EXPANSION_OPACITY_RENDERED for why
-	// they are currently forced to the no-op values (0, 1) at the descriptor edge.
+	// Both are consumed by the wasm compositor as of opencut-wasm 0.3.0; see
+	// MASK_EXPANSION_OPACITY_RENDERED for the kill switch if apps/web is ever
+	// repinned to an older build.
 	expansion: number;
 	opacity: number;
 };
