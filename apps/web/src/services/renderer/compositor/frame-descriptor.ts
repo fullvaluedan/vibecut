@@ -577,9 +577,9 @@ function buildMaskArtifacts({
 			textureId: maskTextureId,
 			feather,
 			inverted: mask.params.inverted,
-			// Plumbed to the wasm boundary but held at the no-op values until the
-			// compositor can consume them (see MASK_EXPANSION_OPACITY_RENDERED). Flip
-			// the flag in the same change that ships a wasm build reading these.
+			// Live as of opencut-wasm 0.3.0. The flag stays as the kill switch: if
+			// apps/web is ever repinned to an older wasm, these fall back to the
+			// no-op values (0, 1) instead of being silently ignored.
 			expansion: MASK_EXPANSION_OPACITY_RENDERED
 				? (mask.params.expansion ?? 0)
 				: 0,

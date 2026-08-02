@@ -5,9 +5,11 @@ struct VertexOutput {
 
 struct MaskUniforms {
     inverted: f32,
+    // Mask strength in 0..1. 1 applies the mask fully; 0 leaves the layer
+    // untouched, which is what mixing towards an alpha of 1.0 below does.
+    opacity: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0) var layer_texture: texture_2d<f32>;
@@ -20,6 +22,8 @@ struct MaskUniforms {
 fn fragment_main(input: VertexOutput) -> @location(0) vec4f {
     let layer = textureSample(layer_texture, layer_sampler, input.tex_coord);
     let mask = textureSample(mask_texture, mask_sampler, input.tex_coord).a;
-    let alpha = select(mask, 1.0 - mask, uniforms.inverted > 0.5);
+    let masked = select(mask, 1.0 - mask, uniforms.inverted > 0.5);
+    let strength = clamp(uniforms.opacity, 0.0, 1.0);
+    let alpha = mix(1.0, masked, strength);
     return vec4f(layer.rgb, layer.a * alpha);
 }

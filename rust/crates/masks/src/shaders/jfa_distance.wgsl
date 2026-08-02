@@ -6,7 +6,10 @@ struct VertexOutput {
 struct DistanceUniforms {
     resolution: vec2f,
     feather_half: f32,
-    _padding: f32,
+    // Signed pixels added to the distance field before thresholding: positive
+    // grows the mask outward, negative shrinks it inward. Zero is the upstream
+    // behaviour exactly.
+    expansion: f32,
 }
 
 @group(0) @binding(0) var inside_texture: texture_2d<f32>;
@@ -43,7 +46,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4f {
         distance(pixel_coord, decode_seed(outside_encoded)),
         has_outside,
     );
-    let signed_distance = distance_to_outside - distance_to_inside;
+    let signed_distance = distance_to_outside - distance_to_inside + uniforms.expansion;
     let alpha = smoothstep(-uniforms.feather_half, uniforms.feather_half, signed_distance);
 
     return vec4f(alpha, alpha, alpha, alpha);
