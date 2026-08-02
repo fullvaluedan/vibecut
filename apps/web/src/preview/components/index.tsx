@@ -9,6 +9,7 @@ import { useFullscreen } from "@/hooks/use-fullscreen";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { AiOverlayPreviewLayer } from "@/features/ai-generate/components/overlay-preview-layer";
 import { PlaceToolOverlay } from "./place-tool-overlay";
+import { EyedropperOverlay } from "./eyedropper-overlay";
 import { TICKS_PER_SECOND, type MediaTime, mediaTimeToSeconds } from "@/wasm";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
@@ -464,6 +465,12 @@ function PreviewCanvas({
 							</div>
 							</div>
 								<PlaceToolOverlay
+									sceneLeft={viewport.sceneLeft}
+									sceneTop={viewport.sceneTop}
+									sceneWidth={viewport.sceneWidth}
+									sceneHeight={viewport.sceneHeight}
+								/>
+								<EyedropperOverlay
 									sceneLeft={viewport.sceneLeft}
 									sceneTop={viewport.sceneTop}
 									sceneWidth={viewport.sceneWidth}

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use gpu::{GpuContext, FULLSCREEN_SHADER_SOURCE};
+use gpu::{FULLSCREEN_SHADER_SOURCE, GpuContext};
 use thiserror::Error;
 use wgpu::util::DeviceExt;
 
@@ -12,6 +12,8 @@ const GAUSSIAN_BLUR_SHADER_SOURCE: &str = include_str!("shaders/gaussian_blur.wg
 
 const COLOR_ADJUST_SHADER_ID: &str = "color-adjust";
 const COLOR_ADJUST_SHADER_SOURCE: &str = include_str!("shaders/color_adjust.wgsl");
+const CHROMA_KEY_SHADER_ID: &str = "chroma-key";
+const CHROMA_KEY_SHADER_SOURCE: &str = include_str!("shaders/chroma_key.wgsl");
 
 /// Number of f32 slots every effect shader can address, indexed 0..SCALAR_SLOT_COUNT.
 pub const SCALAR_SLOT_COUNT: usize = 12;
@@ -140,6 +142,35 @@ const EFFECT_SHADERS: &[EffectShader] = &[
                 UniformBinding {
                     name: "u_sharpen",
                     slot: UniformSlot::Scalar { index: 8 },
+                },
+            ],
+        },
+    },
+    EffectShader {
+        id: CHROMA_KEY_SHADER_ID,
+        source: CHROMA_KEY_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: CHROMA_KEY_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_similarity",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_smoothness",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_spill",
+                    slot: UniformSlot::Scalar { index: 2 },
+                },
+                UniformBinding {
+                    name: "u_shadow",
+                    slot: UniformSlot::Scalar { index: 3 },
+                },
+                UniformBinding {
+                    name: "u_key_color",
+                    slot: UniformSlot::Vec4 { index: 0 },
                 },
             ],
         },
@@ -601,6 +632,28 @@ mod tests {
         }
     }
 
+    fn chroma_key_pass(
+        similarity: f32,
+        smoothness: f32,
+        spill: f32,
+        shadow: f32,
+        key_color: [f32; 4],
+    ) -> EffectPass {
+        EffectPass {
+            shader: CHROMA_KEY_SHADER_ID.to_string(),
+            uniforms: HashMap::from([
+                ("u_similarity".to_string(), UniformValue::Number(similarity)),
+                ("u_smoothness".to_string(), UniformValue::Number(smoothness)),
+                ("u_spill".to_string(), UniformValue::Number(spill)),
+                ("u_shadow".to_string(), UniformValue::Number(shadow)),
+                (
+                    "u_key_color".to_string(),
+                    UniformValue::Vector(key_color.to_vec()),
+                ),
+            ]),
+        }
+    }
+
     #[test]
     fn uniform_buffer_layout_is_alignment_correct() {
         assert_eq!(std::mem::size_of::<EffectUniformBuffer>(), 96);
@@ -763,8 +816,17 @@ mod tests {
     /// apps/web/src/effects/definitions/color-adjust.ts and the WGSL comment
     /// in shaders/color_adjust.wgsl.
     fn color_adjust_pass(values: [f32; 9]) -> EffectPass {
-        let [exposure, temperature, tint, contrast, highlights, shadows, saturation, brightness, sharpen] =
-            values;
+        let [
+            exposure,
+            temperature,
+            tint,
+            contrast,
+            highlights,
+            shadows,
+            saturation,
+            brightness,
+            sharpen,
+        ] = values;
         EffectPass {
             shader: COLOR_ADJUST_SHADER_ID.to_string(),
             uniforms: HashMap::from([
@@ -820,6 +882,79 @@ mod tests {
         assert_eq!(packed.scalars[0], [0.0; 4]);
         assert_eq!(packed.scalars[1], [0.0, 0.0, 1.0, 0.0]);
         assert_eq!(packed.scalars[2], [0.0; 4]);
+    }
+
+    /// T19.2 chroma key. The four scalars share `scalars[0]` and the key
+    /// colour lands in the vec4 slot at byte 64, so the pass touches none of
+    /// blur's bytes and vice versa.
+    #[test]
+    fn packs_chroma_key_uniforms() {
+        let packed = pack_effect_uniforms(
+            &chroma_key_pass(0.2, 0.1, 0.5, 0.0, [0.0, 1.0, 0.0, 1.0]),
+            1920,
+            1080,
+        )
+        .expect("chroma key packs");
+
+        assert_eq!(packed.resolution, [1920.0, 1080.0]);
+        assert_eq!(packed.scalars[0], [0.2, 0.1, 0.5, 0.0]);
+        assert_eq!(packed.scalars[1], [0.0; 4]);
+        assert_eq!(packed.scalars[2], [0.0; 4]);
+        assert_eq!(packed.color, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(packed.direction, [0.0; 2]);
+        assert_eq!(packed.direction_b, [0.0; 2]);
+
+        let bytes = bytemuck::bytes_of(&packed);
+        assert_eq!(bytes.len(), 96);
+        // similarity 16, smoothness 20, spill 24, shadow 28, key colour 64.
+        assert_eq!(&bytes[16..20], &0.2f32.to_ne_bytes());
+        assert_eq!(&bytes[20..24], &0.1f32.to_ne_bytes());
+        assert_eq!(&bytes[24..28], &0.5f32.to_ne_bytes());
+        assert_eq!(&bytes[28..32], &0.0f32.to_ne_bytes());
+        assert_eq!(&bytes[64..68], &0.0f32.to_ne_bytes());
+        assert_eq!(&bytes[68..72], &1.0f32.to_ne_bytes());
+    }
+
+    #[test]
+    fn rejects_a_chroma_key_pass_missing_its_key_colour() {
+        let mut pass = chroma_key_pass(0.2, 0.1, 0.5, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        pass.uniforms.remove("u_key_color");
+        let error = pack_effect_uniforms(&pass, 16, 16).expect_err("missing uniform");
+        assert!(matches!(
+            error,
+            EffectsError::MissingUniform { ref uniform, .. } if uniform == "u_key_color"
+        ));
+    }
+
+    #[test]
+    fn rejects_a_chroma_key_colour_of_the_wrong_length() {
+        let mut pass = chroma_key_pass(0.2, 0.1, 0.5, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        pass.uniforms.insert(
+            "u_key_color".to_string(),
+            UniformValue::Vector(vec![0.0, 1.0, 0.0]),
+        );
+        let error = pack_effect_uniforms(&pass, 16, 16).expect_err("wrong length");
+        assert!(matches!(
+            error,
+            EffectsError::InvalidVectorUniform {
+                expected_length: 4,
+                ..
+            }
+        ));
+    }
+
+    /// Blur's uniform names must stay rejected by the chroma-key schema (and
+    /// the reverse), or a typo could silently borrow the other effect's slot.
+    #[test]
+    fn chroma_key_rejects_blur_uniforms() {
+        let mut pass = chroma_key_pass(0.2, 0.1, 0.5, 0.0, [0.0, 1.0, 0.0, 1.0]);
+        pass.uniforms
+            .insert("u_sigma".to_string(), UniformValue::Number(2.0));
+        let error = pack_effect_uniforms(&pass, 16, 16).expect_err("undeclared uniform");
+        assert!(matches!(
+            error,
+            EffectsError::UnsupportedUniform { ref uniform, .. } if uniform == "u_sigma"
+        ));
     }
 
     #[test]

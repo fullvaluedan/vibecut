@@ -835,3 +835,95 @@ NEUTRAL EARLY-OUT: `isColorAdjustNeutral` returns true when all 9 UI params sit 
 PRESETS (`color-adjust-presets.ts`, `COLOR_ADJUST_PRESETS`): Vivid, Film, Mono, Warm, Cool, Fade, Punch, Golden - each a complete 9-key param bundle (explicit 0 for unused params) so re-applying a different preset always fully replaces the prior look. UI: live GPU thumbnail chips (not text-only), one click = one `updateClipEffectParams` call.
 
 Tests (new, ours): `apps/web/src/effects/__tests__/color-adjust.test.ts` (param/range shape, neutral detection, the UI -> shader mapping per param and combined), `apps/web/src/effects/__tests__/color-adjust-presets.test.ts` (preset shape, uniqueness, in-range values, non-neutral, a few named-preset spot checks), `apps/web/src/effects/__tests__/color-adjust-golden.test.ts` (renderer-parity fixture, same class as `blur-golden.test.ts`: preview-tile vs export-frame pass lists are byte-identical for every preset since color-adjust's uniforms do not depend on target size; a regression golden hash on the Vivid preset's export pass list; neutral -> zero passes at both sizes), plus two Rust tests in `pipeline.rs` (`packs_color_adjust_uniforms`, `color_adjust_neutral_values_pack_to_zeroed_scalars_except_saturation`).
+
+## T19.2 - Chroma key effect + eyedropper (2026-08-02)
+
+Round 19's green-screen feature: one new WGSL shader registered through T19.0's
+`EFFECT_SHADERS` table, one TS effect definition, a CapCut-style "Cutout" entry
+point in the clip Effects tab, and a preview eyedropper that samples the clip's
+own decoded frame.
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `rust/crates/effects/src/pipeline.rs` | Registers the chroma-key shader: two `include_str!` consts and ONE more `EffectShader` entry in `EFFECT_SHADERS` (the const went from a single-element literal to a two-element list, which is the only shape change). Its schema claims scalar slots 0-3 (`u_similarity`, `u_smoothness`, `u_spill`, `u_shadow`) and vec4 slot 0 (`u_key_color`); blur's bytes are untouched. Adds four tests: the chroma-key packing golden, a missing key colour, a wrong-length key colour, and a cross-check that blur's uniform names stay rejected by the chroma-key schema. Crate test count 11 to 15. | 2026-08-02 | Exactly the recipe T19.0 documented; adding an effect should never need more than this |
+| `apps/web/src/effects/definitions/index.ts` | One import + one array member so `chromaKeyEffectDefinition` registers alongside blur. | 2026-08-02 | One line |
+| `apps/web/src/effects/components/effects-tab.tsx` | `ClipEffectsTab` mounts `CutoutSection` (new, ours) directly under the "Effects" header, above the effect list and the empty state. That is the CapCut "Cutout" entry point; it renders for video and image clips only. | 2026-08-02 | One import + one JSX line; revert = delete both |
+| `apps/web/src/preview/components/index.tsx` | Mounts `EyedropperOverlay` (new, ours) next to `PlaceToolOverlay`, with the same scene-rect geometry props. Same class of surface: a transient, armed-tool pointer layer over the scene. | 2026-08-02 | One import + one mount, mirroring the place-tool rows above |
+
+KEYING MATH. `chroma_key.wgsl` converts the pixel and the key colour to BT.601
+luma + chroma, then does three things in order. (1) KEY: `alpha =
+smoothstep(similarity, similarity + smoothness, distance(pixelChroma,
+keyChroma))`, so a pixel of exactly the key colour is fully cut and anything
+past the band is fully opaque. Chroma distance, not RGB distance, so brightness
+variation across the screen does not change what is keyed. (2) SHADOW
+PRESERVATION: `alpha = max(alpha, shadow * shadowDrop)` where `shadowDrop` ramps
+0 to 1 as the pixel's luma falls from `keyLuma - 0.15` to 0. Because it is a
+`max`, it can only ever give alpha BACK to pixels the key removed, so it cannot
+make anything else opaque. This is the parameter that keeps a real shadow cast
+on a green floor when similarity is generous enough to have swallowed it.
+(3) SPILL SUPPRESSION: the pixel's chroma is projected onto the key chroma
+direction (1 = exactly the key hue, 0 = orthogonal or opposite) and that
+proportion, times the spill parameter, mixes the colour towards its own luma.
+Green rims come off hair and shoulders; magenta and neutrals are untouched.
+
+ALPHA CONVENTION: STRAIGHT (non-premultiplied) out, which is what this
+compositor uses throughout. `rust/crates/gpu/src/context.rs` uploads layer
+textures with `premultiplied_alpha: false`, and
+`rust/crates/compositor/src/shaders/blend.wgsl` multiplies the layer's rgb by
+the layer's own alpha at blend time. The shader therefore leaves the colour
+channels at full strength and puts the whole key in `a` (times the source's own
+alpha). Pre-multiplying here would double-darken every keyed edge. Caveat worth
+knowing: chaining a blur AFTER a key blurs straight-alpha colour, which fringes
+at hard edges; that is pre-existing behaviour of the blur pass, not new here.
+
+COLOUR SPACE: the compositor's textures are `Bgra8Unorm`/`Rgba8Unorm`, NOT an
+`*Srgb` format, so `textureSample` hands the shader sRGB-ENCODED channel values.
+The colour param stores hex and the shared `COLOR_CHANNEL_LAYOUT` decomposes it
+into LINEAR components for keyframe interpolation, so `buildPasses` parses via
+the existing `parseColorToLinearRgba` and re-encodes through the sRGB transfer
+curve on the way into the vec4 uniform. That round trip lives in exactly one
+place (`linearChannelToDisplay` in `chroma-key.ts`) and is covered by a test.
+
+EYEDROPPER SOURCE, DECODED NOT COMPOSITED. The plan offered
+`services/renderer/capture-frame.ts` as the readback path and a decoded-source
+fallback. Investigating settled it immediately: `capture-frame.ts` is ALREADY
+the decoded-source path (it calls `videoCache.getFrameAt` and draws
+`frame.canvas`), not a grab of the composited preview canvas. So there was no
+trade-off to make; the picker uses the same `videoCache.getFrameAt` call, via
+`effects/eyedropper/source-frame.ts`, which also repeats freeze-frame's exact
+trim + retime clip-time-to-source-time math so the sampled frame is the one at
+the playhead. It is also the only CORRECT source for a key colour: by the time a
+pixel reaches the preview canvas it has been through this very effect (picking
+green off an already-keying screen would sample whatever is behind the subject),
+plus every other effect, the clip's opacity, its blend mode, and the layers
+under it. The cost is that preview coordinates must be mapped back through crop
+and transform by hand, which `previewPointToSourcePixel` does by mirroring
+`computeVisualTransform` in
+`services/renderer/compositor/frame-descriptor.ts` (crop first, then contain
+scale, then position/rotation/flip), returning null when the click misses the
+clip's quad rather than clamping to a wrong edge pixel.
+
+WHERE "CUTOUT" LIVES: the top of the per-clip Effects tab, under the "Effects"
+header, above the list. Chroma key IS an effect instance, so the place a user
+already looks for "what is stacked on this clip" is where enabling it belongs,
+and its params then render in the list below with no duplicate UI. It is visible
+in the EMPTY state too, which is the case that matters. Enable/remove go
+straight through `addClipEffect`/`removeClipEffect`, so undo, keyframes and
+export behave identically to adding the effect any other way; the only local
+state anywhere is a zustand store holding WHICH param is armed for the picker.
+This also kept `properties/registry.tsx` untouched: no new tab.
+
+Tests (new, ours): `apps/web/src/effects/__tests__/chroma-key.test.ts` (29:
+BT.601 coefficients, pure green to alpha 0, neutrals to alpha 1, a hand-derived
+near-key pixel landing at exactly the middle of the smoothstep band, monotonic
+alpha, hard edge at smoothness 0, the shadow parameter recovering a dark green
+shadow the key had swallowed while never lifting the lit floor, spill extremes
+including magenta being left alone, straight-alpha output, the colour-to-vec4
+mapping incl. a linear round trip, slider scaling, and registration/defaults),
+`apps/web/src/effects/__tests__/eyedropper-sample.test.ts` (30: preview-to-source
+mapping across full-frame, letterboxed contain-fit, crop, move, scale, flip,
+rotation, crop-and-transform composition, degenerate inputs, plus the pixel
+readers and hex formatting), and
+`apps/web/src/effects/__tests__/cutout-commands.test.ts` (6: enable/remove/undo
+round trip through the real commands, coexistence with blur, distinct instance
+ids). Rust: four new cases in `pipeline.rs`.
