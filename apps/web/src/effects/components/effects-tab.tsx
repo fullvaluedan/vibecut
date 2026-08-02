@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ParamValues } from "@/params";
 import type { Effect } from "@/effects/types";
 import type { EffectElement, VisualElement } from "@/timeline";
@@ -27,6 +27,8 @@ import { cn } from "@/utils/ui";
 import { Separator } from "@/components/ui/separator";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { HIDDEN_ASSET_TABS } from "@/features/editing/surface-flags";
+import { COLOR_ADJUST_PRESETS } from "@/effects/definitions/color-adjust-presets";
+import { effectPreviewService } from "@/services/renderer/effect-preview";
 
 export function StandaloneEffectTab({
 	element,
@@ -194,6 +196,14 @@ export function ClipEffectsTab({
 											effectId: effect.id,
 										})
 									}
+									onApplyPreset={(params) =>
+										editor.timeline.updateClipEffectParams({
+											trackId,
+											elementId: element.id,
+											effectId: effect.id,
+											params,
+										})
+									}
 								/>
 							</li>
 						);
@@ -245,6 +255,7 @@ function EffectSection({
 	onCommit,
 	onToggle,
 	onRemove,
+	onApplyPreset,
 }: {
 	effect: Effect;
 	renderParams: ParamValues;
@@ -252,8 +263,10 @@ function EffectSection({
 	onCommit: () => void;
 	onToggle?: () => void;
 	onRemove?: () => void;
+	onApplyPreset?: (params: ParamValues) => void;
 }) {
 	const definition = effectsRegistry.get(effect.type);
+	const isColorAdjust = effect.type === "color-adjust";
 
 	return (
 		<Section
@@ -296,6 +309,14 @@ function EffectSection({
 			<SectionContent
 				className={cn("p-0", onToggle && !effect.enabled && "opacity-50")}
 			>
+				{isColorAdjust && onApplyPreset && (
+					<>
+						<div className="px-4 pb-3.5">
+							<ColorAdjustPresetStrip onApplyPreset={onApplyPreset} />
+						</div>
+						<Separator />
+					</>
+				)}
 				<SectionFields>
 					{definition.params.map((param) => (
 						<div key={param.key} className="flex flex-col gap-3.5">
@@ -314,4 +335,58 @@ function EffectSection({
 			</SectionContent>
 		</Section>
 	);
+}
+
+/**
+ * Horizontal filter-preset strip for the Adjust effect. Each chip renders a
+ * live thumbnail via the existing effect-preview service (the same GPU path
+ * that draws the Effects bin tiles in assets-view.tsx), so the strip costs
+ * one extra tiny preview render per preset rather than a separate rendering
+ * path.
+ */
+function ColorAdjustPresetStrip({
+	onApplyPreset,
+}: {
+	onApplyPreset: (params: ParamValues) => void;
+}) {
+	return (
+		<div className="flex gap-2 overflow-x-auto pb-1">
+			{COLOR_ADJUST_PRESETS.map((preset) => (
+				<button
+					key={preset.id}
+					type="button"
+					className="flex shrink-0 flex-col items-center gap-1"
+					onClick={() => onApplyPreset(preset.params)}
+				>
+					<span className="size-12 overflow-hidden rounded-md border border-border">
+						<ColorAdjustPresetThumbnail params={preset.params} />
+					</span>
+					<span className="text-[10px] text-muted-foreground">
+						{preset.name}
+					</span>
+				</button>
+			))}
+		</div>
+	);
+}
+
+function ColorAdjustPresetThumbnail({ params }: { params: ParamValues }) {
+	const canvasRef = useRef<HTMLCanvasElement>(null);
+
+	useEffect(() => {
+		const render = () => {
+			if (canvasRef.current) {
+				effectPreviewService.renderPreview({
+					effectType: "color-adjust",
+					params,
+					targetCanvas: canvasRef.current,
+				});
+			}
+		};
+
+		render();
+		return effectPreviewService.onPreviewImageReady({ callback: render });
+	}, [params]);
+
+	return <canvas ref={canvasRef} className="size-full" />;
 }
