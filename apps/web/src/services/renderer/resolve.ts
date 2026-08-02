@@ -135,6 +135,7 @@ function resolveEffectPassGroups({
 				effectParams: resolvedParams,
 				width,
 				height,
+				time: localTime,
 			});
 		});
 }
@@ -556,6 +557,7 @@ function resolveEffectLayerNode({
 		effectParams: node.params.effectParams,
 		width: context.renderer.width,
 		height: context.renderer.height,
+		time: time - node.params.timeOffset,
 	});
 	if (passes.length === 0) {
 		return null;

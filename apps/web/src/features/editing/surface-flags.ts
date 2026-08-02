@@ -11,12 +11,13 @@ import type { Tab } from "@/components/editor/panels/assets/assets-panel-store";
 
 /**
  * Left-panel tab keys hidden from the tab rail and the fallback logic in
- * `assets-panel-store.tsx`. HyperFrames is parked (D6); Effects is hidden
- * because it is not useful right now (D4). Sounds unhidden T19.4a once its
- * two bugs were fixed (loadMore TypeError, no-op commercial-license filter)
- * and a friendly no-key state was added for the Freesound sub-tab.
+ * `assets-panel-store.tsx`. HyperFrames is parked (D6). Effects unhidden
+ * T19.4b once the registry held >= 5 effects (blur, color adjust, pixelate,
+ * vignette, glow, noise). Sounds unhidden T19.4a once its two bugs were
+ * fixed (loadMore TypeError, no-op commercial-license filter) and a
+ * friendly no-key state was added for the Freesound sub-tab.
  */
-export const HIDDEN_ASSET_TABS: readonly Tab[] = ["hyperframes", "effects"];
+export const HIDDEN_ASSET_TABS: readonly Tab[] = ["hyperframes"];
 
 /**
  * RUN HYPERFRAMES toolbar cluster in `timeline/components/timeline-toolbar.tsx`:

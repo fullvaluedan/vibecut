@@ -13,6 +13,18 @@ const GAUSSIAN_BLUR_SHADER_SOURCE: &str = include_str!("shaders/gaussian_blur.wg
 const COLOR_ADJUST_SHADER_ID: &str = "color-adjust";
 const COLOR_ADJUST_SHADER_SOURCE: &str = include_str!("shaders/color_adjust.wgsl");
 
+const PIXELATE_SHADER_ID: &str = "pixelate";
+const PIXELATE_SHADER_SOURCE: &str = include_str!("shaders/pixelate.wgsl");
+
+const VIGNETTE_SHADER_ID: &str = "vignette";
+const VIGNETTE_SHADER_SOURCE: &str = include_str!("shaders/vignette.wgsl");
+
+const GLOW_SHADER_ID: &str = "glow";
+const GLOW_SHADER_SOURCE: &str = include_str!("shaders/glow.wgsl");
+
+const NOISE_SHADER_ID: &str = "noise";
+const NOISE_SHADER_SOURCE: &str = include_str!("shaders/noise.wgsl");
+
 /// Number of f32 slots every effect shader can address, indexed 0..SCALAR_SLOT_COUNT.
 pub const SCALAR_SLOT_COUNT: usize = 12;
 /// Number of vec2 slots every effect shader can address.
@@ -140,6 +152,88 @@ const EFFECT_SHADERS: &[EffectShader] = &[
                 UniformBinding {
                     name: "u_sharpen",
                     slot: UniformSlot::Scalar { index: 8 },
+                },
+            ],
+        },
+    },
+    EffectShader {
+        id: PIXELATE_SHADER_ID,
+        source: PIXELATE_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: PIXELATE_SHADER_ID,
+            uniforms: &[UniformBinding {
+                name: "u_block_size",
+                slot: UniformSlot::Scalar { index: 0 },
+            }],
+        },
+    },
+    EffectShader {
+        id: VIGNETTE_SHADER_ID,
+        source: VIGNETTE_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: VIGNETTE_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_amount",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_radius",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_feather",
+                    slot: UniformSlot::Scalar { index: 2 },
+                },
+                UniformBinding {
+                    name: "u_roundness",
+                    slot: UniformSlot::Scalar { index: 3 },
+                },
+            ],
+        },
+    },
+    EffectShader {
+        id: GLOW_SHADER_ID,
+        source: GLOW_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: GLOW_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_threshold",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_intensity",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_radius",
+                    slot: UniformSlot::Scalar { index: 2 },
+                },
+                UniformBinding {
+                    name: "u_direction",
+                    slot: UniformSlot::Vec2 { index: 0 },
+                },
+            ],
+        },
+    },
+    EffectShader {
+        id: NOISE_SHADER_ID,
+        source: NOISE_SHADER_SOURCE,
+        schema: UniformSchema {
+            shader: NOISE_SHADER_ID,
+            uniforms: &[
+                UniformBinding {
+                    name: "u_amount",
+                    slot: UniformSlot::Scalar { index: 0 },
+                },
+                UniformBinding {
+                    name: "u_grain_size",
+                    slot: UniformSlot::Scalar { index: 1 },
+                },
+                UniformBinding {
+                    name: "u_time",
+                    slot: UniformSlot::Scalar { index: 2 },
                 },
             ],
         },
@@ -820,6 +914,97 @@ mod tests {
         assert_eq!(packed.scalars[0], [0.0; 4]);
         assert_eq!(packed.scalars[1], [0.0, 0.0, 1.0, 0.0]);
         assert_eq!(packed.scalars[2], [0.0; 4]);
+    }
+
+    fn pixelate_pass(block_size: f32) -> EffectPass {
+        EffectPass {
+            shader: PIXELATE_SHADER_ID.to_string(),
+            uniforms: HashMap::from([(
+                "u_block_size".to_string(),
+                UniformValue::Number(block_size),
+            )]),
+        }
+    }
+
+    #[test]
+    fn packs_pixelate_uniforms() {
+        let packed =
+            pack_effect_uniforms(&pixelate_pass(12.0), 1920, 1080).expect("pixelate packs");
+        assert_eq!(packed.resolution, [1920.0, 1080.0]);
+        assert_eq!(packed.scalars[0], [12.0, 0.0, 0.0, 0.0]);
+        assert_eq!(packed.scalars[1], [0.0; 4]);
+        assert_eq!(packed.scalars[2], [0.0; 4]);
+        assert_eq!(packed.direction, [0.0; 2]);
+        assert_eq!(packed.color, [0.0; 4]);
+    }
+
+    fn vignette_pass(amount: f32, radius: f32, feather: f32, roundness: f32) -> EffectPass {
+        EffectPass {
+            shader: VIGNETTE_SHADER_ID.to_string(),
+            uniforms: HashMap::from([
+                ("u_amount".to_string(), UniformValue::Number(amount)),
+                ("u_radius".to_string(), UniformValue::Number(radius)),
+                ("u_feather".to_string(), UniformValue::Number(feather)),
+                ("u_roundness".to_string(), UniformValue::Number(roundness)),
+            ]),
+        }
+    }
+
+    #[test]
+    fn packs_vignette_uniforms() {
+        let packed = pack_effect_uniforms(&vignette_pass(0.6, 0.7, 0.3, 1.0), 1920, 1080)
+            .expect("vignette packs");
+        // scalars[0]: amount, radius, feather, roundness.
+        assert_eq!(packed.scalars[0], [0.6, 0.7, 0.3, 1.0]);
+        assert_eq!(packed.scalars[1], [0.0; 4]);
+        assert_eq!(packed.direction, [0.0; 2]);
+    }
+
+    fn glow_pass(threshold: f32, intensity: f32, radius: f32, direction: [f32; 2]) -> EffectPass {
+        EffectPass {
+            shader: GLOW_SHADER_ID.to_string(),
+            uniforms: HashMap::from([
+                ("u_threshold".to_string(), UniformValue::Number(threshold)),
+                ("u_intensity".to_string(), UniformValue::Number(intensity)),
+                ("u_radius".to_string(), UniformValue::Number(radius)),
+                (
+                    "u_direction".to_string(),
+                    UniformValue::Vector(direction.to_vec()),
+                ),
+            ]),
+        }
+    }
+
+    #[test]
+    fn packs_glow_uniforms_for_both_passes() {
+        let horizontal = pack_effect_uniforms(&glow_pass(0.7, 0.8, 20.0, [1.0, 0.0]), 1920, 1080)
+            .expect("glow horizontal packs");
+        assert_eq!(horizontal.scalars[0], [0.7, 0.8, 20.0, 0.0]);
+        assert_eq!(horizontal.direction, [1.0, 0.0]);
+
+        let vertical = pack_effect_uniforms(&glow_pass(0.7, 0.8, 20.0, [0.0, 1.0]), 1920, 1080)
+            .expect("glow vertical packs");
+        assert_eq!(vertical.scalars[0], [0.7, 0.8, 20.0, 0.0]);
+        assert_eq!(vertical.direction, [0.0, 1.0]);
+    }
+
+    fn noise_pass(amount: f32, grain_size: f32, time: f32) -> EffectPass {
+        EffectPass {
+            shader: NOISE_SHADER_ID.to_string(),
+            uniforms: HashMap::from([
+                ("u_amount".to_string(), UniformValue::Number(amount)),
+                ("u_grain_size".to_string(), UniformValue::Number(grain_size)),
+                ("u_time".to_string(), UniformValue::Number(time)),
+            ]),
+        }
+    }
+
+    #[test]
+    fn packs_noise_uniforms() {
+        let packed =
+            pack_effect_uniforms(&noise_pass(0.25, 3.0, 12.5), 1920, 1080).expect("noise packs");
+        assert_eq!(packed.scalars[0], [0.25, 3.0, 12.5, 0.0]);
+        assert_eq!(packed.direction, [0.0; 2]);
     }
 
     #[test]

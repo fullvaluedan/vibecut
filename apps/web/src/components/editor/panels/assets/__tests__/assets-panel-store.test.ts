@@ -43,12 +43,13 @@ describe("hidden-panel default list (Dan's 2026-07-19 roadmap decision D4/D6, W2
 		}
 	});
 
-	test("VISIBLE_TAB_KEYS is exactly Media, Sounds, Text, Shapes, Captions, Transcript, Settings (T19.4a: sounds unhidden)", () => {
+	test("VISIBLE_TAB_KEYS is exactly Media, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings (T19.4b: effects unhidden)", () => {
 		expect(VISIBLE_TAB_KEYS).toEqual([
 			"media",
 			"sounds",
 			"text",
 			"shapes",
+			"effects",
 			"captions",
 			"transcript",
 			"settings",
