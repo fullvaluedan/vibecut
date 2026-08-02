@@ -1,14 +1,11 @@
 import { stickersRegistry } from "../registry";
 import type { StickerProvider } from "@/stickers/types";
 import { flagsProvider } from "./flags";
-import { logosProvider } from "./logos";
-import { shapesProvider } from "./shapes";
 
-const defaultProviders: StickerProvider[] = [
-	logosProvider,
-	flagsProvider,
-	shapesProvider,
-];
+// T19.4a prune: logos.ts (empty stub) and shapes.ts (duplicate of the live
+// Shapes tab) were deleted. Flags is the only provider left - legacy sticker
+// elements (`flags:us`) still need it to resolve at render/export time.
+const defaultProviders: StickerProvider[] = [flagsProvider];
 
 export function registerDefaultStickerProviders({
 	providersToRegister = defaultProviders,

@@ -10,9 +10,9 @@ import {
 } from "@/features/editing/surface-flags";
 
 describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)", () => {
-	test("the hidden left-panel tab list matches the roadmap doc exactly", () => {
+	test("the hidden left-panel tab list matches the roadmap doc exactly (T19.4a: sounds unhidden)", () => {
 		expect([...HIDDEN_ASSET_TABS].sort()).toEqual(
-			["effects", "hyperframes", "sounds"].sort(),
+			["effects", "hyperframes"].sort(),
 		);
 	});
 
@@ -24,6 +24,7 @@ describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)",
 			"captions",
 			"transcript",
 			"settings",
+			"sounds",
 		] as const) {
 			expect(HIDDEN_ASSET_TABS).not.toContain(kept);
 		}

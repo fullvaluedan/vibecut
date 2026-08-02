@@ -10,6 +10,8 @@ interface SoundsStore {
 	topSoundEffects: SoundEffect[];
 	isLoading: boolean;
 	error: string | null;
+	/** True once the server has told us FREESOUND_API_KEY is unset or still the placeholder. */
+	needsFreesoundApiKey: boolean;
 	hasLoaded: boolean;
 	showCommercialOnly: boolean;
 	toggleCommercialFilter: () => void;
@@ -32,6 +34,7 @@ interface SoundsStore {
 	setTopSoundEffects: ({ sounds }: { sounds: SoundEffect[] }) => void;
 	setLoading: ({ loading }: { loading: boolean }) => void;
 	setError: ({ error }: { error: string | null }) => void;
+	setNeedsFreesoundApiKey: ({ needsKey }: { needsKey: boolean }) => void;
 	setHasLoaded: ({ loaded }: { loaded: boolean }) => void;
 	setSearchQuery: ({ query }: { query: string }) => void;
 	setSearchResults: ({ results }: { results: SoundEffect[] }) => void;
@@ -66,6 +69,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 	topSoundEffects: [],
 	isLoading: false,
 	error: null,
+	needsFreesoundApiKey: false,
 	hasLoaded: false,
 	showCommercialOnly: true,
 
@@ -91,6 +95,8 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 	setTopSoundEffects: ({ sounds }) => set({ topSoundEffects: sounds }),
 	setLoading: ({ loading }) => set({ isLoading: loading }),
 	setError: ({ error }) => set({ error }),
+	setNeedsFreesoundApiKey: ({ needsKey }) =>
+		set({ needsFreesoundApiKey: needsKey }),
 	setHasLoaded: ({ loaded }) => set({ hasLoaded: loaded }),
 	setSearchQuery: ({ query }) => set({ searchQuery: query }),
 	setSearchResults: ({ results }) =>

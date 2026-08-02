@@ -1,3 +1,6 @@
+/** Marker the /api/sounds/search route sends when FREESOUND_API_KEY is unset or still the .env.example placeholder. */
+export const FREESOUND_NOT_CONFIGURED_ERROR = "freesound_not_configured";
+
 export interface SoundEffect {
 	id: number;
 	name: string;

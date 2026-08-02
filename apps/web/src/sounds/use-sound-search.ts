@@ -1,5 +1,18 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useSoundsStore } from "@/sounds/sounds-store";
+import {
+	FREESOUND_NOT_CONFIGURED_ERROR,
+	type SoundEffect,
+} from "@/sounds/types";
+
+interface SoundSearchResponse {
+	count: number;
+	next: string | null;
+	previous: string | null;
+	results: SoundEffect[];
+	error?: string;
+	message?: string;
+}
 
 export function useSoundSearch({
 	query,
@@ -25,6 +38,7 @@ export function useSoundSearch({
 		setHasNextPage,
 		setTotalCount,
 		setLoadingMore,
+		setNeedsFreesoundApiKey,
 		appendSearchResults,
 		appendTopSounds,
 		resetPagination,
@@ -52,17 +66,17 @@ export function useSoundSearch({
 			);
 
 			if (response.ok) {
-				const data = await response.json();
+				const data = (await response.json()) as SoundSearchResponse;
 
 				if (query.trim()) {
-					appendSearchResults(data.results);
+					appendSearchResults({ results: data.results });
 				} else {
-					appendTopSounds(data.results);
+					appendTopSounds({ results: data.results });
 				}
 
 				setCurrentPage({ page: nextPage });
 				setHasNextPage({ hasNext: !!data.next });
-				setTotalCount(data.count);
+				setTotalCount({ count: data.count });
 			} else {
 				setSearchError({ error: `Load more failed: ${response.status}` });
 			}
@@ -75,6 +89,8 @@ export function useSoundSearch({
 		}
 	};
 
+	const lastCommercialOnlyRef = useRef(commercialOnly);
+
 	useEffect(() => {
 		if (!query.trim()) {
 			setSearchResults({ results: [] });
@@ -83,7 +99,14 @@ export function useSoundSearch({
 			return;
 		}
 
-		if (query === lastSearchQuery && searchResults.length > 0) {
+		const commercialOnlyChanged = lastCommercialOnlyRef.current !== commercialOnly;
+		lastCommercialOnlyRef.current = commercialOnly;
+
+		if (
+			query === lastSearchQuery &&
+			searchResults.length > 0 &&
+			!commercialOnlyChanged
+		) {
 			return;
 		}
 
@@ -95,13 +118,23 @@ export function useSoundSearch({
 				setSearchError({ error: null });
 				resetPagination();
 
+				const initialSearchParams = new URLSearchParams({
+					q: query,
+					type: "effects",
+					page: "1",
+					commercial_only: commercialOnly.toString(),
+				});
+
 				const response = await fetch(
-					`/api/sounds/search?q=${encodeURIComponent(query)}&type=effects&page=1`,
+					`/api/sounds/search?${initialSearchParams.toString()}`,
 				);
 
 				if (!ignore) {
 					if (response.ok) {
-						const data = await response.json();
+						const data = (await response.json()) as SoundSearchResponse;
+						setNeedsFreesoundApiKey({
+							needsKey: data.error === FREESOUND_NOT_CONFIGURED_ERROR,
+						});
 						setSearchResults({ results: data.results });
 						setLastSearchQuery({ query: query });
 						setHasNextPage({ hasNext: !!data.next });
@@ -130,6 +163,7 @@ export function useSoundSearch({
 		};
 	}, [
 		query,
+		commercialOnly,
 		lastSearchQuery,
 		searchResults.length,
 		setSearchResults,
@@ -139,6 +173,7 @@ export function useSoundSearch({
 		setCurrentPage,
 		setHasNextPage,
 		setTotalCount,
+		setNeedsFreesoundApiKey,
 		resetPagination,
 	]);
 
