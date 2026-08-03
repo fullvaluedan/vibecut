@@ -1,6 +1,7 @@
 import { drawCssBackground } from "@/gradients";
 import { getMaskDefinition } from "@/masks";
 import { MASK_EXPANSION_OPACITY_RENDERED } from "@/masks/types";
+import { getWasmCapabilities } from "../wasm-capabilities";
 import { incrementCounter } from "@/diagnostics/render-perf";
 import { getCropPixelRect, isNoOpCrop } from "@/rendering/crop";
 import type { AnyBaseNode } from "../nodes/base-node";
@@ -418,6 +419,17 @@ function fullCanvasTransform(
 	};
 }
 
+/**
+ * The compile-time kill switch AND-ed with the runtime capability report:
+ * both must agree the loaded wasm reads the mask expansion/opacity fields.
+ */
+function renderMaskExpansionOpacity(): boolean {
+	return (
+		MASK_EXPANSION_OPACITY_RENDERED &&
+		getWasmCapabilities().maskExpansionOpacity
+	);
+}
+
 function buildMaskArtifacts({
 	node,
 	renderer,
@@ -577,13 +589,15 @@ function buildMaskArtifacts({
 			textureId: maskTextureId,
 			feather,
 			inverted: mask.params.inverted,
-			// Live as of opencut-wasm 0.3.0. The flag stays as the kill switch: if
-			// apps/web is ever repinned to an older wasm, these fall back to the
-			// no-op values (0, 1) instead of being silently ignored.
-			expansion: MASK_EXPANSION_OPACITY_RENDERED
+			// Live as of opencut-wasm 0.3.0. Two kill switches: the compile-time
+			// MASK_EXPANSION_OPACITY_RENDERED flag, AND the runtime capability
+			// report — a stale wasm (e.g. the published 0.2.10 shadowing the
+			// local build) reports no mask capability, and the params degrade
+			// to the no-op values (0, 1) instead of being silently ignored.
+			expansion: renderMaskExpansionOpacity()
 				? (mask.params.expansion ?? 0)
 				: 0,
-			opacity: MASK_EXPANSION_OPACITY_RENDERED
+			opacity: renderMaskExpansionOpacity()
 				? (mask.params.opacity ?? 1)
 				: 1,
 		},

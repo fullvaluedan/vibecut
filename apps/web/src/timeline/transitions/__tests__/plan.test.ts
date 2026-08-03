@@ -53,10 +53,13 @@ describe("transition render plan", () => {
 
 		const left = plan.rolesByElementId.get("a");
 		const right = plan.rolesByElementId.get("b");
+		// The outgoing side HOLDS at full opacity; only the incoming side ramps.
+		// Both ramping composited to 0.75 * luminance at the midpoint (the
+		// source-over derivation is on TransitionRamp in plan.ts).
 		expect(left?.tail).toEqual({
 			startTicks: 3.5 * SEC,
 			endTicks: 4.5 * SEC,
-			direction: "out",
+			direction: "hold",
 			extendTicks: 0.5 * SEC,
 		});
 		expect(right?.head).toEqual({

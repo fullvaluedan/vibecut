@@ -31,10 +31,14 @@ export type MaskType = BuiltinMaskType | "freeform";
  * - `opacity` scales mask strength in `rust/crates/compositor/src/shaders/mask.wgsl`,
  *   mixing the masked alpha back towards 1 (0 = mask has no effect).
  *
- * Kept as the single kill switch at the wasm boundary
- * (`services/renderer/compositor/frame-descriptor.ts`): set it back to false if
- * apps/web is ever repinned to an `opencut-wasm` older than 0.3.0, and the two
- * params degrade to their no-op values instead of rendering wrong.
+ * Kept as the compile-time kill switch at the wasm boundary
+ * (`services/renderer/compositor/frame-descriptor.ts`), where it is AND-ed
+ * with the runtime capability report
+ * (`services/renderer/wasm-capabilities.ts`): a stale `opencut-wasm` build
+ * (e.g. the published 0.2.10 shadowing the local one) reports no mask
+ * capability and the two params degrade to their no-op values instead of
+ * rendering wrong. Set the flag back to false only to force that fallback
+ * unconditionally.
  */
 export const MASK_EXPANSION_OPACITY_RENDERED = true;
 

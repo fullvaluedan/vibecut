@@ -69,6 +69,9 @@ export const blurEffectDefinition: EffectDefinition = {
 	type: "blur",
 	name: "Blur",
 	keywords: ["blur", "soft", "defocus"],
+	// 4x the neutral default; at the 160px tile size this is a ~1px sigma,
+	// clearly soft without wiping out the preview image.
+	previewParams: { intensity: 60 },
 	params: [
 		{
 			key: "intensity",

@@ -99,6 +99,9 @@ export const glowEffectDefinition: EffectDefinition = {
 	type: "glow",
 	name: "Glow",
 	keywords: ["glow", "bloom", "shine", "halo"],
+	// intensity is the neutral param; a lowered threshold lets the preview
+	// image's bright background bloom so the effect is unmistakable.
+	previewParams: { intensity: 80, threshold: 55 },
 	params: [
 		{
 			key: "threshold",

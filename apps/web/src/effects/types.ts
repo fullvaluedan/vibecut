@@ -46,5 +46,14 @@ export interface EffectDefinition {
 	name: string;
 	keywords: string[];
 	params: ParamDefinition[];
+	/**
+	 * Optional param overrides for the catalogue tile thumbnail ONLY. Defaults
+	 * are deliberately neutral (a freshly added clip effect must not change the
+	 * frame), which would make every tile render the unchanged preview image;
+	 * these values are merged over `buildDefaultParamValues(params)` by the
+	 * tile render path so the thumbnail shows what the effect does. Never read
+	 * when creating a clip effect instance.
+	 */
+	previewParams?: ParamValues;
 	renderer: EffectRendererConfig;
 }

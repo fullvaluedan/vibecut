@@ -3,6 +3,6 @@ mod types;
 
 pub use pipeline::{
     ApplyEffectsOptions, EffectPipeline, EffectsError, SCALAR_SLOT_COUNT, UniformBinding,
-    UniformSchema, UniformSlot, VEC2_SLOT_COUNT, VEC4_SLOT_COUNT,
+    UniformSchema, UniformSlot, VEC2_SLOT_COUNT, VEC4_SLOT_COUNT, registered_shader_ids,
 };
 pub use types::{EffectPass, UniformValue};

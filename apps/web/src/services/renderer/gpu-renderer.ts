@@ -3,7 +3,19 @@ import {
 	applyMaskFeather as applyMaskFeatherWasm,
 	initializeGpu,
 } from "opencut-wasm";
+import * as opencutWasm from "opencut-wasm";
 import type { EffectPass, EffectUniformValue } from "@/effects/types";
+import {
+	filterSupportedEffectPasses,
+	registerWasmCapabilitiesProbe,
+} from "./wasm-capabilities";
+
+// Stale-wasm detection (see wasm-capabilities.ts): a pre-0.3.0 package has no
+// `wasmCapabilities` export, which the guard reads as "supports nothing".
+// Namespace access (not a named import) so the stale package still compiles.
+registerWasmCapabilitiesProbe(() =>
+	(opencutWasm as { wasmCapabilities?: () => unknown }).wasmCapabilities?.(),
+);
 
 let gpuAvailable = false;
 let initPromise: Promise<void> | null = null;
@@ -39,7 +51,10 @@ export const gpuRenderer = {
 		height: number;
 		passes: EffectPass[];
 	}): OffscreenCanvas {
-		if (passes.length === 0 || !gpuAvailable) {
+		// Stale-wasm guard: drop passes the loaded module cannot run, so the
+		// thumbnail renders the unfiltered source instead of throwing.
+		const supportedPasses = filterSupportedEffectPasses(passes);
+		if (supportedPasses.length === 0 || !gpuAvailable) {
 			return source;
 		}
 
@@ -47,7 +62,7 @@ export const gpuRenderer = {
 			source,
 			width,
 			height,
-			passes: serializeEffectPasses(passes),
+			passes: serializeEffectPasses(supportedPasses),
 		});
 	},
 

@@ -17,7 +17,7 @@ const leftRoles: TransitionRoles = {
 	tail: {
 		startTicks: 3.5 * SEC,
 		endTicks: 4.5 * SEC,
-		direction: "out",
+		direction: "hold",
 		extendTicks: 0.5 * SEC,
 	},
 };
@@ -99,34 +99,64 @@ describe("visibility gate", () => {
 });
 
 describe("opacity ramp math", () => {
-	test("linear 1 -> 0 out and 0 -> 1 in, complementary across the window", () => {
-		for (const [time, expected] of [
-			[3.5 * SEC, 1],
-			[3.75 * SEC, 0.75],
-			[4 * SEC, 0.5],
-			[4.25 * SEC, 0.25],
-			[4.5 * SEC, 0],
-		] as const) {
-			const out = resolveTransitionOpacityFactor({
+	test("constant-colour sources compose to the FLAT linear blend at every t", () => {
+		// The renderer composites the INCOMING clip last (scene-builder pushes
+		// the right clip's node after the left's, and items draw in order
+		// source-over), so the frame is `U*fU + (L*fL)*(1 - fU)`. A flat
+		// dissolve needs `U*t + L*(1-t)`, which holds iff the outgoing layer
+		// keeps fL = 1 and only the incoming ramps fU = t. Both ramping gave
+		// `U*t + L*(1-t)^2` - the 25% midpoint luminance dip. Assert the
+		// COMPOSITED result, not the per-layer factors: the old factors summed
+		// to 1 and still dipped.
+		const L = 0.2;
+		const U = 0.8;
+		for (const sec of [3.5, 3.75, 4, 4.25, 4.5]) {
+			const time = sec * SEC;
+			const t = sec - 3.5;
+			const fL = resolveTransitionOpacityFactor({
 				transitions: leftRoles,
 				time,
 			});
-			const incoming = resolveTransitionOpacityFactor({
+			const fU = resolveTransitionOpacityFactor({
 				transitions: rightRoles,
 				time,
 			});
-			expect(out).toBeCloseTo(expected, 6);
-			expect(incoming).toBeCloseTo(1 - expected, 6);
-			expect(out + incoming).toBeCloseTo(1, 6);
+			const composited = U * fU + L * fL * (1 - fU);
+			expect(composited).toBeCloseTo(U * t + L * (1 - t), 6);
 		}
+	});
+
+	test("midpoint (t=0.5): the outgoing layer holds at 1, the incoming is at half", () => {
+		expect(
+			resolveTransitionOpacityFactor({ transitions: leftRoles, time: 4 * SEC }),
+		).toBe(1);
+		expect(
+			resolveTransitionOpacityFactor({
+				transitions: rightRoles,
+				time: 4 * SEC,
+			}),
+		).toBeCloseTo(0.5, 6);
 	});
 
 	test("outside the window the factor is a plain 1 (or 0 past an out-ramp)", () => {
 		expect(
 			resolveTransitionOpacityFactor({ transitions: leftRoles, time: 1 * SEC }),
 		).toBe(1);
+		// A held layer never dips, even past its own window (the visibility
+		// gate is what removes it there).
 		expect(
 			resolveTransitionOpacityFactor({ transitions: leftRoles, time: 9 * SEC }),
+		).toBe(1);
+		const fadeOut: TransitionRoles = {
+			tail: {
+				startTicks: 3.5 * SEC,
+				endTicks: 4.5 * SEC,
+				direction: "out",
+				extendTicks: 0,
+			},
+		};
+		expect(
+			resolveTransitionOpacityFactor({ transitions: fadeOut, time: 9 * SEC }),
 		).toBe(0);
 		expect(resolveTransitionOpacityFactor({ time: 1 * SEC })).toBe(1);
 	});
@@ -158,19 +188,26 @@ describe("opacity ramp math", () => {
 	});
 
 	test("the ramp MULTIPLIES authored opacity instead of replacing it", () => {
-		// The renderer does `authored * factor` (see resolve.ts). A clip held at
-		// 40% by the user (or by an opacity keyframe) dissolves 0.4 -> 0.
+		// The renderer does `authored * factor` (see resolve.ts). An incoming
+		// clip held at 40% by the user (or by an opacity keyframe) dissolves
+		// 0 -> 0.4, and the outgoing side HOLDS its authored 0.4 while it is
+		// covered - the transition never clobbers authored opacity.
 		const authored = 0.4;
 		const midpoint = resolveTransitionOpacityFactor({
-			transitions: leftRoles,
+			transitions: rightRoles,
 			time: 4 * SEC,
 		});
 		expect(authored * midpoint).toBeCloseTo(0.2, 6);
-		const start = resolveTransitionOpacityFactor({
-			transitions: leftRoles,
-			time: 3.5 * SEC,
+		const end = resolveTransitionOpacityFactor({
+			transitions: rightRoles,
+			time: 4.5 * SEC,
 		});
-		expect(authored * start).toBeCloseTo(0.4, 6);
+		expect(authored * end).toBeCloseTo(0.4, 6);
+		const held = resolveTransitionOpacityFactor({
+			transitions: leftRoles,
+			time: 4 * SEC,
+		});
+		expect(authored * held).toBeCloseTo(0.4, 6);
 	});
 
 	test("head and tail ramps on one clip multiply", () => {

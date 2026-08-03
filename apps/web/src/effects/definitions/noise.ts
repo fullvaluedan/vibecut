@@ -79,6 +79,9 @@ export const noiseEffectDefinition: EffectDefinition = {
 	type: "noise",
 	name: "Noise",
 	keywords: ["noise", "grain", "film grain", "static"],
+	// amount is the neutral param; 45 reads as clear film grain at tile size
+	// (u_amount 0.225, under the 0.5 max blend).
+	previewParams: { amount: 45 },
 	params: [
 		{
 			key: "amount",

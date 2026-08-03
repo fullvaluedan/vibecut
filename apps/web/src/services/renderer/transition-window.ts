@@ -24,6 +24,9 @@ function rampFactor({
 }): number {
 	const span = ramp.endTicks - ramp.startTicks;
 	if (span <= 0) return 1;
+	// "hold": the outgoing side of a crossDissolve stays fully opaque while the
+	// incoming side is composited over it (see TransitionRamp in plan.ts).
+	if (ramp.direction === "hold") return 1;
 	if (time <= ramp.startTicks) {
 		return ramp.direction === "out" ? 1 : 0;
 	}

@@ -30,17 +30,26 @@ The web app depends on the published `opencut-wasm` package by default. If you a
 ```bash
 # From the repo root
 bun run build:wasm
-
-cd rust/wasm/pkg
-bun link
-
-# Back at the repo root, NOT in apps/web (see "Windows notes" below)
-cd ../../..
-bun link opencut-wasm
+bun run link:wasm
 ```
 
-Confirm the link took: `node_modules/opencut-wasm` should be a symlink into
-`rust/wasm/pkg`, and its `package.json` should show the version you just built.
+`bun run link:wasm` (scripts/link-wasm.mjs) replaces the installed
+`opencut-wasm` with a junction/symlink into `rust/wasm/pkg` in BOTH places it
+can resolve from — the hoisted root `node_modules/opencut-wasm` AND
+`apps/web/node_modules/opencut-wasm`. The second one is the trap: it is a real
+directory installed from npm, Node resolution checks it first, and it SHADOWS
+the root-level link that `bun link opencut-wasm` creates. Do not use
+`bun link` for this repo layout; it only fixes the root copy.
+
+The link survives `bun install`: the root `postinstall` re-runs the script
+with `--if-built`, which re-links whenever `rust/wasm/pkg` exists and is a
+silent no-op on a fresh checkout (where it does not). The script is idempotent
+and never touches an `opencut-wasm.npm-*-backup` directory.
+
+Confirm the link took: `apps/web/node_modules/opencut-wasm/package.json`
+should show the version you just built. The app also guards this at runtime:
+a stale build shows a banner at the top of the editor naming the missing
+shaders and this fix (see `apps/web/src/services/renderer/wasm-capabilities.ts`).
 
 While you work, rebuild on changes from the repo root:
 
@@ -48,11 +57,12 @@ While you work, rebuild on changes from the repo root:
 bun dev:wasm
 ```
 
-To go back to the published package, run `bun install` from the repo root.
+To go back to the published package, run `bun install` from the repo root after
+deleting `rust/wasm/pkg` (otherwise the postinstall re-links it).
 
-### Windows notes (2026-08-02, round 19 T19.0)
+### Windows notes (2026-08-02, round 19 T19.0; item 2 revised 2026-08-03)
 
-Three things in the loop above do not work as written on Dan's Windows box:
+Three deviations found running the documented loop on Dan's Windows box:
 
 1. **`bun run build:wasm` fails with `linker 'link.exe' not found`** under the
    default `stable-x86_64-pc-windows-msvc` toolchain, because no Visual Studio
@@ -66,11 +76,13 @@ Three things in the loop above do not work as written on Dan's Windows box:
    bun run build:wasm
    ```
 
-2. **`bun link opencut-wasm` must be run from the repo root, not `apps/web`.**
-   From `apps/web` it fails with `Workspace dependency "@framecut/hf-bridge" not
-   found`: bun treats the package directory as the workspace root and cannot
-   resolve the sibling workspace packages. From the repo root it links into the
-   hoisted `node_modules/opencut-wasm`, which is where `apps/web` resolves it.
+2. **`bun link opencut-wasm` is not sufficient on this repo layout** — it only
+   links the hoisted root `node_modules/opencut-wasm`, while
+   `apps/web/node_modules/opencut-wasm` stays a real npm directory and shadows
+   it. Use `bun run link:wasm` (above) instead, which replaces both. (It also
+   must not be run from `apps/web`: bun treats the package directory as the
+   workspace root and fails with `Workspace dependency "@framecut/hf-bridge"
+   not found`.)
 
 3. **`cargo test` cannot run at all on this box, for any crate.** The MSVC
    linker is missing, and rustup's bundled MinGW has no GNU assembler, so
@@ -107,11 +119,17 @@ development rides on the local link above.
    npm whoami            # confirm you are logged in
    bun run publish:wasm  # builds again, then npm publish rust/wasm/pkg --access public
    ```
-5. Repin the web app: set `opencut-wasm` in `apps/web/package.json` to the
-   published version, then from the repo root:
+5. Repin the web app: set `opencut-wasm` in BOTH `package.json` (repo root)
+   and `apps/web/package.json` to the published version, then from the repo
+   root:
    ```bash
-   bun install           # drops the local link, installs from npm
+   rm -rf rust/wasm/pkg   # otherwise the postinstall re-links the local build
+   bun install            # drops the local link, installs from npm
    ```
+   The version-guard test
+   (`apps/web/src/services/renderer/__tests__/wasm-version.test.ts`) fails
+   loudly until this repin lands — that red is the publish reminder, not a
+   regression.
 6. Re-verify against the published package, not the link:
    ```bash
    cd apps/web && bun test && bunx tsc --noEmit

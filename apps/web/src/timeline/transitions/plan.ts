@@ -22,12 +22,19 @@ import { DIP_COLOR_BY_KIND } from "./types";
  *
  * `direction` is what the clip's own alpha does across `[startTicks, endTicks]`:
  * "in" ramps 0 -> 1, "out" ramps 1 -> 0, "dip" ramps 0 -> 1 -> 0 (the colour
- * layer of a dip-to-black/white). Linear in v1.
+ * layer of a dip-to-black/white), "hold" stays at 1. Linear in v1.
+ *
+ * Why a crossDissolve's OUTGOING side is "hold", not "out": the renderer
+ * composites the incoming clip LAST (source-over), so the frame is
+ * `U*aU + (L*aL)*(1-aU)`. The flat blend `U*t + L*(1-t)` falls out only when
+ * the lower (outgoing) layer holds aL = 1 and the upper (incoming) layer
+ * ramps aU = t. Ramping BOTH gives `U*t + L*(1-t)^2` - a 25% luminance dip
+ * at the midpoint.
  */
 export interface TransitionRamp {
 	startTicks: number;
 	endTicks: number;
-	direction: "in" | "out" | "dip";
+	direction: "in" | "out" | "dip" | "hold";
 	/**
 	 * Ticks of timeline the clip is allowed to render OUTSIDE its own span,
 	 * sampling into trimmed-away source. Non-zero only for a crossDissolve.
@@ -128,7 +135,7 @@ function planJoin({
 		plan,
 		elementId: boundary.leftElementId,
 		side: "tail",
-		ramp: { startTicks, endTicks, direction: "out", extendTicks: halfTicks },
+		ramp: { startTicks, endTicks, direction: "hold", extendTicks: halfTicks },
 	});
 	setRole({
 		plan,

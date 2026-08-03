@@ -41,8 +41,9 @@ export type LayerMaskDescriptor = {
 	inverted: boolean;
 	// Grow/shrink the boundary (SDF-threshold bias) and mask strength (0..1).
 	// Both are consumed by the wasm compositor as of opencut-wasm 0.3.0; see
-	// MASK_EXPANSION_OPACITY_RENDERED for the kill switch if apps/web is ever
-	// repinned to an older build.
+	// MASK_EXPANSION_OPACITY_RENDERED (compile-time) and the runtime capability
+	// guard in services/renderer/wasm-capabilities.ts for the kill switches if
+	// the loaded wasm is older.
 	expansion: number;
 	opacity: number;
 };

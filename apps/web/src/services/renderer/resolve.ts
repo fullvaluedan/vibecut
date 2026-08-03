@@ -28,6 +28,7 @@ import {
 	resolveTransitionClipTime,
 	resolveTransitionOpacityFactor,
 } from "./transition-window";
+import { filterSupportedEffectPasses } from "./wasm-capabilities";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -130,13 +131,18 @@ function resolveEffectPassGroups({
 				localTime,
 			});
 			const definition = effectsRegistry.get(effect.type);
-			return resolveEffectPasses({
-				definition,
-				effectParams: resolvedParams,
-				width,
-				height,
-				time: localTime,
-			});
+			// Stale-wasm guard: a shader the loaded wasm cannot run degrades to
+			// no passes (the clip renders without that effect) instead of
+			// throwing inside the compositor.
+			return filterSupportedEffectPasses(
+				resolveEffectPasses({
+					definition,
+					effectParams: resolvedParams,
+					width,
+					height,
+					time: localTime,
+				}),
+			);
 		});
 }
 
@@ -552,13 +558,15 @@ function resolveEffectLayerNode({
 	}
 
 	const definition = effectsRegistry.get(node.params.effectType);
-	const passes = resolveEffectPasses({
-		definition,
-		effectParams: node.params.effectParams,
-		width: context.renderer.width,
-		height: context.renderer.height,
-		time: time - node.params.timeOffset,
-	});
+	const passes = filterSupportedEffectPasses(
+		resolveEffectPasses({
+			definition,
+			effectParams: node.params.effectParams,
+			width: context.renderer.width,
+			height: context.renderer.height,
+			time: time - node.params.timeOffset,
+		}),
+	);
 	if (passes.length === 0) {
 		return null;
 	}

@@ -41,6 +41,7 @@ import {
 	getBookmarkPreviewOverlaySource,
 } from "@/timeline/bookmarks/index";
 import { BackgroundTranscriber } from "@/features/transcription/background-transcriber";
+import { getWasmCapabilities } from "@/services/renderer/wasm-capabilities";
 import { parseOpenParam, resolveOpenParamAction } from "./deep-link-open";
 import { useDirectorPlanStore } from "@/features/ai-generate/director/director-plan-store";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
@@ -85,6 +86,7 @@ export default function Editor() {
 		<MobileGate>
 			<EditorProvider projectId={projectId}>
 				<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
+					<StaleWasmBanner />
 					<DegradedRendererBanner />
 					<EditorHeader />
 					<div className="min-h-0 min-w-0 flex-1">
@@ -108,6 +110,44 @@ function DegradedRendererBanner() {
 	return (
 		<div className="bg-accent border-b h-9 flex items-center justify-center gap-2 text-xs text-muted-foreground">
 			<span>For the best experience, open VibeCut in Chrome.</span>
+			<Button
+				variant="text"
+				size="icon"
+				className="p-0 w-auto [&_svg]:size-3.5"
+				onClick={() => setDismissed(true)}
+				aria-label="Dismiss"
+			>
+				<HugeiconsIcon icon={Cancel01Icon} />
+			</Button>
+		</div>
+	);
+}
+
+/**
+ * Stale-wasm guard (services/renderer/wasm-capabilities.ts): the loaded
+ * `opencut-wasm` predates the shaders the app emits — typically the published
+ * package shadowing the local `rust/wasm/pkg` build. Effects degrade to no-op
+ * passes instead of blanking the preview; this banner is the ONE place the
+ * condition is surfaced, with the fix.
+ */
+function StaleWasmBanner() {
+	const [dismissed, setDismissed] = useState(false);
+	const capabilities = getWasmCapabilities();
+	if (capabilities.supported || dismissed) return null;
+
+	return (
+		<div className="bg-accent border-b min-h-9 flex items-center justify-center gap-2 px-3 py-1 text-xs text-muted-foreground">
+			<span>
+				VibeCut is running a stale opencut-wasm build
+				{capabilities.version ? ` (${capabilities.version})` : ""} — GPU
+				effects
+				{capabilities.missingShaders.length > 0
+					? ` (${capabilities.missingShaders.join(", ")})`
+					: ""}{" "}
+				are disabled. Fix: run{" "}
+				<code>bun run build:wasm && bun run link:wasm</code> from the repo
+				root (see rust/wasm/README.md).
+			</span>
 			<Button
 				variant="text"
 				size="icon"

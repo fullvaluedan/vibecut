@@ -85,6 +85,9 @@ export const vignetteEffectDefinition: EffectDefinition = {
 	type: "vignette",
 	name: "Vignette",
 	keywords: ["vignette", "darken edges", "frame", "focus"],
+	// amount is the only neutral param; 70% darkening at the default
+	// size/feather is obvious in the corners but keeps the subject readable.
+	previewParams: { amount: 70 },
 	params: [
 		{
 			key: "amount",

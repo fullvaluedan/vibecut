@@ -115,6 +115,9 @@ export const colorAdjustEffectDefinition: EffectDefinition = {
 	type: "color-adjust",
 	name: "Adjust",
 	keywords: ["color", "adjust", "grade", "filter", "correction"],
+	// All defaults are 0 (untouched frame); a warm, contrasty grade reads
+	// unmistakably as a colour effect on a small tile.
+	previewParams: { saturation: 55, contrast: 25, temperature: 25 },
 	params: [
 		{
 			key: "brightness",

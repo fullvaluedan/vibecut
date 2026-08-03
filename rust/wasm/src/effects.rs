@@ -1,8 +1,8 @@
 #![cfg(target_arch = "wasm32")]
 
-use effects::{ApplyEffectsOptions, EffectPass, UniformValue};
+use effects::{ApplyEffectsOptions, EffectPass, UniformValue, registered_shader_ids};
 use gpu::wgpu;
-use js_sys::Object;
+use js_sys::{Array, Object, Reflect};
 use serde::Deserialize;
 use wasm_bindgen::{JsCast, JsValue, prelude::wasm_bindgen};
 
@@ -30,6 +30,34 @@ struct EffectPassInput {
 struct EffectUniformInput {
     name: String,
     value: Vec<f32>,
+}
+
+/// Capability report read once at startup by the JS runtime guard
+/// (`apps/web/src/services/renderer/wasm-capabilities.ts`). A stale
+/// `opencut-wasm` build (e.g. the published 0.2.10 shadowing a local build)
+/// simply has no `wasmCapabilities` export, which the guard treats as
+/// "supports nothing beyond blur-era behaviour"; a build that predates a
+/// shader reports the gap in `shaders`. `maskExpansionOpacity` gates the
+/// `LayerMaskDescriptor.expansion`/`opacity` fields added in 0.3.0.
+#[wasm_bindgen(js_name = wasmCapabilities)]
+pub fn wasm_capabilities() -> Object {
+    let capabilities = Object::new();
+    let _ = Reflect::set(
+        &capabilities,
+        &JsValue::from_str("version"),
+        &JsValue::from_str(env!("CARGO_PKG_VERSION")),
+    );
+    let shaders = Array::new();
+    for id in registered_shader_ids() {
+        shaders.push(&JsValue::from_str(id));
+    }
+    let _ = Reflect::set(&capabilities, &JsValue::from_str("shaders"), &shaders);
+    let _ = Reflect::set(
+        &capabilities,
+        &JsValue::from_str("maskExpansionOpacity"),
+        &JsValue::from_bool(true),
+    );
+    capabilities
 }
 
 #[wasm_bindgen(js_name = applyEffectPasses)]

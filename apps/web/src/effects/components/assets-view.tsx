@@ -32,10 +32,24 @@ function EffectsGrid({ effects }: { effects: EffectDefinition[] }) {
 	);
 }
 
+/**
+ * Effects whose catalogue tile cannot be rendered from the shared preview
+ * frame get a static illustrative thumbnail instead. Chroma key is the one
+ * case: preview.jpg is chroma-neutral (white background, black sweater, dark
+ * hair), so no key colour produces a meaningful cutout — verified against the
+ * shader's reference math in effects/__tests__/preview-params.test.ts, whose
+ * exemption list documents the same reason.
+ */
+const STATIC_TILE_PREVIEWS: Record<string, string> = {
+	"chroma-key": "/effects/chroma-key-preview.png",
+};
+
 function EffectPreviewCanvas({ effectType }: { effectType: string }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const staticSrc = STATIC_TILE_PREVIEWS[effectType];
 
 	useEffect(() => {
+		if (staticSrc) return;
 		const render = () => {
 			if (canvasRef.current) {
 				effectPreviewService.renderPreview({
@@ -48,8 +62,11 @@ function EffectPreviewCanvas({ effectType }: { effectType: string }) {
 
 		render();
 		return effectPreviewService.onPreviewImageReady({ callback: render });
-	}, [effectType]);
+	}, [effectType, staticSrc]);
 
+	if (staticSrc) {
+		return <img src={staticSrc} alt="" className="size-full object-cover" />;
+	}
 	return <canvas ref={canvasRef} className="size-full" />;
 }
 

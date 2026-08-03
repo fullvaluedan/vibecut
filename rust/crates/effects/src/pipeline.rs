@@ -275,6 +275,14 @@ fn find_effect_shader(shader: &str) -> Option<&'static EffectShader> {
     EFFECT_SHADERS.iter().find(|entry| entry.id == shader)
 }
 
+/// The JS-facing id of every registered effect shader, in registration order.
+/// Surfaced to JS through `wasmCapabilities` (`rust/wasm/src/effects.rs`) so
+/// the app can detect a stale `opencut-wasm` build before it hands the GPU a
+/// pass the loaded module cannot run.
+pub fn registered_shader_ids() -> Vec<&'static str> {
+    EFFECT_SHADERS.iter().map(|shader| shader.id).collect()
+}
+
 pub struct ApplyEffectsOptions<'a> {
     pub source: &'a wgpu::Texture,
     pub width: u32,

@@ -178,7 +178,7 @@ describe("crossDissolve export parity: sampled source times + opacities", () => 
 	const [left, right] = videoNodes(root);
 
 	test("the scene builder attached the two roles", () => {
-		expect(left.params.transitions?.tail?.direction).toBe("out");
+		expect(left.params.transitions?.tail?.direction).toBe("hold");
 		expect(right.params.transitions?.head?.direction).toBe("in");
 	});
 
@@ -202,7 +202,7 @@ describe("crossDissolve export parity: sampled source times + opacities", () => 
 		});
 	});
 
-	test("window MIDPOINT (the cut): both at half, left past its out point", () => {
+	test("window MIDPOINT (the cut): left HELD at full, right at half on top", () => {
 		const time = 4 * SEC;
 		const l = sample({ node: left, time });
 		const r = sample({ node: right, time });
@@ -210,8 +210,26 @@ describe("crossDissolve export parity: sampled source times + opacities", () => 
 		// (trimStart 1s + 4s wall) inside its 2s of trimmed-away tail.
 		expect(l?.sourceTicks).toBe(5 * SEC);
 		expect(r?.sourceTicks).toBe(2 * SEC);
-		expect(l?.opacity).toBeCloseTo(0.5, 6);
+		// Source-over with the incoming clip composited last: the outgoing
+		// layer must hold at 1 or the frame dips to 0.75 * luminance here.
+		expect(l?.opacity).toBeCloseTo(1, 6);
 		expect(r?.opacity).toBeCloseTo(0.5, 6);
+	});
+
+	test("constant-colour sources compose to the FLAT blend across the window", () => {
+		// The composited-result assertion the per-layer 0.5/0.5 factors used to
+		// defeat: source-over with the right (incoming) node drawn last gives
+		// `U*fU + (L*fL)*(1 - fU)`, which must equal `U*t + L*(1-t)` at every t.
+		const L = 0.2;
+		const U = 0.8;
+		for (const sec of [3.5, 3.75, 4, 4.25, 4.5]) {
+			const time = sec * SEC;
+			const t = sec - 3.5;
+			const fL = sample({ node: left, time })?.opacity ?? 0;
+			const fU = sample({ node: right, time })?.opacity ?? 0;
+			const composited = U * fU + L * fL * (1 - fU);
+			expect(composited).toBeCloseTo(U * t + L * (1 - t), 6);
+		}
 	});
 
 	test("window END: left gone, right at full", () => {
@@ -257,7 +275,7 @@ describe("crossDissolve with no headroom holds its edge frame", () => {
 	});
 
 	test("the opacity ramp is unaffected by the freeze", () => {
-		expect(sample({ node: left, time: 4 * SEC })?.opacity).toBeCloseTo(0.5, 6);
+		expect(sample({ node: left, time: 4 * SEC })?.opacity).toBeCloseTo(1, 6);
 		expect(sample({ node: right, time: 4 * SEC })?.opacity).toBeCloseTo(0.5, 6);
 	});
 });
@@ -277,16 +295,23 @@ describe("authored opacity is multiplied, never clobbered", () => {
 				mediaId: "two",
 				startSec: 4,
 				durationSec: 4,
+				opacity: 0.4,
 				transitionIn: { id: "t", kind: "crossDissolve", durationSec: 1 },
 			}),
 		],
 		mediaAssets: [videoAsset({ id: "one" }), videoAsset({ id: "two" })],
 	});
-	const [left] = videoNodes(root);
+	const [left, right] = videoNodes(root);
 
-	test("a clip held at 40% dissolves 0.4 -> 0", () => {
+	test("the incoming clip held at 40% dissolves 0 -> 0.4", () => {
+		expect(sample({ node: right, time: 3.5 * SEC })?.opacity).toBeCloseTo(0, 6);
+		expect(sample({ node: right, time: 4 * SEC })?.opacity).toBeCloseTo(0.2, 6);
+		expect(sample({ node: right, time: 4.5 * SEC })?.opacity).toBeCloseTo(0.4, 6);
+	});
+
+	test("the outgoing clip HOLDS its authored 40% while it is covered", () => {
 		expect(sample({ node: left, time: 3.5 * SEC })?.opacity).toBeCloseTo(0.4, 6);
-		expect(sample({ node: left, time: 4 * SEC })?.opacity).toBeCloseTo(0.2, 6);
+		expect(sample({ node: left, time: 4 * SEC })?.opacity).toBeCloseTo(0.4, 6);
 	});
 });
 
@@ -332,12 +357,92 @@ describe("dip to black emits a colour layer, not an overlap", () => {
 		expect(at(4.5 * SEC)).toBeCloseTo(0, 6);
 	});
 
+	test("the composited result falls LINEARLY to black and back", () => {
+		// Same source-over derivation as the crossDissolve, but here the maths
+		// was already right: the clips never overlap, so exactly one opaque
+		// clip sits under the dip layer at any time and the frame is
+		// `D*a + X*(1-a)` - a linear fall to the dip colour and back.
+		const BLACK = 0;
+		const L = 0.4;
+		const R = 0.8;
+		const [left, right] = videoNodes(root);
+		const at = (time: number) =>
+			resolveTransitionOpacityFactor({
+				transitions: (dip as SolidColorNode).params.transitions,
+				time,
+			});
+		// First half: only the LEFT clip is on screen under the dip.
+		for (const sec of [3.5, 3.75]) {
+			const time = sec * SEC;
+			const a = at(time);
+			expect(sample({ node: left, time })?.opacity).toBeCloseTo(1, 6);
+			expect(sample({ node: right, time })).toBeNull();
+			expect(BLACK * a + L * (1 - a)).toBeCloseTo(L * (1 - (sec - 3.5) * 2), 6);
+		}
+		// Second half: only the RIGHT clip.
+		for (const sec of [4, 4.25, 4.5]) {
+			const time = sec * SEC;
+			const a = at(time);
+			expect(sample({ node: left, time })).toBeNull();
+			expect(sample({ node: right, time })?.opacity).toBeCloseTo(1, 6);
+			expect(BLACK * a + R * (1 - a)).toBeCloseTo(R * (1 - a), 6);
+		}
+	});
+
 	test("neither clip gets a ramp or an extended window", () => {
 		const [left, right] = videoNodes(root);
 		expect(left.params.transitions).toBeUndefined();
 		expect(right.params.transitions).toBeUndefined();
 		expect(sample({ node: left, time: 4.2 * SEC })).toBeNull();
 		expect(sample({ node: right, time: 3.8 * SEC })).toBeNull();
+	});
+});
+
+describe("dip to white composits through white the same way", () => {
+	const root = build({
+		elements: [
+			clip({ id: "a", mediaId: "one", startSec: 0, durationSec: 4 }),
+			clip({
+				id: "b",
+				mediaId: "two",
+				startSec: 4,
+				durationSec: 4,
+				transitionIn: { id: "t", kind: "dipToWhite", durationSec: 1 },
+			}),
+		],
+		mediaAssets: [videoAsset({ id: "one" }), videoAsset({ id: "two" })],
+	});
+
+	const dip = root.children.find(
+		(child): child is SolidColorNode => child instanceof SolidColorNode,
+	);
+
+	test("the colour layer is white and the composited result peaks at the cut", () => {
+		expect(dip?.params.color).toBe("#ffffff");
+		// Same derivation as dip to black: one opaque clip under the dip layer,
+		// frame = `WHITE*a + X*(1-a)`. At the midpoint a = 1, so the frame is
+		// pure white no matter which clip is underneath.
+		const WHITE = 1;
+		const L = 0.4;
+		const R = 0.8;
+		const [left, right] = videoNodes(root);
+		const at = (time: number) =>
+			resolveTransitionOpacityFactor({
+				transitions: (dip as SolidColorNode).params.transitions,
+				time,
+			});
+		const aMid = at(4 * SEC);
+		expect(aMid).toBeCloseTo(1, 6);
+		expect(WHITE * aMid + R * (1 - aMid)).toBeCloseTo(1, 6);
+		const aStart = at(3.75 * SEC);
+		expect(sample({ node: left, time: 3.75 * SEC })?.opacity).toBeCloseTo(1, 6);
+		expect(WHITE * aStart + L * (1 - aStart)).toBeCloseTo(
+			WHITE * 0.5 + L * 0.5,
+			6,
+		);
+		const aEnd = at(4.25 * SEC);
+		expect(sample({ node: right, time: 4.25 * SEC })?.opacity).toBeCloseTo(1, 6);
+		expect(WHITE * aEnd + R * (1 - aEnd)).toBeCloseTo(WHITE * 0.5 + R * 0.5, 6);
 	});
 });
 

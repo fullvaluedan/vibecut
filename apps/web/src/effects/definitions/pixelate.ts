@@ -65,6 +65,9 @@ export const pixelateEffectDefinition: EffectDefinition = {
 	type: "pixelate",
 	name: "Pixelate",
 	keywords: ["pixelate", "mosaic", "censor", "block"],
+	// ~4px blocks at the 160px tile size (1920 reference): a clear mosaic
+	// without dissolving the subject.
+	previewParams: { blockSize: 50 },
 	params: [
 		{
 			key: "blockSize",

@@ -53,10 +53,17 @@ class EffectPreviewService {
 
 		try {
 			const definition = effectsRegistry.get(effectType);
+			// An empty `params` means a catalogue tile, not a real effect
+			// instance: defaults are neutral by design (see
+			// EffectDefinition.previewParams), so merge the tile-only preview
+			// overrides over them to show what the effect does.
 			const resolvedParams =
 				Object.keys(params).length > 0
 					? params
-					: buildDefaultParamValues(definition.params);
+					: {
+							...buildDefaultParamValues(definition.params),
+							...definition.previewParams,
+						};
 
 			const passes = resolveEffectPasses({
 				definition,
