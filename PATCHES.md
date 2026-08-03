@@ -1001,3 +1001,11 @@ Round-19 verification Defects 2-4. All files below are FrameCut-owned (created i
 ### R19-7 addendum (same day, second verification pass)
 
 The live re-verification found one hole in the guard: under a STALE (pre-0.3.0) compositor, adding a clip effect still threw `Failed to apply effects: At least one effect pass is required` every frame. The guard emptied the pass group, but the empty-group skip only exists in the NEW compositor — the stale one being guarded against still errors on `[[]]`. Fix: `apps/web/src/services/renderer/wasm-capabilities.ts` adds `compactEffectPassGroups` (drops empty groups JS-side, R19-7 rationale in its doc comment) and `apps/web/src/services/renderer/resolve.ts` runs `resolveEffectPassGroups`'s result through it. Two tests added to `__tests__/wasm-capabilities.test.ts`. Re-verified live: vignette/color-adjust under stale wasm render byte-identical to baseline with zero console errors; healthy path unaffected. T19.0 re-rated 9/9; round 19 closed.
+
+## T20.3 Remotion media pack export (2026-08-03)
+
+| File | Reason | Date | Notes for a future port |
+|---|---|---|---|
+| `apps/web/src/components/editor/export-button.tsx` | Export popover gains a collapsed "Remotion" section with an "Export media pack" button (own busy state, sonner loading/success/error toasts, same empty-timeline guard as the video export) - writes the T20.3 Remotion media pack (EDL + transcript + media + manifest) | 2026-08-03 | Wiring only; all logic in `apps/web/src/export/remotion-pack{,-save}.ts` (ours) |
+
+New files, all ours (no rows needed): `apps/web/src/export/remotion-pack.ts` (pure pack builders: JSON EDL, transcript, manifest, bundle; DOM-free and unit-tested), `apps/web/src/export/remotion-pack-save.ts` (editor orchestration: gathers timeline/media/transcript, writes a File System Access directory where `showDirectoryPicker` exists, else a single JSON bundle with base64 media via the existing `saveBufferWithPicker`), `apps/web/src/export/__tests__/remotion-pack.test.ts` (17 tests: EDL/manifest serialization against a fixture timeline, round-trip invariants, styleProfile null slot, bundle round-trip, path helpers), and the format contract `docs/remotion-media-pack-v1.md`.
