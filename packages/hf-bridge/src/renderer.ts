@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -270,6 +270,108 @@ export async function renderCompDir({
 	if (code !== 0 || !existsSync(outPath)) {
 		throw new Error(
 			`hyperframes render failed (exit ${code}):\n${output.slice(-4000)}`,
+		);
+	}
+	return { videoPath: outPath, compDir };
+}
+
+/**
+ * Rewrite a composition's ROOT data-duration to a short probe cap, producing
+ * the probe.html the probe render runs. The cap never EXTENDS the comp: a
+ * chunk shorter than probeSec probes its full length. The root is the first
+ * data-duration in the document (it sits directly in <body> per the author
+ * contract). Pure for unit tests.
+ */
+export function buildProbeHtml(html: string, probeSec: number): string {
+	const m = html.match(/data-duration="([\d.]+)"/);
+	if (!m) {
+		throw new Error(
+			"Composition has no root data-duration; cannot probe-render it.",
+		);
+	}
+	const full = Number(m[1]);
+	if (!Number.isFinite(full) || full <= 0) {
+		throw new Error(`Composition has an unreadable data-duration ("${m[1]}").`);
+	}
+	const cap = Number(Math.min(Math.max(probeSec, 0.1), full).toFixed(3));
+	return html.replace(m[0], `data-duration="${cap}"`);
+}
+
+/**
+ * Probe render: the first ~probeSec seconds of an EXISTING comp dir, without
+ * re-authoring and without touching the full-render cache (out.webm). The
+ * hyperframes CLI has no duration/frames flag, so the cap rides a generated
+ * probe.html (index.html with the root data-duration rewritten) rendered via
+ * --composition. A repeat call with the same cap + unchanged source reuses
+ * probe.webm.
+ */
+export async function renderProbe({
+	compId,
+	fps,
+	probeSec,
+}: {
+	compId: string;
+	fps?: number;
+	probeSec: number;
+}): Promise<RenderOutcome> {
+	const compDir = path.join(generatedRoot(), compId);
+	const indexPath = path.join(compDir, "index.html");
+	if (!existsSync(indexPath)) {
+		throw new Error(`Comp source not found for ${compId}; re-author instead.`);
+	}
+	const probeHtml = buildProbeHtml(await readFile(indexPath, "utf8"), probeSec);
+	const probePath = path.join(compDir, "probe.html");
+	const outPath = path.join(compDir, "probe.webm");
+	// Reuse a probe rendered from the same source at the same cap.
+	if (existsSync(probePath) && existsSync(outPath)) {
+		try {
+			const prev = await readFile(probePath, "utf8");
+			if (
+				prev === probeHtml &&
+				statSync(outPath).mtimeMs >= statSync(indexPath).mtimeMs
+			) {
+				return { videoPath: outPath, compDir };
+			}
+		} catch {
+			// fall through to a fresh probe render
+		}
+	}
+	await writeFile(probePath, probeHtml, "utf8");
+
+	let effectiveFps = fps;
+	if (!effectiveFps) {
+		try {
+			const meta = JSON.parse(
+				readFileSync(path.join(compDir, "framecut.json"), "utf8"),
+			) as { fps?: number };
+			effectiveFps = meta.fps;
+		} catch {
+			// fall through to default
+		}
+	}
+
+	const cli = resolveHyperframesCli();
+	const args = [
+		cli,
+		"render",
+		"--format",
+		"webm",
+		"--quality",
+		"standard",
+		"--fps",
+		String(effectiveFps ?? 30),
+		"--composition",
+		"probe.html",
+		"--output",
+		outPath,
+	];
+	if (existsSync(path.join(compDir, "vars.json"))) {
+		args.push("--variables-file", "vars.json");
+	}
+	const { code, output } = await enqueueRender(() => runNode(args, compDir));
+	if (code !== 0 || !existsSync(outPath)) {
+		throw new Error(
+			`hyperframes probe render failed (exit ${code}):\n${output.slice(-4000)}`,
 		);
 	}
 	return { videoPath: outPath, compDir };

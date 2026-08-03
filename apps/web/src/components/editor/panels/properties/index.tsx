@@ -68,7 +68,7 @@ export function PropertiesPanel() {
 	// HyperFrames drafts panel takeover is parked (roadmap D6); code stays,
 	// the empty inspector just never routes to it.
 	const hasHfDraftsRaw = useVariantPickerStore(
-		(s) => (s.versions?.length ?? 0) > 0,
+		(s) => (s.versions?.length ?? 0) > 0 || !!s.probeSet,
 	);
 	const hasHfDrafts = HIDE_HYPERFRAMES_DRAFTS_PANEL ? false : hasHfDraftsRaw;
 

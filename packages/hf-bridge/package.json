@@ -9,7 +9,8 @@
 	"exports": {
 		".": "./src/index.ts",
 		"./templates": "./src/templates/index.ts",
-		"./stable-op-id": "./src/stable-op-id.ts"
+		"./stable-op-id": "./src/stable-op-id.ts",
+		"./run-manifest": "./src/run-manifest.ts"
 	},
 	"dependencies": {
 		"hyperframes": "0.7.68"

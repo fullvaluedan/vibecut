@@ -74,6 +74,7 @@ export function RunHyperframesButton() {
 	// Drafts persist after the picker closes — surface a re-open affordance so a
 	// closed picker (and the tokens/render time it cost) is recoverable.
 	const draftCount = useVariantPickerStore((s) => s.versions?.length ?? 0);
+	const hasProbes = useVariantPickerStore((s) => !!s.probeSet);
 	const showPicker = useVariantPickerStore((s) => s.show);
 	const isRunning =
 		progress !== null &&
@@ -96,7 +97,12 @@ export function RunHyperframesButton() {
 					p.progress != null ? ` (${Math.round(p.progress * 100)}%)` : "";
 				logRun(`${p.stage}: ${p.detail}${pct}`);
 			};
-			let result: { placed: number; skipped: string[]; tokensUsed: number };
+			let result: {
+				placed: number;
+				skipped: string[];
+				tokensUsed: number;
+				probesPending?: boolean;
+			};
 			if (range) {
 				// "Run Selected Video ONLY" — always the authored (skill) path; it
 				// supports a sub-range, the native template engine does not.
@@ -140,13 +146,18 @@ export function RunHyperframesButton() {
 								signal: controller.signal,
 							});
 			}
-			logRun(
-				result.placed > 0
-					? `✓ placed ${result.placed} effect(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ""}`
-					: `✗ ${result.skipped[0] ?? "nothing placed"}`,
-				result.placed > 0 ? "info" : "warn",
-			);
-			if (result.placed > 0) {
+			if (result.probesPending) {
+				logRun("■ full render blocked until the probes are approved", "info");
+				toast.info("Probes ready for review", {
+					description:
+						"Approve the probe set in the drafts review to start the full render; failed segments can be retried there.",
+					duration: 8000,
+				});
+			} else if (result.placed > 0) {
+				logRun(
+					`✓ placed ${result.placed} effect(s)${result.skipped.length ? `, ${result.skipped.length} skipped` : ""}`,
+					"info",
+				);
 				const tokenNote = result.tokensUsed
 					? `Used ~${result.tokensUsed.toLocaleString()} Claude tokens.`
 					: "";
@@ -163,6 +174,7 @@ export function RunHyperframesButton() {
 							: undefined,
 				);
 			} else {
+				logRun(`✗ ${result.skipped[0] ?? "nothing placed"}`, "warn");
 				toast.error("HyperFrames could not place any effects", {
 					description: result.skipped[0] ?? "Unknown reason — see console.",
 					duration: 10000,
@@ -393,7 +405,7 @@ export function RunHyperframesButton() {
 					</Tooltip>
 				</TooltipProvider>
 			)}
-			{draftCount > 0 && (
+			{(draftCount > 0 || hasProbes) && (
 				<TooltipProvider delayDuration={300}>
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -403,13 +415,15 @@ export function RunHyperframesButton() {
 								onClick={showPicker}
 								className="rounded-sm"
 							>
-								Versions (ready) ▸
+								{hasProbes && draftCount === 0
+									? "Probes (ready) ▸"
+									: "Versions (ready) ▸"}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72">
-							Reopen your {draftCount} generated version
-							{draftCount === 1 ? "" : "s"} to review and pick one — they stay
-							here until you apply or discard them.
+							{hasProbes && draftCount === 0
+								? "Reopen your probe review: approve to start the full render, or retry failed segments. They stay here until you apply or discard them."
+								: `Reopen your ${draftCount} generated version${draftCount === 1 ? "" : "s"} to review and pick one — they stay here until you apply or discard them.`}
 						</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
