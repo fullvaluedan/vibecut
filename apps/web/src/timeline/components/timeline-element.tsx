@@ -586,8 +586,7 @@ function TimelineElementImpl({
 						</>
 					)}
 					<ContextMenuSeparator />
-					{/* HyperFrames generation is parked (roadmap D6); this context-menu
-						entry point stays hidden alongside the rest of that UI, code kept. */}
+					{/* "Run through HyperFrames" per-clip generation; unhidden T20.4. */}
 					{!HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM && element.type === "video" && (
 						<ContextMenuItem
 							icon={<HugeiconsIcon icon={MagicWand05Icon} />}

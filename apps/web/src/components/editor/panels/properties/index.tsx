@@ -17,6 +17,7 @@ import type { TimelineElement, TimelineTrack } from "@/timeline";
 import { cn } from "@/utils/ui";
 import { EmptyView } from "./empty-view";
 import { useVariantPickerStore } from "@/features/ai-generate/components/variant-picker-dialog";
+import { hasVariantDrafts } from "@/features/ai-generate/variant-picker-store";
 import { HyperframesDraftsPanel } from "@/features/ai-generate/components/hyperframes-drafts-panel";
 import { HIDE_HYPERFRAMES_DRAFTS_PANEL } from "@/features/editing/surface-flags";
 
@@ -65,11 +66,9 @@ export function PropertiesPanel() {
 	useEditor((e) => e.media.getAssets());
 	const { selectedElements } = useElementSelection();
 	const { activeTabPerType, setActiveTab } = usePropertiesStore();
-	// HyperFrames drafts panel takeover is parked (roadmap D6); code stays,
-	// the empty inspector just never routes to it.
-	const hasHfDraftsRaw = useVariantPickerStore(
-		(s) => (s.versions?.length ?? 0) > 0 || !!s.probeSet,
-	);
+	// HyperFrames drafts (versions or a probe set awaiting approval) dock here
+	// in the empty-selection state; unhidden T20.4 with the probe-first flow.
+	const hasHfDraftsRaw = useVariantPickerStore(hasVariantDrafts);
 	const hasHfDrafts = HIDE_HYPERFRAMES_DRAFTS_PANEL ? false : hasHfDraftsRaw;
 
 	// The Director review (cut/assemble/highlight) no longer takes over this panel

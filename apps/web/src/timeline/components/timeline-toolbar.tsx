@@ -341,7 +341,7 @@ function ToolbarRightSection({
 
 	return (
 		<div className="flex items-center gap-1">
-			{/* RUN HYPERFRAMES cluster parked (roadmap D6); code stays, just hidden. */}
+			{/* RUN HYPERFRAMES cluster; unhidden T20.4 with the probe-first flow. */}
 			{!HIDE_RUN_HYPERFRAMES_CLUSTER && <RunHyperframesButton />}
 			<AiCutMenu />
 

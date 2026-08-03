@@ -11,25 +11,29 @@ import type { Tab } from "@/components/editor/panels/assets/assets-panel-store";
 
 /**
  * Left-panel tab keys hidden from the tab rail and the fallback logic in
- * `assets-panel-store.tsx`. HyperFrames is parked (D6). Effects unhidden
- * T19.4b once the registry held >= 5 effects (blur, color adjust, pixelate,
- * vignette, glow, noise). Sounds unhidden T19.4a once its two bugs were
- * fixed (loadMore TypeError, no-op commercial-license filter) and a
- * friendly no-key state was added for the Freesound sub-tab.
+ * `assets-panel-store.tsx`. Empty since T20.4: HyperFrames was un-parked
+ * once the panel's redesigned start flow (profiles + probe gate) landed.
+ * Effects unhidden T19.4b once the registry held >= 5 effects (blur, color
+ * adjust, pixelate, vignette, glow, noise). Sounds unhidden T19.4a once its
+ * two bugs were fixed (loadMore TypeError, no-op commercial-license filter)
+ * and a friendly no-key state was added for the Freesound sub-tab.
  */
-export const HIDDEN_ASSET_TABS: readonly Tab[] = ["hyperframes"];
+export const HIDDEN_ASSET_TABS: readonly Tab[] = [];
 
 /**
  * RUN HYPERFRAMES toolbar cluster in `timeline/components/timeline-toolbar.tsx`:
  * the run button, its dropdown (Run Entire Timeline / Run Selected Video ONLY),
  * Versions x3, the reopen-drafts button, the run Log popover, and its Stop
  * button all live inside `RunHyperframesButton` - hiding that one mount hides
- * the whole cluster.
+ * the whole cluster. Unhidden T20.4 (probe-first flow shipped in T20.2).
  */
-export const HIDE_RUN_HYPERFRAMES_CLUSTER = true;
+export const HIDE_RUN_HYPERFRAMES_CLUSTER = false;
 
-/** The "Run through HyperFrames" clip context-menu item (per-clip generation). */
-export const HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM = true;
+/**
+ * The "Run through HyperFrames" clip context-menu item (per-clip generation).
+ * Unhidden T20.4.
+ */
+export const HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM = false;
 
 /**
  * Retired T17.3: the preview-toolbar prompt box is now the Assistant
@@ -40,8 +44,8 @@ export const HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM = true;
  */
 export const HIDE_ASSISTANT_PROMPT = false;
 
-/** The HyperFrames drafts panel takeover of the empty inspector. */
-export const HIDE_HYPERFRAMES_DRAFTS_PANEL = true;
+/** The HyperFrames drafts panel takeover of the empty inspector. Unhidden T20.4. */
+export const HIDE_HYPERFRAMES_DRAFTS_PANEL = false;
 
 /**
  * AI CUT menu (toolbar dropdown) and the Director dock idle card both slim to
