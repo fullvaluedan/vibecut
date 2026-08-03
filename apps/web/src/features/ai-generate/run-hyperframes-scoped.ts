@@ -15,9 +15,14 @@ import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	useAiSettingsStore,
 	buildAiAuthHeaders,
+	resolveDesignSpec,
 } from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
+import {
+	describeDesignSpec,
+	type HfDesignProfile,
+} from "@/features/ai-generate/profiles";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 import {
 	getCachedTranscript,
@@ -59,6 +64,47 @@ function enabledSelections(): HfSelectionAsset[] {
 			title: t.id,
 			description: t.whenToUse,
 		}));
+}
+
+interface BriefLook {
+	name: string;
+	description: string;
+	accent?: string;
+	fontFamily?: string;
+}
+
+/**
+ * The look + optional design profile for a run's brief. With no active
+ * profile this is exactly the factory look, as before; with one, the look
+ * line reflects the profile and the structured DESIGN PROFILE section rides
+ * along so the skill honors palette/fonts/motion/density as a set.
+ */
+function resolveBriefDesign(): {
+	look: BriefLook;
+	designProfile?: HfDesignProfile;
+} {
+	const state = useAiSettingsStore.getState();
+	const design = resolveDesignSpec(state);
+	if (!design.custom) {
+		const look = getStyleById(state.styleId);
+		return {
+			look: {
+				name: look.name,
+				description: look.description,
+				accent: look.accent,
+				fontFamily: look.fontFamily,
+			},
+		};
+	}
+	return {
+		look: {
+			name: design.name,
+			description: `Saved style profile: ${describeDesignSpec(design.spec)}`,
+			accent: design.spec.palette.accent,
+			fontFamily: design.spec.fonts.display,
+		},
+		designProfile: { name: design.name, spec: design.spec },
+	};
 }
 
 /**
@@ -265,8 +311,8 @@ export async function runHyperframesOnClip({
 	const fps = Math.round(frameRateToFloat(project.settings.fps)) || 30;
 	const { width, height } = project.settings.canvasSize;
 	const durationSec = Math.min(Math.max(endSec - startSec, 3), 10);
-	const { styleId, hfDirection } = useAiSettingsStore.getState();
-	const look = getStyleById(styleId);
+	const { hfDirection } = useAiSettingsStore.getState();
+	const briefDesign = resolveBriefDesign();
 
 	const controller = new AbortController();
 	const toastId = toast.loading(
@@ -305,12 +351,8 @@ export async function runHyperframesOnClip({
 		const prompt = compileHyperframesPrompt({
 			selections: [...enabledSelections(), ...registrySelections],
 			referenceCompositions,
-			look: {
-				name: look.name,
-				description: look.description,
-				accent: look.accent,
-				fontFamily: look.fontFamily,
-			},
+			look: briefDesign.look,
+			designProfile: briefDesign.designProfile,
 			direction: hfDirection,
 			scope: { kind: "clip", label: `clip "${scope.label}"`, startSec, endSec },
 			transcript,
@@ -406,6 +448,8 @@ interface SharedAuthorInputs {
 		accent?: string;
 		fontFamily?: string;
 	};
+	/** Present only when a user style profile is active. */
+	designProfile?: HfDesignProfile;
 	direction: string;
 	canvas: { width: number; height: number; fps: number };
 	preferenceNotes: string[];
@@ -430,18 +474,14 @@ async function buildSharedInputs({
 		registrySelections,
 		signal,
 	);
-	const { styleId, hfDirection } = useAiSettingsStore.getState();
-	const look = getStyleById(styleId);
+	const { hfDirection } = useAiSettingsStore.getState();
+	const briefDesign = resolveBriefDesign();
 	return {
 		segments,
 		selections: [...enabledSelections(), ...registrySelections],
 		referenceCompositions,
-		look: {
-			name: look.name,
-			description: look.description,
-			accent: look.accent,
-			fontFamily: look.fontFamily,
-		},
+		look: briefDesign.look,
+		designProfile: briefDesign.designProfile,
 		direction: hfDirection,
 		canvas: { width, height, fps },
 		preferenceNotes: usePreferenceStore
@@ -531,6 +571,7 @@ async function authorChunks({
 			selections: shared.selections,
 			referenceCompositions: shared.referenceCompositions,
 			look: shared.look,
+			designProfile: shared.designProfile,
 			direction,
 			scope: {
 				kind: "timeline",

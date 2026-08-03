@@ -22,10 +22,12 @@ import {
 import { generateUUID } from "@/utils/id";
 import {
 	buildAiAuthHeaders,
+	resolveDesignSpec,
 	useAiSettingsStore,
 } from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { getStyleById } from "@/features/ai-generate/styles";
+import { describeDesignSpec } from "@/features/ai-generate/profiles";
 import { loadFonts } from "@/fonts/google-fonts";
 import { buildAiLanes, claimLane } from "@/features/ai-generate/placement";
 import { getMotionTemplate } from "@/features/motion-templates/templates";
@@ -148,6 +150,9 @@ export async function runHyperframes({
 		detail: "Claude is planning your effects...",
 	});
 	const activeLook = getStyleById(useAiSettingsStore.getState().styleId);
+	// The design spec this run honors: the active style profile when one is
+	// loaded (palette/fonts/motion/density), else the factory look as before.
+	const design = resolveDesignSpec(useAiSettingsStore.getState());
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
 		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
@@ -159,7 +164,14 @@ export async function runHyperframes({
 			direction: hfDirection,
 			preferences: usePreferenceStore.getState().buildPreferenceNotes(),
 			// Bias the planner toward templates/pacing that fit the chosen look.
-			look: { name: activeLook.name, description: activeLook.description },
+			// A custom profile sends its full spec as the context (motion and
+			// density have no template variables, so they ride the description).
+			look: {
+				name: design.name,
+				description: design.custom
+					? describeDesignSpec(design.spec)
+					: activeLook.description,
+			},
 		}),
 	});
 	if (!planRes.ok) {
@@ -192,13 +204,13 @@ export async function runHyperframes({
 	}
 
 	// 3. Render each effect locally, then place all clips in one batch.
-	// The active style/look colors and sets the typeface of every effect
-	// (unless the planner chose its own accent).
-	const themeStyle = getStyleById(useAiSettingsStore.getState().styleId);
-	const themeAccent = themeStyle.accent;
+	// The active profile's design (or the factory look's) sets the accent and
+	// typeface of every effect (unless the planner chose its own accent).
+	const themeAccent = design.spec.palette.accent;
+	const themeFont = design.spec.fonts.display;
 	// Templates can use a Google font (kinetic-title defaults to Inter); fetch the
 	// fonts they need so AI-placed text renders in the right face, not a fallback.
-	void loadFonts({ families: ["Inter", themeStyle.fontFamily] });
+	void loadFonts({ families: ["Inter", themeFont] });
 	for (const item of plan.items) {
 		if (item.variables.accent === undefined) {
 			item.variables.accent = themeAccent;
@@ -233,7 +245,7 @@ export async function runHyperframes({
 				durationSec: item.durationSec,
 				variables: item.variables,
 				accent: String(item.variables.accent ?? themeAccent),
-				fontFamily: themeStyle.fontFamily,
+				fontFamily: themeFont,
 				canvasSize,
 				// One edit-group PER planned effect — sharing the run-wide id would
 				// make Template Controls treat the whole run as a single template.

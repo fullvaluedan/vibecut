@@ -4,6 +4,12 @@
  * and can be batch-applied to existing AI clips.
  */
 
+import type {
+	HfDensity,
+	HfDesignSpec,
+	HfMotionStyle,
+} from "@/features/ai-generate/profiles";
+
 export interface VibeStyle {
 	id: string;
 	name: string;
@@ -17,6 +23,22 @@ export interface VibeStyle {
 	description: string;
 }
 
+/**
+ * How each factory look reads as a design spec's motion + density. Palette
+ * and fonts come from the VibeStyle itself (accent, fontFamily).
+ */
+const FACTORY_PROFILE_FEEL: Record<
+	string,
+	{ motion: HfMotionStyle; density: HfDensity }
+> = {
+	ember: { motion: "punchy", density: "balanced" },
+	electric: { motion: "standard", density: "balanced" },
+	acid: { motion: "punchy", density: "dense" },
+	magenta: { motion: "standard", density: "balanced" },
+	gold: { motion: "calm", density: "sparse" },
+	mono: { motion: "standard", density: "sparse" },
+};
+
 export const VIBE_STYLES: VibeStyle[] = [
 	{ id: "ember", name: "Ember", accent: "#FF6E20", fontFamily: "Arial", description: "Warm, punchy YouTube look — bold sans, orange accent" },
 	{ id: "electric", name: "Electric", accent: "#3B82F6", fontFamily: "Verdana", description: "Cool tech explainer — wide sans, electric blue" },
@@ -28,4 +50,22 @@ export const VIBE_STYLES: VibeStyle[] = [
 
 export function getStyleById(id: string): VibeStyle {
 	return VIBE_STYLES.find((s) => s.id === id) ?? VIBE_STYLES[0];
+}
+
+/**
+ * A factory look expressed as a design spec. VIBE_STYLES are the
+ * factory-default profile set: a saved profile's spec has exactly this
+ * shape, and a migrated preset's spec is seeded from its own look.
+ */
+export function designSpecFromStyle(style: VibeStyle): HfDesignSpec {
+	const feel = FACTORY_PROFILE_FEEL[style.id] ?? {
+		motion: "standard" as const,
+		density: "balanced" as const,
+	};
+	return {
+		palette: { accent: style.accent, supporting: [] },
+		fonts: { display: style.fontFamily, body: style.fontFamily },
+		motion: feel.motion,
+		density: feel.density,
+	};
 }

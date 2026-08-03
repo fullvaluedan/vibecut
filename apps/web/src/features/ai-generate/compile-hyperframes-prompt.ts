@@ -12,6 +12,12 @@
  * usable from both the in-app run and a skill/job hand-off.
  */
 
+import {
+	HF_DENSITY_BRIEFS,
+	HF_MOTION_BRIEFS,
+	type HfDesignProfile,
+} from "@/features/ai-generate/profiles";
+
 export interface HfSelectionAsset {
 	/** Registry name or native template id. */
 	name: string;
@@ -50,6 +56,12 @@ export interface CompileHyperframesPromptInput {
 	/** Enabled assets from the panel (the user's selection). */
 	selections: HfSelectionAsset[];
 	look?: HfLook;
+	/**
+	 * The user's ACTIVE style profile (a saved design spec), emitted as a
+	 * structured DESIGN PROFILE section. Omit when no profile is active so the
+	 * brief stays exactly as before (the look line carries the factory look).
+	 */
+	designProfile?: HfDesignProfile;
 	/** Free-form text from the HyperFrames prompt box. */
 	direction?: string;
 	scope: HfPromptScope;
@@ -154,6 +166,7 @@ export function compileHyperframesPrompt(
 	const {
 		selections,
 		look,
+		designProfile,
 		direction,
 		scope,
 		transcript,
@@ -319,6 +332,26 @@ export function compileHyperframesPrompt(
 				look.accent ? `. Accent color ${look.accent}` : ""
 			}${look.fontFamily ? `. Typeface ${look.fontFamily}` : ""}.`,
 		);
+	}
+
+	// Active style profile: the user's saved design spec, structured so the
+	// skill honors palette/fonts/motion/density as a set. It WINS any conflict
+	// with the look line above (the caller still emits that line for context).
+	if (designProfile) {
+		const { name, spec } = designProfile;
+		const supporting = spec.palette.supporting.filter((c) => c.trim());
+		lines.push("");
+		lines.push(
+			`DESIGN PROFILE: "${name}" - the user's saved design spec. Honor it over every default above (it wins any conflict with VISUAL LOOK):`,
+		);
+		lines.push(
+			`  - Palette: accent ${spec.palette.accent}${supporting.length ? `; supporting colors ${supporting.join(", ")}` : ""}`,
+		);
+		lines.push(
+			`  - Fonts: display "${spec.fonts.display}" for headlines, "${spec.fonts.body}" for body text`,
+		);
+		lines.push(`  - Motion: ${HF_MOTION_BRIEFS[spec.motion]}`);
+		lines.push(`  - Density: ${HF_DENSITY_BRIEFS[spec.density]}`);
 	}
 
 	// Direction.
