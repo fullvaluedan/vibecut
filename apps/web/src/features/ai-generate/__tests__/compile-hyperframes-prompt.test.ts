@@ -5,6 +5,7 @@ import {
 	type CompileHyperframesPromptInput,
 	type HfSelectionAsset,
 } from "../compile-hyperframes-prompt";
+import type { HfDesignProfile } from "../profiles";
 
 function baseInput(
 	over: Partial<CompileHyperframesPromptInput> = {},
@@ -479,5 +480,68 @@ describe("prioritizeFormPicks — FORM-relevant ordering for exemplar embedding"
 
 	test("empty picks yield empty", () => {
 		expect(prioritizeFormPicks([], 3)).toEqual([]);
+	});
+});
+
+describe("compileHyperframesPrompt - design profile", () => {
+	const profile: HfDesignProfile = {
+		name: "My Brand",
+		spec: {
+			palette: { accent: "#112233", supporting: ["#445566", "#778899"] },
+			fonts: { display: "Anton", body: "Inter" },
+			motion: "punchy",
+			density: "sparse",
+		},
+	};
+
+	test("emits a structured DESIGN PROFILE section when a profile is active", () => {
+		const out = compileHyperframesPrompt(baseInput({ designProfile: profile }));
+		expect(out).toContain('DESIGN PROFILE: "My Brand"');
+		expect(out).toContain("accent #112233");
+		expect(out).toContain("supporting colors #445566, #778899");
+		expect(out).toContain('display "Anton"');
+		expect(out).toContain('"Inter" for body text');
+		expect(out).toContain("Motion: punchy");
+		expect(out).toContain("Density: sparse");
+	});
+
+	test("the profile section follows the look line and claims precedence", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				look: { name: "Ember", description: "Warm look", accent: "#FF6E20" },
+				designProfile: profile,
+			}),
+		);
+		expect(out).toContain("VISUAL LOOK");
+		expect(out.indexOf("DESIGN PROFILE")).toBeGreaterThan(
+			out.indexOf("VISUAL LOOK"),
+		);
+		expect(out).toContain("wins any conflict with VISUAL LOOK");
+	});
+
+	test("omits the section without a profile (behavior exactly as before)", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				look: { name: "Ember", description: "Warm look", accent: "#FF6E20" },
+			}),
+		);
+		expect(out).not.toContain("DESIGN PROFILE");
+		expect(out).toContain("VISUAL LOOK");
+	});
+
+	test("an empty supporting palette is omitted from the palette line", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				designProfile: {
+					...profile,
+					spec: {
+						...profile.spec,
+						palette: { accent: "#112233", supporting: [] },
+					},
+				},
+			}),
+		);
+		expect(out).toContain("accent #112233");
+		expect(out).not.toContain("supporting colors");
 	});
 });

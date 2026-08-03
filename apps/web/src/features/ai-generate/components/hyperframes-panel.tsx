@@ -20,7 +20,18 @@ import {
 	MAX_HF_PRESETS,
 	type HfPreset,
 } from "@/features/ai-generate/store";
-import { VIBE_STYLES, getStyleById } from "@/features/ai-generate/styles";
+import {
+	VIBE_STYLES,
+	getStyleById,
+} from "@/features/ai-generate/styles";
+import {
+	HF_DENSITIES,
+	HF_MOTION_STYLES,
+	PROFILE_FONT_OPTIONS,
+	type HfDensity,
+	type HfDesignSpec,
+	type HfMotionStyle,
+} from "@/features/ai-generate/profiles";
 import { bakeAndPlaceBlock } from "@/features/ai-generate/bake-block";
 import { useEditor } from "@/editor/use-editor";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -454,9 +465,242 @@ function PresetAction({
 }
 
 /**
- * User-saved HyperFrames presets ("Custom Template 1–5"): snapshot the current
- * templates + pinned picks + look + direction, then re-apply them in one click.
- * The active preset is highlighted and clears the moment a selection diverges.
+ * Accent dot + display-type glyph: the at-a-glance form of a design spec,
+ * same visual language as the factory Look swatches below.
+ */
+function ProfileSwatch({
+	design,
+	className,
+}: {
+	design: HfDesignSpec;
+	className?: string;
+}) {
+	return (
+		<span
+			className={cn(
+				"flex size-5 shrink-0 items-center justify-center rounded-full",
+				className,
+			)}
+			style={{
+				backgroundColor: design.palette.accent,
+				fontFamily: design.fonts.display,
+			}}
+		>
+			<span className="text-[0.6rem] font-bold text-black/70">Aa</span>
+		</span>
+	);
+}
+
+/** Small segmented control (the EngineSection pattern, generalized). */
+function Segmented<T extends string>({
+	value,
+	options,
+	onChange,
+}: {
+	value: T;
+	options: readonly T[];
+	onChange: (value: T) => void;
+}) {
+	return (
+		<div className="bg-foreground/5 flex rounded-md p-0.5">
+			{options.map((option) => (
+				<button
+					key={option}
+					type="button"
+					className={cn(
+						"flex-1 rounded px-2 py-1 text-[0.65rem] capitalize transition-colors",
+						value === option
+							? "bg-background font-medium shadow-sm"
+							: "text-muted-foreground hover:text-foreground",
+					)}
+					onClick={() => onChange(option)}
+				>
+					{option}
+				</button>
+			))}
+		</div>
+	);
+}
+
+function FontSelect({
+	label,
+	value,
+	onChange,
+}: {
+	label: string;
+	value: string;
+	onChange: (family: string) => void;
+}) {
+	return (
+		<label className="flex flex-col gap-0.5">
+			<span className="text-muted-foreground text-[0.6rem]">{label}</span>
+			<select
+				value={value}
+				onChange={(e) => onChange(e.target.value)}
+				className="border-input bg-background rounded border px-1 py-1 text-xs outline-none"
+				style={{ fontFamily: value }}
+			>
+				{PROFILE_FONT_OPTIONS.map((family) => (
+					<option key={family} value={family} style={{ fontFamily: family }}>
+						{family}
+					</option>
+				))}
+			</select>
+		</label>
+	);
+}
+
+/** At most this many supporting colors per profile (keeps the editor compact). */
+const MAX_SUPPORTING_COLORS = 3;
+
+/**
+ * The style-profile editor: live swatch + type preview up top, then the
+ * design spec fields (palette, fonts, motion, density). Every change commits
+ * straight to the preset via updateHfPresetDesign, so the preview and any
+ * ACTIVE profile's next generation track the edits as they happen.
+ */
+function ProfileDesignEditor({ preset }: { preset: HfPreset }) {
+	const updateDesign = useAiSettingsStore((s) => s.updateHfPresetDesign);
+	const design = preset.design;
+	const patch = (partial: Partial<HfDesignSpec>) =>
+		updateDesign(preset.id, { ...design, ...partial });
+	const patchPalette = (partial: Partial<HfDesignSpec["palette"]>) =>
+		patch({ palette: { ...design.palette, ...partial } });
+	const patchFonts = (partial: Partial<HfDesignSpec["fonts"]>) =>
+		patch({ fonts: { ...design.fonts, ...partial } });
+
+	return (
+		<div className="border-foreground/10 mt-1 flex flex-col gap-2 rounded-md border p-2">
+			{/* Live preview: accent bar + display headline + body line. */}
+			<div className="bg-black/40 overflow-hidden rounded">
+				<div
+					className="h-1.5"
+					style={{ backgroundColor: design.palette.accent }}
+				/>
+				<div className="flex flex-col gap-0.5 p-2">
+					<span
+						className="text-sm font-bold text-white"
+						style={{ fontFamily: design.fonts.display }}
+					>
+						{preset.name}
+					</span>
+					<span
+						className="text-[0.65rem] text-white/70"
+						style={{ fontFamily: design.fonts.body }}
+					>
+						Body text previews in {design.fonts.body}.
+					</span>
+					<div className="mt-1 flex items-center gap-1">
+						{[design.palette.accent, ...design.palette.supporting].map(
+							(color, i) => (
+								<span
+									key={`${color}-${i}`}
+									className="size-3 rounded-full"
+									style={{ backgroundColor: color }}
+								/>
+							),
+						)}
+					</div>
+				</div>
+			</div>
+
+			<div className="flex items-end gap-2">
+				<label className="flex flex-col gap-0.5">
+					<span className="text-muted-foreground text-[0.6rem]">Accent</span>
+					<input
+						type="color"
+						value={design.palette.accent}
+						onChange={(e) => patchPalette({ accent: e.target.value })}
+						className="border-input bg-background h-7 w-10 cursor-pointer rounded border p-0.5"
+					/>
+				</label>
+				<div className="flex flex-col gap-0.5">
+					<span className="text-muted-foreground text-[0.6rem]">
+						Supporting
+					</span>
+					<div className="flex items-center gap-1">
+						{design.palette.supporting.map((color, i) => (
+							<input
+								key={i}
+								type="color"
+								value={color}
+								title="Click to change, double-click to remove"
+								onChange={(e) =>
+									patchPalette({
+										supporting: design.palette.supporting.map((c, j) =>
+											j === i ? e.target.value : c,
+										),
+									})
+								}
+								onDoubleClick={() =>
+									patchPalette({
+										supporting: design.palette.supporting.filter(
+											(_, j) => j !== i,
+										),
+									})
+								}
+								className="border-input bg-background h-7 w-10 cursor-pointer rounded border p-0.5"
+							/>
+						))}
+						{design.palette.supporting.length < MAX_SUPPORTING_COLORS && (
+							<button
+								type="button"
+								title="Add a supporting color"
+								className="text-muted-foreground hover:text-foreground border-input h-7 w-10 rounded border border-dashed text-xs"
+								onClick={() =>
+									patchPalette({
+										supporting: [...design.palette.supporting, "#888888"],
+									})
+								}
+							>
+								+
+							</button>
+						)}
+					</div>
+				</div>
+			</div>
+
+			<div className="grid grid-cols-2 gap-2">
+				<FontSelect
+					label="Display font"
+					value={design.fonts.display}
+					onChange={(family) => patchFonts({ display: family })}
+				/>
+				<FontSelect
+					label="Body font"
+					value={design.fonts.body}
+					onChange={(family) => patchFonts({ body: family })}
+				/>
+			</div>
+
+			<label className="flex flex-col gap-0.5">
+				<span className="text-muted-foreground text-[0.6rem]">
+					Motion style
+				</span>
+				<Segmented<HfMotionStyle>
+					value={design.motion}
+					options={HF_MOTION_STYLES}
+					onChange={(motion) => patch({ motion })}
+				/>
+			</label>
+			<label className="flex flex-col gap-0.5">
+				<span className="text-muted-foreground text-[0.6rem]">Density</span>
+				<Segmented<HfDensity>
+					value={design.density}
+					options={HF_DENSITIES}
+					onChange={(density) => patch({ density })}
+				/>
+			</label>
+		</div>
+	);
+}
+
+/**
+ * User-saved HyperFrames presets, doubling as STYLE PROFILES: each snapshots
+ * the current templates + pinned picks + look + direction AND carries a
+ * design spec (palette, fonts, motion, density) edited inline. The active
+ * preset is highlighted and clears the moment a selection diverges; picking
+ * a factory Look below also deactivates it.
  */
 function CustomPresetsSection() {
 	const presets = useAiSettingsStore((s) => s.hfPresets);
@@ -465,10 +709,13 @@ function CustomPresetsSection() {
 	const loadPreset = useAiSettingsStore((s) => s.loadHfPreset);
 	const renamePreset = useAiSettingsStore((s) => s.renameHfPreset);
 	const deletePreset = useAiSettingsStore((s) => s.deleteHfPreset);
+	const duplicatePreset = useAiSettingsStore((s) => s.duplicateHfPreset);
 
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [draftName, setDraftName] = useState("");
 	const renameInputRef = useRef<HTMLInputElement>(null);
+	// Which preset's profile editor is open (at most one at a time).
+	const [designEditingId, setDesignEditingId] = useState<string | null>(null);
 
 	// Focus the rename field when it opens (avoids the autoFocus prop, which
 	// the a11y lint forbids, and the re-focus-every-keystroke of a callback ref).
@@ -491,7 +738,7 @@ function CustomPresetsSection() {
 		<div className="flex flex-col gap-1.5 px-3 pt-1 pb-2">
 			<div className="flex items-center justify-between">
 				<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
-					Custom templates
+					Style profiles
 				</p>
 				<span className="text-muted-foreground text-[10px]">
 					{presets.length}/{MAX_HF_PRESETS}
@@ -500,75 +747,94 @@ function CustomPresetsSection() {
 			{presets.length === 0 ? (
 				<p className="text-muted-foreground text-[10px] leading-snug">
 					Save the current templates, pinned picks, look, and direction as a
-					reusable preset — then load it before any RUN HYPERFRAMES.
+					reusable profile, then edit its design (palette, fonts, motion,
+					density). The ACTIVE profile&apos;s design colors every generation;
+					picking a factory Look below deactivates it.
 				</p>
 			) : (
 				<div className="flex flex-col gap-1">
 					{presets.map((p) => {
 						const active = p.id === activeId;
 						return (
-							<div
-								key={p.id}
-								className={cn(
-									"flex items-center gap-1 rounded-md px-2 py-1.5 ring-1 transition-colors",
-									active
-										? "bg-primary/10 ring-primary/50"
-										: "bg-foreground/5 hover:bg-foreground/10 ring-transparent",
-								)}
-							>
-								{editingId === p.id ? (
-									<input
-										ref={renameInputRef}
-										value={draftName}
-										onChange={(e) => setDraftName(e.target.value)}
-										onBlur={commitRename}
-										onKeyDown={(e) => {
-											if (e.key === "Enter") commitRename();
-											if (e.key === "Escape") setEditingId(null);
-										}}
-										className="border-input bg-background min-w-0 flex-1 rounded border px-1 py-0.5 text-xs outline-none"
-									/>
-								) : (
-									<button
-										type="button"
-										className="min-w-0 flex-1 text-left"
-										title="Load this preset's selections"
-										onClick={() => loadPreset(p.id)}
-									>
-										<span className="flex items-center gap-1.5">
-											<span className="truncate text-xs font-medium">
-												{p.name}
-											</span>
-											{active && (
-												<span className="text-primary text-[9px] tracking-wide uppercase">
-													active
+							<div key={p.id}>
+								<div
+									className={cn(
+										"flex items-center gap-1.5 rounded-md px-2 py-1.5 ring-1 transition-colors",
+										active
+											? "bg-primary/10 ring-primary/50"
+											: "bg-foreground/5 hover:bg-foreground/10 ring-transparent",
+									)}
+								>
+									<ProfileSwatch design={p.design} />
+									{editingId === p.id ? (
+										<input
+											ref={renameInputRef}
+											value={draftName}
+											onChange={(e) => setDraftName(e.target.value)}
+											onBlur={commitRename}
+											onKeyDown={(e) => {
+												if (e.key === "Enter") commitRename();
+												if (e.key === "Escape") setEditingId(null);
+											}}
+											className="border-input bg-background min-w-0 flex-1 rounded border px-1 py-0.5 text-xs outline-none"
+										/>
+									) : (
+										<button
+											type="button"
+											className="min-w-0 flex-1 text-left"
+											title="Load this profile's selections"
+											onClick={() => loadPreset(p.id)}
+										>
+											<span className="flex items-center gap-1.5">
+												<span className="truncate text-xs font-medium">
+													{p.name}
 												</span>
-											)}
-										</span>
-										<span className="text-muted-foreground block truncate text-[10px]">
-											{presetSummary(p)}
-										</span>
-									</button>
-								)}
-								{editingId !== p.id && (
-									<div className="flex shrink-0 items-center gap-0.5">
-										<PresetAction
-											label="Update"
-											title="Overwrite this preset with the current selection"
-											onClick={() => savePreset(p.id)}
-										/>
-										<PresetAction
-											label="Rename"
-											title="Rename this preset"
-											onClick={() => startRename(p)}
-										/>
-										<PresetAction
-											label="Delete"
-											title="Delete this preset"
-											onClick={() => deletePreset(p.id)}
-										/>
-									</div>
-								)}
+												{active && (
+													<span className="text-primary text-[9px] tracking-wide uppercase">
+														active
+													</span>
+												)}
+											</span>
+											<span className="text-muted-foreground block truncate text-[10px]">
+												{presetSummary(p)}
+											</span>
+										</button>
+									)}
+									{editingId !== p.id && (
+										<div className="flex shrink-0 flex-wrap items-center justify-end gap-0.5">
+											<PresetAction
+												label={designEditingId === p.id ? "Close" : "Design"}
+												title="Edit this profile's palette, fonts, motion, and density"
+												onClick={() =>
+													setDesignEditingId((cur) =>
+														cur === p.id ? null : p.id,
+													)
+												}
+											/>
+											<PresetAction
+												label="Duplicate"
+												title="Copy this profile into a new slot"
+												onClick={() => duplicatePreset(p.id)}
+											/>
+											<PresetAction
+												label="Update"
+												title="Overwrite this preset with the current selection"
+												onClick={() => savePreset(p.id)}
+											/>
+											<PresetAction
+												label="Rename"
+												title="Rename this preset"
+												onClick={() => startRename(p)}
+											/>
+											<PresetAction
+												label="Delete"
+												title="Delete this preset"
+												onClick={() => deletePreset(p.id)}
+											/>
+										</div>
+									)}
+								</div>
+								{designEditingId === p.id && <ProfileDesignEditor preset={p} />}
 							</div>
 						);
 					})}
@@ -581,8 +847,8 @@ function CustomPresetsSection() {
 				disabled={atCap}
 				title={
 					atCap
-						? `You can save up to ${MAX_HF_PRESETS} presets — delete one first.`
-						: "Save the current templates, picks, look, and direction as a new preset"
+						? `You can save up to ${MAX_HF_PRESETS} profiles - delete one first.`
+						: "Save the current templates, picks, look, and direction as a new profile"
 				}
 				onClick={() => savePreset()}
 			>
@@ -889,8 +1155,9 @@ export function HyperframesPanel() {
 							{getStyleById(styleId).name}
 						</span>
 						{" — "}
-						{getStyleById(styleId).fontFamily} type + accent. Sets every
-						template&apos;s font + color and biases RUN HYPERFRAMES.
+						{getStyleById(styleId).fontFamily} type + accent. The factory
+						profile set: sets every template&apos;s font + color and biases
+						RUN HYPERFRAMES while no style profile is active.
 					</p>
 				</div>
 

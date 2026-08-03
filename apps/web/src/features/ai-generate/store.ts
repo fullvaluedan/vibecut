@@ -8,18 +8,34 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { generateUUID } from "@/utils/id";
+import {
+	cloneDesignSpec,
+	type HfDesignProfile,
+	type HfDesignSpec,
+} from "@/features/ai-generate/profiles";
+import {
+	designSpecFromStyle,
+	getStyleById,
+} from "@/features/ai-generate/styles";
 
 export type AiAuthMode = "api-key" | "claude-code" | "custom";
 export type AiBackend = "local" | "heygen";
 
-/** How many saved HyperFrames presets ("Custom Template 1–5") we allow. */
-export const MAX_HF_PRESETS = 5;
+/**
+ * How many saved HyperFrames presets / style profiles we allow. Raised 5 -> 8
+ * with Round 20's style profiles: the six factory looks stay a separate
+ * default set, but profile duplicate/edit flows burn user slots faster than
+ * the old save-only flow did.
+ */
+export const MAX_HF_PRESETS = 8;
 
 /**
  * A user-saved HyperFrames preset: a named snapshot of the selections that
  * shape the authoring prompt (which templates are enabled, which registry
- * assets are pinned, the look, and the direction). Loading one re-applies
- * those selections so "the way I like HyperFrames to edit" is one click.
+ * assets are pinned, the look, and the direction) plus its STYLE PROFILE
+ * design spec (palette, fonts, motion, density). Loading one re-applies
+ * those selections so "the way I like HyperFrames to edit" is one click, and
+ * the active preset's design spec is what every generation honors.
  */
 export interface HfPreset {
 	id: string;
@@ -28,6 +44,8 @@ export interface HfPreset {
 	promptHfAssets: string[];
 	styleId: string;
 	hfDirection: string;
+	/** The profile's design spec (Round 20 style profiles). */
+	design: HfDesignSpec;
 }
 
 interface AiSettingsStore {
@@ -127,19 +145,28 @@ interface AiSettingsStore {
 	tokensUsedTotal: number;
 	addTokensUsed: (tokens: number) => void;
 
-	/** Saved HyperFrames presets ("Custom Template 1–5"). */
+	/** Saved HyperFrames presets ("Custom Template N") / style profiles. */
 	hfPresets: HfPreset[];
 	/** The preset currently loaded — cleared as soon as a selection diverges. */
 	activeHfPresetId: string | null;
 	/**
 	 * Snapshot the current selections into a preset. With a presetId, overwrites
 	 * that slot; without one, creates a new preset (capped at MAX_HF_PRESETS).
+	 * The design spec comes from the active preset when one is loaded, else
+	 * from the current factory look.
 	 */
 	saveHfPreset: (presetId?: string) => void;
 	/** Re-apply a saved preset's selections to the live fields. */
 	loadHfPreset: (presetId: string) => void;
 	renameHfPreset: (presetId: string, name: string) => void;
 	deleteHfPreset: (presetId: string) => void;
+	/** Copy a preset (design included) into a new slot, "name copy". */
+	duplicateHfPreset: (presetId: string) => void;
+	/**
+	 * Edit a preset's design spec in place (the profile editor). Does not
+	 * clear the active id, so edits to the active profile apply immediately.
+	 */
+	updateHfPresetDesign: (presetId: string, design: HfDesignSpec) => void;
 }
 
 export const useAiSettingsStore = create<AiSettingsStore>()(
@@ -245,11 +272,20 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			saveHfPreset: (presetId) =>
 				set((state) => {
+					// The design spec snapshots from the ACTIVE preset when one is
+					// loaded (its profile is the live design), else from the current
+					// factory look - the look the next generation would use anyway.
+					const activePreset = state.hfPresets.find(
+						(p) => p.id === state.activeHfPresetId,
+					);
 					const snapshot = {
 						disabledTemplateIds: [...state.disabledTemplateIds],
 						promptHfAssets: [...state.promptHfAssets],
 						styleId: state.styleId,
 						hfDirection: state.hfDirection,
+						design: activePreset
+							? cloneDesignSpec(activePreset.design)
+							: designSpecFromStyle(getStyleById(state.styleId)),
 					};
 					if (presetId) {
 						// Overwrite an existing slot with the current selection.
@@ -303,10 +339,46 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 					activeHfPresetId:
 						state.activeHfPresetId === presetId ? null : state.activeHfPresetId,
 				})),
+
+			duplicateHfPreset: (presetId) =>
+				set((state) => {
+					const source = state.hfPresets.find((p) => p.id === presetId);
+					if (!source || state.hfPresets.length >= MAX_HF_PRESETS) return state;
+					const used = new Set(state.hfPresets.map((p) => p.name));
+					let name = `${source.name} copy`;
+					let n = 2;
+					while (used.has(name)) name = `${source.name} copy ${n++}`;
+					const id = generateUUID();
+					return {
+						hfPresets: [
+							...state.hfPresets,
+							{
+								...source,
+								id,
+								name,
+								disabledTemplateIds: [...source.disabledTemplateIds],
+								promptHfAssets: [...source.promptHfAssets],
+								design: cloneDesignSpec(source.design),
+							},
+						],
+						// Duplicating the ACTIVE preset keeps the copy active (its
+						// selections still match the live fields); otherwise the live
+						// state is untouched.
+						activeHfPresetId:
+							state.activeHfPresetId === presetId ? id : state.activeHfPresetId,
+					};
+				}),
+
+			updateHfPresetDesign: (presetId, design) =>
+				set((state) => ({
+					hfPresets: state.hfPresets.map((p) =>
+						p.id === presetId ? { ...p, design: cloneDesignSpec(design) } : p,
+					),
+				})),
 		}),
 		{
 			name: "framecut-ai-settings",
-			version: 4,
+			version: 5,
 			migrate: (persisted, version) =>
 				migrateAiSettings(persisted, version) as unknown as AiSettingsStore,
 		},
@@ -329,6 +401,10 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
  * unchanged, so both recall passes go default-ON with their Settings toggles
  * removed, following the v3 VAD delete-not-default precedent). A persisted
  * true/false for either key is stale data, not a preference; drop both.
+ * v5: presets gained a design spec (Round 20 style profiles). Seed each saved
+ * preset's spec from its own styleId so a migrated preset generates the exact
+ * same look it always did - additive and lossless; presets that already carry
+ * a design are left alone.
  */
 export function migrateAiSettings(
 	persisted: unknown,
@@ -348,7 +424,44 @@ export function migrateAiSettings(
 		delete s.directorRetake;
 		delete s.directorStructural;
 	}
+	if (version < 5 && Array.isArray(s.hfPresets)) {
+		s.hfPresets = (s.hfPresets as Record<string, unknown>[]).map((p) => {
+			if (!p || typeof p !== "object" || p.design) return p;
+			const styleId = typeof p.styleId === "string" ? p.styleId : "";
+			return { ...p, design: designSpecFromStyle(getStyleById(styleId)) };
+		});
+	}
 	return s;
+}
+
+/**
+ * The design spec a generation should honor right now: the ACTIVE preset's
+ * spec when a profile is loaded, else the current factory look expressed as a
+ * spec (which is exactly the pre-profiles behavior). Pure + exported for
+ * tests; the T20.3 media-pack manifest serializes the same spec shape.
+ */
+export interface ResolvedDesignSpec extends HfDesignProfile {
+	/** true when a user-saved profile is active (vs the factory look). */
+	custom: boolean;
+}
+
+export function resolveDesignSpec(state: {
+	hfPresets: HfPreset[];
+	activeHfPresetId: string | null;
+	styleId: string;
+}): ResolvedDesignSpec {
+	const active = state.hfPresets.find((p) => p.id === state.activeHfPresetId);
+	if (active) {
+		return {
+			name: active.name,
+			// Tolerate an unmigrated preset (no design yet): fall back to the
+			// spec of its own look rather than crashing a generation.
+			spec: active.design ?? designSpecFromStyle(getStyleById(active.styleId)),
+			custom: true,
+		};
+	}
+	const style = getStyleById(state.styleId);
+	return { name: style.name, spec: designSpecFromStyle(style), custom: false };
 }
 
 /** Headers to attach to FrameCut AI API routes, carrying device-local auth. */
