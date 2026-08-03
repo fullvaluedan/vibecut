@@ -1,15 +1,19 @@
 "use client";
 
 /**
- * The HyperFrames asset home (left sidebar tab): every template, style,
- * block, and component in one place — collapsible sections, visual
- * previews, grid/list views, and persisted checkboxes that pick your
- * palette. Template checkboxes gate RUN HYPERFRAMES; blocks have an "Add"
- * action that bakes them to a cached WebM and drops them on the timeline;
- * styles/components are saved for releases that render them directly.
+ * The HyperFrames asset home (left sidebar tab). The start flow (T20.4):
+ * pick or create a style profile, describe what you want (or one-click a
+ * showcase), then hit RUN HYPERFRAMES in the timeline toolbar. A run renders
+ * a short probe of each segment first and the full render waits on your
+ * approval in the drafts review - the panel teaches that probe-first model
+ * up top. The engine knob, the template/style/block/component palette
+ * (collapsible sections, visual previews, grid/list views, persisted
+ * checkboxes), and the factory Look stay reachable behind the Advanced
+ * disclosure. Template checkboxes gate RUN HYPERFRAMES; blocks have an "Add"
+ * action that bakes them to a cached WebM and drops them on the timeline.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { describeTemplateCatalog } from "@framecut/hf-bridge/templates";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -900,6 +904,74 @@ function EngineSection() {
 	);
 }
 
+/**
+ * Step 2 of the start flow: the free-text direction. A showcase below fills
+ * this in for you; either way the run's brief carries it.
+ */
+function DirectionSection() {
+	const hfDirection = useAiSettingsStore((s) => s.hfDirection);
+	const setHfDirection = useAiSettingsStore((s) => s.setHfDirection);
+	return (
+		<div className="px-3 pt-1 pb-2">
+			<h3 className="text-xs font-semibold">Describe what you want</h3>
+			<textarea
+				value={hfDirection}
+				onChange={(e) => setHfDirection(e.target.value)}
+				placeholder="Tell HyperFrames how to edit..."
+				rows={3}
+				className="border-input bg-background mt-2 w-full resize-y rounded-md border p-2 text-xs outline-none focus:ring-1"
+			/>
+		</div>
+	);
+}
+
+/**
+ * The flow's last step: what RUN actually does now (T20.2's probe gate), so
+ * the panel teaches the probe-first model instead of the old direct-run one.
+ */
+function RunFlowNote() {
+	return (
+		<p className="text-muted-foreground bg-foreground/5 mx-3 mt-1 rounded-md p-2 text-[0.65rem] leading-snug">
+			Hit <span className="text-foreground">RUN HYPERFRAMES</span> in the
+			timeline toolbar. A run renders a short probe of each segment first -
+			approve the probes in the drafts review to start the full render, and
+			retry any failed segment there. Nothing renders in full before you
+			approve.
+		</p>
+	);
+}
+
+/**
+ * The tuning knobs, collapsed by default (T20.4): the start flow is
+ * profile -> describe -> RUN, and everything that shapes the run's palette
+ * (engine, templates, registry styles/blocks/components, factory Look)
+ * stays one disclosure away. Nothing was removed, only re-flowed.
+ */
+function AdvancedSection({ children }: { children: ReactNode }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<div className="border-b px-3 pb-1">
+			<button
+				type="button"
+				className="flex w-full items-center gap-1.5 py-2 text-left"
+				onClick={() => setOpen((o) => !o)}
+				aria-expanded={open}
+			>
+				<HugeiconsIcon
+					icon={open ? ArrowDown01Icon : ArrowRight01Icon}
+					size={14}
+					className="text-muted-foreground"
+				/>
+				<span className="text-xs font-semibold">Advanced</span>
+				<span className="text-muted-foreground text-[0.65rem]">
+					engine, template palette, registry assets, factory look
+				</span>
+			</button>
+			{open && children}
+		</div>
+	);
+}
+
 export function HyperframesPanel() {
 	const disabledTemplateIds = useAiSettingsStore((s) => s.disabledTemplateIds);
 	const toggleTemplate = useAiSettingsStore((s) => s.toggleTemplate);
@@ -907,7 +979,6 @@ export function HyperframesPanel() {
 	const togglePromptHfAsset = useAiSettingsStore((s) => s.togglePromptHfAsset);
 	const styleId = useAiSettingsStore((s) => s.styleId);
 	const setStyleId = useAiSettingsStore((s) => s.setStyleId);
-	const hfDirection = useAiSettingsStore((s) => s.hfDirection);
 	const setHfDirection = useAiSettingsStore((s) => s.setHfDirection);
 	const tokensUsedTotal = useAiSettingsStore((s) => s.tokensUsedTotal);
 	const view = useAiSettingsStore((s) => s.hfBrowserView);
@@ -1042,7 +1113,8 @@ export function HyperframesPanel() {
 			}
 		>
 			<div className="flex flex-col gap-1 pb-4">
-				<EngineSection />
+				<CustomPresetsSection />
+				<DirectionSection />
 				<ShowcaseSection
 					onApply={({ templateIds, direction, title }) => {
 						const allIds = describeTemplateCatalog().map((t) => t.id);
@@ -1055,125 +1127,118 @@ export function HyperframesPanel() {
 						});
 					}}
 				/>
-				<CustomPresetsSection />
-				<Section
-					title="Templates"
-					subtitle="used by RUN HYPERFRAMES"
-					items={templateItems}
-					view={view}
-					onSetAll={(enabled) =>
-						setTemplatesEnabled(
-							templateItems.map((t) => t.id),
-							enabled,
-						)
-					}
-				/>
-				<Section
-					title="Styles"
-					subtitle="whole-video looks; check to use, RUN authors it over your footage"
-					items={registryItems("example")}
-					view={view}
-					onSetAll={(enabled) =>
-						setPromptHfAssetsEnabled(
-							registryItems("example").map((i) => i.id),
-							enabled,
-						)
-					}
-				/>
-				<Section
-					title="Blocks"
-					subtitle="graphics & cards; Add drops one, or check to use in RUN"
-					items={registryItems("block", (a) => !isTransitionBlock(a))}
-					view={view}
-					onSetAll={(enabled) =>
-						setPromptHfAssetsEnabled(
-							registryItems("block", (a) => !isTransitionBlock(a)).map(
-								(i) => i.id,
-							),
-							enabled,
-						)
-					}
-				/>
-				<Section
-					title="Transitions & effects"
-					subtitle="need a transition slot — not droppable yet"
-					items={registryItems("block", isTransitionBlock)}
-					view={view}
-					onSetAll={(enabled) =>
-						setPromptHfAssetsEnabled(
-							registryItems("block", isTransitionBlock).map((i) => i.id),
-							enabled,
-						)
-					}
-				/>
-				<Section
-					title="Components"
-					subtitle="caption & effect snippets; check to use in the RUN prompt"
-					items={registryItems("component")}
-					view={view}
-					onSetAll={(enabled) =>
-						setPromptHfAssetsEnabled(
-							registryItems("component").map((i) => i.id),
-							enabled,
-						)
-					}
-				/>
-				{registryError && (
-					<p className="text-muted-foreground text-[0.65rem]">
-						{registryError}
-					</p>
-				)}
-
-				<div className="pt-2">
-					<h3 className="text-xs font-semibold">Look</h3>
-					<div className="mt-2 flex flex-wrap gap-1.5">
-						{VIBE_STYLES.map((style) => (
-							<button
-								key={style.id}
-								type="button"
-								title={`${style.name} — ${style.description}`}
-								onClick={() => setStyleId(style.id)}
-								className={cn(
-									"size-7 rounded-full border-2 transition-transform",
-									styleId === style.id
-										? "scale-110 border-foreground"
-										: "border-transparent hover:scale-105",
-								)}
-								style={{
-									backgroundColor: style.accent,
-									fontFamily: style.fontFamily,
-								}}
-							>
-								<span className="text-[0.7rem] font-bold text-black/70">
-									Aa
-								</span>
-							</button>
-						))}
-					</div>
-					<p className="text-muted-foreground mt-1.5 text-[0.65rem]">
-						<span className="text-foreground">
-							{getStyleById(styleId).name}
-						</span>
-						{" — "}
-						{getStyleById(styleId).fontFamily} type + accent. The factory
-						profile set: sets every template&apos;s font + color and biases
-						RUN HYPERFRAMES while no style profile is active.
-					</p>
-				</div>
-
-				<div className="pt-2">
-					<h3 className="text-xs font-semibold">Direction</h3>
-					<textarea
-						value={hfDirection}
-						onChange={(e) => setHfDirection(e.target.value)}
-						placeholder="Tell HyperFrames how to edit..."
-						rows={3}
-						className="border-input bg-background mt-2 w-full resize-y rounded-md border p-2 text-xs outline-none focus:ring-1"
+				<RunFlowNote />
+				<AdvancedSection>
+					<EngineSection />
+					<Section
+						title="Templates"
+						subtitle="used by RUN HYPERFRAMES"
+						items={templateItems}
+						view={view}
+						onSetAll={(enabled) =>
+							setTemplatesEnabled(
+								templateItems.map((t) => t.id),
+								enabled,
+							)
+						}
 					/>
-				</div>
+					<Section
+						title="Styles"
+						subtitle="whole-video looks; check to use, RUN authors it over your footage"
+						items={registryItems("example")}
+						view={view}
+						onSetAll={(enabled) =>
+							setPromptHfAssetsEnabled(
+								registryItems("example").map((i) => i.id),
+								enabled,
+							)
+						}
+					/>
+					<Section
+						title="Blocks"
+						subtitle="graphics & cards; Add drops one, or check to use in RUN"
+						items={registryItems("block", (a) => !isTransitionBlock(a))}
+						view={view}
+						onSetAll={(enabled) =>
+							setPromptHfAssetsEnabled(
+								registryItems("block", (a) => !isTransitionBlock(a)).map(
+									(i) => i.id,
+								),
+								enabled,
+							)
+						}
+					/>
+					<Section
+						title="Transitions & effects"
+						subtitle="need a transition slot — not droppable yet"
+						items={registryItems("block", isTransitionBlock)}
+						view={view}
+						onSetAll={(enabled) =>
+							setPromptHfAssetsEnabled(
+								registryItems("block", isTransitionBlock).map((i) => i.id),
+								enabled,
+							)
+						}
+					/>
+					<Section
+						title="Components"
+						subtitle="caption & effect snippets; check to use in the RUN prompt"
+						items={registryItems("component")}
+						view={view}
+						onSetAll={(enabled) =>
+							setPromptHfAssetsEnabled(
+								registryItems("component").map((i) => i.id),
+								enabled,
+							)
+						}
+					/>
+					{registryError && (
+						<p className="text-muted-foreground text-[0.65rem]">
+							{registryError}
+						</p>
+					)}
+
+					<div className="pt-2">
+						<h3 className="text-xs font-semibold">Look</h3>
+						<div className="mt-2 flex flex-wrap gap-1.5">
+							{VIBE_STYLES.map((style) => (
+								<button
+									key={style.id}
+									type="button"
+									title={`${style.name} — ${style.description}`}
+									onClick={() => setStyleId(style.id)}
+									className={cn(
+										"size-7 rounded-full border-2 transition-transform",
+										styleId === style.id
+											? "scale-110 border-foreground"
+											: "border-transparent hover:scale-105",
+									)}
+									style={{
+										backgroundColor: style.accent,
+										fontFamily: style.fontFamily,
+									}}
+								>
+									<span className="text-[0.7rem] font-bold text-black/70">
+										Aa
+									</span>
+								</button>
+							))}
+						</div>
+						<p className="text-muted-foreground mt-1.5 text-[0.65rem]">
+							<span className="text-foreground">
+								{getStyleById(styleId).name}
+							</span>
+							{" — "}
+							{getStyleById(styleId).fontFamily} type + accent. The factory
+							profile set: sets every template&apos;s font + color and biases
+							RUN HYPERFRAMES while no style profile is active.
+						</p>
+					</div>
+				</AdvancedSection>
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
-					Checked templates are the palette RUN HYPERFRAMES picks from today.
+					Checked templates are the palette RUN HYPERFRAMES picks from today
+					(under Advanced).
 					<span className="text-foreground">Check</span> any style, block, or
 					component to add it to the RUN HYPERFRAMES prompt; the Authored engine
 					(default) authors them over your footage. Instant and Cinematic are

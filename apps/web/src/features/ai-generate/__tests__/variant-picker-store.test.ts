@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	useVariantPickerStore,
 	buildVersionPlacements,
+	hasVariantDrafts,
 	type ProbeSet,
 } from "../variant-picker-store";
 import type { AuthoredVersion } from "../run-hyperframes-scoped";
@@ -200,5 +201,41 @@ describe("probe-set drafts: the approval gate's persistence", () => {
 		expect(s.urls.size).toBe(0);
 		// 1 revoked when openProbes replaced open()'s set, then all 3 live URLs.
 		expect(revoked.length).toBe(4);
+	});
+});
+
+describe("hasVariantDrafts - the drafts-surface selector (T20.4 panel states)", () => {
+	test("the empty state: no versions and no probe set surfaces nothing", () => {
+		expect(hasVariantDrafts({ versions: null, probeSet: null })).toBe(false);
+		expect(hasVariantDrafts({ versions: [], probeSet: null })).toBe(false);
+	});
+
+	test("a probe set awaiting approval surfaces the drafts panel with zero versions", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(2));
+		const s = useVariantPickerStore.getState();
+		expect(s.probeSet?.approved).toBe(false);
+		expect(s.versions).toBeNull();
+		expect(hasVariantDrafts(s)).toBe(true);
+	});
+
+	test("version drafts surface it too", () => {
+		useVariantPickerStore.getState().open([version(0, 1)]);
+		expect(hasVariantDrafts(useVariantPickerStore.getState())).toBe(true);
+	});
+
+	test("close() keeps the surface live (the reopen-drafts affordance); discard() ends it", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(1));
+		useVariantPickerStore.getState().close();
+		expect(hasVariantDrafts(useVariantPickerStore.getState())).toBe(true);
+		useVariantPickerStore.getState().discard();
+		expect(hasVariantDrafts(useVariantPickerStore.getState())).toBe(false);
+	});
+
+	test("show() reopens a probe-only draft set (reopen after a closed review)", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(1));
+		useVariantPickerStore.getState().close();
+		expect(useVariantPickerStore.getState().isOpen).toBe(false);
+		useVariantPickerStore.getState().show();
+		expect(useVariantPickerStore.getState().isOpen).toBe(true);
 	});
 });

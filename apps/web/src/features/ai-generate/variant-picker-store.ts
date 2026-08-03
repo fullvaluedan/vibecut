@@ -184,6 +184,18 @@ export const useVariantPickerStore = create<VariantPickerStore>((set, get) => ({
 }));
 
 /**
+ * True when any drafts exist (version drafts OR a probe set awaiting
+ * approval). Drives the empty-inspector drafts-panel takeover
+ * (`properties/index.tsx`) and the toolbar's reopen-drafts affordance, so
+ * the probe gate surfaces in the UI even with zero versions generated.
+ */
+export function hasVariantDrafts(
+	s: Pick<VariantPickerStore, "versions" | "probeSet">,
+): boolean {
+	return (s.versions?.length ?? 0) > 0 || !!s.probeSet;
+}
+
+/**
  * Map a version's segments to placeHyperframesRenders args (one new track, one
  * undo). Pure: the templateId fallback (`authored:${compId ?? chunk.index}`) and
  * the per-render shape are the load-bearing bits, kept testable apart from the

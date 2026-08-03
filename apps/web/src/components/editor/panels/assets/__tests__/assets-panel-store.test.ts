@@ -43,9 +43,10 @@ describe("hidden-panel default list (Dan's 2026-07-19 roadmap decision D4/D6, W2
 		}
 	});
 
-	test("VISIBLE_TAB_KEYS is exactly Media, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings (T19.4b: effects unhidden)", () => {
+	test("VISIBLE_TAB_KEYS is the full TAB_KEYS set (T20.4: hyperframes unhidden, nothing parked)", () => {
 		expect(VISIBLE_TAB_KEYS).toEqual([
 			"media",
+			"hyperframes",
 			"sounds",
 			"text",
 			"shapes",

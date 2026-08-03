@@ -10,8 +10,8 @@ import {
 } from "@/features/editing/surface-flags";
 
 describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)", () => {
-	test("the hidden left-panel tab list matches the roadmap doc exactly (T19.4b: effects unhidden)", () => {
-		expect([...HIDDEN_ASSET_TABS].sort()).toEqual(["hyperframes"].sort());
+	test("the hidden left-panel tab list is empty (T20.4: hyperframes unhidden with the redesigned start flow)", () => {
+		expect(HIDDEN_ASSET_TABS).toEqual([]);
 	});
 
 	test("kept-visible tabs are never in the hidden list", () => {
@@ -24,15 +24,16 @@ describe("surface-flags defaults (Dan's 2026-07-19 roadmap decision D4/D6, W2)",
 			"settings",
 			"sounds",
 			"effects",
+			"hyperframes",
 		] as const) {
 			expect(HIDDEN_ASSET_TABS).not.toContain(kept);
 		}
 	});
 
-	test("every HyperFrames generation surface defaults to hidden (roadmap D6, parked not deleted)", () => {
-		expect(HIDE_RUN_HYPERFRAMES_CLUSTER).toBe(true);
-		expect(HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM).toBe(true);
-		expect(HIDE_HYPERFRAMES_DRAFTS_PANEL).toBe(true);
+	test("every HyperFrames generation surface is shown (T20.4 un-park after profiles + the probe-first flow)", () => {
+		expect(HIDE_RUN_HYPERFRAMES_CLUSTER).toBe(false);
+		expect(HIDE_RUN_HYPERFRAMES_CONTEXT_MENU_ITEM).toBe(false);
+		expect(HIDE_HYPERFRAMES_DRAFTS_PANEL).toBe(false);
 	});
 
 	test("the assistant prompt flag is retired (T17.3): the surface is now the Assistant mini-prompt, shown", () => {

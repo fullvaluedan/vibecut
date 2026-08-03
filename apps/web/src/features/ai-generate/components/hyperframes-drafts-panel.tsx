@@ -22,6 +22,7 @@ import {
 	approveProbesAndRender,
 	retryProbe,
 } from "@/features/ai-generate/components/variant-picker-dialog";
+import { hasVariantDrafts } from "@/features/ai-generate/variant-picker-store";
 import type { AuthoredVersion } from "@/features/ai-generate/run-hyperframes-scoped";
 
 export function HyperframesDraftsPanel() {
@@ -32,7 +33,7 @@ export function HyperframesDraftsPanel() {
 	const urls = useVariantPickerStore((s) => s.urls);
 	const discard = useVariantPickerStore((s) => s.discard);
 
-	if (!versions?.length && !probeSet) return null;
+	if (!hasVariantDrafts({ versions, probeSet })) return null;
 
 	const apply = async (v: AuthoredVersion) => {
 		try {
