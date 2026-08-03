@@ -28,7 +28,10 @@ import {
 	resolveTransitionClipTime,
 	resolveTransitionOpacityFactor,
 } from "./transition-window";
-import { filterSupportedEffectPasses } from "./wasm-capabilities";
+import {
+	compactEffectPassGroups,
+	filterSupportedEffectPasses,
+} from "./wasm-capabilities";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
 import {
@@ -121,29 +124,33 @@ function resolveEffectPassGroups({
 	width: number;
 	height: number;
 }): EffectPass[][] {
-	return (effects ?? [])
-		.filter((effect) => effect.enabled)
-		.map((effect) => {
-			const resolvedParams = resolveEffectParamsAtTime({
-				effectId: effect.id,
-				params: effect.params,
-				animations,
-				localTime,
-			});
-			const definition = effectsRegistry.get(effect.type);
-			// Stale-wasm guard: a shader the loaded wasm cannot run degrades to
-			// no passes (the clip renders without that effect) instead of
-			// throwing inside the compositor.
-			return filterSupportedEffectPasses(
-				resolveEffectPasses({
-					definition,
-					effectParams: resolvedParams,
-					width,
-					height,
-					time: localTime,
-				}),
-			);
-		});
+	return compactEffectPassGroups(
+		(effects ?? [])
+			.filter((effect) => effect.enabled)
+			.map((effect) => {
+				const resolvedParams = resolveEffectParamsAtTime({
+					effectId: effect.id,
+					params: effect.params,
+					animations,
+					localTime,
+				});
+				const definition = effectsRegistry.get(effect.type);
+				// Stale-wasm guard: a shader the loaded wasm cannot run degrades
+				// to no passes (the clip renders without that effect). The empty
+				// group is then dropped by compactEffectPassGroups — the stale
+				// compositor throws on empty groups, so passing them through
+				// would re-introduce the crash the guard exists to prevent.
+				return filterSupportedEffectPasses(
+					resolveEffectPasses({
+						definition,
+						effectParams: resolvedParams,
+						width,
+						height,
+						time: localTime,
+					}),
+				);
+			}),
+	);
 }
 
 function resolveVisualState({

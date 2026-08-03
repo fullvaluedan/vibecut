@@ -1,10 +1,13 @@
-# VibeCut handoff, 2026-08-02 (end of session: rounds 15-18 shipped, round 19 in a G6 fix cycle)
+# VibeCut handoff, 2026-08-03 (ROUND 19 CLOSED 9/9; next: Round 20)
 
-Written at a clean stopping point after the monthly API spend limit killed four in-flight
-fix agents (they died during setup and wrote NO code, so nothing is half-applied).
+Updated at the end of the 2026-08-03 session: all four G6 reopens plus the R19-7
+follow-up hole were fixed and re-verified live (pixel evidence in
+`docs/TO-VERIFY.md`, round-19 re-verification section). Round 19 closes at 9/9
+across all seven features.
 
-Branch: `feat/director-eval`, tip `9ca7d6a0`, pushed. Working tree clean apart from the
-untracked local-only `.claude/` and `bunfig.toml`.
+Branch: `feat/director-eval`, tip is the R19-7 commit on top of `a8d6a6df`
+("fix(round-19): close the four G6 reopens"), both pushed. Working tree clean
+apart from the untracked local-only `.claude/` and `bunfig.toml`.
 
 ## 1. Read these first, in this order
 
@@ -43,7 +46,7 @@ untracked local-only `.claude/` and `bunfig.toml`.
   real key is in `apps/web/.env.local` and the cloud path was verified end to end
   (HTTP 200, 67-word transcript, word-seek + pipe + SRT export all correct).
 
-### Round 19: ALL SEVEN BUILD TASKS MERGED, but the round does NOT close (see section 3)
+### Round 19: CLOSED 2026-08-03 at 9/9 across all seven features
 
 - T19.0 wasm effects foundation: `pack_effect_uniforms` generalized to a per-shader
   uniform schema (96-byte buffer: 12 scalars + 2 vec2 + 1 vec4), blur proven
@@ -70,84 +73,41 @@ untracked local-only `.claude/` and `bunfig.toml`.
   removed, export-critical resolver spine kept and proven by a legacy-project test);
   6 new caption looks (12 total).
 
-Gates at tip `9ca7d6a0`: apps/web **2690 pass / 0 fail**, hf-bridge **210 pass / 0 fail**,
-`bunx tsc --noEmit` clean from apps/web, `wasm-pack test --node rust/crates/effects`
-**21 pass / 0 fail**, `bun run build:web` green.
+Gates at the R19-7 tip: apps/web **2717 pass / 0 fail / 1 skip** (the skip is the
+intentional pin-vs-source guard test, un-skip after the 0.3.0 publish + repin),
+hf-bridge **210 pass / 0 fail**, `bunx tsc --noEmit` clean from apps/web,
+`wasm-pack test --node rust/crates/effects` **21 pass / 0 fail**, `bun run build:web`
+green.
 
-## 3. Round 19 G6 verdict: 3 features PASS, 4 REOPEN
+## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
-Full evidence in `docs/TO-VERIFY.md` (round-19 section) and the verifier's scores below.
+The four defects below were fixed in `a8d6a6df` and re-verified live; the
+re-verification then caught one follow-up hole (R19-7), fixed in the tip commit and
+re-verified live again. Full before/after numbers: `docs/TO-VERIFY.md` (round-19
+re-verification section). Kept here as the record of what was wrong:
 
-| Feature | Func | Qual | Verdict |
-|---|---|---|---|
-| T19.1 Adjust + presets | 9 | 9 | PASS |
-| T19.2 chroma key + eyedropper | 9 | 8 | PASS |
-| T19.4a sounds | 9 | 8 | PASS |
-| T19.0 wasm foundation | 6 | 7 | REOPEN |
-| T19.3 transitions | 8 | 7 | REOPEN |
-| T19.4b new effects + tab unhide | 9 | 6 | REOPEN |
-| T19.4a stickers prune + caption looks | 8 | 6 | REOPEN |
-
-### DEFECT 1 (CRITICAL, blocks the entire GPU half of round 19)
-
-**apps/web never loads the wasm this round built.**
-`apps/web/node_modules/opencut-wasm` is a REAL DIRECTORY holding the published 0.2.10
-(dated 2026-06-07). It SHADOWS the root-level `bun link` that `rust/wasm/README.md`
-tells you to create, so the README's dev-loop instructions are false on this repo
-layout. Both `package.json` (root, ~line 31) and `apps/web/package.json` (~line 57)
-still pin `"opencut-wasm": "^0.2.10"`, so any fresh `bun install` restores the shadow.
-
-Proof: the served bundle chunk was byte-identical (md5) to the npm copy and contained
-zero occurrences of `color-adjust`.
-
-Consequences on a clean checkout: adding an Adjust effect BLANKS THE PREVIEW with
-`Missing uniform 'u_sigma' for shader 'color-adjust'`; chroma key, pixelate, vignette,
-glow and noise fail identically; and `MASK_EXPANSION_OPACITY_RENDERED = true` is running
-against a compositor that cannot honour it.
-
-CURRENT LOCAL STATE (uncommitted, machine-only): the verifier replaced that directory
-with a junction to `rust/wasm/pkg` so anything could be verified at all. A backup of the
-npm copy sits at `apps/web/node_modules/opencut-wasm.npm-0.2.10-backup`. This is a hack,
-not a fix, and it will not survive `bun install`.
-
-The fix task was fully specified and was mid-launch when the spend limit hit. Required
-shape: (a) a reproducible dev-link that survives `bun install` (root `overrides`, a
-`bun run link:wasm` script that removes the shadow and makes a Windows-safe junction, or
-a `link:` dependency with a documented publish-time repin); (b) a RUNTIME CAPABILITY
-GUARD so a stale wasm shows one clear actionable banner instead of blanking the preview,
-with `MASK_EXPANSION_OPACITY_RENDERED` gated on the detected capability and unknown
-shaders degrading to a no-op pass list; (c) a guard TEST comparing the pinned version to
-the version the Rust source declares - that test is what would have caught this.
-
-### DEFECT 2: cross dissolve dips about 25% dark at its midpoint
-
-Both neighbours ramp opacity, so source-over compositing yields `0.75 * luminance` at
-t=0.5 instead of a flat blend. Measured mid-gray to mid-gray: `[126,127,129]` ->
-`[93,96,94]` -> `[123,128,128]`, in preview AND export. Correct math: with an upper
-layer at alpha a over a lower layer at alpha 1, the result is `U*a + L*(1-a)`, so the
-OUTGOING layer must stay at factor 1.0 and only the INCOMING (last-composited) layer
-ramps 0->1. The existing unit tests ASSERT the buggy per-layer 0.5 factor and must be
-rewritten as composited-result assertions (that test class would have caught it). Dip to
-black/white need the same re-derivation check.
-
-### DEFECT 3: 6 of 7 Effects-browser tiles are pixel-identical
-
-Catalogue tiles render with `params: {}`, and every effect except blur is neutral at its
-defaults (correct for clips, useless for a catalogue). Fix: add an optional
-`previewParams` to `EffectDefinition`, author a visibly distinct value set per effect,
-use it in the tile render path only (never for a newly added clip instance), and guard
-it with a test asserting every registered effect's previewParams produce a NON-EMPTY
-pass list or appear in a documented exemption list. Chroma key needs a decision (key a
-plausible hue on a bundled preview image, or a static illustrative thumbnail).
-
-### DEFECT 4: caption looks bleed in both directions
-
-Application is a merge, and the 12 looks do not all set the same key set. Repro:
-Broadcast -> Neon Accent -> Plain leaves `letterSpacing=2 shadowBlur=8 shadowOffsetY=2`;
-"Plain", the reset look, leaves a drop shadow. Fix: compute the union of keys across all
-12 looks, make every look set every key in that union (without changing any look's
-intended fresh-application appearance), and add both a completeness-invariant test and a
-full 12x12 permutation sequence-independence sweep.
+- DEFECT 1 (wasm stale shadow) - fixed three ways: `bun run link:wasm` + a root
+  `postinstall` that re-links `rust/wasm/pkg` over the npm shadow after every
+  `bun install`; a runtime capability guard (`wasmCapabilities()` export +
+  `apps/web/src/services/renderer/wasm-capabilities.ts`) that degrades unsupported
+  shaders to no-op passes, gates `MASK_EXPANSION_OPACITY_RENDERED`, and shows ONE
+  actionable banner; and a version-guard test suite
+  (`__tests__/wasm-version.test.ts`, the pin-vs-source check skipped until publish).
+- DEFECT 2 (cross dissolve dipped ~25% dark at midpoint) - the outgoing clip now
+  holds at factor 1.0 (new `"hold"` ramp direction); flat blend verified in preview
+  AND export; dips re-derived, already correct; guilty per-layer-factor tests
+  rewritten as composited-result assertions.
+- DEFECT 3 (6 of 7 effect tiles pixel-identical) - optional
+  `EffectDefinition.previewParams` consumed only by the tile path; chroma-key exempt
+  with a static thumbnail (bundled preview frame is chroma-neutral); guard test
+  asserts non-empty pass lists.
+- DEFECT 4 (caption-look bleed) - every look now spreads `CAPTION_STYLE_RESET`
+  (17-key union at `DEFAULTS.text` values) under its designed values; fresh
+  application byte-identical; completeness-invariant test + 12x12 sweep (144/144).
+- R19-7 (found by the re-verification) - under a STALE compositor, adding a clip
+  effect still threw `At least one effect pass is required`: the guard emptied the
+  pass group but only the NEW compositor skips empty groups. Fixed JS-side with
+  `compactEffectPassGroups` in the resolve path.
 
 ### Minor, not scored as reopens
 
@@ -159,24 +119,21 @@ full 12x12 permutation sequence-independence sweep.
 
 ## 4. What to do next, in order
 
-1. Re-run the four fix tasks from section 3 (their full specs are reproduced above; each
-   was written as a standalone worktree brief). Suggested split: DEFECT 1 on Opus alone
-   (it is the critical path and touches package resolution + a runtime guard), DEFECT 2
-   on Opus, DEFECTS 3 and 4 on Sonnet in parallel. They touch disjoint files.
-2. Re-run the round-19 verifier (T19.5) on the fixed tip. It must confirm, with the
-   local wasm actually loaded: all 7 effect tiles visibly distinct, an Adjust effect
-   rendering rather than blanking, mask expansion/opacity, a luminance-flat cross
-   dissolve, and clean caption-look sequencing. Round 19 closes only at 9/9 across all
-   seven features.
-3. Then Round 20 (HyperFrames + Remotion, un-parked, probe-render-first) and the rest of
+1. Round 20 (HyperFrames + Remotion, un-parked, probe-render-first) and the rest of
    Round 21 (T21.2 provider abstraction incl. claude-code support for the assistant
    route, T21.3-T21.7 hosted credits/billing/shop). Both need their own Fable plan docs
-   before any build, per the roadmap.
+   before any build, per the roadmap
+   (`docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md`).
+2. The three minor items in section 3 can ride along with any round-20 worktree.
 
 ## 5. Dan-owed (only Dan can do these)
 
 1. **Publish `opencut-wasm` 0.3.0 and repin** - needs his npm auth. Checklist is in
-   `rust/wasm/README.md`. Until then dev depends on the local-link fix from DEFECT 1.
+   `rust/wasm/README.md`; after repinning both package.json files, un-skip the
+   pin-vs-source guard test in
+   `apps/web/src/services/renderer/__tests__/wasm-version.test.ts`. Until then dev uses
+   `bun run build:wasm && bun run link:wasm` (the postinstall re-links automatically
+   after every `bun install` when a local build exists).
    Note the Windows build needs `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu` (no MSVC
    linker on this machine), and `cargo test` cannot link at all here - Rust tests run via
    `wasm-pack test --node rust/crates/effects`.

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	buildCapabilitiesReport,
+	compactEffectPassGroups,
 	filterPassesByCapabilities,
 	type WasmCapabilitiesReport,
 } from "../wasm-capabilities";
@@ -104,5 +105,34 @@ describe("filterPassesByCapabilities", () => {
 				report,
 			}).map((p) => p.shader),
 		).toEqual(["gaussian-blur", "noise"]);
+	});
+});
+
+describe("compactEffectPassGroups (R19-7)", () => {
+	test("drops groups the stale-wasm guard emptied", () => {
+		// The R19-7 hole: under a stale compositor the guard empties a group,
+		// and the STALE compositor throws `At least one effect pass is
+		// required` on it — the exact crash the guard exists to prevent. The
+		// empty group must never leave resolve.ts.
+		const stale = buildCapabilitiesReport(undefined);
+		const groups = [
+			filterPassesByCapabilities({
+				passes: [pass("color-adjust")],
+				report: stale,
+			}),
+			filterPassesByCapabilities({
+				passes: [pass("chroma-key")],
+				report: stale,
+			}),
+		];
+		expect(compactEffectPassGroups(groups)).toEqual([]);
+	});
+
+	test("keeps non-empty groups and preserves their order", () => {
+		const groups = [[pass("gaussian-blur")], [], [pass("noise")]];
+		expect(compactEffectPassGroups(groups).map((g) => g[0].shader)).toEqual([
+			"gaussian-blur",
+			"noise",
+		]);
 	});
 });

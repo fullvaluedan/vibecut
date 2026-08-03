@@ -125,9 +125,12 @@ export function getWasmCapabilities(): WasmCapabilitiesReport {
 
 /**
  * Pure: the no-op degradation. Passes whose shader the loaded wasm cannot run
- * are dropped, so the clip renders without that effect; a group that loses
- * every pass comes back empty, which the compositor already skips without a
- * blit (T19.0 `apply_effect_groups` hygiene).
+ * are dropped, so the clip renders without that effect. A group that loses
+ * every pass comes back empty and MUST be dropped JS-side via
+ * `compactEffectPassGroups`: the NEW compositor skips empty groups without a
+ * blit (T19.0 `apply_effect_groups` hygiene), but the stale pre-0.3.0
+ * compositor this guard exists for throws `At least one effect pass is
+ * required` on them (R19-7).
  */
 export function filterPassesByCapabilities({
 	passes,
@@ -147,4 +150,16 @@ export function filterSupportedEffectPasses(passes: EffectPass[]): EffectPass[] 
 		passes,
 		report: getWasmCapabilities(),
 	});
+}
+
+/**
+ * Drops groups that capability filtering (or neutral params) emptied. Not
+ * optional hygiene: the stale pre-0.3.0 compositor throws `At least one
+ * effect pass is required` for an empty group, so passing `[[]]` through
+ * re-introduces the exact crash the guard exists to prevent (R19-7).
+ */
+export function compactEffectPassGroups(
+	groups: EffectPass[][],
+): EffectPass[][] {
+	return groups.filter((group) => group.length > 0);
 }
