@@ -563,7 +563,9 @@ Dan's directive: make it very easy for someone to start designing their own
 preferences for both HyperFrames and Remotion, and always test a short sequence
 before a full render. This round opens with its own Fable plan doc
 (2026-07-22-hyperframes-remotion-findings.md preconditions reviewed there); the
-direction is fixed now so that plan starts from decisions, not debate:
+direction is fixed now so that plan starts from decisions, not debate.
+Plan doc: `docs/plans/2026-08-03-001-feat-round20-hyperframes-remotion-plan.md`
+(opened 2026-08-03). Its fixed-direction items, verbatim from this roadmap:
 
 1. **Style preference profiles**: a saved, named design spec (palette, fonts, motion
    style, density) the user builds once and every generation honors, for HyperFrames
