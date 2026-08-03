@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import { TransitionTopIcon } from "@hugeicons/core-free-icons";
@@ -29,7 +29,7 @@ import {
 } from "@/export/resolution-utils";
 import { getExportableTranscript } from "@/features/transcription/transcript-cache";
 import { formatTranscriptSrt } from "@/features/transcription/export-transcript";
-import { Check, Copy, Download, RotateCcw } from "lucide-react";
+import { Check, Copy, Download, Package, RotateCcw } from "lucide-react";
 import {
 	EXPORT_FORMAT_VALUES,
 	EXPORT_QUALITY_VALUES,
@@ -48,6 +48,7 @@ import {
 	compositeAiOverlays,
 	collectAiOverlayClips,
 } from "@/features/ai-generate/composite-export";
+import { exportRemotionPack } from "@/export/remotion-pack-save";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { toast } from "sonner";
 
@@ -141,6 +142,7 @@ function ExportPopover({
 		"project",
 	);
 	const [shouldExportSrt, setShouldExportSrt] = useState(false);
+	const [isPackingRemotionPack, setIsPackingRemotionPack] = useState(false);
 
 	const canvasSize = activeProject.settings.canvasSize;
 	const projectPixels = canvasSize.width * canvasSize.height;
@@ -275,6 +277,40 @@ function ExportPopover({
 
 	const handleCancel = () => {
 		editor.project.cancelExport();
+	};
+
+	// T20.3: the Remotion media pack (EDL + transcript + media, per
+	// docs/remotion-media-pack-v1.md) rides its own busy state - it must not
+	// touch the video export state machine above.
+	const handleExportRemotionPack = async () => {
+		if (!activeProject) return;
+		if (!canExport({ durationTicks: editor.timeline.getTotalDuration() })) {
+			toast.error("Add footage to the timeline first");
+			return;
+		}
+		setIsPackingRemotionPack(true);
+		const toastId = toast.loading("Building Remotion media pack...");
+		try {
+			const outcome = await exportRemotionPack({ editor });
+			if (outcome === "cancelled") {
+				toast.dismiss(toastId);
+				return;
+			}
+			toast.success("Remotion media pack exported", {
+				id: toastId,
+				description:
+					outcome === "saved-directory"
+						? "Folder written with manifest, EDL, transcript and media."
+						: "Saved as one JSON bundle with the media embedded.",
+			});
+		} catch (e) {
+			toast.error("Couldn't export the Remotion media pack", {
+				id: toastId,
+				description: e instanceof Error ? e.message : String(e),
+			});
+		} finally {
+			setIsPackingRemotionPack(false);
+		}
 	};
 
 	return (
@@ -439,6 +475,29 @@ t							<Section
 											</SectionContent>
 										</Section>
 									)}
+
+									<Section collapsible defaultOpen={false}>
+										<SectionHeader>
+											<SectionTitle>Remotion</SectionTitle>
+										</SectionHeader>
+										<SectionContent>
+											<p className="text-muted-foreground text-xs">
+												EDL, transcript and media for the external Remotion
+												kits (docs/remotion-media-pack-v1.md).
+											</p>
+											<Button
+												variant="outline"
+												onClick={handleExportRemotionPack}
+												disabled={!canExportProject || isPackingRemotionPack}
+												className="mt-2 w-full gap-2"
+											>
+												<Package className="size-4" />
+												{isPackingRemotionPack
+													? "Building pack..."
+													: "Export media pack"}
+											</Button>
+										</SectionContent>
+									</Section>
 								</div>
 
 								<div className="p-3 pt-0">
