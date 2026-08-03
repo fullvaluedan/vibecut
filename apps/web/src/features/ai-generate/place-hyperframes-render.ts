@@ -23,6 +23,10 @@ import { processMediaAssets } from "@/media/processing";
 import { ZERO_MEDIA_TIME, mediaTimeFromSeconds } from "@/wasm";
 import { generateUUID } from "@/utils/id";
 import type { EditorCore } from "@/core";
+import {
+	buildSegmentInsertSpecs,
+	type SegmentAssetInfo,
+} from "@/features/ai-generate/place-segment-spec";
 
 export interface HyperframesRenderScope {
 	/** Whole timeline, a single clip, or a nested sequence. */
@@ -160,8 +164,9 @@ export interface ChunkRenderInput {
  * per ~90s segment) on ONE shared new video track, each at its segment offset.
  * Chunks are sequential + non-overlapping, so a single explicit track holds
  * them all with no lane logic. One BatchCommand = one undo step for the whole
- * run. Returns how many actually landed. Authored overlays are transparent
- * (no audio), so no source-audio split here.
+ * run. Returns how many actually landed. Segments are ALWAYS placed muted
+ * (buildSegmentInsertSpecs): audio muxes from the source footage at export,
+ * never from render segments.
  */
 export async function placeHyperframesRenders({
 	editor,
@@ -176,16 +181,7 @@ export async function placeHyperframesRenders({
 	const project = editor.project.getActive();
 
 	// Import each render to a media asset first (eager, same as the singular fn).
-	const assets: {
-		assetId: string;
-		startSec: number;
-		durationSec: number;
-		hasAudio: boolean;
-		compId?: string;
-		templateId?: string;
-		name?: string;
-		brief?: string;
-	}[] = [];
+	const assets: SegmentAssetInfo[] = [];
 	for (const r of renders) {
 		const [processed] = await processMediaAssets({ files: [r.file] });
 		if (!processed) continue; // skip a bad render, keep the rest
@@ -211,26 +207,26 @@ export async function placeHyperframesRenders({
 
 	const addTrack = new AddTrackCommand({ type: "video", index: 0 });
 	const trackId = addTrack.getTrackId(); // stable pre-execute
-	const inserts = assets.map(
-		(a) =>
+	const inserts = buildSegmentInsertSpecs(assets).map(
+		(spec) =>
 			new InsertElementCommand({
 				element: {
 					type: "video",
-					mediaId: a.assetId,
-					name: a.name ?? `${trackName}: ${a.startSec.toFixed(1)}s`,
-					startTime: mediaTimeFromSeconds({ seconds: a.startSec }),
-					duration: mediaTimeFromSeconds({ seconds: a.durationSec }),
+					mediaId: spec.assetId,
+					name: spec.name ?? `${trackName}: ${spec.startSec.toFixed(1)}s`,
+					startTime: mediaTimeFromSeconds({ seconds: spec.startSec }),
+					duration: mediaTimeFromSeconds({ seconds: spec.durationSec }),
 					trimStart: ZERO_MEDIA_TIME,
 					trimEnd: ZERO_MEDIA_TIME,
-					sourceDuration: mediaTimeFromSeconds({ seconds: a.durationSec }),
-					isSourceAudioEnabled: a.hasAudio,
+					sourceDuration: mediaTimeFromSeconds({ seconds: spec.durationSec }),
+					isSourceAudioEnabled: spec.isSourceAudioEnabled,
 					params: {},
 					framecutAi: {
-						compId: a.compId ?? generateUUID(),
-						templateId: a.templateId ?? "authored:chunk",
+						compId: spec.compId ?? generateUUID(),
+						templateId: spec.templateId,
 						variables: {},
 						groupId: generateUUID(),
-						brief: a.brief,
+						brief: spec.brief,
 					},
 				},
 				placement: { mode: "explicit", trackId },

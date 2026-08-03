@@ -32,6 +32,7 @@ import { detectSpeakerZone } from "@/features/ai-generate/detect-speaker-zone";
 import {
 	placeHyperframesRender,
 	placeHyperframesRenders,
+	type ChunkRenderInput,
 	type HyperframesRenderScope,
 } from "@/features/ai-generate/place-hyperframes-render";
 import { useRunLogStore, logRun } from "@/features/ai-generate/run-log-store";
@@ -40,6 +41,7 @@ import {
 	planAuthorChunks,
 	planAuthorChunksOver,
 	VARIANT_CHUNK_SEC,
+	fmtRange,
 	type AuthorChunk,
 } from "@/features/ai-generate/chunk-plan";
 import type { RunProgress } from "@/features/ai-generate/run-hyperframes";
@@ -47,6 +49,23 @@ import {
 	scopeSegments,
 	hasAuthorableContent,
 } from "@/features/ai-generate/transcript-scope";
+import {
+	createRunManifest,
+	markApproved,
+	matchReusableChunks,
+	transitionChunk,
+	type ManifestChunk,
+	type RunManifest,
+} from "@framecut/hf-bridge/run-manifest";
+import {
+	probeDurationSec,
+	runIdForScope,
+	canStartFullRender,
+} from "@/features/ai-generate/probe-plan";
+import {
+	useVariantPickerStore,
+	type ProbeDraft,
+} from "@/features/ai-generate/variant-picker-store";
 
 /** Enabled native templates → selection hints for the author brief. */
 function enabledSelections(): HfSelectionAsset[] {
@@ -477,6 +496,53 @@ interface AuthoredChunkRender {
 	brief?: string;
 }
 
+/**
+ * The per-chunk brief both the full-render loop (authorChunks) and the probe
+ * loop (probeChunks) compile: scoped transcript + prompt, or null when the
+ * segment has nothing to author from.
+ */
+function compileChunkBrief({
+	shared,
+	chunk,
+	angle,
+}: {
+	shared: SharedAuthorInputs;
+	chunk: AuthorChunk;
+	/** A distinct creative angle appended to the brief (variant mode). */
+	angle?: string;
+}): { transcript: string; prompt: string } | null {
+	const chunkLen = chunk.endSec - chunk.startSec;
+	const transcript = scopeSegments(
+		shared.segments,
+		chunk.startSec,
+		chunk.endSec,
+	);
+	// A silent segment (gap, music, intro) has nothing to recap and the skill
+	// would only refuse — skip it instead of a doomed author, unless the user
+	// gave a direction to author from (an angle alone is not content).
+	if (!hasAuthorableContent(transcript, shared.direction)) return null;
+	const direction = angle
+		? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
+		: shared.direction;
+	const prompt = compileHyperframesPrompt({
+		selections: shared.selections,
+		referenceCompositions: shared.referenceCompositions,
+		look: shared.look,
+		direction,
+		scope: {
+			kind: "timeline",
+			label: `segment ${chunk.label}`,
+			startSec: 0,
+			endSec: chunkLen,
+		},
+		transcript,
+		canvas: shared.canvas,
+		preferenceNotes: shared.preferenceNotes,
+		densityHint: `At most ~${Math.max(1, Math.round(chunkLen / 45))} SUBSTANTIVE graphics across this ${Math.round(chunkLen)}s segment — a recap list, a data chart, or an explanatory card, NOT title pills. Quality over quantity: a topic earns at most one strong graphic, held long enough to read. Make fewer (or none) rather than pad with labels.`,
+	});
+	return { transcript, prompt };
+}
+
 /** Author every chunk (bounded concurrency); local renders serialize in the bridge. */
 async function authorChunks({
 	chunks,
@@ -509,40 +575,15 @@ async function authorChunks({
 	await runWithConcurrency(chunks, concurrency, async (chunk) => {
 		if (signal?.aborted) throw new Error("Cancelled");
 		const chunkLen = chunk.endSec - chunk.startSec;
-		const transcript = scopeSegments(
-			shared.segments,
-			chunk.startSec,
-			chunk.endSec,
-		);
-		// A silent segment (gap, music, intro) has nothing to recap and the skill
-		// would only refuse — skip it instead of a doomed author, unless the user
-		// gave a direction to author from (an angle alone is not content).
-		if (!hasAuthorableContent(transcript, shared.direction)) {
+		const brief = compileChunkBrief({ shared, chunk, angle });
+		if (!brief) {
 			skipped.push(`segment ${chunk.label}: no speech in this segment`);
 			logRun(`${pre}— skipped ${chunk.label} (no speech)`, "warn");
 			done++;
 			onChunkDone?.(done, chunks.length);
 			return;
 		}
-		const direction = angle
-			? `${shared.direction}\n\nVARIANT ANGLE (make this version distinct): ${angle}`.trim()
-			: shared.direction;
-		const prompt = compileHyperframesPrompt({
-			selections: shared.selections,
-			referenceCompositions: shared.referenceCompositions,
-			look: shared.look,
-			direction,
-			scope: {
-				kind: "timeline",
-				label: `segment ${chunk.label}`,
-				startSec: 0,
-				endSec: chunkLen,
-			},
-			transcript,
-			canvas: shared.canvas,
-			preferenceNotes: shared.preferenceNotes,
-			densityHint: `At most ~${Math.max(1, Math.round(chunkLen / 45))} SUBSTANTIVE graphics across this ${Math.round(chunkLen)}s segment — a recap list, a data chart, or an explanatory card, NOT title pills. Quality over quantity: a topic earns at most one strong graphic, held long enough to read. Make fewer (or none) rather than pad with labels.`,
-		});
+		const { transcript, prompt } = brief;
 		try {
 			logRun(
 				`${pre}authoring segment ${chunk.index + 1}/${chunks.length} (${chunk.label}) — ${transcript.trim().length} transcript chars…`,
@@ -596,6 +637,195 @@ async function authorChunks({
 	return { rendered, skipped, tokensUsed };
 }
 
+// --- Probe-render-first + resume guards: every chunked run probes each
+// segment (the first ~4s), BLOCKS the full render until the probe set is
+// approved, and checkpoints chunk state in a server-side run-manifest so a
+// failed chunk retries (never silently dropped), a re-run of the same scope
+// reuses rendered chunks, and a user cancel keeps them. The probe review
+// rides the variant-picker/drafts machinery, not a new dialog family. ---
+
+/** Load a run's checkpoint; the manifest is a resume optimization, never fatal. */
+async function fetchRunManifest(runId: string): Promise<RunManifest | null> {
+	try {
+		const res = await fetch(
+			`/api/hyperframes/run-manifest?runId=${encodeURIComponent(runId)}`,
+		);
+		if (!res.ok) return null;
+		const data = (await res.json()) as { manifest?: RunManifest | null };
+		return data.manifest ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** Persist a checkpoint (best-effort). */
+async function postRunManifest(manifest: RunManifest): Promise<void> {
+	try {
+		await fetch("/api/hyperframes/run-manifest", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ manifest }),
+		});
+	} catch {
+		// best-effort checkpoint
+	}
+}
+
+/** Full-render one authored comp via the render-comp route (cache-reuses out.webm). */
+async function renderCompViaRoute(
+	compId: string,
+	fps: number,
+	signal: AbortSignal | undefined,
+	chunkIndex: number,
+): Promise<File> {
+	const res = await fetch("/api/hyperframes/render-comp", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ compId, fps }),
+		signal,
+	});
+	if (!res.ok) {
+		const err = (await res.json().catch(() => null)) as {
+			error?: string;
+		} | null;
+		throw new Error(err?.error ?? `Render failed (${res.status})`);
+	}
+	const blob = await res.blob();
+	return new File([blob], `hf-render-${chunkIndex}.webm`, {
+		type: "video/webm",
+	});
+}
+
+/** Re-pull the cached probe of a chunk a previous identical run already authored. */
+async function pullCachedProbe(
+	chunk: AuthorChunk,
+	compId: string,
+	fps: number,
+	signal?: AbortSignal,
+): Promise<File> {
+	const res = await fetch("/api/hyperframes/render-comp", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			compId,
+			fps,
+			probeSec: probeDurationSec(chunk.endSec - chunk.startSec),
+		}),
+		signal,
+	});
+	if (!res.ok) throw new Error(`Probe pull failed (${res.status})`);
+	const blob = await res.blob();
+	return new File([blob], `hf-probe-${chunk.index}.webm`, {
+		type: "video/webm",
+	});
+}
+
+/**
+ * PROBE STAGE: author each chunk and render only its first ~PROBE_SEC seconds
+ * (one author call per chunk; the full render re-renders the same comp after
+ * approval, so probing costs no extra tokens). Failures are checkpointed as
+ * retryable probe drafts, never silently skipped.
+ */
+async function probeChunks({
+	chunks,
+	shared,
+	concurrency,
+	signal,
+	manifest,
+	onChunkDone,
+}: {
+	chunks: AuthorChunk[];
+	shared: SharedAuthorInputs;
+	concurrency: number;
+	signal?: AbortSignal;
+	manifest: RunManifest;
+	onChunkDone?: (done: number, total: number) => void;
+}): Promise<{
+	probes: ProbeDraft[];
+	skipped: string[];
+	tokensUsed: number;
+	manifest: RunManifest;
+}> {
+	const probes: ProbeDraft[] = [];
+	const skipped: string[] = [];
+	let tokensUsed = 0;
+	let done = 0;
+	let m = manifest;
+
+	await runWithConcurrency(chunks, concurrency, async (chunk) => {
+		if (signal?.aborted) throw new Error("Cancelled");
+		const brief = compileChunkBrief({ shared, chunk });
+		if (!brief) {
+			skipped.push(`segment ${chunk.label}: no speech in this segment`);
+			logRun(`— skipped ${chunk.label} (no speech)`, "warn");
+			done++;
+			onChunkDone?.(done, chunks.length);
+			return;
+		}
+		const chunkLen = chunk.endSec - chunk.startSec;
+		try {
+			logRun(
+				`authoring segment ${chunk.index + 1} probe (${chunk.label}) - ${brief.transcript.trim().length} transcript chars…`,
+			);
+			const res = await fetch("/api/hyperframes/author", {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					...buildAiAuthHeaders(),
+				},
+				body: JSON.stringify({
+					prompt: brief.prompt,
+					fps: shared.canvas.fps,
+					width: shared.canvas.width,
+					height: shared.canvas.height,
+					durationSec: chunkLen,
+					probeSec: probeDurationSec(chunkLen),
+				}),
+				signal,
+			});
+			if (!res.ok) {
+				const err = (await res.json().catch(() => null)) as {
+					error?: string;
+				} | null;
+				throw new Error(err?.error ?? `Author failed (${res.status})`);
+			}
+			const compId = res.headers.get("x-framecut-comp-id") ?? undefined;
+			if (!compId) throw new Error("Author returned no comp id");
+			tokensUsed += Number(res.headers.get("x-framecut-tokens")) || 0;
+			const blob = await res.blob();
+			probes.push({
+				chunk,
+				compId,
+				brief: brief.prompt,
+				status: "probed",
+				file: new File([blob], `hf-probe-${chunk.index}.webm`, {
+					type: "video/webm",
+				}),
+			});
+			m = transitionChunk(m, chunk.index, "probed", { compId });
+			await postRunManifest(m);
+			logRun(
+				`✓ probe ${chunk.index + 1} ready (${probeDurationSec(chunkLen)}s of ${Math.round(chunkLen)}s)`,
+			);
+		} catch (e) {
+			// A user cancel aborts the run; a single bad segment checkpoints as
+			// failed (retryable from the drafts panel) instead of being dropped.
+			if (signal?.aborted) throw e;
+			const msg = e instanceof Error ? e.message : String(e);
+			probes.push({ chunk, brief: brief.prompt, status: "failed", error: msg });
+			m = transitionChunk(m, chunk.index, "failed", { error: msg });
+			await postRunManifest(m);
+			logRun(`✗ segment ${chunk.label}: ${msg} (retryable from drafts)`, "warn");
+		} finally {
+			done++;
+			onChunkDone?.(done, chunks.length);
+		}
+	});
+
+	probes.sort((a, b) => a.chunk.startSec - b.chunk.startSec);
+	return { probes, skipped, tokensUsed, manifest: m };
+}
+
 /**
  * Author chunks in parallel to cut the whole-timeline run's wall-clock. Each
  * claude-code call spawns a local CLI, so 2 keeps the machine sane while roughly
@@ -608,9 +838,12 @@ function authorConcurrency(): number {
 /**
  * RUN HYPERFRAMES "authored" engine: split the video into ~90s segments, author
  * a graphic-rich composition for each, and place them across the WHOLE timeline
- * on one new overlay track. Renders run one-at-a-time (bridge render queue) so a
- * long video stays light on the machine. Same progress/result shape as
- * runHyperframes so the toolbar button can call either.
+ * on one new overlay track. PROBE-RENDER-FIRST: the run probes each segment
+ * (first ~4s) and stops for approval; the full render + placement happens in
+ * renderApprovedProbeSet once the user approves the probe set in the drafts
+ * review. Chunk state checkpoints to a run-manifest, so a re-run of the same
+ * scope reuses rendered chunks (skipping probe + approval for them). Same
+ * progress/result shape as runHyperframes so the toolbar button can call either.
  */
 export async function runHyperframesWholeTimeline({
 	editor,
@@ -627,7 +860,13 @@ export async function runHyperframesWholeTimeline({
 	 * The transcript still covers everything; only these chunks get graphics.
 	 */
 	range?: { startSec: number; endSec: number };
-}): Promise<{ placed: number; skipped: string[]; tokensUsed: number }> {
+}): Promise<{
+	placed: number;
+	skipped: string[];
+	tokensUsed: number;
+	/** True when the run stopped at the probe gate awaiting approval. */
+	probesPending?: boolean;
+}> {
 	const totalSec = editor.timeline.getTotalDuration() / TICKS_PER_SECOND;
 	if (totalSec < 1) {
 		throw new Error("Add some footage to the timeline first.");
@@ -663,27 +902,176 @@ export async function runHyperframesWholeTimeline({
 		throw noAuthorableContentError(editor);
 	}
 
-	onProgress({
-		stage: "rendering",
-		detail: `Authoring graphics segment 1/${chunks.length}…`,
-		effectIndex: 1,
-		effectCount: chunks.length,
+	// Run identity + checkpoint: same scope + same brief inputs → same runId →
+	// a re-run reuses the manifest's rendered chunks instead of re-authoring.
+	const runId = runIdForScope({
+		startSec: spanStart,
+		endSec: spanEnd,
+		width: shared.canvas.width,
+		height: shared.canvas.height,
+		fps: shared.canvas.fps,
+		lookName: shared.look.name,
+		direction: shared.direction,
+		selectionNames: shared.selections.map((s) => s.name),
+		segments: shared.segments,
 	});
-	const { rendered, skipped, tokensUsed } = await authorChunks({
-		chunks,
-		shared,
-		concurrency: authorConcurrency(),
-		signal,
-		onChunkDone: (doneCount) =>
-			onProgress({
-				stage: "rendering",
-				detail: `Authored ${doneCount}/${chunks.length} segments…`,
-				effectIndex: Math.min(doneCount + 1, chunks.length),
-				effectCount: chunks.length,
-			}),
-	});
+	const scopeLabel = range ? "the selected section" : "the whole video";
+	let manifest = await fetchRunManifest(runId);
+	if (!manifest) {
+		manifest = createRunManifest({
+			runId,
+			scope: { startSec: spanStart, endSec: spanEnd },
+			canvas: shared.canvas,
+			chunks,
+		});
+		await postRunManifest(manifest);
+	}
+
+	// RESUME: chunks a previous identical run fully rendered are reused (no
+	// re-author, no re-probe; their approval lineage holds because the runId
+	// only matches when every brief input is unchanged).
+	const reusable = matchReusableChunks(manifest, chunks);
+	// Chunks a previous run already authored (probed, or failed AFTER authoring
+	// so the comp still exists) re-pull their cached probe instead.
+	const resumable = manifest.chunks.filter(
+		(c) =>
+			!reusable.has(c.index) &&
+			c.compId &&
+			(c.state === "probed" || c.state === "failed"),
+	);
+
+	const probes: ProbeDraft[] = [];
+	const skipped: string[] = [];
+	let tokensUsed = 0;
+	const fresh: AuthorChunk[] = [];
+	for (const chunk of chunks) {
+		if (reusable.has(chunk.index)) continue;
+		const prior = resumable.find((c) => c.index === chunk.index);
+		if (!prior?.compId) {
+			fresh.push(chunk);
+			continue;
+		}
+		try {
+			const file = await pullCachedProbe(
+				chunk,
+				prior.compId,
+				shared.canvas.fps,
+				signal,
+			);
+			probes.push({ chunk, compId: prior.compId, status: "probed", file });
+			if (prior.state === "failed") {
+				// Failed at the full render before; the probe is reviewable again.
+				manifest = transitionChunk(manifest, chunk.index, "probed");
+				await postRunManifest(manifest);
+			}
+		} catch (e) {
+			if (signal?.aborted) throw new Error("Cancelled");
+			fresh.push(chunk); // cached probe unreadable: re-author below
+		}
+	}
+
+	if (fresh.length) {
+		onProgress({
+			stage: "rendering",
+			detail: `Probing segment 1/${fresh.length}…`,
+			effectIndex: 1,
+			effectCount: fresh.length,
+		});
+		const result = await probeChunks({
+			chunks: fresh,
+			shared,
+			concurrency: authorConcurrency(),
+			signal,
+			manifest,
+			onChunkDone: (doneCount) =>
+				onProgress({
+					stage: "rendering",
+					detail: `Probed ${doneCount}/${fresh.length} segments…`,
+					effectIndex: Math.min(doneCount + 1, fresh.length),
+					effectCount: fresh.length,
+				}),
+		});
+		probes.push(...result.probes);
+		skipped.push(...result.skipped);
+		tokensUsed += result.tokensUsed;
+		manifest = result.manifest;
+	}
 	if (tokensUsed > 0) useAiSettingsStore.getState().addTokensUsed(tokensUsed);
 	if (signal?.aborted) throw new Error("Cancelled");
+	probes.sort((a, b) => a.chunk.startSec - b.chunk.startSec);
+
+	if (probes.length) {
+		// THE GATE: the full render is BLOCKED until the user approves this
+		// probe set in the drafts review (approval persists on the draft).
+		useVariantPickerStore.getState().openProbes({
+			runId,
+			scopeLabel,
+			approved: false,
+			canvas: shared.canvas,
+			probes,
+			placedChunkIndexes: [],
+		});
+		logRun(
+			`■ probes ready: review and approve to render the full pass (${probes.length} segment${probes.length === 1 ? "" : "s"})`,
+		);
+		onProgress({
+			stage: "done",
+			detail: "Probes ready: review and approve to render the full pass.",
+		});
+		return { placed: 0, skipped, tokensUsed, probesPending: true };
+	}
+
+	if (!reusable.size) {
+		// Nothing rendered, nothing probed: every chunk was silent.
+		onProgress({
+			stage: "done",
+			detail: "Nothing to place: every segment was silent.",
+		});
+		return { placed: 0, skipped, tokensUsed };
+	}
+
+	// Fast path: the whole scope is reused from a previous identical run.
+	onProgress({
+		stage: "rendering",
+		detail: "Reusing rendered segments…",
+		effectIndex: 1,
+		effectCount: reusable.size,
+	});
+	const renders: ChunkRenderInput[] = [];
+	const failedDrafts: ProbeDraft[] = [];
+	for (const chunk of chunks) {
+		const mc = reusable.get(chunk.index);
+		if (!mc?.compId) continue;
+		if (signal?.aborted) throw new Error("Cancelled");
+		try {
+			const file = await renderCompViaRoute(
+				mc.compId,
+				shared.canvas.fps,
+				signal,
+				chunk.index,
+			);
+			renders.push({
+				file,
+				startSec: chunk.startSec,
+				compId: mc.compId,
+				templateId: `authored:${mc.compId}`,
+				name: `HyperFrames: ${chunk.label}`,
+			});
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			manifest = transitionChunk(manifest, chunk.index, "failed", {
+				error: msg,
+			});
+			await postRunManifest(manifest);
+			failedDrafts.push({
+				chunk,
+				compId: mc.compId,
+				status: "failed",
+				error: msg,
+			});
+			logRun(`✗ segment ${chunk.label}: ${msg} (retryable from drafts)`, "warn");
+		}
+	}
 
 	onProgress({
 		stage: "placing",
@@ -691,26 +1079,34 @@ export async function runHyperframesWholeTimeline({
 		effectIndex: chunks.length,
 		effectCount: chunks.length,
 	});
-	const placed = await placeHyperframesRenders({
-		editor,
-		renders: rendered.map((r) => ({
-			file: r.file,
-			startSec: r.chunk.startSec,
-			compId: r.compId,
-			templateId: `authored:${r.compId ?? r.chunk.index}`,
-			name: `HyperFrames: ${r.chunk.label}`,
-			brief: r.brief,
-		})),
-	});
+	const placed = await placeHyperframesRenders({ editor, renders });
 	if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
 	logRun(
 		`✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`,
 	);
+	if (failedDrafts.length) {
+		// Surface the failed re-renders as retryable drafts (already approved).
+		useVariantPickerStore.getState().openProbes({
+			runId,
+			scopeLabel,
+			approved: true,
+			canvas: shared.canvas,
+			probes: failedDrafts,
+			placedChunkIndexes: chunks
+				.filter((c) => !failedDrafts.some((f) => f.chunk.index === c.index))
+				.map((c) => c.index),
+		});
+	}
 	onProgress({
 		stage: "done",
 		detail: `Placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video.`,
 	});
-	return { placed, skipped, tokensUsed };
+	return {
+		placed,
+		skipped,
+		tokensUsed,
+		probesPending: failedDrafts.length > 0 || undefined,
+	};
 }
 
 /** Distinct creative angles for the variant picker (one whole-video pass each). */
@@ -821,4 +1217,303 @@ export async function runHyperframesVariants({
 		detail: `${usable.length} version${usable.length === 1 ? "" : "s"} ready — pick one.`,
 	});
 	return { versions: usable, tokensUsed };
+}
+
+/**
+ * FULL RENDER continuation: runs when the user approves a probe set in the
+ * drafts review. BLOCKED until approved (canStartFullRender). Renders every
+ * probed chunk's comp (plus chunks reused from an earlier identical run),
+ * places them on one new track, and checkpoints every transition; a failed
+ * chunk stays in the drafts as retryable instead of being dropped. Chunks
+ * recorded in placedChunkIndexes are never placed twice.
+ */
+export async function renderApprovedProbeSet({
+	editor,
+	signal,
+}: {
+	editor: EditorCore;
+	signal?: AbortSignal;
+}): Promise<{ placed: number; failed: number }> {
+	const store = useVariantPickerStore.getState();
+	const probeSet = store.probeSet;
+	if (!probeSet || !canStartFullRender(probeSet)) {
+		throw new Error(
+			"Approve the probes first; the full render stays blocked until then.",
+		);
+	}
+	if (store.probeRendering) {
+		throw new Error("The full render is already running.");
+	}
+	const set = probeSet;
+	store.setProbeRendering(true);
+	logRun(
+		`▶ probes approved: rendering ${set.probes.length} segment${set.probes.length === 1 ? "" : "s"} (full pass)`,
+	);
+	try {
+		let manifest = await fetchRunManifest(set.runId);
+		if (manifest && !manifest.approved) {
+			manifest = markApproved(manifest);
+			await postRunManifest(manifest);
+		}
+		const alreadyPlaced = new Set(set.placedChunkIndexes);
+		const probeIdx = new Set(set.probes.map((p) => p.chunk.index));
+		const renders: { index: number; input: ChunkRenderInput }[] = [];
+		let failed = 0;
+
+		// Reused chunks rendered by an earlier identical run (not re-probed).
+		const reused: Map<number, ManifestChunk> = manifest
+			? matchReusableChunks(
+					manifest,
+					manifest.chunks.filter(
+						(c) => !probeIdx.has(c.index) && !alreadyPlaced.has(c.index),
+					),
+				)
+			: new Map();
+		for (const mc of [...reused.values()].sort(
+			(a, b) => a.startSec - b.startSec,
+		)) {
+			if (signal?.aborted) throw new Error("Cancelled");
+			try {
+				const file = await renderCompViaRoute(
+					mc.compId!,
+					set.canvas.fps,
+					signal,
+					mc.index,
+				);
+				renders.push({
+					index: mc.index,
+					input: {
+						file,
+						startSec: mc.startSec,
+						compId: mc.compId,
+						templateId: `authored:${mc.compId}`,
+						name: `HyperFrames: ${fmtRange(mc.startSec, mc.endSec)}`,
+					},
+				});
+			} catch (e) {
+				if (signal?.aborted) throw e;
+				failed++;
+				const msg = e instanceof Error ? e.message : String(e);
+				logRun(`✗ segment ${fmtRange(mc.startSec, mc.endSec)}: ${msg}`, "warn");
+				manifest = transitionChunk(manifest!, mc.index, "failed", {
+					error: msg,
+				});
+				await postRunManifest(manifest);
+			}
+		}
+
+		for (const p of set.probes) {
+			if (signal?.aborted) throw new Error("Cancelled");
+			if (p.status === "rendered" || alreadyPlaced.has(p.chunk.index)) continue;
+			useVariantPickerStore
+				.getState()
+				.updateProbe(p.chunk.index, { status: "rendering", error: undefined });
+			logRun(`rendering segment ${p.chunk.label} (full pass)…`);
+			try {
+				const file = await renderCompViaRoute(
+					p.compId!,
+					set.canvas.fps,
+					signal,
+					p.chunk.index,
+				);
+				useVariantPickerStore
+					.getState()
+					.updateProbe(p.chunk.index, { status: "rendered" });
+				if (manifest?.chunks.some((c) => c.index === p.chunk.index)) {
+					manifest = transitionChunk(manifest, p.chunk.index, "rendered");
+					await postRunManifest(manifest);
+				}
+				renders.push({
+					index: p.chunk.index,
+					input: {
+						file,
+						startSec: p.chunk.startSec,
+						compId: p.compId,
+						templateId: `authored:${p.compId ?? p.chunk.index}`,
+						name: `HyperFrames: ${p.chunk.label}`,
+						brief: p.brief,
+					},
+				});
+				logRun(`✓ segment ${p.chunk.label} rendered`);
+			} catch (e) {
+				if (signal?.aborted) throw e;
+				failed++;
+				const msg = e instanceof Error ? e.message : String(e);
+				useVariantPickerStore
+					.getState()
+					.updateProbe(p.chunk.index, { status: "failed", error: msg });
+				if (manifest?.chunks.some((c) => c.index === p.chunk.index)) {
+					manifest = transitionChunk(manifest, p.chunk.index, "failed", {
+						error: msg,
+					});
+					await postRunManifest(manifest);
+				}
+				logRun(
+					`✗ segment ${p.chunk.label}: ${msg} (retryable from drafts)`,
+					"warn",
+				);
+			}
+		}
+
+		let placed = 0;
+		if (renders.length) {
+			renders.sort((a, b) => a.input.startSec - b.input.startSec);
+			logRun("placing rendered segments on a new track…");
+			placed = await placeHyperframesRenders({
+				editor,
+				renders: renders.map((r) => r.input),
+			});
+			if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
+			useVariantPickerStore
+				.getState()
+				.markProbesPlaced(renders.map((r) => r.index));
+		}
+		// All rendered + placed: the drafts have served their purpose. Failures
+		// stay listed for retry.
+		const after = useVariantPickerStore.getState();
+		if (!after.probeSet?.probes.some((p) => p.status === "failed")) {
+			after.discardProbes();
+		}
+		logRun(
+			failed
+				? `✓ placed ${placed} segment${placed === 1 ? "" : "s"}; ${failed} failed (retryable from drafts)`
+				: `✓ placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`,
+		);
+		return { placed, failed };
+	} finally {
+		useVariantPickerStore.getState().setProbeRendering(false);
+	}
+}
+
+/**
+ * RETRY one failed chunk from the drafts panel. Two shapes:
+ *   - failed at the FULL RENDER (compId kept): re-render the same comp and
+ *     place it; the content is unchanged, so the approval still holds.
+ *   - failed at AUTHORING (no compId): re-author a probe from the saved brief;
+ *     that is NEW unreviewed content, so the gate re-arms (approval resets).
+ */
+export async function retryProbeChunk({
+	editor,
+	index,
+	signal,
+}: {
+	editor: EditorCore;
+	index: number;
+	signal?: AbortSignal;
+}): Promise<void> {
+	const store = useVariantPickerStore.getState();
+	const set = store.probeSet;
+	const probe = set?.probes.find((p) => p.chunk.index === index);
+	if (!set || !probe) throw new Error("That probe draft is gone; run again.");
+	if (probe.status !== "failed") return;
+
+	if (probe.compId) {
+		store.updateProbe(index, { status: "rendering", error: undefined });
+		try {
+			const file = await renderCompViaRoute(
+				probe.compId,
+				set.canvas.fps,
+				signal,
+				index,
+			);
+			useVariantPickerStore
+				.getState()
+				.updateProbe(index, { status: "rendered" });
+			let manifest = await fetchRunManifest(set.runId);
+			if (manifest?.chunks.some((c) => c.index === index)) {
+				manifest = transitionChunk(manifest, index, "rendered");
+				await postRunManifest(manifest);
+			}
+			const placed = await placeHyperframesRenders({
+				editor,
+				renders: [
+					{
+						file,
+						startSec: probe.chunk.startSec,
+						compId: probe.compId,
+						templateId: `authored:${probe.compId}`,
+						name: `HyperFrames: ${probe.chunk.label}`,
+						brief: probe.brief,
+					},
+				],
+			});
+			if (placed > 0) usePreferenceStore.getState().noteGraphicsPlaced();
+			useVariantPickerStore.getState().markProbesPlaced([index]);
+			logRun(`✓ segment ${probe.chunk.label} rendered + placed on retry`);
+			const after = useVariantPickerStore.getState();
+			if (
+				after.probeSet &&
+				!after.probeSet.probes.some((p) => p.status === "failed")
+			) {
+				after.discardProbes();
+			}
+		} catch (e) {
+			if (signal?.aborted) throw e;
+			const msg = e instanceof Error ? e.message : String(e);
+			useVariantPickerStore
+				.getState()
+				.updateProbe(index, { status: "failed", error: msg });
+			throw new Error(msg);
+		}
+		return;
+	}
+
+	// Re-author path: needs the saved brief.
+	if (!probe.brief) {
+		throw new Error("No brief was saved for this segment; run again.");
+	}
+	store.updateProbe(index, { status: "rendering", error: undefined });
+	const chunkLen = probe.chunk.endSec - probe.chunk.startSec;
+	try {
+		const res = await fetch("/api/hyperframes/author", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...buildAiAuthHeaders(),
+			},
+			body: JSON.stringify({
+				prompt: probe.brief,
+				fps: set.canvas.fps,
+				width: set.canvas.width,
+				height: set.canvas.height,
+				durationSec: chunkLen,
+				probeSec: probeDurationSec(chunkLen),
+			}),
+			signal,
+		});
+		if (!res.ok) {
+			const err = (await res.json().catch(() => null)) as {
+				error?: string;
+			} | null;
+			throw new Error(err?.error ?? `Author failed (${res.status})`);
+		}
+		const compId = res.headers.get("x-framecut-comp-id") ?? undefined;
+		if (!compId) throw new Error("Author returned no comp id");
+		const tokens = Number(res.headers.get("x-framecut-tokens")) || 0;
+		if (tokens > 0) useAiSettingsStore.getState().addTokensUsed(tokens);
+		const blob = await res.blob();
+		const file = new File([blob], `hf-probe-${index}.webm`, {
+			type: "video/webm",
+		});
+		useVariantPickerStore
+			.getState()
+			.updateProbe(index, { status: "probed", compId, file, error: undefined });
+		// New unreviewed content: the gate re-arms.
+		useVariantPickerStore.getState().resetProbeApproval();
+		let manifest = await fetchRunManifest(set.runId);
+		if (manifest?.chunks.some((c) => c.index === index)) {
+			manifest = transitionChunk(manifest, index, "probed", { compId });
+			await postRunManifest(manifest);
+		}
+		logRun(
+			`✓ segment ${probe.chunk.label} re-authored; approve the new probe to render it`,
+		);
+	} catch (e) {
+		if (signal?.aborted) throw e;
+		const msg = e instanceof Error ? e.message : String(e);
+		useVariantPickerStore
+			.getState()
+			.updateProbe(index, { status: "failed", error: msg });
+		throw new Error(msg);
+	}
 }

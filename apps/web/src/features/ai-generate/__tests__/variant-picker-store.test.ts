@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	useVariantPickerStore,
 	buildVersionPlacements,
+	type ProbeSet,
 } from "../variant-picker-store";
 import type { AuthoredVersion } from "../run-hyperframes-scoped";
 
@@ -26,6 +27,8 @@ beforeEach(() => {
 	};
 	useVariantPickerStore.setState({
 		versions: null,
+		probeSet: null,
+		probeRendering: false,
 		isOpen: false,
 		urls: new Map(),
 	});
@@ -122,5 +125,80 @@ describe("buildVersionPlacements — apply mapping (one new-track entry per rend
 
 	test("an empty version yields no placements", () => {
 		expect(buildVersionPlacements(version(0, 0))).toEqual([]);
+	});
+});
+
+function probeSet(fileCount: number): ProbeSet {
+	return {
+		runId: "run-test",
+		scopeLabel: "the whole video",
+		approved: false,
+		canvas: { width: 1920, height: 1080, fps: 30 },
+		placedChunkIndexes: [],
+		probes: Array.from({ length: fileCount }, (_, i) => ({
+			chunk: { index: i, label: `${i}:00`, startSec: i * 10, endSec: i * 10 + 10 },
+			file: new File([`probe-${i}`], `probe-${i}.webm`, { type: "video/webm" }),
+			compId: `comp-${i}`,
+			brief: `brief ${i}`,
+			status: "probed" as const,
+		})),
+	};
+}
+
+describe("probe-set drafts: the approval gate's persistence", () => {
+	test("openProbes() stores the set unapproved, opens, and URLs each probe", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(2));
+		const s = useVariantPickerStore.getState();
+		expect(s.probeSet?.probes.length).toBe(2);
+		expect(s.probeSet?.approved).toBe(false);
+		expect(s.isOpen).toBe(true);
+		expect(s.urls.size).toBe(2);
+		expect(created.length).toBe(2);
+	});
+
+	test("approval PERSISTS across close(): reopening never forces a re-probe", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(1));
+		useVariantPickerStore.getState().approveProbes();
+		useVariantPickerStore.getState().close();
+		const s = useVariantPickerStore.getState();
+		expect(s.isOpen).toBe(false);
+		expect(s.probeSet?.approved).toBe(true);
+		expect(revoked.length).toBe(0); // close keeps the probe URLs too
+		useVariantPickerStore.getState().show();
+		expect(useVariantPickerStore.getState().isOpen).toBe(true);
+	});
+
+	test("updateProbe patches one chunk and URLs a swapped-in file", () => {
+		useVariantPickerStore.getState().openProbes(probeSet(2));
+		const swapped = new File(["new"], "probe-new.webm", { type: "video/webm" });
+		useVariantPickerStore
+			.getState()
+			.updateProbe(1, { status: "rendered", file: swapped });
+		const s = useVariantPickerStore.getState();
+		expect(s.probeSet?.probes[0].status).toBe("probed");
+		expect(s.probeSet?.probes[1].status).toBe("rendered");
+		expect(s.urls.get(swapped)).toBeDefined();
+	});
+
+	test("discardProbes clears only the probe set; versions survive", () => {
+		useVariantPickerStore.getState().open([version(0, 1)]);
+		useVariantPickerStore.getState().openProbes(probeSet(1));
+		useVariantPickerStore.getState().discardProbes();
+		const s = useVariantPickerStore.getState();
+		expect(s.probeSet).toBeNull();
+		expect(s.versions).not.toBeNull();
+		expect(s.urls.size).toBe(1); // the version's render file
+	});
+
+	test("discard() clears versions AND probes and revokes every URL", () => {
+		useVariantPickerStore.getState().open([version(0, 1)]);
+		useVariantPickerStore.getState().openProbes(probeSet(2));
+		useVariantPickerStore.getState().discard();
+		const s = useVariantPickerStore.getState();
+		expect(s.versions).toBeNull();
+		expect(s.probeSet).toBeNull();
+		expect(s.urls.size).toBe(0);
+		// 1 revoked when openProbes replaced open()'s set, then all 3 live URLs.
+		expect(revoked.length).toBe(4);
 	});
 });

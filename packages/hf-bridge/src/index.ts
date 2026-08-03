@@ -1,4 +1,4 @@
-﻿export * from "./types";
+export * from "./types";
 export {
 	computeSafeZone,
 	type HZone,
@@ -129,6 +129,8 @@ export {
 export {
 	renderTemplateJob,
 	renderCompDir,
+	renderProbe,
+	buildProbeHtml,
 	startStudio,
 	generatedRoot,
 } from "./renderer";
@@ -159,3 +161,23 @@ export {
 	resolveRegistryBase,
 } from "./registry-ref";
 export { runDoctor, type DoctorReport } from "./doctor";
+export {
+	createRunManifest,
+	transitionChunk,
+	markApproved,
+	matchReusableChunks,
+	revalidateManifest,
+	RUN_ID_PATTERN,
+	type ManifestChunkState,
+	type ManifestChunk,
+	type RunManifest,
+	type CompDirStatus,
+} from "./run-manifest";
+export {
+	manifestsRoot,
+	manifestPath,
+	loadRunManifest,
+	saveRunManifest,
+	compDirStatus,
+	loadRevalidatedManifest,
+} from "./run-manifest-store";

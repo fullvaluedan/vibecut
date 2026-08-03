@@ -23,8 +23,13 @@ import { placeHyperframesRenders } from "@/features/ai-generate/place-hyperframe
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import type { AuthoredVersion } from "@/features/ai-generate/run-hyperframes-scoped";
 import {
+	renderApprovedProbeSet,
+	retryProbeChunk,
+} from "@/features/ai-generate/run-hyperframes-scoped";
+import {
 	useVariantPickerStore,
 	buildVersionPlacements,
+	type ProbeSet,
 } from "@/features/ai-generate/variant-picker-store";
 
 // The draft store + object-URL lifecycle live in variant-picker-store.ts (pure,
@@ -147,9 +152,185 @@ export function VariantVersionReview({
 	);
 }
 
+/**
+ * Approve the probe set and run the full render + placement. Shared by the
+ * modal and the docked drafts panel so "Approve" behaves identically.
+ */
+export async function approveProbesAndRender(editor: EditorCore): Promise<void> {
+	useVariantPickerStore.getState().approveProbes();
+	try {
+		const { placed, failed } = await renderApprovedProbeSet({ editor });
+		if (failed > 0) {
+			toast.info(
+				`Placed ${placed} segment${placed === 1 ? "" : "s"}; ${failed} failed`,
+				{ description: "Failed segments stay in drafts with a Retry button." },
+			);
+		} else {
+			toast.success(
+				`Placed ${placed} graphic segment${placed === 1 ? "" : "s"} across the video`,
+			);
+		}
+	} catch (e) {
+		toast.error("Full render failed", {
+			description: e instanceof Error ? e.message : String(e),
+		});
+	}
+}
+
+/** Retry one failed chunk (re-render, or re-author when it never authored). */
+export async function retryProbe(
+	editor: EditorCore,
+	index: number,
+): Promise<void> {
+	try {
+		await retryProbeChunk({ editor, index });
+	} catch (e) {
+		toast.error("Retry failed", {
+			description: e instanceof Error ? e.message : String(e),
+		});
+	}
+}
+
+const PROBE_STATUS_LABEL: Record<string, string> = {
+	probed: "probe ready",
+	rendering: "rendering…",
+	rendered: "rendered",
+	failed: "failed",
+};
+
+/**
+ * The probe contact sheet: one thumbnail + one-click play per segment probe,
+ * an approve button that gates the full render, and per-chunk Retry for
+ * failures. Rides the same tile pattern as the version review below; reused
+ * by the modal and the docked drafts panel.
+ */
+export function ProbeSetReview({
+	probeSet,
+	urls,
+	rendering,
+	onApprove,
+	onRetry,
+}: {
+	probeSet: ProbeSet;
+	urls: Map<File, string>;
+	rendering: boolean;
+	onApprove: () => void;
+	onRetry: (index: number) => void;
+}) {
+	const [expanded, setExpanded] = useState<File | null>(null);
+	const failedCount = probeSet.probes.filter(
+		(p) => p.status === "failed",
+	).length;
+
+	return (
+		<div className="flex flex-col gap-2 rounded-md border p-3">
+			<div className="flex items-center gap-2">
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-sm font-medium">
+						Probe review: {probeSet.scopeLabel}
+					</div>
+					<div className="text-muted-foreground text-xs">
+						{probeSet.probes.length} probe
+						{probeSet.probes.length === 1 ? "" : "s"} (first seconds of each
+						segment); the full render is blocked until you approve.
+					</div>
+				</div>
+				<Button
+					size="sm"
+					disabled={rendering || (probeSet.approved && failedCount === 0)}
+					onClick={onApprove}
+				>
+					{rendering
+						? "Rendering…"
+						: probeSet.approved
+							? "Approved"
+							: "Approve & render full pass"}
+				</Button>
+			</div>
+			<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+				{probeSet.probes.map((p) => (
+					<div
+						key={p.chunk.index}
+						className="group relative overflow-hidden rounded bg-black/60"
+					>
+						{p.file ? (
+							<button
+								type="button"
+								onClick={() => setExpanded(p.file!)}
+								title={`segment ${p.chunk.label} — click to enlarge & scrub`}
+								className="block w-full ring-offset-2 transition hover:ring-2 hover:ring-primary"
+							>
+								<video
+									src={urls.get(p.file)}
+									autoPlay
+									loop
+									muted
+									playsInline
+									className="aspect-video w-full object-contain"
+								/>
+							</button>
+						) : (
+							<div className="text-muted-foreground flex aspect-video w-full items-center justify-center text-[10px]">
+								no preview
+							</div>
+						)}
+						<span className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">
+							{p.chunk.label} · {PROBE_STATUS_LABEL[p.status] ?? p.status}
+						</span>
+						{p.status === "failed" && (
+							<div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/70 p-2">
+								<span
+									className="max-w-full truncate text-[10px] text-red-300"
+									title={p.error}
+								>
+									{p.error ?? "failed"}
+								</span>
+								<Button
+									size="sm"
+									variant="secondary"
+									disabled={rendering}
+									onClick={() => onRetry(p.chunk.index)}
+								>
+									Retry
+								</Button>
+							</div>
+						)}
+					</div>
+				))}
+			</div>
+
+			{expanded && (
+				<div
+					className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-3 bg-black/85 p-6"
+					onClick={() => setExpanded(null)}
+				>
+					{/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+					<video
+						src={urls.get(expanded)}
+						controls
+						autoPlay
+						loop
+						onClick={(e) => e.stopPropagation()}
+						className="max-h-[80vh] max-w-full rounded bg-black"
+					/>
+					<Button
+						variant="secondary"
+						size="sm"
+						onClick={() => setExpanded(null)}
+					>
+						Close preview
+					</Button>
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function VariantPickerDialog() {
 	const editor = useEditor();
 	const versions = useVariantPickerStore((s) => s.versions);
+	const probeSet = useVariantPickerStore((s) => s.probeSet);
+	const probeRendering = useVariantPickerStore((s) => s.probeRendering);
 	const isOpen = useVariantPickerStore((s) => s.isOpen);
 	const urls = useVariantPickerStore((s) => s.urls);
 	const close = useVariantPickerStore((s) => s.close);
@@ -175,17 +356,30 @@ export function VariantPickerDialog() {
 			}}
 		>
 			<DialogContent className="max-w-5xl p-6">
-				<DialogTitle>Pick a HyperFrames version</DialogTitle>
+				<DialogTitle>
+					{probeSet ? "Review HyperFrames probes" : "Pick a HyperFrames version"}
+				</DialogTitle>
 				<div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pt-1">
-					<VariantVersionReview
-						versions={versions ?? []}
-						urls={urls}
-						onApply={placeVersion}
-					/>
+					{probeSet && (
+						<ProbeSetReview
+							probeSet={probeSet}
+							urls={urls}
+							rendering={probeRendering}
+							onApprove={() => void approveProbesAndRender(editor)}
+							onRetry={(i) => void retryProbe(editor, i)}
+						/>
+					)}
+					{(versions ?? []).length > 0 && (
+						<VariantVersionReview
+							versions={versions ?? []}
+							urls={urls}
+							onApply={placeVersion}
+						/>
+					)}
 				</div>
 				<div className="flex items-center justify-between gap-3 pt-2">
 					<p className="text-muted-foreground text-xs">
-						Your versions stay here until you apply or discard — closing keeps
+						Your drafts stay here until you apply or discard — closing keeps
 						them.
 					</p>
 					<div className="flex shrink-0 gap-2">
@@ -193,7 +387,7 @@ export function VariantPickerDialog() {
 							Close (keep drafts)
 						</Button>
 						<Button variant="destructive" size="sm" onClick={discard}>
-							Discard versions
+							Discard drafts
 						</Button>
 					</div>
 				</div>

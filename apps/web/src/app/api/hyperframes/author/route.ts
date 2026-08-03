@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
-import { authorComposition, renderCompDir } from "@framecut/hf-bridge";
+import { authorComposition, renderCompDir, renderProbe } from "@framecut/hf-bridge";
 import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
 
 export const runtime = "nodejs";
@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
 		width?: number;
 		height?: number;
 		durationSec?: number;
+		probeSec?: number;
 	};
 	try {
 		body = await req.json();
@@ -45,6 +46,12 @@ export async function POST(req: NextRequest) {
 	const durationSec = Number.isFinite(body.durationSec)
 		? Math.min(Math.max(Number(body.durationSec), 1), 180)
 		: 5;
+	// Probe mode (probe-render-first): author the comp for the FULL duration but
+	// render only the first ~probeSec seconds; the full render happens later via
+	// render-comp once the user approves the probe set.
+	const probeSec = Number.isFinite(body.probeSec)
+		? Math.min(Math.max(Number(body.probeSec), 1), 30)
+		: undefined;
 
 	try {
 		const { compId, usage } = await authorComposition({
@@ -67,12 +74,15 @@ export async function POST(req: NextRequest) {
 		if (req.signal.aborted) {
 			return new NextResponse(null, { status: 499 });
 		}
-		const { videoPath, compDir } = await renderCompDir({ compId, fps });
+		const { videoPath, compDir } = probeSec
+			? await renderProbe({ compId, fps, probeSec })
+			: await renderCompDir({ compId, fps });
 		const bytes = await readFile(videoPath);
 		return new NextResponse(new Uint8Array(bytes), {
 			headers: {
 				"content-type": "video/webm",
 				"x-framecut-comp-id": path.basename(compDir),
+				...(probeSec ? { "x-framecut-probe": "1" } : {}),
 				"x-framecut-tokens": String(
 					usage ? usage.inputTokens + usage.outputTokens : 0,
 				),
