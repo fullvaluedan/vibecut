@@ -1060,3 +1060,30 @@ Roadmap section 10 T21.2: one capability-keyed provider layer for every LLM call
 | `apps/web/src/features/ai-generate/run-hyperframes-scoped.ts` | Same one-argument change at its four `buildAiAuthHeaders` call sites | 2026-08-04 | One argument per site |
 
 FrameCut-owned, no rows needed: `packages/hf-bridge/src/{llm-client.ts,author.ts,author-composition.ts,types.ts,index.ts}`, `apps/web/src/features/assistant/fallback-turn.ts`, `apps/web/src/features/ai-generate/resolve-ai-auth.ts` (new named-provider branch), `apps/web/src/features/ai-generate/components/ai-settings.tsx` (provider picker per feature, per-provider key/model fields, the "community quality" label on non-Anthropic picks), `apps/web/src/app/get-started/provider-status.ts` (`ProviderId` grows + `deriveChatProviderStatus`), the feature-tagged `buildAiAuthHeaders(...)` call sites in `detect-speaker-zone.ts` / `re-render.ts` / `director/run-{assemble,director,highlight}.ts` / `assistant/{run-assistant,turn-transport}.ts`, and `apps/web/src/app/api/assistant/edit/route.ts` (auth acceptance matrix: api-key native, claude-code/custom/new providers via the fallback, server-env hosted fallback preserved). Tests (ours): `packages/hf-bridge/src/__tests__/llm-client.test.ts` (21: capability table, per-provider URL/headers/model/body shaping for both transport families, groq-llm image stripping with the degraded flag, extractJson fallback, chatTextCompletion shaping + claude-code rejection), `apps/web/src/features/assistant/__tests__/fallback-turn.test.ts` (7: prompt flattening, tool-result rendering, history windowing, tolerant parse incl. ask_user), extended `__tests__/ai-auth.test.ts` (+8: new-mode headers, per-feature override, resolveAiAuth round-trip for all six modes), new `__tests__/ai-settings-v6.test.ts` (4: v5 -> v6 losslessness), new `eval/__tests__/llm-adapter-cache-key.test.ts` (3: golden sha256 cache-key stability for claude-code/api-key, new modes never collide), extended `get-started/__tests__/provider-status.test.ts` (+3) and `assistant/edit/__tests__/route.test.ts` (the 400-on-claude-code case replaced by the fallback acceptance matrix).
+
+## ClearVoice audio enhancement (2026-08-05)
+
+One-click audio quality from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio)
+(the `clearvoice` PyPI package): a local FastAPI service
+(`services/audio-enhance/`, ours) runs the PyTorch models, the web app proxies
+to it through `/api/audio-enhance`, and two UI entry points (the Audio tab's
+"Enhance audio (AI)" section and an "Enhance audio" toolbar dropdown next to
+AI CUT) send the selected clip's source span to it and swap the clip's audio
+in one undoable batch. Tasks: `denoise` (FRCRN_SE_16K) and `super_resolution`
+(MossFormer2_SR_48K); `separate` (MossFormer2_SS_16K, ZIP of stems) is exposed
+by the service but not yet wired to the UI.
+
+| File | Change | Date | Revert notes |
+| --- | --- | --- | --- |
+| `apps/web/src/components/editor/panels/properties/registry.tsx` | Audio tab now renders the `EnhanceAudioSection` (ClearVoice denoise / super-resolution) under the existing A/V sync readout; the section component is ours (`features/editing/components/enhance-audio-section.tsx`) | 2026-08-05 | One import + one section mount inside `buildAudioTab` |
+| `apps/web/src/timeline/components/timeline-toolbar.tsx` | "Enhance audio" dropdown (`EnhanceAudioMenu`, ours) mounted next to `<AiCutMenu />`; disabled until exactly one audio-bearing clip is selected | 2026-08-05 | One import + one mount |
+
+FrameCut-owned, no rows needed: `services/audio-enhance/` (main.py, install/start
+scripts, README), `apps/web/src/features/editing/clearvoice-enhance.ts` (target
+resolution for audio / linked separated audio / video-with-source-audio,
+source-span extraction, WAV encode, service POST, one-batch swap),
+`apps/web/src/app/api/audio-enhance/route.ts` (health + proxy to
+`CLEARVOICE_SERVICE_URL`, default loopback), the two UI components,
+`env/web.ts` (optional env) and `.env.example`. Tests (ours): 8 cases in
+`features/editing/__tests__/clearvoice-enhance.test.ts` (span math, slicing,
+WAV header, sample clamping).

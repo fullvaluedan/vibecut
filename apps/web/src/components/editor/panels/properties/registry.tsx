@@ -26,6 +26,7 @@ import {
 import { ElementParamsTab } from "./components/element-params-tab";
 import { EffectControlsTab } from "./components/effect-controls-tab";
 import { AudioSyncSection } from "./components/audio-sync-section";
+import { EnhanceAudioSection } from "@/features/editing/components/enhance-audio-section";
 import { SolidColorTab } from "./components/solid-color-tab";
 import { ClipEffectsTab, StandaloneEffectTab } from "@/effects/components/effects-tab";
 import { HyperframesTab } from "@/features/ai-generate/components/hyperframes-tab";
@@ -139,6 +140,7 @@ function buildAudioTab({
 					sectionKey="audio"
 				/>
 				<AudioSyncSection element={element} />
+				<EnhanceAudioSection element={element} trackId={trackId} />
 			</>
 		),
 	};

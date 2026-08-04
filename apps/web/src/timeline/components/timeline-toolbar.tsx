@@ -56,6 +56,7 @@ import { PopoverTrigger } from "@/components/ui/popover";
 import { useGraphEditorController } from "./graph-editor/use-controller";
 import { RunHyperframesButton } from "@/features/ai-generate/components/run-hyperframes-button";
 import { AiCutMenu } from "@/features/editing/components/ai-cut-menu";
+import { EnhanceAudioMenu } from "@/features/editing/components/enhance-audio-menu";
 import { HIDE_RUN_HYPERFRAMES_CLUSTER } from "@/features/editing/surface-flags";
 import { nestSelectionIntoNewScene } from "@/features/editing/nest-scene";
 import { CloseGapsCommand } from "@/commands/timeline/track/close-gaps";
@@ -344,6 +345,7 @@ function ToolbarRightSection({
 			{/* RUN HYPERFRAMES cluster; unhidden T20.4 with the probe-first flow. */}
 			{!HIDE_RUN_HYPERFRAMES_CLUSTER && <RunHyperframesButton />}
 			<AiCutMenu />
+			<EnhanceAudioMenu />
 
 			<div className="bg-border mx-1 h-6 w-px" />
 

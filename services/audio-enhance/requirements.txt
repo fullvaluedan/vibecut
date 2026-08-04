@@ -1,0 +1,5 @@
+clearvoice==0.1.2
+fastapi
+uvicorn
+python-multipart
+soundfile

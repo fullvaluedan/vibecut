@@ -23,6 +23,10 @@ const webEnvSchema = z.object({
 	MARBLE_WORKSPACE_KEY: z.string(),
 	FREESOUND_CLIENT_ID: z.string(),
 	FREESOUND_API_KEY: z.string(),
+
+	// Optional local ClearVoice service (services/audio-enhance). Loopback is the
+	// dev default; a hosted deployment points this at the sidecar.
+	CLEARVOICE_SERVICE_URL: z.url().optional(),
 });
 
 export type WebEnv = z.infer<typeof webEnvSchema>;
