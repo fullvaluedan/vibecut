@@ -135,6 +135,24 @@ G6-VERIFIED: no live LLM calls (keys are Dan's); transports proven with mock
 fetch/spawn only. Follow-up noted: /get-started still renders only Anthropic +
 Groq cards (status derivations for the new providers exist; cards not added).
 
+### Add-on 2026-08-05: ClearVoice audio enhancement (shipped, live-verified)
+
+One-click audio quality from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio)
+(the `clearvoice` PyPI package, Apache-2.0): a local FastAPI service at
+`services/audio-enhance/` runs the PyTorch models, the web app proxies to it via
+`/api/audio-enhance` (`CLEARVOICE_SERVICE_URL`, loopback default), and two UI
+entry points - the Audio tab's "Enhance audio (AI)" section and an "Enhance
+audio" toolbar dropdown next to AI CUT - send the selected clip's source span
+and swap the clip's audio in one undoable batch. Tasks live-verified through
+the service: denoise (FRCRN_SE_16K, 16k -> 16k) and super_resolution
+(MossFormer2_SR_48K, 16k -> 48k); the service also exposes `separate`
+(MossFormer2_SS_16K, ZIP of stems) but the UI does not call it yet. Gates:
+tsc clean, eslint clean, 8 new unit tests pass, 68 tests across the touched
+areas pass, and the full proxy path (browser route -> Python service -> WAV)
+was exercised against a real 2.4s sample. The service runs with
+`services/audio-enhance/start.ps1` (CPU-only torch; models auto-download to
+`services/audio-enhance/clearvoice/checkpoints` on first use, gitignored).
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the
@@ -219,6 +237,11 @@ re-verification section). Kept here as the record of what was wrong:
    AudioDecoder, so the live verified runs transcribed silence; the pipeline is proven,
    the words are not. One real-browser generation run also covers the multi-chunk path
    (verification only ran single-chunk scopes live).
+9. **ClearVoice feel check on real footage** (add-on): start
+   `services/audio-enhance/start.ps1`, then run "Reduce noise" / "Improve
+   clarity" on a real noisy clip in the Audio tab or via the toolbar button next
+   to AI CUT; the headless verification used a synthetic sample, so real-footage
+   quality is Dan's call.
 
 ## 6. Process notes that keep paying off
 
