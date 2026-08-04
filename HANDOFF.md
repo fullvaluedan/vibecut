@@ -1,4 +1,4 @@
-# VibeCut handoff, 2026-08-03 (ROUNDS 19 + 20 CLOSED 9/9; T21.2 SHIPPED; next: T21.3 plan doc)
+# VibeCut handoff, 2026-08-04 (ROUNDS 19 + 20 CLOSED 9/9; T21.2 SHIPPED; T21.3-T21.7 PLAN READY; next: Dan's approval + pricing knobs)
 
 Updated at the end of the 2026-08-03 session: round 19's four G6 reopens plus the
 R19-7 follow-up hole were fixed and re-verified live, round 20 (HyperFrames +
@@ -176,10 +176,12 @@ re-verification section). Kept here as the record of what was wrong:
 ## 4. What to do next, in order
 
 1. T21.3-T21.7 (hosted tier: accounts + credit ledger, Stripe billing + shop,
-   metering, licensing/packaging, end-to-end verification). These open with their
-   own Fable plan doc BEFORE any build, per the roadmap
-   (`docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md` section 10, incl. the
-   T21.5 pricing numbers and the section-11 pricing knobs that are Dan's call).
+   metering, licensing/packaging, end-to-end verification). The Fable plan doc is
+   WRITTEN: `docs/plans/2026-08-04-001-feat-round21-hosted-tier-plan.md` (opened
+   2026-08-04). It carries the roadmap's T21.5 pricing numbers and the section-11
+   pricing knobs that are Dan's call (section 4 of the plan). Dan approves the
+   plan and answers the knobs, then T21.3 (Opus) and T21.6 (Haiku) open as
+   worktree tasks per the plan's sequencing.
 2. G6-verify T21.2 once Dan has keys/a moment: one live assistant turn on
    claude-code mode, one Director pass per provider he cares about.
 3. The three minor round-19 items in section 3 can ride along with any worktree.
