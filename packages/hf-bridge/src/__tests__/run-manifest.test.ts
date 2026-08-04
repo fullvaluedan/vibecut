@@ -63,6 +63,18 @@ describe("run-manifest state machine", () => {
 		expect(m.chunks[0].error).toBeUndefined();
 	});
 
+	test("the brief rides the patch so reused chunks keep it (R20-1)", () => {
+		let m = manifest(1);
+		m = transitionChunk(m, 0, "probed", {
+			compId: "comp-a",
+			brief: "the authored brief",
+		});
+		expect(m.chunks[0].brief).toBe("the authored brief");
+		// Later transitions without a brief patch keep it.
+		m = transitionChunk(m, 0, "rendered");
+		expect(m.chunks[0].brief).toBe("the authored brief");
+	});
+
 	test("illegal transitions throw", () => {
 		const m = manifest(1);
 		expect(() => transitionChunk(m, 0, "rendered")).toThrow(

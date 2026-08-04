@@ -843,7 +843,10 @@ async function probeChunks({
 					type: "video/webm",
 				}),
 			});
-			m = transitionChunk(m, chunk.index, "probed", { compId });
+			m = transitionChunk(m, chunk.index, "probed", {
+				compId,
+				brief: brief.prompt,
+			});
 			await postRunManifest(m);
 			logRun(
 				`✓ probe ${chunk.index + 1} ready (${probeDurationSec(chunkLen)}s of ${Math.round(chunkLen)}s)`,
@@ -999,7 +1002,13 @@ export async function runHyperframesWholeTimeline({
 				shared.canvas.fps,
 				signal,
 			);
-			probes.push({ chunk, compId: prior.compId, status: "probed", file });
+			probes.push({
+				chunk,
+				compId: prior.compId,
+				brief: prior.brief,
+				status: "probed",
+				file,
+			});
 			if (prior.state === "failed") {
 				// Failed at the full render before; the probe is reviewable again.
 				manifest = transitionChunk(manifest, chunk.index, "probed");
@@ -1329,6 +1338,7 @@ export async function renderApprovedProbeSet({
 						compId: mc.compId,
 						templateId: `authored:${mc.compId}`,
 						name: `HyperFrames: ${fmtRange(mc.startSec, mc.endSec)}`,
+						brief: mc.brief,
 					},
 				});
 			} catch (e) {
@@ -1543,7 +1553,10 @@ export async function retryProbeChunk({
 		useVariantPickerStore.getState().resetProbeApproval();
 		let manifest = await fetchRunManifest(set.runId);
 		if (manifest?.chunks.some((c) => c.index === index)) {
-			manifest = transitionChunk(manifest, index, "probed", { compId });
+			manifest = transitionChunk(manifest, index, "probed", {
+				compId,
+				brief: probe.brief,
+			});
 			await postRunManifest(manifest);
 		}
 		logRun(

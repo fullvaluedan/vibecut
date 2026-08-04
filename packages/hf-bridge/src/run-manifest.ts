@@ -21,6 +21,9 @@ export interface ManifestChunk {
 	endSec: number;
 	state: ManifestChunkState;
 	compId?: string;
+	/** The authored brief, recorded at probe time so a reused chunk's placed
+	 * clip keeps its `framecutAi.brief` (regenerate-from-brief depends on it). */
+	brief?: string;
 	error?: string;
 	updatedAt: string;
 }
@@ -92,7 +95,12 @@ export function transitionChunk(
 	manifest: RunManifest,
 	index: number,
 	next: ManifestChunkState,
-	patch: { compId?: string | null; error?: string | null; now?: string } = {},
+	patch: {
+		compId?: string | null;
+		brief?: string | null;
+		error?: string | null;
+		now?: string;
+	} = {},
 ): RunManifest {
 	const chunk = manifest.chunks.find((c) => c.index === index);
 	if (!chunk) throw new Error(`No chunk ${index} in run ${manifest.runId}`);
@@ -113,6 +121,10 @@ export function transitionChunk(
 							patch.compId === null
 								? undefined
 								: (patch.compId ?? c.compId),
+						brief:
+							patch.brief === null
+								? undefined
+								: (patch.brief ?? c.brief),
 						error:
 							patch.error === null || next !== "failed"
 								? undefined
