@@ -13,6 +13,8 @@
     "dev:tools": "turbo run dev --filter=@opencut/tools",
     "dev:wasm": "cargo watch -w rust/crates -w rust/wasm/src -s 'wasm-pack build rust/wasm --target bundler --out-dir pkg'",
     "dev:web": "turbo run dev --filter=@opencut/web",
+    "audio:enhance": "powershell -NoProfile -ExecutionPolicy Bypass -File services/audio-enhance/start.ps1",
+    "audio:enhance:install": "powershell -NoProfile -ExecutionPolicy Bypass -File services/audio-enhance/install.ps1",
     "format:web": "prettier apps/web/src/services/renderer --write",
     "generate:fonts": "npx tsx apps/web/scripts/generate-font-sprites.ts",
     "lint:web": "eslint apps/web/src --ext .ts,.tsx",

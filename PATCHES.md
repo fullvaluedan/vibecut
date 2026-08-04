@@ -1077,6 +1077,7 @@ by the service but not yet wired to the UI.
 | --- | --- | --- | --- |
 | `apps/web/src/components/editor/panels/properties/registry.tsx` | Audio tab now renders the `EnhanceAudioSection` (ClearVoice denoise / super-resolution) under the existing A/V sync readout; the section component is ours (`features/editing/components/enhance-audio-section.tsx`) | 2026-08-05 | One import + one section mount inside `buildAudioTab` |
 | `apps/web/src/timeline/components/timeline-toolbar.tsx` | "Enhance audio" dropdown (`EnhanceAudioMenu`, ours) mounted next to `<AiCutMenu />`; disabled until exactly one audio-bearing clip is selected | 2026-08-05 | One import + one mount |
+| `package.json` (repo root) | Adds `audio:enhance` / `audio:enhance:install` scripts that start / install the ClearVoice service (idempotent: `start.ps1` exits cleanly when the service is already listening on 8760) | 2026-08-05 | Two script entries |
 
 FrameCut-owned, no rows needed: `services/audio-enhance/` (main.py, install/start
 scripts, README), `apps/web/src/features/editing/clearvoice-enhance.ts` (target
