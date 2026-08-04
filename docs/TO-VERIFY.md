@@ -2,6 +2,66 @@
 
 Everything below is **shipped + committed** (tsc + lint clean, logic unit-tested where testable) but **not yet live-verified by Dan** on real footage. Branch: `feat/director-dupword` (dev server: `framecut-director` launch entry → localhost:3000). Tick items off as you confirm them.
 
+## Round 20: HyperFrames style profiles + probe-render-first + Remotion media pack (2026-08-04, T20.5, branch `feat/director-eval`, tip `69b72889`)
+
+Hands-on closing pass for T20.1, T20.2, T20.3, T20.4. **Round 20 CLOSES** by the rounds-15-19 convention (no Func below 9, no Qual below 8, no open reopens): T20.1 9/9, T20.2 9/8 (one minor defect, R20-1), T20.3 9/9, T20.4 9/9. Unlike round 19's session, the LLM path was LIVE: the claude-code CLI (2.1.195, credentialed, `FRAMECUT_CLAUDE` set in `apps/web/.env.local`) drove real author + planner calls through the actual UI, so the probe gate, brief injection and placement evidence below is from live generation, not fixtures.
+
+**Method.** Same harness as the round-19 re-verify (puppeteer + the app's own managers via `window.__vibeEditor`, dev server from the main checkout). Two harness notes: (1) TICKS_PER_SECOND is 120000; (2) **neither chrome-headless-shell nor headless Chrome-for-Testing ships `AudioDecoder`**, so the in-browser audio extraction feeds Whisper silence and transcripts come back `[BLANK_AUDIO]` — an environment limit, not app code (the transcription pipeline itself was verified end to end: background transcriber fired, cache filled, pack carried the result; content accuracy in a real browser stays Dan-owed). Test media: `testsrc2`+sine, Apollo-13 air-to-ground audio, and a spoken-Wikipedia narration clip, all 640x360@30. The File System Access directory write was exercised with a fake `showDirectoryPicker` that records real writes; only the OS dialog was substituted.
+
+### Gates at `69b72889`
+- G1 `bun test` apps/web: 2777 pass, 0 fail, 1 skip (the intentional wasm pin-vs-source skip). PASS.
+- G1 `bun test` hf-bridge: 231 pass, 0 fail. PASS.
+- G2 `bunx tsc --noEmit` from apps/web: 0 errors. PASS.
+- T20.0 regression net `bun packages/hf-bridge/scripts/render-smoke.ts`: **24/24 rendered OK, 0 dim-mismatch, 0 duration-off.** PASS.
+
+### T20.1 style preference profiles — 9/9 PASS
+- [x] Editor CRUD live: "+ Save current selection" creates; the inline editor edits palette (accent + supporting color wells, "+" adds, double-click removes), display/body fonts (12 options), motion (calm/standard/punchy) and density (sparse/balanced/dense); duplicate produces "name copy"; rename and delete work; the live preview bar repaints on accent change (`rgb(255,0,102)` after setting #FF0066) and the headline/body preview lines carry the chosen families. Everything persists across a full page reload (store version 5).
+- [x] Migration v4 -> v5 live: a hand-seeded v4 `framecut-ai-settings` (one preset with `styleId`, no `design`) loaded into version 5 with the preset's name/styleId/direction intact and a design seeded from its own look (`accent #FF6E20, punchy, balanced`); `activeHfPresetId` survived. Lossless and additive, as specced. MAX_HF_PRESETS is 8 (was 5); VIBE_STYLES are the factory defaults.
+- [x] Brief injection (authored path), live: the `/api/hyperframes/author` request for a run with the "Verifier Loud" profile active carried `DESIGN PROFILE: "Verifier Loud" - the user's saved design spec. Honor it over every default above (it wins any conflict with VISUAL LOOK): - Palette: accent #FF0066; supporting colors #00FFCC - Fonts: display "Anton" for headlines, "Courier New" for body text - Motion: punchy - fast entrances... - Density: dense...` followed by the USER DIRECTION and TRANSCRIPT sections (request saved at `r20-author-request.json` in the harness scratch dir).
+- [x] Native-template path variable mapping, live: with the profile active and the engine on "Instant", a direction-driven run ("Put a kinetic title at the very start and a lower third a few seconds in") planned via Claude (~484 tokens) and placed 3 motion-template elements; every one carries `variables.accent: "#FF0066"` (the profile's accent injected wherever the planner didn't choose its own). The display font flows as `fontFamily: themeFont` into `template.build` (run-hyperframes.ts:247-248; unit-tested); accent is the visible-in-variables half and is confirmed. An empty-direction/no-transcript native run fails honestly: "The planner didn't mark any moments with the templates you allowed. Try checking more templates, adding a Direction...".
+
+### T20.2 probe-render-first + resume guards — 9/8 PASS (R20-1 minor)
+All of this was LIVE (claude-code authoring + real renders), on a 30s whole-timeline scope (1 chunk):
+- [x] Probe gate: run log reads `■ probes ready: review and approve to render the full pass` then `■ full render blocked until the probes are approved`; zero full-render calls before approval (the only render-comp call pre-approval carried `probeSec: 4`; the author request itself carried `probeSec: 4`). The contact sheet: "Review HyperFrames probes / Probe review: the whole video / 1 probe (first seconds of each segment); the full render is blocked until you approve. / 0:00-0:30 · probe ready" plus a toast "Probes ready for review - Approve the probe set in the drafts review to start the full render; failed segments can be retried there."
+- [x] Approval persists across dialog close: approved, Escape-closed mid-render, reopened via the toolbar's "Probes (ready) ▸" reopen-drafts button - the dialog came back showing "Rendering… / 0:00-0:30 · rendering…", no re-probe. Closing pre-approval likewise keeps the unapproved set.
+- [x] Approve → full render → placement: "✓ placed 1 graphic segment across the video"; the overlay element carries `framecutAi.compId` and **`isSourceAudioEnabled: false`** - placed segments bring no audio (the T20.2 audio invariant, also unit-pinned).
+- [x] Run-manifest reuse: an identical second run made ZERO new author calls and placed in ~5s (chunk reuse; it places a duplicate, which is the documented fresh-run behavior).
+- [x] Cancel mid-run: the toolbar Stop button appears only while running; clicking it toasted "HyperFrames run stopped - Anything already rendered is in your media bin; nothing was placed.", removed Stop, and re-enabled RUN (progress reset).
+- [x] Retry: with full-render requests aborted (puppeteer request interception, reversible), approving produced the failed state with a per-segment **Retry** button in the drafts; unblocking and clicking Retry rendered and placed the segment (a third authored element appeared on the timeline).
+- [x] Versions ×3 variant flow (ridden accidentally, worth reporting): 3 sequential author calls ended in "3 versions ready - pick one".
+- [ ] R20-1 (minor): a chunk placed from the manifest-REUSE path lands without `framecutAi.brief` (the `renders.push` branch at run-hyperframes-scoped.ts:~1318 has no `brief:`; the fresh-probe branch at ~1375 has it). The placed clip's properties then show "This graphic was authored before prompt-editing existed, so its prompt is not stored" - a false statement for a clip authored moments earlier. Verified: of three placed clips, only the fresh-authored one carried the brief. Fix: persist the brief in the run-manifest chunk (or carry it through the reuse path) and pass it at placement.
+
+### T20.3 Remotion media pack — 9/9 PASS
+- [x] Export popover → collapsed Remotion section → "Export media pack" with busy state and toasts; empty-timeline guard present (same as video export).
+- [x] Directory shape (fake picker capturing real writes): `manifest.json`, `edl.json`, `media/<assetId>-speech.mp4` (bytes byte-identical to the source, ffprobe-readable). Untranscribed project: `transcript.json` absent and `files.transcript: null` - the specced branch.
+- [x] Validated against `docs/remotion-media-pack-v1.md`: format/version/generator fields; project fps as `{numerator, denominator}`; trimmed clip (`trimStartSec 5, trimEndSec 2.5, sourceDurationSec 30, durationSec 22.5`) with main-track durations summing to `project.durationSec` (22.5); every EDL `mediaId` resolves to exactly one `media[]` entry whose `path` equals the clip's `mediaPath` and exists in the pack; track roles `main-video` / `overlay-text`; text clips carry no mediaId; `styleProfile: null` as specced for v1; `framecutAi: []` on a no-AI timeline.
+- [x] Run project (post-placement): the pack gains `media/<id>-hf-render-0.webm` (74KB, the generated overlay) with `generated: true` + `framecutAi` comp references in the manifest.
+- [x] Transcript branch: with a transcript in cache, `transcript.json` serializes as `framecut-transcript` v1 with `segments` + `words` (start/end/text) - shape verified; CONTENT was `[BLANK_AUDIO]` because the headless browsers have no `AudioDecoder` (see Method). Content accuracy in a real browser is Dan-owed.
+- Not exercised live: the single-JSON-bundle fallback (Chromium always has the directory picker; the fallback is the non-Chromium path) and kit-side consumption (Dan-owed, needs D:\Hermes\remotion-v2).
+
+### T20.4 panel redesign + un-park — 9/9 PASS
+- [x] First-run start flow order: Style profiles (with 0/8 empty-state guidance) → "Describe what you want" → Showcase (8 one-click quick starts) → the run-flow note ("Hit RUN HYPERFRAMES in the timeline toolbar. A run renders a short pro[be]…") → collapsed "Advanced - engine, template palette, registry assets, factory look" disclosure, which opens (engine segmented control + Templates/Styles/Components/Blocks/Transitions & effects palettes) and collapses again.
+- [x] Un-parked surfaces, all live: HyperFrames rail tab (rail is Media, HyperFrames, Sounds, Text, Shapes, Effects, Captions, Transcript, Settings); the toolbar cluster (RUN HYPERFRAMES, Run options ▾ = "Run Entire Timeline" / "Run Selected Video ONLY", Versions ×3, Log, Stop-while-running, "Probes (ready) ▸"/"Versions (ready) ▸" reopen-drafts); the clip context-menu "Run through HyperFrames"; the drafts panel docking (with nothing selected and drafts open, the empty inspector shows the "HyperFrames drafts" takeover with the probe review and its Approve button).
+- [x] Still parked per spec: the AI CUT menu offers exactly "AI CUT: review and cut the whole video" + "Remove silences" (auto-assemble and highlight hidden).
+
+### T20.4 deferred list outcomes
+- Cancel mid-run UI: PASS (Stop button, "run stopped" toast, controls reset - evidence under T20.2).
+- "Select a clip first" toast on Run Selected with no selection: PASS - "Select a clip in the timeline first / Click a video clip (or a few), then choose 'Run Selected Video ONLY'."
+- Advanced disclosure interaction: PASS (opens/collapses, all palettes behind it).
+- Drafts panel probe-review rendering live: PASS (docked "HyperFrames drafts" with probe statuses + approve).
+- Regenerate from a placed clip's brief end to end: PASS on a fresh placement - "Customize this graphic" surface with the stored brief in an editable prompt; Regenerate fired one new author call and swapped the clip in place (new compId AND new mediaId, ~70s) with a "Graphic regenerated" toast. Caveat: R20-1 (above) means reuse-path placements can't reach it.
+
+### Not exercised live (plainly stated)
+- Multi-chunk runs (>90s scopes): chunk-boundary behavior is unit-tested; the live runs were single-chunk.
+- Retry of an AUTHORING failure (my injection failed the render stage; the author-failure retry branch is unit-tested).
+- The pack's JSON-bundle fallback (non-Chromium path).
+- Transcript content accuracy (headless `AudioDecoder` gap, above) and any real-footage feel - Dan-owed.
+
+### Dan-owed (round 20 additions)
+1. One live generation in his real browser (audio decode works there) to see transcript-driven authoring with real speech.
+2. Kit-side consumption of the media pack against `D:\Hermes\remotion-v2` (the in-repo spec `docs/remotion-media-pack-v1.md` is the contract until then).
+3. Feel check on the probe gate UX: is 4s per probe enough to judge a look.
+
 ## Round 19 G6 RE-VERIFICATION (2026-08-03, T19.5 re-verify, branch `feat/director-eval`, tip `a8d6a6df` + uncommitted R19-7 fix)
 
 Re-run of the four reopen checks on the fix commit, plus a same-day re-check of the one remaining hole. **Round 19 CLOSES at 9/9 across all seven features.** The first pass below found three of the four reopen defects verifiably fixed and one remaining hole (R19-7, stale-wasm clip-effect degrade still throwing); R19-7 was then fixed in the working tree (`compactEffectPassGroups` in `wasm-capabilities.ts`, applied in `resolve.ts` `resolveEffectPassGroups`) and re-verified end to end the same day — see the "FIXED and RE-VERIFIED" block under check 7 and the re-rated scores.

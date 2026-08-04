@@ -204,3 +204,26 @@ Estimate: ~5-7 agent-days wall-clock with the above parallelism.
 4. Candidate (b) (@remotion/player embedded probe preview) opens only on Dan's call
    after (a) proves out.
 5. Auto-assemble + highlight surfaces stay parked unless Dan asks.
+
+## 5. T20.5 verification status (2026-08-03, tip 9c6e7867) - ROUND 20 CLOSED
+
+Verified LIVE (a credentialed claude-code CLI drove real author/planner calls
+through the UI). Full evidence: `docs/TO-VERIFY.md` round-20 section.
+
+- T20.0 registry tag-pin: PASS (shipped earlier in `653437fb`; render-smoke 24/24).
+- T20.1 style preference profiles: PASS, 9/9 (CRUD, migration, brief injection,
+  native accent mapping all live-verified).
+- T20.2 probe-render-first + resume: PASS, 9/8 (gate, approval persistence, reuse,
+  cancel, retry, audio invariant all live-verified; minor defect R20-1 - reused
+  chunks lost `framecutAi.brief` - fixed in `9c6e7867`).
+- T20.3 Remotion media-pack export: PASS, 9/9 (pack validated against
+  `docs/remotion-media-pack-v1.md`; kit-side consumption Dan-owed).
+- T20.4 panel redesign + un-park: PASS, 9/9 (start flow, Advanced disclosure,
+  toolbar cluster, drafts docking all live; auto-assemble/highlight still parked).
+
+Gates at tip `9c6e7867`: apps/web 2777 pass / 0 fail / 1 skip, hf-bridge 232 pass /
+0 fail, `bunx tsc --noEmit` clean, render-smoke 24/24.
+
+Not exercised live (carried to Dan's real-browser pass): multi-chunk runs,
+author-stage retry, the JSON-bundle pack fallback, transcript content accuracy
+(headless Chrome has no AudioDecoder).

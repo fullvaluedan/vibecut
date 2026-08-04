@@ -1,13 +1,14 @@
-# VibeCut handoff, 2026-08-03 (ROUND 19 CLOSED 9/9; next: Round 20)
+# VibeCut handoff, 2026-08-03 (ROUNDS 19 AND 20 CLOSED 9/9; next: Round 21)
 
-Updated at the end of the 2026-08-03 session: all four G6 reopens plus the R19-7
-follow-up hole were fixed and re-verified live (pixel evidence in
-`docs/TO-VERIFY.md`, round-19 re-verification section). Round 19 closes at 9/9
-across all seven features.
+Updated at the end of the 2026-08-03 session: round 19's four G6 reopens plus the
+R19-7 follow-up hole were fixed and re-verified live, then round 20 (HyperFrames +
+Remotion authoring) was planned, built, merged, and verified LIVE (a credentialed
+claude-code CLI drove real author/planner calls through the UI). Both rounds close
+at 9/9 across every feature. Evidence: `docs/TO-VERIFY.md` (round-19
+re-verification + round-20 sections).
 
-Branch: `feat/director-eval`, tip is the R19-7 commit on top of `a8d6a6df`
-("fix(round-19): close the four G6 reopens"), both pushed. Working tree clean
-apart from the untracked local-only `.claude/` and `bunfig.toml`.
+Branch: `feat/director-eval`, tip `9c6e7867` (the R20-1 fix), pushed. Working tree
+clean apart from the untracked local-only `.claude/` and `bunfig.toml`.
 
 ## 1. Read these first, in this order
 
@@ -79,6 +80,41 @@ hf-bridge **210 pass / 0 fail**, `bunx tsc --noEmit` clean from apps/web,
 `wasm-pack test --node rust/crates/effects` **21 pass / 0 fail**, `bun run build:web`
 green.
 
+### Round 20: CLOSED 2026-08-03 at 9/9 across all four features (LIVE verification)
+
+Plan: `docs/plans/2026-08-03-001-feat-round20-hyperframes-remotion-plan.md`.
+Verified live (claude-code CLI drove real author/planner calls through the UI;
+evidence in `docs/TO-VERIFY.md` round-20 section):
+
+- T20.0 registry tag-pin: already shipped in `653437fb`; render-smoke re-run 24/24.
+- T20.1 style preference profiles (9/9): `HfPreset.design` (palette/fonts/motion/
+  density), store v4 -> v5 migration proven lossless live, VIBE_STYLES as factory
+  defaults, DESIGN PROFILE brief injection seen in the live author request, native
+  path maps accent/font onto template variables, profile editor in the panel.
+- T20.2 probe-render-first + resume (9/8): probe stage (4s probes via a generated
+  `probe.html`, `probeSec` route param), contact-sheet approval gate riding the
+  drafts UX (full render blocked pre-approval, approval persists across close),
+  run-manifest checkpoint (pending/probed/rendered/failed; retry from drafts;
+  same-scope re-run reuses rendered chunks, ~5s, zero author calls), placed
+  segments always muted (audio muxes from source). One minor defect R20-1 (reused
+  chunks lost `framecutAi.brief`) fixed in `9c6e7867`.
+- T20.3 Remotion media-pack export (9/9): manifest + JSON EDL + transcript +
+  media via File System Access directory (JSON bundle fallback), spec
+  `docs/remotion-media-pack-v1.md`, styleProfile slot null until kit-side
+  validation. Kit-side consumption is Dan-owed.
+- T20.4 panel redesign + un-park (9/9): start flow profiles -> describe ->
+  showcase -> run-flow note -> Advanced disclosure; `HIDDEN_ASSET_TABS` is now
+  EMPTY; RUN HYPERFRAMES cluster + context item + drafts panel live;
+  auto-assemble and highlight stay parked.
+
+Gates at tip `9c6e7867`: apps/web **2777 pass / 0 fail / 1 skip**, hf-bridge
+**232 pass / 0 fail**, tsc clean, render-smoke 24/24.
+
+Not exercised live (carried): multi-chunk runs (single-chunk scopes only),
+author-stage retry (render-stage retry was injected and passes), the JSON-bundle
+pack fallback, transcript CONTENT accuracy (headless Chrome ships no AudioDecoder;
+pipeline verified, content check is Dan's real-browser pass).
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the
@@ -119,12 +155,12 @@ re-verification section). Kept here as the record of what was wrong:
 
 ## 4. What to do next, in order
 
-1. Round 20 (HyperFrames + Remotion, un-parked, probe-render-first) and the rest of
-   Round 21 (T21.2 provider abstraction incl. claude-code support for the assistant
-   route, T21.3-T21.7 hosted credits/billing/shop). Both need their own Fable plan docs
-   before any build, per the roadmap
+1. Round 21 remainder: T21.2 (LLM provider abstraction incl. claude-code support
+   for the assistant route - the author route already runs on FRAMECUT_CLAUDE,
+   verified live in round 20), then T21.3-T21.7 (hosted credits/billing/shop),
+   which need their own Fable plan doc before any build, per the roadmap
    (`docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md`).
-2. The three minor items in section 3 can ride along with any round-20 worktree.
+2. The three minor round-19 items in section 3 can ride along with any worktree.
 
 ## 5. Dan-owed (only Dan can do these)
 
@@ -150,6 +186,14 @@ re-verification section). Kept here as the record of what was wrong:
 6. **Feel checks on real footage** - everything this session was measured on synthetic
    ffmpeg fixtures: play an exported file with sound, scrub a reversed clip, try the crop
    handles, run one real AI CUT to see Director reasons inside the red pipes.
+7. **Kit-side check of the Remotion media pack** (round 20): feed an exported pack to the
+   dan-video kits (D:\Hermes\remotion-v2) and ratify or amend
+   `docs/remotion-media-pack-v1.md`. Candidate (b) (@remotion/player embedded probe
+   preview) opens only after (a) proves out in his hands.
+8. **Transcript content check in a real browser** (round 20): headless Chrome ships no
+   AudioDecoder, so the live verified runs transcribed silence; the pipeline is proven,
+   the words are not. One real-browser generation run also covers the multi-chunk path
+   (verification only ran single-chunk scopes live).
 
 ## 6. Process notes that keep paying off
 
