@@ -34,7 +34,7 @@ export async function runAssistant({
 	onStage?.("Thinking...");
 	const res = await fetch("/api/assistant", {
 		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders("assistant") },
 		body: JSON.stringify({ prompt }),
 	});
 	if (!res.ok) {

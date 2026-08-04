@@ -26,7 +26,7 @@ export const postAssistantTurn: AssistantTurnTransport = async (
 ): Promise<AssistantTurnResponse> => {
 	const response = await fetch(ASSISTANT_EDIT_ENDPOINT, {
 		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders("assistant") },
 		body: JSON.stringify(request),
 	});
 	const data = (await response.json().catch(() => null)) as

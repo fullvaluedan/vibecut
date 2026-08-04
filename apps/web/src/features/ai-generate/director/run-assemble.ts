@@ -95,7 +95,7 @@ export async function runAssemble({
 	const taste = useDirectorTasteStore.getState().buildDirectorTasteNote();
 	const res = await fetch("/api/director/assemble", {
 		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 		signal,
 		body: JSON.stringify({ candidates, taste: taste || undefined }),
 	});

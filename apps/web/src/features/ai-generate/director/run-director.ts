@@ -291,7 +291,7 @@ export async function runDirector({
 			try {
 				res = await fetch("/api/director/plan", {
 					method: "POST",
-					headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+					headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 					signal: composePassSignal({ cancel: signal, timeoutMs: PLAN_PASS_TIMEOUT_MS }),
 					body: JSON.stringify(planInput),
 				});
@@ -327,7 +327,7 @@ export async function runDirector({
 		async redundancy(input) {
 			const res = await fetch("/api/director/redundancy", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
@@ -337,7 +337,7 @@ export async function runDirector({
 		async context(input) {
 			const res = await fetch("/api/director/context", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
@@ -352,7 +352,7 @@ export async function runDirector({
 		async retake(input: DirectorRetakeRequest): Promise<DirectorRetakeResponse> {
 			const res = await fetch("/api/director/retake", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
@@ -368,7 +368,7 @@ export async function runDirector({
 		): Promise<DirectorStructuralResponse> {
 			const res = await fetch("/api/director/structural", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});
@@ -381,7 +381,7 @@ export async function runDirector({
 		async verify(input: DirectorVerifyRequest): Promise<DirectorVerifyResponse> {
 			const res = await fetch("/api/director/verify", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal: composePassSignal({ cancel: signal, timeoutMs: AUX_PASS_TIMEOUT_MS }),
 				body: JSON.stringify(input),
 			});

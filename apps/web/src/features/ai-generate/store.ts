@@ -18,8 +18,21 @@ import {
 	getStyleById,
 } from "@/features/ai-generate/styles";
 
-export type AiAuthMode = "api-key" | "claude-code" | "custom";
+export type AiAuthMode =
+	| "api-key"
+	| "claude-code"
+	| "custom"
+	| "openai"
+	| "xai-grok"
+	| "groq-llm";
 export type AiBackend = "local" | "heygen";
+
+/**
+ * The features that make LLM calls and can each pick their own provider
+ * (T21.2). "default" follows the global AI connection (authMode).
+ */
+export type AiFeature = "director" | "assistant" | "hyperframes";
+export type AiProviderSelection = "default" | AiAuthMode;
 
 /**
  * How many saved HyperFrames presets / style profiles we allow. Raised 5 -> 8
@@ -64,6 +77,33 @@ interface AiSettingsStore {
 	setCustomApiKey: (key: string) => void;
 	customModel: string;
 	setCustomModel: (model: string) => void;
+	/**
+	 * T21.2 named OpenAI-compatible chat providers. Keys are device-local like
+	 * the Anthropic key; a blank model field means hf-bridge's provider default.
+	 * All three are "community quality" until they pass the Director eval.
+	 */
+	openaiApiKey: string;
+	setOpenaiApiKey: (key: string) => void;
+	openaiModel: string;
+	setOpenaiModel: (model: string) => void;
+	xaiGrokApiKey: string;
+	setXaiGrokApiKey: (key: string) => void;
+	xaiGrokModel: string;
+	setXaiGrokModel: (model: string) => void;
+	groqLlmApiKey: string;
+	setGroqLlmApiKey: (key: string) => void;
+	groqLlmModel: string;
+	setGroqLlmModel: (model: string) => void;
+	/**
+	 * Per-feature provider picks (T21.2). "default" follows the global AI
+	 * connection (authMode); a specific mode pins that feature to it.
+	 */
+	directorProvider: AiProviderSelection;
+	setDirectorProvider: (pick: AiProviderSelection) => void;
+	assistantProvider: AiProviderSelection;
+	setAssistantProvider: (pick: AiProviderSelection) => void;
+	hyperframesProvider: AiProviderSelection;
+	setHyperframesProvider: (pick: AiProviderSelection) => void;
 	/** HeyGen API key — unlocks music & SFX search in the Sounds panel. */
 	heygenApiKey: string;
 	setHeygenApiKey: (key: string) => void;
@@ -184,6 +224,27 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			setCustomApiKey: (customApiKey) => set({ customApiKey }),
 			customModel: "",
 			setCustomModel: (customModel) => set({ customModel }),
+
+			openaiApiKey: "",
+			setOpenaiApiKey: (openaiApiKey) => set({ openaiApiKey }),
+			openaiModel: "",
+			setOpenaiModel: (openaiModel) => set({ openaiModel }),
+			xaiGrokApiKey: "",
+			setXaiGrokApiKey: (xaiGrokApiKey) => set({ xaiGrokApiKey }),
+			xaiGrokModel: "",
+			setXaiGrokModel: (xaiGrokModel) => set({ xaiGrokModel }),
+			groqLlmApiKey: "",
+			setGroqLlmApiKey: (groqLlmApiKey) => set({ groqLlmApiKey }),
+			groqLlmModel: "",
+			setGroqLlmModel: (groqLlmModel) => set({ groqLlmModel }),
+
+			directorProvider: "default",
+			setDirectorProvider: (directorProvider) => set({ directorProvider }),
+			assistantProvider: "default",
+			setAssistantProvider: (assistantProvider) => set({ assistantProvider }),
+			hyperframesProvider: "default",
+			setHyperframesProvider: (hyperframesProvider) =>
+				set({ hyperframesProvider }),
 
 			heygenApiKey: "",
 			setHeygenApiKey: (heygenApiKey) => set({ heygenApiKey }),
@@ -378,7 +439,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 		}),
 		{
 			name: "framecut-ai-settings",
-			version: 5,
+			version: 6,
 			migrate: (persisted, version) =>
 				migrateAiSettings(persisted, version) as unknown as AiSettingsStore,
 		},
@@ -405,6 +466,12 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
  * preset's spec from its own styleId so a migrated preset generates the exact
  * same look it always did - additive and lossless; presets that already carry
  * a design are left alone.
+ * v6: T21.2 provider abstraction. New fields only: the three named
+ * OpenAI-compatible providers' key/model fields and the per-feature provider
+ * picks. Backfill the picks to "default" (follow the global connection) when
+ * absent so a migrated install behaves exactly as before - additive and
+ * lossless, like v5. The pre-v6 authMode values and key fields are untouched
+ * (the eval disk cache and this store's persisted shape depend on them).
  */
 export function migrateAiSettings(
 	persisted: unknown,
@@ -430,6 +497,11 @@ export function migrateAiSettings(
 			const styleId = typeof p.styleId === "string" ? p.styleId : "";
 			return { ...p, design: designSpecFromStyle(getStyleById(styleId)) };
 		});
+	}
+	if (version < 6 && Object.keys(s).length > 0) {
+		s.directorProvider ??= "default";
+		s.assistantProvider ??= "default";
+		s.hyperframesProvider ??= "default";
 	}
 	return s;
 }
@@ -464,25 +536,69 @@ export function resolveDesignSpec(state: {
 	return { name: style.name, spec: designSpecFromStyle(style), custom: false };
 }
 
-/** Headers to attach to FrameCut AI API routes, carrying device-local auth. */
-export function buildAiAuthHeaders(): Record<string, string> {
-	const {
-		authMode,
-		anthropicApiKey,
-		customBaseUrl,
-		customApiKey,
-		customModel,
-	} = useAiSettingsStore.getState();
+/**
+ * Resolve the effective auth mode for a feature: the per-feature pick when one
+ * is pinned, else the global AI connection (T21.2 resolution order: per-feature
+ * pick -> global default; the server env fallback is applied route-side).
+ */
+export function resolveEffectiveAuthMode(
+	state: {
+		authMode: AiAuthMode;
+		directorProvider: AiProviderSelection;
+		assistantProvider: AiProviderSelection;
+		hyperframesProvider: AiProviderSelection;
+	},
+	feature?: AiFeature,
+): AiAuthMode {
+	const pick = feature
+		? state[
+				feature === "director"
+					? "directorProvider"
+					: feature === "assistant"
+						? "assistantProvider"
+						: "hyperframesProvider"
+			]
+		: "default";
+	return pick && pick !== "default" ? pick : state.authMode;
+}
+
+/**
+ * Headers to attach to FrameCut AI API routes, carrying device-local auth.
+ * `feature` (T21.2) applies that feature's provider pick before emitting;
+ * the header names for the pre-existing modes are byte-stable (the eval disk
+ * cache and resolveAiAuth depend on them).
+ */
+export function buildAiAuthHeaders(feature?: AiFeature): Record<string, string> {
+	const state = useAiSettingsStore.getState();
+	const authMode = resolveEffectiveAuthMode(state, feature);
 	const headers: Record<string, string> = {
 		"x-framecut-auth-mode": authMode,
 	};
-	if (authMode === "api-key" && anthropicApiKey) {
-		headers["x-framecut-anthropic-key"] = anthropicApiKey;
+	if (authMode === "api-key" && state.anthropicApiKey) {
+		headers["x-framecut-anthropic-key"] = state.anthropicApiKey;
 	}
 	if (authMode === "custom") {
-		if (customBaseUrl) headers["x-framecut-custom-base-url"] = customBaseUrl;
-		if (customModel) headers["x-framecut-custom-model"] = customModel;
-		if (customApiKey) headers["x-framecut-custom-key"] = customApiKey;
+		if (state.customBaseUrl)
+			headers["x-framecut-custom-base-url"] = state.customBaseUrl;
+		if (state.customModel) headers["x-framecut-custom-model"] = state.customModel;
+		if (state.customApiKey) headers["x-framecut-custom-key"] = state.customApiKey;
+	}
+	if (authMode === "openai") {
+		if (state.openaiApiKey) headers["x-framecut-openai-key"] = state.openaiApiKey;
+		if (state.openaiModel)
+			headers["x-framecut-openai-model"] = state.openaiModel;
+	}
+	if (authMode === "xai-grok") {
+		if (state.xaiGrokApiKey)
+			headers["x-framecut-xai-grok-key"] = state.xaiGrokApiKey;
+		if (state.xaiGrokModel)
+			headers["x-framecut-xai-grok-model"] = state.xaiGrokModel;
+	}
+	if (authMode === "groq-llm") {
+		if (state.groqLlmApiKey)
+			headers["x-framecut-groq-llm-key"] = state.groqLlmApiKey;
+		if (state.groqLlmModel)
+			headers["x-framecut-groq-llm-model"] = state.groqLlmModel;
 	}
 	return headers;
 }

@@ -155,7 +155,7 @@ export async function runHyperframes({
 	const design = resolveDesignSpec(useAiSettingsStore.getState());
 	const planRes = await fetch("/api/hyperframes/plan", {
 		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders("hyperframes") },
 		signal,
 		body: JSON.stringify({
 			segments,

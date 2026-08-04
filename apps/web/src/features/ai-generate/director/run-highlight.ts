@@ -115,7 +115,7 @@ export async function runHighlight({
 		try {
 			const res = await fetch("/api/director/plan", {
 				method: "POST",
-				headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+				headers: { "content-type": "application/json", ...buildAiAuthHeaders("director") },
 				signal,
 				body: JSON.stringify({ segments: signalTable, totalSec, taste: taste || undefined }),
 			});

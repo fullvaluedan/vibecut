@@ -1,7 +1,11 @@
-import { spawn } from "node:child_process";
-import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
-import { resolveClaude } from "./renderer";
+import {
+	planJsonTransport,
+	planMultimodal,
+	type TokenUsage,
+	type MultimodalBlock,
+	type MultimodalImageMediaType,
+} from "./llm-client";
 import { stableOpId } from "./stable-op-id";
 import type {
 	ClaudeAuth,
@@ -9,6 +13,27 @@ import type {
 	EffectPlanItem,
 	TranscriptSegment,
 } from "./types";
+
+// The transports, usage normalizers, multimodal body builders, and the
+// capability model live in ./llm-client (T21.2 provider layer). Re-exported
+// here so existing importers (barrel, tests, speaker-detect) keep their seam.
+export {
+	planMultimodal,
+	partitionMultimodalBlocks,
+	buildAnthropicMultimodalBody,
+	buildCustomMultimodalBody,
+	assertSafeMultimodalHost,
+	shouldTaskkillOnTimeout,
+	customChatUrl,
+	MAX_MULTIMODAL_IMAGES,
+	LLM_CAPABILITIES,
+	OPENAI_COMPATIBLE_PROVIDERS,
+	isAnthropicBacked,
+	type TokenUsage,
+	type MultimodalBlock,
+	type MultimodalImageMediaType,
+	type MultimodalResult,
+} from "./llm-client";
 
 const PLAN_SCHEMA = {
 	type: "object",
@@ -32,32 +57,6 @@ const PLAN_SCHEMA = {
 	required: ["items"],
 	additionalProperties: false,
 } as const;
-
-export interface TokenUsage {
-	inputTokens: number;
-	outputTokens: number;
-}
-
-/** Map an Anthropic `usage` object to our TokenUsage (null when absent). */
-function normalizeAnthropicUsage(
-	usage: { input_tokens?: number; output_tokens?: number } | undefined,
-): TokenUsage | null {
-	return usage
-		? { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0 }
-		: null;
-}
-
-/** Map an OpenAI-compatible `usage` object to our TokenUsage (null when absent). */
-function normalizeOpenAiUsage(
-	usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
-): TokenUsage | null {
-	return usage
-		? {
-				inputTokens: usage.prompt_tokens ?? 0,
-				outputTokens: usage.completion_tokens ?? 0,
-			}
-		: null;
-}
 
 function buildPreferencesBlock(preferences?: string[]): string {
 	if (!preferences?.length) return "";
@@ -119,241 +118,6 @@ ${
 		: ""
 }
 Respond with ONLY a JSON object: {"items": [{"templateId", "startSec", "durationSec", "variables", "reason"}, ...]}. The "reason" is one short sentence.`;
-}
-
-function extractJson(text: string): unknown {
-	const direct = text.trim();
-	try {
-		return JSON.parse(direct);
-	} catch {
-		const start = direct.indexOf("{");
-		const end = direct.lastIndexOf("}");
-		if (start >= 0 && end > start) {
-			return JSON.parse(direct.slice(start, end + 1));
-		}
-		throw new Error("Planner returned no parseable JSON");
-	}
-}
-
-async function planViaApiKeySchema(
-	prompt: string,
-	apiKey: string,
-	schema: object,
-): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			"x-api-key": apiKey,
-			"anthropic-version": "2023-06-01",
-		},
-		body: JSON.stringify({
-			model: "claude-opus-4-8",
-			max_tokens: 8000,
-			thinking: { type: "adaptive" },
-			output_config: {
-				format: { type: "json_schema", schema },
-			},
-			messages: [{ role: "user", content: prompt }],
-		}),
-	});
-	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Anthropic API error ${res.status}: ${body.slice(0, 500)}`);
-	}
-	const data = (await res.json()) as {
-		content: { type: string; text?: string }[];
-		usage?: { input_tokens?: number; output_tokens?: number };
-	};
-	const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-	const usage = normalizeAnthropicUsage(data.usage);
-	return { raw: extractJson(text), usage };
-}
-
-/** Kill leash for the claude-code CLI spawn (round 12 U3/R4): a wedged CLI (a
- * hung network call, a login prompt waiting on a terminal that isn't there)
- * previously kept the child - and the whole Director run - alive forever. On
- * expiry the child is killed and the plan call rejects with a plain message. */
-const CLAUDE_CLI_KILL_TIMEOUT_MS = 300_000;
-
-/** Pure branch decision for the kill timer below, split out so it is
- * unit-testable without actually spawning anything. On Windows the CLI runs
- * through `shell: true` (resolveClaude in renderer.ts needs the shell to
- * resolve the bare `claude` command's `.cmd` shim via PATHEXT), which means
- * the spawned pid is cmd.exe, not the real claude/node process underneath
- * it. A plain `child.kill()` only reaps that cmd.exe wrapper and orphans the
- * real process, which keeps running the hung call. So on Windows we walk and
- * kill the whole process tree by pid instead. */
-export function shouldTaskkillOnTimeout({
-	platform,
-	pid,
-}: {
-	platform: NodeJS.Platform;
-	pid: number | undefined;
-}): boolean {
-	return platform === "win32" && pid != null;
-}
-
-function planViaClaudeCode(
-	prompt: string,
-): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	return new Promise((resolve, reject) => {
-		const { command, useShell } = resolveClaude();
-		const child = spawn(command, ["-p", "--output-format", "json"], {
-			shell: useShell,
-			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, NO_COLOR: "1" },
-		});
-		let out = "";
-		let err = "";
-		// Kill timer (round 12 U3/R4, tree-kill added later): reject FIRST (so
-		// the caller fails with the real reason, not a generic exit-code message
-		// from the kill's close event), then kill the child. `timedOut` makes the
-		// close handler a no-op after.
-		let timedOut = false;
-		const killTimer = setTimeout(() => {
-			timedOut = true;
-			reject(
-				new Error(
-					`The claude CLI did not respond within ${CLAUDE_CLI_KILL_TIMEOUT_MS / 60_000} minutes and was stopped. Check that the CLI works (run \`claude\` in a terminal), or switch Settings -> AI to an Anthropic API key.`,
-				),
-			);
-			if (shouldTaskkillOnTimeout({ platform: process.platform, pid: child.pid })) {
-				// Fire-and-forget: we already rejected above, so this is best-effort
-				// cleanup and must never itself throw or reject anything.
-				try {
-					spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"]).on(
-						"error",
-						() => {},
-					);
-				} catch {
-					child.kill();
-				}
-			} else {
-				child.kill();
-			}
-		}, CLAUDE_CLI_KILL_TIMEOUT_MS);
-		child.stdout.on("data", (d) => (out += d.toString()));
-		child.stderr.on("data", (d) => (err += d.toString()));
-		child.on("error", (e) => {
-			clearTimeout(killTimer);
-			reject(e);
-		});
-		child.on("close", (code) => {
-			clearTimeout(killTimer);
-			if (timedOut) return; // already rejected; this close came from the kill
-			// claude-code `--output-format json` reports API/auth errors in the STDOUT
-			// JSON (`is_error` / `api_error_status` / `result`) — typically with a
-			// NON-zero exit and EMPTY stderr. Parse stdout FIRST so we surface the real
-			// reason (e.g. a 401 auth failure) instead of a bare "exited 1:".
-			let wrapper: {
-				result?: string;
-				is_error?: boolean;
-				api_error_status?: number;
-				usage?: { input_tokens?: number; output_tokens?: number };
-			} | null = null;
-			try {
-				wrapper = JSON.parse(out);
-			} catch {
-				wrapper = null;
-			}
-
-			if (wrapper?.is_error === true) {
-				const status = wrapper.api_error_status;
-				const detail =
-					typeof wrapper.result === "string"
-						? wrapper.result
-						: `claude CLI error (exit ${code})`;
-				const authHint =
-					status === 401 || /authenticat|invalid auth|credential/i.test(detail)
-						? " — the claude CLI is not signed in. Run `claude setup-token` (or `claude` then /login) in a terminal, or switch Settings → AI to an Anthropic API key."
-						: "";
-				reject(
-					new Error(
-						`Claude planning failed${status ? ` (API ${status})` : ""}: ${detail}${authHint}`,
-					),
-				);
-				return;
-			}
-
-			if (code !== 0) {
-				// A wiped/missing CLI binary surfaces as "not recognized"/ENOENT — point
-				// at the escape hatch rather than a cryptic shell error.
-				const hint = /not recognized|ENOENT|not found|cannot find/i.test(err)
-					? " — the claude CLI isn't runnable (a failed update may have wiped its binary). Set FRAMECUT_CLAUDE to a working claude path, or restore the CLI."
-					: "";
-				reject(new Error(`claude CLI exited ${code}: ${err.slice(0, 800)}${hint}`));
-				return;
-			}
-
-			try {
-				const text =
-					typeof wrapper?.result === "string" ? wrapper.result : out;
-				const usage = normalizeAnthropicUsage(wrapper?.usage);
-				resolve({ raw: extractJson(text), usage });
-			} catch (e) {
-				reject(new Error(`Could not parse claude CLI output: ${String(e)}`));
-			}
-		});
-		child.stdin.write(prompt);
-		child.stdin.end();
-	});
-}
-
-/** OpenAI-compatible chat-completions URL from a user-supplied base URL. */
-export function customChatUrl(baseUrl: string): string {
-	return baseUrl.replace(/\/+$/, "") + "/chat/completions";
-}
-
-/**
- * Plan via a user-supplied OpenAI-compatible endpoint (Ollama, LM Studio, a
- * self-hosted model, etc.). Asks for JSON via response_format where supported;
- * extractJson is the fallback for servers that ignore it.
- */
-async function planViaCustomSchema(
-	prompt: string,
-	conn: { baseUrl: string; apiKey?: string; model: string },
-): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	const res = await fetch(customChatUrl(conn.baseUrl), {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			...(conn.apiKey ? { authorization: `Bearer ${conn.apiKey}` } : {}),
-		},
-		body: JSON.stringify({
-			model: conn.model,
-			messages: [{ role: "user", content: prompt }],
-			temperature: 0.4,
-			response_format: { type: "json_object" },
-		}),
-	});
-	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Custom model error ${res.status}: ${body.slice(0, 500)}`);
-	}
-	const data = (await res.json()) as {
-		choices?: { message?: { content?: string } }[];
-		usage?: { prompt_tokens?: number; completion_tokens?: number };
-	};
-	const text = data.choices?.[0]?.message?.content ?? "";
-	const usage = normalizeOpenAiUsage(data.usage);
-	return { raw: extractJson(text), usage };
-}
-
-/** Route a schema-constrained JSON ask to the connected backend. */
-function planDispatch(
-	prompt: string,
-	auth: ClaudeAuth,
-	schema: object,
-): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	switch (auth.mode) {
-		case "api-key":
-			return planViaApiKeySchema(prompt, auth.apiKey, schema);
-		case "custom":
-			return planViaCustomSchema(prompt, auth);
-		default:
-			return planViaClaudeCode(prompt);
-	}
 }
 
 /** Validates + normalizes the raw plan against the template registry. */
@@ -427,7 +191,7 @@ export async function planJson({
 	auth: ClaudeAuth;
 	schema: object;
 }): Promise<{ raw: unknown; usage: TokenUsage | null }> {
-	return planDispatch(prompt, auth, schema);
+	return planJsonTransport(prompt, auth, schema);
 }
 
 // --- Director planner (v0: text+audio typed-op plan) ---
@@ -798,270 +562,12 @@ export async function planDirector({
 
 // --- Multimodal dispatch (U5: the Director's vision pass) ---
 //
-// The Director sends sampled keyframes alongside the fused-signal text so the
-// model can judge shot type / B-roll / framing. Only `api-key` (Anthropic
-// Messages) and a vision-capable `custom` endpoint accept inline images; the
-// `claude-code` CLI cannot, so it degrades to a text-only call and flags it.
-
-/** Image media types the Anthropic Messages API accepts. */
-export type MultimodalImageMediaType =
-	| "image/jpeg"
-	| "image/png"
-	| "image/gif"
-	| "image/webp";
-
-/** A content block for a multimodal ask: a base64 image or a text run. */
-export type MultimodalBlock =
-	| { type: "image"; mediaType: MultimodalImageMediaType; dataBase64: string }
-	| { type: "text"; text: string };
-
-export interface MultimodalResult {
-	raw: unknown;
-	usage: TokenUsage | null;
-	/** True when the backend can't take images and the call ran text-only. */
-	degraded: boolean;
-}
-
-/**
- * Default vision model for BULK classification (cheap). Hard calls (the Director
- * plan) pass `model: "claude-opus-4-8"`. (KTD2/KTD3.)
- */
-const DEFAULT_MULTIMODAL_MODEL = "claude-sonnet-4-6";
-
-/**
- * Max images forwarded in one request — bounds the payload and the server's
- * compute window. Excess images are truncated with a logged warning, never
- * silently dropped (the caller's tiered gate should keep counts well under this).
- */
-export const MAX_MULTIMODAL_IMAGES = 20;
-
-interface PartitionedBlocks {
-	images: Array<{ mediaType: string; dataBase64: string }>;
-	/** All text blocks concatenated, in order. */
-	text: string;
-	/** True when images were truncated to fit MAX_MULTIMODAL_IMAGES. */
-	truncated: boolean;
-}
-
-/**
- * Split blocks into a capped image list + concatenated text. Over the cap,
- * truncate (keeping the first N) and log a warning — never silently drop.
- */
-export function partitionMultimodalBlocks(
-	blocks: readonly MultimodalBlock[],
-): PartitionedBlocks {
-	const allImages = blocks.filter(
-		(b): b is Extract<MultimodalBlock, { type: "image" }> => b.type === "image",
-	);
-	const text = blocks
-		.filter((b): b is Extract<MultimodalBlock, { type: "text" }> => b.type === "text")
-		.map((b) => b.text)
-		.join("\n\n");
-	const truncated = allImages.length > MAX_MULTIMODAL_IMAGES;
-	if (truncated) {
-		console.warn(
-			`[hf-bridge] planMultimodal: ${allImages.length} images exceeds cap ${MAX_MULTIMODAL_IMAGES}; truncating to ${MAX_MULTIMODAL_IMAGES} (no silent drop).`,
-		);
-	}
-	const images = allImages
-		.slice(0, MAX_MULTIMODAL_IMAGES)
-		.map(({ mediaType, dataBase64 }) => ({ mediaType, dataBase64 }));
-	return { images, text, truncated };
-}
-
-/** Anthropic Messages body: images BEFORE text, native Structured Outputs. */
-export function buildAnthropicMultimodalBody({
-	images,
-	text,
-	schema,
-	model,
-}: {
-	images: Array<{ mediaType: string; dataBase64: string }>;
-	text: string;
-	schema: object;
-	model?: string;
-}): object {
-	return {
-		model: model ?? DEFAULT_MULTIMODAL_MODEL,
-		max_tokens: 8000,
-		thinking: { type: "adaptive" },
-		output_config: { format: { type: "json_schema", schema } },
-		messages: [
-			{
-				role: "user",
-				content: [
-					...images.map((img) => ({
-						type: "image",
-						source: {
-							type: "base64",
-							media_type: img.mediaType,
-							data: img.dataBase64,
-						},
-					})),
-					// Omit an empty text block — the Messages API rejects `text: ""`.
-					...(text ? [{ type: "text", text }] : []),
-				],
-			},
-		],
-	};
-}
-
-/** OpenAI-compatible vision body: image_url data URIs before text. */
-export function buildCustomMultimodalBody({
-	images,
-	text,
-	model,
-}: {
-	images: Array<{ mediaType: string; dataBase64: string }>;
-	text: string;
-	model: string;
-}): object {
-	return {
-		model,
-		messages: [
-			{
-				role: "user",
-				content: [
-					...images.map((img) => ({
-						type: "image_url",
-						image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` },
-					})),
-					...(text ? [{ type: "text", text }] : []),
-				],
-			},
-		],
-		temperature: 0.4,
-		response_format: { type: "json_object" },
-	};
-}
-
-/**
- * SSRF guard for the user-supplied `custom` vision endpoint — the ONLY path that
- * forwards FOOTAGE FRAMES off-device, so it is the only one that needs the guard.
- * Mirrors `apps/web/.../api/broll/fetch/route.ts`: https only, no IP literals, no
- * `localhost`/`.local`/`.internal`. (Local LLM servers can't take footage frames
- * for this reason — use `api-key` for the visual Director.) Throws on reject.
- */
-export function assertSafeMultimodalHost(baseUrl: string): void {
-	let parsed: URL;
-	try {
-		parsed = new URL(baseUrl);
-	} catch {
-		throw new Error(`Invalid custom endpoint URL: ${baseUrl}`);
-	}
-	// Normalize before the checks: lowercase, strip a single trailing dot (the FQDN
-	// form `localhost.`), and unwrap an IPv6 literal's brackets — `URL.hostname`
-	// keeps them (e.g. `[::1]`) and `node:net` `isIP()` returns 0 for a bracketed
-	// address, which would otherwise let IPv6 loopback / ULA / link-local / IPv4-
-	// mapped literals slip past the IP-literal check.
-	let host = parsed.hostname.toLowerCase();
-	if (host.endsWith(".")) host = host.slice(0, -1);
-	const ipLiteral =
-		host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-	if (
-		parsed.protocol !== "https:" ||
-		isIP(ipLiteral) !== 0 ||
-		host === "localhost" ||
-		host === "localhost.localdomain" ||
-		host.endsWith(".localhost") ||
-		host.endsWith(".local") ||
-		host.endsWith(".internal")
-	) {
-		throw new Error(
-			`Custom vision endpoint host not allowed (must be a public https host): ${host}`,
-		);
-	}
-}
-
-/**
- * Dispatch a multimodal (image+text) schema-constrained ask. `api-key` and
- * `custom` send the images; `claude-code` strips them and runs text-only with
- * `degraded: true`. Accumulated `TokenUsage` rides on the result.
- */
-export async function planMultimodal({
-	blocks,
-	auth,
-	schema,
-	model,
-	signal,
-}: {
-	blocks: readonly MultimodalBlock[];
-	auth: ClaudeAuth;
-	schema: object;
-	model?: string;
-	/** Aborts the in-flight LLM request when a Director run is cancelled. */
-	signal?: AbortSignal;
-}): Promise<MultimodalResult> {
-	if (signal?.aborted) throw new Error("Cancelled");
-	const { images, text } = partitionMultimodalBlocks(blocks);
-
-	switch (auth.mode) {
-		case "api-key": {
-			const res = await fetch("https://api.anthropic.com/v1/messages", {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					"x-api-key": auth.apiKey,
-					"anthropic-version": "2023-06-01",
-				},
-				body: JSON.stringify(
-					buildAnthropicMultimodalBody({ images, text, schema, model }),
-				),
-				signal,
-			});
-			if (!res.ok) {
-				const body = await res.text();
-				throw new Error(`Anthropic API error ${res.status}: ${body.slice(0, 500)}`);
-			}
-			const data = (await res.json()) as {
-				content?: { type: string; text?: string }[];
-				usage?: { input_tokens?: number; output_tokens?: number };
-			};
-			// A 200 with a missing/empty content array (overloaded / refusal / streamed
-			// shapes) must surface as extractJson's typed error, not a raw TypeError.
-			const out = data.content?.find((b) => b.type === "text")?.text ?? "";
-			return {
-				raw: extractJson(out),
-				usage: normalizeAnthropicUsage(data.usage),
-				degraded: false,
-			};
-		}
-		case "custom": {
-			// Guard the host BEFORE any fetch — no frame leaves until this passes.
-			assertSafeMultimodalHost(auth.baseUrl);
-			const res = await fetch(customChatUrl(auth.baseUrl), {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					...(auth.apiKey ? { authorization: `Bearer ${auth.apiKey}` } : {}),
-				},
-				body: JSON.stringify(
-					buildCustomMultimodalBody({ images, text, model: model ?? auth.model }),
-				),
-				signal,
-			});
-			if (!res.ok) {
-				const body = await res.text();
-				throw new Error(`Custom model error ${res.status}: ${body.slice(0, 500)}`);
-			}
-			const data = (await res.json()) as {
-				choices?: { message?: { content?: string } }[];
-				usage?: { prompt_tokens?: number; completion_tokens?: number };
-			};
-			const out = data.choices?.[0]?.message?.content ?? "";
-			return {
-				raw: extractJson(out),
-				usage: normalizeOpenAiUsage(data.usage),
-				degraded: false,
-			};
-		}
-		default: {
-			// claude-code CLI can't take inline images: strip them, run text-only.
-			const { raw, usage } = await planViaClaudeCode(text);
-			return { raw, usage, degraded: true };
-		}
-	}
-}
+// The multimodal transports (image partitioning, the Anthropic/OpenAI body
+// builders, the custom-endpoint SSRF guard, `planMultimodal` itself) moved to
+// ./llm-client with T21.2 and are re-exported at the top of this file. The
+// capability tier decides who gets images: `api-key` and the image-capable
+// OpenAI-compatible modes send them; `claude-code` and text-only providers
+// degrade to text-only with `degraded: true`.
 
 // --- Vision Director (U2): the text+audio cut, now with eyes ---
 //
@@ -1214,6 +720,6 @@ export async function planEffects({
 		preferences,
 		look,
 	});
-	const { raw, usage } = await planDispatch(prompt, auth, PLAN_SCHEMA);
+	const { raw, usage } = await planJsonTransport(prompt, auth, PLAN_SCHEMA);
 	return { ...sanitizePlan(raw, totalDurationSec, allowedTemplateIds), usage };
 }

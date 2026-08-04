@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	deriveAnthropicStatus,
+	deriveChatProviderStatus,
 	deriveGroqStatus,
 	needsAiSetupWarning,
 } from "../provider-status";
@@ -75,6 +76,39 @@ describe("deriveGroqStatus", () => {
 		expect(
 			deriveGroqStatus({ groqApiKey: "   ", serverKeyDetected: false }),
 		).toEqual({ provider: "groq", state: "missing" });
+	});
+});
+
+describe("deriveChatProviderStatus (T21.2)", () => {
+	test("a saved key is a device key for each named chat provider", () => {
+		for (const provider of ["openai", "xai-grok", "groq-llm"] as const) {
+			expect(deriveChatProviderStatus({ provider, apiKey: "k" })).toEqual({
+				provider,
+				state: "device-key",
+			});
+		}
+	});
+
+	test("no key is missing; whitespace does not count", () => {
+		expect(
+			deriveChatProviderStatus({ provider: "openai", apiKey: "" }),
+		).toEqual({ provider: "openai", state: "missing" });
+		expect(
+			deriveChatProviderStatus({ provider: "groq-llm", apiKey: "  " }),
+		).toEqual({ provider: "groq-llm", state: "missing" });
+	});
+
+	test("never returns server-key or claude-code (device-key only)", () => {
+		const states = [
+			deriveChatProviderStatus({ provider: "openai", apiKey: "k" }),
+			deriveChatProviderStatus({ provider: "xai-grok", apiKey: "" }),
+			deriveChatProviderStatus({ provider: "groq-llm", apiKey: "k" }),
+		];
+		for (const status of states) {
+			expect(status.state === "device-key" || status.state === "missing").toBe(
+				true,
+			);
+		}
 	});
 });
 

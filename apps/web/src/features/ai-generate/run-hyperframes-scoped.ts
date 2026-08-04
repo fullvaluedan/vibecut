@@ -384,7 +384,7 @@ export async function runHyperframesOnClip({
 		logRun("Authoring a custom graphic with Claude (this can take ~30–60s)…");
 		const res = await fetch("/api/hyperframes/author", {
 			method: "POST",
-			headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+			headers: { "content-type": "application/json", ...buildAiAuthHeaders("hyperframes") },
 			body: JSON.stringify({ prompt, fps, width, height, durationSec }),
 			signal: controller.signal,
 		});
@@ -633,7 +633,7 @@ async function authorChunks({
 				method: "POST",
 				headers: {
 					"content-type": "application/json",
-					...buildAiAuthHeaders(),
+					...buildAiAuthHeaders("hyperframes"),
 				},
 				body: JSON.stringify({
 					prompt,
@@ -812,7 +812,7 @@ async function probeChunks({
 				method: "POST",
 				headers: {
 					"content-type": "application/json",
-					...buildAiAuthHeaders(),
+					...buildAiAuthHeaders("hyperframes"),
 				},
 				body: JSON.stringify({
 					prompt: brief.prompt,
@@ -1520,7 +1520,7 @@ export async function retryProbeChunk({
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
-				...buildAiAuthHeaders(),
+				...buildAiAuthHeaders("hyperframes"),
 			},
 			body: JSON.stringify({
 				prompt: probe.brief,

@@ -31,6 +31,7 @@ import {
 	probeServerGroqKey,
 	useAiSettingsStore,
 	type AiAuthMode,
+	type AiProviderSelection,
 } from "@/features/ai-generate/store";
 import { usePreferenceStore } from "@/features/ai-generate/preference-store";
 import { useTranscriptStatusStore } from "@/features/transcription/transcript-cache";
@@ -43,7 +44,22 @@ const AUTH_MODE_LABELS: Record<AiAuthMode, string> = {
 	"claude-code": "Claude subscription (Claude Code)",
 	"api-key": "Anthropic API key",
 	custom: "Custom / local model",
+	openai: "OpenAI",
+	"xai-grok": "xAI Grok",
+	"groq-llm": "Groq (Llama, chat)",
 };
+
+/**
+ * T21.2: non-Anthropic chat providers are usable everywhere but have not
+ * passed the Director quality eval (measured on Anthropic, the reference
+ * config), so the UI says so plainly wherever one is picked.
+ */
+const COMMUNITY_QUALITY_NOTE =
+	"Community quality: this provider has not passed VibeCut's editing-quality eval, which runs on Anthropic. Output may differ.";
+
+function isCommunityMode(mode: AiAuthMode): boolean {
+	return mode !== "claude-code" && mode !== "api-key";
+}
 
 // 4 collapsible groups (menu IA audit): Settings -> AI used to be a dozen
 // stacked toggle sections with paragraph copy. "Connections and keys" is the
@@ -60,6 +76,7 @@ export function AiSettingsContent() {
 					</AccordionTrigger>
 					<AccordionContent className="pt-0 pb-0">
 						<AiConnectionSection />
+						<FeatureProviderSection />
 						<CloudTranscriptionSection />
 						<IntegrationsSection />
 					</AccordionContent>
@@ -128,6 +145,18 @@ function AiConnectionSection() {
 	const setCustomModel = useAiSettingsStore((s) => s.setCustomModel);
 	const customApiKey = useAiSettingsStore((s) => s.customApiKey);
 	const setCustomApiKey = useAiSettingsStore((s) => s.setCustomApiKey);
+	const openaiApiKey = useAiSettingsStore((s) => s.openaiApiKey);
+	const setOpenaiApiKey = useAiSettingsStore((s) => s.setOpenaiApiKey);
+	const openaiModel = useAiSettingsStore((s) => s.openaiModel);
+	const setOpenaiModel = useAiSettingsStore((s) => s.setOpenaiModel);
+	const xaiGrokApiKey = useAiSettingsStore((s) => s.xaiGrokApiKey);
+	const setXaiGrokApiKey = useAiSettingsStore((s) => s.setXaiGrokApiKey);
+	const xaiGrokModel = useAiSettingsStore((s) => s.xaiGrokModel);
+	const setXaiGrokModel = useAiSettingsStore((s) => s.setXaiGrokModel);
+	const groqLlmApiKey = useAiSettingsStore((s) => s.groqLlmApiKey);
+	const setGroqLlmApiKey = useAiSettingsStore((s) => s.setGroqLlmApiKey);
+	const groqLlmModel = useAiSettingsStore((s) => s.groqLlmModel);
+	const setGroqLlmModel = useAiSettingsStore((s) => s.setGroqLlmModel);
 	const [isKeyVisible, setIsKeyVisible] = useState(false);
 	const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
@@ -238,6 +267,148 @@ function AiConnectionSection() {
 						</CollapsibleContent>
 					</Collapsible>
 				)}
+				<NamedProviderFields
+					mode="openai"
+					keyValue={openaiApiKey}
+					onKeyChange={setOpenaiApiKey}
+					keyPlaceholder="sk-..."
+					keyHelp="Get a key at platform.openai.com."
+					modelValue={openaiModel}
+					onModelChange={setOpenaiModel}
+				/>
+				<NamedProviderFields
+					mode="xai-grok"
+					keyValue={xaiGrokApiKey}
+					onKeyChange={setXaiGrokApiKey}
+					keyPlaceholder="xai-..."
+					keyHelp="Get a key at console.x.ai."
+					modelValue={xaiGrokModel}
+					onModelChange={setXaiGrokModel}
+				/>
+				<NamedProviderFields
+					mode="groq-llm"
+					keyValue={groqLlmApiKey}
+					onKeyChange={setGroqLlmApiKey}
+					keyPlaceholder="gsk_..."
+					keyHelp="Get a key at console.groq.com. This is Groq's chat API (Llama) - separate from Groq transcription below."
+					modelValue={groqLlmModel}
+					onModelChange={setGroqLlmModel}
+				/>
+				{isCommunityMode(authMode) && (
+					<p className="text-muted-foreground text-xs">
+						{COMMUNITY_QUALITY_NOTE}
+					</p>
+				)}
+			</SectionContent>
+		</Section>
+	);
+}
+
+/** Key + optional-model fields for one named OpenAI-compatible provider. */
+function NamedProviderFields({
+	mode,
+	keyValue,
+	onKeyChange,
+	keyPlaceholder,
+	keyHelp,
+	modelValue,
+	onModelChange,
+}: {
+	mode: "openai" | "xai-grok" | "groq-llm";
+	keyValue: string;
+	onKeyChange: (key: string) => void;
+	keyPlaceholder: string;
+	keyHelp: string;
+	modelValue: string;
+	onModelChange: (model: string) => void;
+}) {
+	const authMode = useAiSettingsStore((s) => s.authMode);
+	if (authMode !== mode) return null;
+	return (
+		<>
+			<div className="flex flex-col gap-1">
+				<p className="text-xs font-medium">{AUTH_MODE_LABELS[mode]} API key</p>
+				<KeyInput
+					value={keyValue}
+					onChange={onKeyChange}
+					placeholder={keyPlaceholder}
+				/>
+			</div>
+			<div className="flex flex-col gap-1">
+				<p className="text-xs font-medium">Model (optional)</p>
+				<Input
+					placeholder="Leave blank for the provider default"
+					value={modelValue}
+					onChange={(e) => onModelChange(e.target.value)}
+					autoComplete="off"
+					spellCheck={false}
+				/>
+			</div>
+			<p className="text-muted-foreground text-xs">
+				Stored only in this browser on this device. {keyHelp}
+			</p>
+		</>
+	);
+}
+
+/**
+ * T21.2 per-feature provider picks. Each feature follows the global AI
+ * connection unless pinned here; pinning a community provider labels it.
+ */
+function FeatureProviderSection() {
+	const directorProvider = useAiSettingsStore((s) => s.directorProvider);
+	const setDirectorProvider = useAiSettingsStore((s) => s.setDirectorProvider);
+	const assistantProvider = useAiSettingsStore((s) => s.assistantProvider);
+	const setAssistantProvider = useAiSettingsStore((s) => s.setAssistantProvider);
+	const hyperframesProvider = useAiSettingsStore((s) => s.hyperframesProvider);
+	const setHyperframesProvider = useAiSettingsStore(
+		(s) => s.setHyperframesProvider,
+	);
+
+	const rows: Array<{
+		label: string;
+		value: AiProviderSelection;
+		onChange: (pick: AiProviderSelection) => void;
+	}> = [
+		{ label: "AI Cut Director", value: directorProvider, onChange: setDirectorProvider },
+		{ label: "Prompt-to-edit assistant", value: assistantProvider, onChange: setAssistantProvider },
+		{ label: "HyperFrames graphics", value: hyperframesProvider, onChange: setHyperframesProvider },
+	];
+
+	return (
+		<Section showTopBorder={false}>
+			<SectionHeader>
+				<SectionTitle>Provider per feature</SectionTitle>
+			</SectionHeader>
+			<SectionContent className="px-3 pb-3 flex flex-col gap-2">
+				{rows.map((row) => (
+					<div key={row.label} className="flex items-center justify-between gap-2">
+						<p className="text-xs">{row.label}</p>
+						<Select
+							value={row.value}
+							onValueChange={(value) =>
+								row.onChange(value as AiProviderSelection)
+							}
+						>
+							<SelectTrigger className="bg-transparent border-none p-1 h-auto">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="default">Default (AI connection)</SelectItem>
+								{(Object.keys(AUTH_MODE_LABELS) as AiAuthMode[]).map((mode) => (
+									<SelectItem key={mode} value={mode}>
+										{AUTH_MODE_LABELS[mode]}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+				))}
+				<p className="text-muted-foreground text-xs">
+					Each feature follows the global AI connection unless pinned here.
+					Anthropic is the quality reference; other providers work but are
+					community quality until they pass the editing-quality eval.
+				</p>
 			</SectionContent>
 		</Section>
 	);
