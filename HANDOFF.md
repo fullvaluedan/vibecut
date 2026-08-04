@@ -1,14 +1,15 @@
-# VibeCut handoff, 2026-08-03 (ROUNDS 19 AND 20 CLOSED 9/9; next: Round 21)
+# VibeCut handoff, 2026-08-03 (ROUNDS 19 + 20 CLOSED 9/9; T21.2 SHIPPED; next: T21.3 plan doc)
 
 Updated at the end of the 2026-08-03 session: round 19's four G6 reopens plus the
-R19-7 follow-up hole were fixed and re-verified live, then round 20 (HyperFrames +
+R19-7 follow-up hole were fixed and re-verified live, round 20 (HyperFrames +
 Remotion authoring) was planned, built, merged, and verified LIVE (a credentialed
-claude-code CLI drove real author/planner calls through the UI). Both rounds close
-at 9/9 across every feature. Evidence: `docs/TO-VERIFY.md` (round-19
-re-verification + round-20 sections).
+claude-code CLI drove real author/planner calls through the UI), and T21.2 (LLM
+provider abstraction) is merged. Rounds 19 and 20 close at 9/9 across every
+feature. Evidence: `docs/TO-VERIFY.md` (round-19 re-verification + round-20
+sections).
 
-Branch: `feat/director-eval`, tip `9c6e7867` (the R20-1 fix), pushed. Working tree
-clean apart from the untracked local-only `.claude/` and `bunfig.toml`.
+Branch: `feat/director-eval`, tip `ca3998b0` (the T21.2 merge), pushed. Working
+tree clean apart from the untracked local-only `.claude/` and `bunfig.toml`.
 
 ## 1. Read these first, in this order
 
@@ -115,6 +116,25 @@ author-stage retry (render-stage retry was injected and passes), the JSON-bundle
 pack fallback, transcript CONTENT accuracy (headless Chrome ships no AudioDecoder;
 pipeline verified, content check is Dan's real-browser pass).
 
+### Round 21 (partial): T21.1 onboarding closed with round 18; T21.2 SHIPPED 2026-08-03
+
+T21.2 LLM provider abstraction (merged `ca3998b0`, gates 2804/0/1-skip + 253/0 +
+tsc): one capability-keyed provider layer (`packages/hf-bridge/src/llm-client.ts`:
+jsonSchema/images/tools per mode; claude-code is the degenerate no-images/no-tools
+tier) behind `planJson`/`planMultimodal`; providers anthropic (default + quality
+reference), openai, xai-grok, groq-llm (the three as configs over the existing
+OpenAI-compatible transport, not new code paths) plus the pre-existing api-key /
+claude-code / custom modes. `author-composition.ts`'s parallel dispatch converged
+onto it. The prompt-to-edit assistant route now accepts claude-code and every new
+provider via a prompt-instructed JSON fallback turn (native Anthropic tools
+untouched), so DAN'S LIVE ASSISTANT RUN IS UNBLOCKED without an Anthropic key.
+Per-feature provider picks in Settings > AI (Director / Assistant / HyperFrames),
+"community quality" label on non-Anthropic picks, store v5 -> v6 additive
+migration, eval cache-key stability proven by a golden-hash test. NOT YET
+G6-VERIFIED: no live LLM calls (keys are Dan's); transports proven with mock
+fetch/spawn only. Follow-up noted: /get-started still renders only Anthropic +
+Groq cards (status derivations for the new providers exist; cards not added).
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the
@@ -155,12 +175,14 @@ re-verification section). Kept here as the record of what was wrong:
 
 ## 4. What to do next, in order
 
-1. Round 21 remainder: T21.2 (LLM provider abstraction incl. claude-code support
-   for the assistant route - the author route already runs on FRAMECUT_CLAUDE,
-   verified live in round 20), then T21.3-T21.7 (hosted credits/billing/shop),
-   which need their own Fable plan doc before any build, per the roadmap
-   (`docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md`).
-2. The three minor round-19 items in section 3 can ride along with any worktree.
+1. T21.3-T21.7 (hosted tier: accounts + credit ledger, Stripe billing + shop,
+   metering, licensing/packaging, end-to-end verification). These open with their
+   own Fable plan doc BEFORE any build, per the roadmap
+   (`docs/plans/2026-08-01-001-feat-capcut-parity-roadmap.md` section 10, incl. the
+   T21.5 pricing numbers and the section-11 pricing knobs that are Dan's call).
+2. G6-verify T21.2 once Dan has keys/a moment: one live assistant turn on
+   claude-code mode, one Director pass per provider he cares about.
+3. The three minor round-19 items in section 3 can ride along with any worktree.
 
 ## 5. Dan-owed (only Dan can do these)
 
@@ -173,9 +195,10 @@ re-verification section). Kept here as the record of what was wrong:
    Note the Windows build needs `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu` (no MSVC
    linker on this machine), and `cargo test` cannot link at all here - Rust tests run via
    `wasm-pack test --node rust/crates/effects`.
-2. **Anthropic key** for the live prompt-to-edit assistant: either a device key in
-   Settings > AI, or `ANTHROPIC_API_KEY` in `apps/web/.env.local` plus a restart.
-   (Claude Code auth mode does not cover that route yet; it is tracked as T21.2.)
+2. **Live assistant run (was: Anthropic key)** - T21.2 unblocked this: the assistant
+   route now runs on claude-code mode with no key. An Anthropic device key is still
+   the quality-reference path, and openai/xai-grok/groq-llm keys are only needed if
+   he wants to try those providers (they carry the "community quality" label).
 3. **Freesound API key** (free, 2 minutes, freesound.org/apiv2/apply) to light up the
    Sound effects sub-tab. Everything else in the Sounds tab works without it.
 4. **Crop keyframes decision**: ship crop non-keyframable (recommended, CapCut parity
