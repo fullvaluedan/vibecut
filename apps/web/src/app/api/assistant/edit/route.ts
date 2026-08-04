@@ -13,12 +13,17 @@
  * the old route untouched.
  *
  * PROVIDER. Auth resolves through the same `resolveAiAuth` header plumbing every
- * other AI route uses. Tool use needs the native tools API, which the claude-code
- * CLI path and the OpenAI-compatible custom path do not expose in the shape this
- * turn contract needs, so this route requires an Anthropic API key (device-local
- * header, or a server-side `ANTHROPIC_API_KEY` for a hosted deployment) and says
- * so plainly otherwise. Round 21's T21.2 provider abstraction is where the other
- * backends get wired in; doing it here would be guesswork ahead of that plan.
+ * other AI route uses. Anthropic (device-local api-key header, or a server-side
+ * `ANTHROPIC_API_KEY` for a hosted deployment when the user is on claude-code /
+ * custom) runs the turn on the native tools API below - it is the default and
+ * the quality-reference config. Every other provider tier has `tools: false` in
+ * the T21.2 capability model, so those modes (claude-code without a server key,
+ * custom, openai, xai-grok, groq-llm) run the turn through
+ * `features/assistant/fallback-turn.ts`: the same system prompt + tool catalog +
+ * windowed history flattened into one prompt-instructed JSON ask, parsed back
+ * into the same `AssistantTurnResponse`. The client-side execution loop
+ * (turn-service.ts) validates and applies either way, so the safety spine is
+ * provider-independent.
  *
  * Non-streaming by design for v1 (the roadmap allows it). The response is one
  * `AssistantTurnResponse`; T17.2 validates its tool calls and executes them.
@@ -32,6 +37,7 @@ import {
 	buildAssistantEditSystemPrompt,
 } from "@/features/assistant/prompt";
 import { toAnthropicTools } from "@/features/assistant/tools";
+import { runAssistantFallbackTurn } from "@/features/assistant/fallback-turn";
 import type { AssistantContext } from "@/features/assistant/context";
 import type {
 	AssistantMessage,
@@ -214,17 +220,17 @@ export async function POST(req: NextRequest) {
 			{ status: 401 },
 		);
 	}
-	const apiKey =
-		auth.mode === "api-key" ? auth.apiKey : process.env.ANTHROPIC_API_KEY || "";
-	if (!apiKey) {
-		return NextResponse.json(
-			{
-				error:
-					"Prompt-to-edit needs an Anthropic API key. Add one in Settings → AI (the editing tools use Anthropic's tool calling, which the other connection modes do not offer yet).",
-			},
-			{ status: 400 },
-		);
-	}
+	// Native Anthropic tools path: a device-local api-key always uses it; the
+	// claude-code / custom modes fall back to a server-side ANTHROPIC_API_KEY
+	// (hosted mode). The named T21.2 providers are explicit user picks, so they
+	// never get silently rerouted to a server Anthropic key - they run the
+	// prompt-instructed JSON fallback on their own provider instead.
+	const anthropicKey =
+		auth.mode === "api-key"
+			? auth.apiKey
+			: auth.mode === "claude-code" || auth.mode === "custom"
+				? process.env.ANTHROPIC_API_KEY || ""
+				: "";
 
 	const body = await req.json().catch(() => null);
 	const context = body?.context as AssistantContext | undefined;
@@ -247,12 +253,49 @@ export async function POST(req: NextRequest) {
 			? body.model.trim()
 			: ASSISTANT_EDIT_MODEL;
 
+	if (!anthropicKey) {
+		// T21.2 fallback turn: claude-code (the rider's unlock), custom, and the
+		// named OpenAI-compatible providers. Tool calls arrive as JSON and the
+		// client-side loop validates/executes them exactly like the native path.
+		if (auth.mode === "api-key") {
+			// Unreachable today (resolveAiAuth nulls a key-less api-key), kept as a
+			// guard so a future caller change fails closed, not open.
+			return NextResponse.json(
+				{
+					error:
+						"Prompt-to-edit needs an Anthropic API key. Add one in Settings → AI.",
+				},
+				{ status: 400 },
+			);
+		}
+		try {
+			const response = await runAssistantFallbackTurn({
+				auth,
+				system: buildAssistantEditSystemPrompt({ context }),
+				messages,
+				toolResults,
+				tools: toAnthropicTools(),
+				...(typeof body?.model === "string" && body.model.trim()
+					? { model: model }
+					: {}),
+			});
+			return NextResponse.json(response);
+		} catch (e) {
+			return NextResponse.json(
+				{
+					error: `Assistant edit failed: ${e instanceof Error ? e.message : String(e)}`,
+				},
+				{ status: 500 },
+			);
+		}
+	}
+
 	try {
 		const res = await fetch(ANTHROPIC_URL, {
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
-				"x-api-key": apiKey,
+				"x-api-key": anthropicKey,
 				"anthropic-version": ANTHROPIC_VERSION,
 			},
 			body: JSON.stringify({

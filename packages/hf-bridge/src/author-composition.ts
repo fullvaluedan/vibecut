@@ -17,7 +17,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { generatedRoot, resolveClaude } from "./renderer";
-import { customChatUrl } from "./author";
+import { chatTextCompletion } from "./llm-client";
 import type { ClaudeAuth } from "./types";
 
 const FORMAT_RULES = `You are authoring a HyperFrames video composition (HTML that renders to video). Output ONLY the raw contents of index.html — start with <!doctype html> and end with </html>. NO markdown code fences, NO explanation, NO preamble.
@@ -80,8 +80,10 @@ export async function authorComposition({
 			signal,
 		});
 	} else {
-		// api-key / custom hit a raw chat API and can't load Claude Code skills,
-		// so they fall back to the inline format rules + returned-HTML capture.
+		// Every non-CLI mode hits a raw chat API and can't load Claude Code
+		// skills, so they fall back to the inline format rules + returned-HTML
+		// capture. One shared transport (llm-client) covers api-key and every
+		// OpenAI-compatible provider (custom, openai, xai-grok, groq-llm).
 		const rules = FORMAT_RULES.replace(/__W__/g, String(width))
 			.replace(/__H__/g, String(height))
 			.replace(
@@ -89,12 +91,17 @@ export async function authorComposition({
 				String(Math.max(1, Math.round(durationSec * 10) / 10)),
 			);
 		const fullPrompt = `${rules}\n\nBRIEF:\n${prompt}`;
-		const res =
-			auth.mode === "api-key"
-				? await authorViaApi(fullPrompt, auth.apiKey, signal)
-				: await authorViaCustom(fullPrompt, auth, signal);
+		// Authored comps can be a dense, multi-graphic HTML document - give the
+		// call headroom so a rich composition isn't truncated.
+		const res = await chatTextCompletion({
+			prompt: fullPrompt,
+			auth,
+			maxTokens: 16000,
+			temperature: 0.7,
+			signal,
+		});
 		usage = res.usage;
-		const cleaned = stripToHtml(res.html);
+		const cleaned = stripToHtml(res.text);
 		if (!/^\s*<(!doctype|html)/i.test(cleaned)) {
 			throw new Error("The author did not return an HTML document.");
 		}
@@ -309,90 +316,4 @@ function authorViaSkill({
 		child.stdin.write(buildSkillBrief({ width, height, durationSec, brief }));
 		child.stdin.end();
 	});
-}
-
-async function authorViaApi(
-	prompt: string,
-	apiKey: string,
-	signal?: AbortSignal,
-): Promise<{
-	html: string;
-	usage: { inputTokens: number; outputTokens: number } | null;
-}> {
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			"x-api-key": apiKey,
-			"anthropic-version": "2023-06-01",
-		},
-		body: JSON.stringify({
-			model: "claude-opus-4-8",
-			// Authored comps can be a dense, multi-graphic HTML document — give
-			// the api-key path headroom so a rich composition isn't truncated.
-			max_tokens: 16000,
-			messages: [{ role: "user", content: prompt }],
-		}),
-		signal,
-	});
-	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Anthropic API error ${res.status}: ${body.slice(0, 500)}`);
-	}
-	const data = (await res.json()) as {
-		content: { type: string; text?: string }[];
-		usage?: { input_tokens?: number; output_tokens?: number };
-	};
-	const html = data.content.find((b) => b.type === "text")?.text ?? "";
-	const usage = data.usage
-		? {
-				inputTokens: data.usage.input_tokens ?? 0,
-				outputTokens: data.usage.output_tokens ?? 0,
-			}
-		: null;
-	return { html, usage };
-}
-
-/**
- * Author via a user-supplied OpenAI-compatible endpoint (Ollama, LM Studio, a
- * self-hosted Nous-Hermes server, etc.). No response_format here — we want the
- * raw HTML document back, not JSON. The signal aborts the outbound request.
- */
-async function authorViaCustom(
-	prompt: string,
-	conn: { baseUrl: string; apiKey?: string; model: string },
-	signal?: AbortSignal,
-): Promise<{
-	html: string;
-	usage: { inputTokens: number; outputTokens: number } | null;
-}> {
-	const res = await fetch(customChatUrl(conn.baseUrl), {
-		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			...(conn.apiKey ? { authorization: `Bearer ${conn.apiKey}` } : {}),
-		},
-		body: JSON.stringify({
-			model: conn.model,
-			messages: [{ role: "user", content: prompt }],
-			temperature: 0.7,
-		}),
-		signal,
-	});
-	if (!res.ok) {
-		const body = await res.text();
-		throw new Error(`Custom model error ${res.status}: ${body.slice(0, 500)}`);
-	}
-	const data = (await res.json()) as {
-		choices?: { message?: { content?: string } }[];
-		usage?: { prompt_tokens?: number; completion_tokens?: number };
-	};
-	const html = data.choices?.[0]?.message?.content ?? "";
-	const usage = data.usage
-		? {
-				inputTokens: data.usage.prompt_tokens ?? 0,
-				outputTokens: data.usage.completion_tokens ?? 0,
-			}
-		: null;
-	return { html, usage };
 }

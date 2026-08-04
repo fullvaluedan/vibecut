@@ -178,7 +178,7 @@ export async function regenerateAuthoredClip({
 
 	const res = await fetch("/api/hyperframes/author", {
 		method: "POST",
-		headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+		headers: { "content-type": "application/json", ...buildAiAuthHeaders("hyperframes") },
 		body: JSON.stringify({ prompt: brief, fps, width, height, durationSec }),
 	});
 	if (!res.ok) {

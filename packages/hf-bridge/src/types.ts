@@ -57,7 +57,17 @@ export type ClaudeAuth =
 	 * any version prefix the server needs (e.g. ".../v1"); apiKey is optional
 	 * (many local servers need none).
 	 */
-	| { mode: "custom"; baseUrl: string; apiKey?: string; model: string };
+	| { mode: "custom"; baseUrl: string; apiKey?: string; model: string }
+	/**
+	 * T21.2 named OpenAI-compatible providers. Same chat-completions transport
+	 * as `custom`, but with a fixed base URL and default model from
+	 * `OPENAI_COMPATIBLE_PROVIDERS` (llm-client.ts); `model` overrides the
+	 * default when set. All three are "community quality" until they pass the
+	 * four-fixture Director eval (Anthropic is the quality reference).
+	 */
+	| { mode: "openai"; apiKey: string; model?: string }
+	| { mode: "xai-grok"; apiKey: string; model?: string }
+	| { mode: "groq-llm"; apiKey: string; model?: string };
 
 export interface RenderJob {
 	templateId: string;

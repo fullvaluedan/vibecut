@@ -50,7 +50,7 @@ export async function detectSpeakerZone({
 
 		const res = await fetch("/api/hyperframes/speaker-zone", {
 			method: "POST",
-			headers: { "content-type": "application/json", ...buildAiAuthHeaders() },
+			headers: { "content-type": "application/json", ...buildAiAuthHeaders("hyperframes") },
 			body: JSON.stringify({ frames: wire }),
 			signal,
 		});

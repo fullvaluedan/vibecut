@@ -139,6 +139,18 @@ export {
 	type AuthoredComposition,
 } from "./author-composition";
 export {
+	LLM_CAPABILITIES,
+	OPENAI_COMPATIBLE_PROVIDERS,
+	isAnthropicBacked,
+	resolveOpenAiConnection,
+	planJsonTransport,
+	chatTextCompletion,
+	type LlmAuthMode,
+	type LlmCapabilities,
+	type NamedOpenAiProviderMode,
+	type OpenAiCompatibleProviderConfig,
+} from "./llm-client";
+export {
 	bakeRegistryItem,
 	bakeRegistryBlock,
 	bakedRoot,

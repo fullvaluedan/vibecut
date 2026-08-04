@@ -22,6 +22,15 @@ beforeEach(() => {
 		customBaseUrl: "",
 		customApiKey: "",
 		customModel: "",
+		openaiApiKey: "",
+		openaiModel: "",
+		xaiGrokApiKey: "",
+		xaiGrokModel: "",
+		groqLlmApiKey: "",
+		groqLlmModel: "",
+		directorProvider: "default",
+		assistantProvider: "default",
+		hyperframesProvider: "default",
 	});
 });
 
@@ -72,6 +81,77 @@ describe("buildAiAuthHeaders — client → server contract", () => {
 		const h = buildAiAuthHeaders();
 		expect(h["x-framecut-custom-base-url"]).toBe("http://localhost:1234/v1");
 		expect(h["x-framecut-custom-key"]).toBeUndefined();
+	});
+
+	test("named providers: key + optional model headers (T21.2)", () => {
+		useAiSettingsStore.setState({ authMode: "openai", openaiApiKey: "sk-o" });
+		let h = buildAiAuthHeaders();
+		expect(h["x-framecut-auth-mode"]).toBe("openai");
+		expect(h["x-framecut-openai-key"]).toBe("sk-o");
+		expect(h["x-framecut-openai-model"]).toBeUndefined();
+
+		useAiSettingsStore.setState({
+			authMode: "xai-grok",
+			xaiGrokApiKey: "xai-k",
+			xaiGrokModel: "grok-mini",
+		});
+		h = buildAiAuthHeaders();
+		expect(h["x-framecut-xai-grok-key"]).toBe("xai-k");
+		expect(h["x-framecut-xai-grok-model"]).toBe("grok-mini");
+
+		useAiSettingsStore.setState({
+			authMode: "groq-llm",
+			groqLlmApiKey: "gsk",
+		});
+		h = buildAiAuthHeaders();
+		expect(h["x-framecut-groq-llm-key"]).toBe("gsk");
+		// A named provider never leaks another mode's headers.
+		expect(h["x-framecut-anthropic-key"]).toBeUndefined();
+		expect(h["x-framecut-custom-base-url"]).toBeUndefined();
+	});
+});
+
+describe("buildAiAuthHeaders - per-feature provider picks (T21.2)", () => {
+	test("a pinned feature uses its own provider; unpinned features follow the global mode", () => {
+		useAiSettingsStore.setState({
+			authMode: "claude-code",
+			assistantProvider: "openai",
+			openaiApiKey: "sk-o",
+		});
+		expect(buildAiAuthHeaders("assistant")["x-framecut-auth-mode"]).toBe(
+			"openai",
+		);
+		expect(buildAiAuthHeaders("assistant")["x-framecut-openai-key"]).toBe(
+			"sk-o",
+		);
+		// Director and HyperFrames stay on the global connection.
+		expect(buildAiAuthHeaders("director")["x-framecut-auth-mode"]).toBe(
+			"claude-code",
+		);
+		expect(buildAiAuthHeaders("hyperframes")["x-framecut-auth-mode"]).toBe(
+			"claude-code",
+		);
+		// No feature argument = the global mode (pre-T21.2 behavior).
+		expect(buildAiAuthHeaders()["x-framecut-auth-mode"]).toBe("claude-code");
+	});
+
+	test('"default" picks resolve to the global mode byte-identically', () => {
+		useAiSettingsStore.setState({
+			authMode: "api-key",
+			anthropicApiKey: "sk-ant-1",
+			directorProvider: "default",
+		});
+		expect(buildAiAuthHeaders("director")).toEqual(buildAiAuthHeaders());
+	});
+
+	test("a pinned claude-code feature emits just the mode", () => {
+		useAiSettingsStore.setState({
+			authMode: "openai",
+			openaiApiKey: "sk-o",
+			hyperframesProvider: "claude-code",
+		});
+		const h = buildAiAuthHeaders("hyperframes");
+		expect(h).toEqual({ "x-framecut-auth-mode": "claude-code" });
 	});
 });
 
@@ -141,5 +221,68 @@ describe("resolveAiAuth — server header → auth", () => {
 				}),
 			),
 		).toMatchObject({ mode: "custom", apiKey: "k" });
+	});
+
+	test("named providers require their key; the model is optional (T21.2)", () => {
+		for (const mode of ["openai", "xai-grok", "groq-llm"] as const) {
+			expect(
+				resolveAiAuth(req({ "x-framecut-auth-mode": mode })),
+			).toBeNull();
+			expect(
+				resolveAiAuth(
+					req({
+						"x-framecut-auth-mode": mode,
+						[`x-framecut-${mode}-key`]: "k",
+					}),
+				),
+			).toEqual({ mode, apiKey: "k", model: undefined });
+			expect(
+				resolveAiAuth(
+					req({
+						"x-framecut-auth-mode": mode,
+						[`x-framecut-${mode}-key`]: "k",
+						[`x-framecut-${mode}-model`]: "m1",
+					}),
+				),
+			).toEqual({ mode, apiKey: "k", model: "m1" });
+		}
+	});
+
+	test("header round-trip: buildAiAuthHeaders -> resolveAiAuth for every mode", () => {
+		useAiSettingsStore.setState({
+			anthropicApiKey: "sk-ant-1",
+			customBaseUrl: "http://localhost:11434/v1",
+			customModel: "hermes-3",
+			openaiApiKey: "sk-o",
+			openaiModel: "gpt-x",
+			xaiGrokApiKey: "xai-k",
+			groqLlmApiKey: "gsk",
+		});
+		const modes = [
+			"claude-code",
+			"api-key",
+			"custom",
+			"openai",
+			"xai-grok",
+			"groq-llm",
+		] as const;
+		for (const mode of modes) {
+			useAiSettingsStore.setState({ authMode: mode });
+			const auth = resolveAiAuth(req(buildAiAuthHeaders()));
+			expect(auth?.mode).toBe(mode);
+		}
+		// Spot-check the full resolved shapes for the new providers.
+		useAiSettingsStore.setState({ authMode: "openai" });
+		expect(resolveAiAuth(req(buildAiAuthHeaders()))).toEqual({
+			mode: "openai",
+			apiKey: "sk-o",
+			model: "gpt-x",
+		});
+		useAiSettingsStore.setState({ authMode: "groq-llm" });
+		expect(resolveAiAuth(req(buildAiAuthHeaders()))).toEqual({
+			mode: "groq-llm",
+			apiKey: "gsk",
+			model: undefined,
+		});
 	});
 });

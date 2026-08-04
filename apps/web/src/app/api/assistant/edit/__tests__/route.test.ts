@@ -11,6 +11,57 @@ mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
 }));
 
+// T21.2: the fallback turn (claude-code / custom / named providers) dispatches
+// through hf-bridge's planJson via a lazy import - stub the bridge the same
+// cooperative way the Director route tests do (the planner superset keeps
+// sibling route tests' imports satisfied whichever mock wins).
+let planJsonImpl: (arg: {
+	prompt: string;
+	auth: unknown;
+	schema: object;
+}) => Promise<{ raw: unknown; usage: unknown }> = async () => ({
+	raw: { text: "fallback ok", toolCalls: [] },
+	usage: { inputTokens: 5, outputTokens: 2 },
+});
+let lastPlanJsonArg: { prompt: string; auth: unknown } | null = null;
+
+mock.module("@framecut/hf-bridge", () => ({
+	planJson: (arg: { prompt: string; auth: unknown; schema: object }) => {
+		lastPlanJsonArg = arg;
+		return planJsonImpl(arg);
+	},
+	OPENAI_COMPATIBLE_PROVIDERS: {
+		openai: {
+			baseUrl: "https://api.openai.com/v1",
+			defaultModel: "gpt-test",
+			displayName: "OpenAI",
+		},
+		"xai-grok": {
+			baseUrl: "https://api.x.ai/v1",
+			defaultModel: "grok-test",
+			displayName: "xAI Grok",
+		},
+		"groq-llm": {
+			baseUrl: "https://api.groq.com/openai/v1",
+			defaultModel: "llama-test",
+			displayName: "Groq (Llama)",
+		},
+	},
+	// Inert here, present so the Director route tests' process-global
+	// mock.module doesn't leave their planner imports unsatisfied.
+	planDirector: async () => ({ plan: { operations: [] }, usage: null }),
+	planDirectorVision: async () => ({
+		plan: { operations: [] },
+		usage: null,
+		degraded: false,
+	}),
+	planRedundancy: async () => ({ plan: { groups: [] }, usage: null }),
+	planContext: async () => ({ plan: { topic: "", flags: [] }, usage: null }),
+	planRetake: async () => ({ plan: { cuts: [] }, usage: null }),
+	planStructural: async () => ({ plan: { drops: [] }, usage: null }),
+	planVerify: async () => ({ plan: { verdicts: [] }, usage: null }),
+}));
+
 const { POST } = await import("../route");
 
 const realFetch = globalThis.fetch;
@@ -48,6 +99,11 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 	captured = null;
 	authImpl = () => ({ mode: "api-key", apiKey: "test-key" });
+	planJsonImpl = async () => ({
+		raw: { text: "fallback ok", toolCalls: [] },
+		usage: { inputTokens: 5, outputTokens: 2 },
+	});
+	lastPlanJsonArg = null;
 });
 
 const context = {
@@ -105,14 +161,113 @@ describe("/api/assistant/edit", () => {
 		expect(called).toBe(false);
 	});
 
-	test("400 when the connection is not an Anthropic key", async () => {
+	test("claude-code without a server key runs the JSON fallback turn (T21.2 rider)", async () => {
 		authImpl = () => ({ mode: "claude-code" });
 		const previous = process.env.ANTHROPIC_API_KEY;
 		delete process.env.ANTHROPIC_API_KEY;
-		const res = await POST(post({ context, messages: [{ role: "user", content: "hi" }] }));
-		expect(res.status).toBe(400);
-		expect((await res.json()).error).toContain("Anthropic API key");
+		let nativeCalled = false;
+		globalThis.fetch = (async () => {
+			nativeCalled = true;
+			return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
+		}) as unknown as typeof fetch;
+		planJsonImpl = async () => ({
+			raw: {
+				text: "Removing the intro.",
+				toolCalls: [
+					{ id: "call-1", name: "delete_clip", args: { clipId: "clip-intro" } },
+				],
+			},
+			usage: { inputTokens: 9, outputTokens: 4 },
+		});
+		const res = await POST(
+			post({ context, messages: [{ role: "user", content: "delete the intro" }] }),
+		);
+		expect(res.status).toBe(200);
+		const json = await res.json();
+		expect(json.toolCalls).toEqual([
+			{ id: "call-1", name: "delete_clip", args: { clipId: "clip-intro" } },
+		]);
+		expect(json.usage).toEqual({ inputTokens: 9, outputTokens: 4 });
+		expect(json.model).toBe("claude-code");
+		expect(json.promptVersion).toBe(1);
+		// The fallback went through planJson with the claude-code auth, never the
+		// native Anthropic fetch.
+		expect(nativeCalled).toBe(false);
+		expect(lastPlanJsonArg?.auth).toEqual({ mode: "claude-code" });
+		expect(lastPlanJsonArg?.prompt).toContain("edit operator for VibeCut");
+		expect(lastPlanJsonArg?.prompt).toContain("TOOL CATALOG");
 		if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
+	});
+
+	test("claude-code with a server ANTHROPIC_API_KEY still uses the native tools path", async () => {
+		authImpl = () => ({ mode: "claude-code" });
+		const previous = process.env.ANTHROPIC_API_KEY;
+		process.env.ANTHROPIC_API_KEY = "server-key";
+		stubFetch({ json: { content: [{ type: "text", text: "ok" }] } });
+		const res = await POST(
+			post({ context, messages: [{ role: "user", content: "hi" }] }),
+		);
+		expect(res.status).toBe(200);
+		expect(captured?.url).toBe("https://api.anthropic.com/v1/messages");
+		expect(captured?.headers["x-api-key"]).toBe("server-key");
+		expect(lastPlanJsonArg).toBeNull();
+		if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
+		else delete process.env.ANTHROPIC_API_KEY;
+	});
+
+	test("a named provider pick runs the fallback on its own provider, never the server key", async () => {
+		authImpl = () => ({ mode: "openai", apiKey: "sk-o", model: undefined });
+		const previous = process.env.ANTHROPIC_API_KEY;
+		process.env.ANTHROPIC_API_KEY = "server-key";
+		let nativeCalled = false;
+		globalThis.fetch = (async () => {
+			nativeCalled = true;
+			return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
+		}) as unknown as typeof fetch;
+		const res = await POST(
+			post({ context, messages: [{ role: "user", content: "hi" }] }),
+		);
+		expect(res.status).toBe(200);
+		expect(nativeCalled).toBe(false);
+		expect(lastPlanJsonArg?.auth).toEqual({
+			mode: "openai",
+			apiKey: "sk-o",
+			model: undefined,
+		});
+		// The provider's default model labels the response.
+		expect((await res.json()).model).toBe("gpt-test");
+		if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
+		else delete process.env.ANTHROPIC_API_KEY;
+	});
+
+	test("custom mode without a server key runs the fallback on the custom endpoint", async () => {
+		authImpl = () => ({
+			mode: "custom",
+			baseUrl: "http://localhost:11434/v1",
+			model: "hermes-3",
+			apiKey: undefined,
+		});
+		const previous = process.env.ANTHROPIC_API_KEY;
+		delete process.env.ANTHROPIC_API_KEY;
+		const res = await POST(
+			post({ context, messages: [{ role: "user", content: "hi" }] }),
+		);
+		expect(res.status).toBe(200);
+		expect((lastPlanJsonArg?.auth as { mode: string }).mode).toBe("custom");
+		expect((await res.json()).model).toBe("hermes-3");
+		if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
+	});
+
+	test("a fallback failure surfaces as a 500 with the planner's message", async () => {
+		authImpl = () => ({ mode: "groq-llm", apiKey: "gsk", model: undefined });
+		planJsonImpl = async () => {
+			throw new Error("Custom model error 429: rate limited");
+		};
+		const res = await POST(
+			post({ context, messages: [{ role: "user", content: "hi" }] }),
+		);
+		expect(res.status).toBe(500);
+		expect((await res.json()).error).toContain("rate limited");
 	});
 
 	test("400 on a missing or malformed context", async () => {

@@ -22,7 +22,14 @@
 
 import type { AiAuthMode } from "@/features/ai-generate/store";
 
-export type ProviderId = "anthropic" | "groq";
+/**
+ * T21.2: the onboarding cards track two TRANSCRIPTION-capable providers
+ * (Anthropic for chat, Groq for transcription) plus the named chat-LLM
+ * providers added by the provider abstraction. `groq` stays the
+ * transcription provider (Whisper); `groq-llm` is Groq's chat API - the
+ * onboarding copy must not confuse the two (T21.1 naming hygiene).
+ */
+export type ProviderId = "anthropic" | "groq" | "openai" | "xai-grok" | "groq-llm";
 export type ProviderKeyState = "device-key" | "server-key" | "claude-code" | "missing";
 
 export interface ProviderStatus {
@@ -45,6 +52,24 @@ export function deriveAnthropicStatus({
 		return { provider: "anthropic", state: "device-key" };
 	}
 	return { provider: "anthropic", state: "missing" };
+}
+
+/**
+ * A named OpenAI-compatible chat provider (T21.2: openai / xai-grok /
+ * groq-llm). Device-key only: there is no server-side probe for these, and
+ * no CLI subscription path. All three are "community quality" until they
+ * pass the four-fixture Director eval (Anthropic is the reference).
+ */
+export function deriveChatProviderStatus({
+	provider,
+	apiKey,
+}: {
+	provider: "openai" | "xai-grok" | "groq-llm";
+	apiKey: string;
+}): ProviderStatus {
+	return apiKey.trim().length > 0
+		? { provider, state: "device-key" }
+		: { provider, state: "missing" };
 }
 
 /**
