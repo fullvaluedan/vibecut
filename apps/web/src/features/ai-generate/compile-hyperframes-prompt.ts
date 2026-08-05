@@ -180,14 +180,21 @@ export function compileHyperframesPrompt(
 	const lines: string[] = [];
 
 	lines.push(
-		`Author a HyperFrames overlay GRAPHIC that recaps or visualizes the SPOKEN CONTENT of ONE video. It overlays that video's footage and is ABOUT what the speaker actually says in the TRANSCRIPT below — NOT about the video editor, this tool, or generic advice. If the transcript is about anagrams, the graphics are about anagrams; never invent a different topic (e.g. editing tips, product features).`,
+		`Author a HyperFrames GRAPHIC that recaps or visualizes the SPOKEN CONTENT of ONE video. It sits on that video (as full-screen screens or transparent overlays) and is ABOUT what the speaker actually says in the TRANSCRIPT below - NOT about the video editor, this tool, or generic advice. If the transcript is about anagrams, the graphics are about anagrams; never invent a different topic (e.g. editing tips, product features).`,
 	);
 	lines.push("");
 	lines.push(
-		`GOAL: author graphics that HELP THE VIEWER FOLLOW AND RECAP the content. Every graphic must carry INFORMATION the viewer cannot get from the audio alone — a structured summary of the points being made, a chart of data/comparison mentioned, or a diagram that explains a concept. A graphic that only labels what the speaker is already saying is worthless — do NOT make it. These overlay the footage on a NEW transparent track (no opaque full-frame fill unless a selected full-frame asset deliberately reframes the shot).`,
+		`GOAL: author graphics that HELP THE VIEWER FOLLOW AND RECAP the content. Every graphic must carry INFORMATION the viewer cannot get from the audio alone - a structured summary of the points being made, a chart of data/comparison mentioned, or a diagram that explains a concept. A graphic that only labels what the speaker is already saying is worthless - do NOT make it. Prefer FULL-SCREEN compositions that fill the frame (default Swiss-grid white) whenever the content supports an informational screen; use transparent overlay cards only for a name or a short quote, or when the footage must stay visible at that exact moment.`,
+	);
+	lines.push("");
+	lines.push(
+		`LAYOUT DEFAULT: SWISS GRID WHITE. Unless the active style profile, look, or user direction says otherwise, design full-screen screens in the Swiss / International Typographic Style: a WHITE background that fills the frame, black ink type, ONE red accent, a clean sans (Helvetica or Arial), and a visible GRID of cells and columns that the content sits in. Animate every screen - cells and type reveal with clean easing, and content moves in as the speaker says it. The video stays the subject: keep the speaker and footage visible where it matters, and use a full-screen screen only at moments it serves (a point being wrapped, data being shown, a chapter opening).`,
 	);
 	lines.push("");
 	lines.push(`WHAT TO BUILD — pick the form that genuinely helps THIS content:`);
+	lines.push(
+		`  - FULL-SCREEN RECAP / CHAPTER SCREEN: the PREFERRED form. When the speaker wraps a point or opens a chapter, build a full-frame Swiss-grid white screen: the point or chapter name in a bold grid cell, supporting details in adjacent cells, animated in as they are spoken, held until the topic moves on.`,
+	);
 	lines.push(
 		`  - RECAP / KEY-POINTS LIST: when the speaker makes several points on a topic, show a 3-5 item list summarizing them so the viewer can follow. Reveal items as each is discussed and keep the list on screen while the topic continues — a running recap, not a single line. Do NOT number the items (no "01/02/03") — the points stand on their own; separate them with a small accent dot, a thin rule, or whitespace.`,
 	);
@@ -265,7 +272,7 @@ export function compileHyperframesPrompt(
 		lines.push(renderSelectionGroup(selections, false));
 	} else {
 		lines.push(
-			`No specific assets were selected — use your own judgment to add tasteful, INFORMATIVE overlays (recap lists, data charts, explanatory cards) where the transcript warrants them.`,
+			`No specific assets were selected - use your own judgment to add tasteful, INFORMATIVE full-screen screens (recap lists, data charts, explanatory grids) where the transcript warrants them.`,
 		);
 	}
 
@@ -412,7 +419,7 @@ export function compileHyperframesPrompt(
 	lines.push("");
 	lines.push("REQUIREMENTS:");
 	lines.push(
-		"- Transparent background; these are overlays, not a full-frame scene (unless a selected full-frame asset is explicitly used to reframe the footage).",
+		"- Full-screen is the PREFERRED form: build full-frame screens on a solid background (default white, Swiss grid) whenever the content supports them. Transparent overlay cards are the exception - a name or short quote, or when the footage must stay visible.",
 	);
 	lines.push(
 		"- Time each graphic to the moment it supports and HOLD it long enough to read (a list or chart needs several seconds on screen). Build it from the REAL content of the transcript — the actual points, numbers, names — never invent data; copy numbers and names EXACTLY as spoken.",
@@ -421,7 +428,7 @@ export function compileHyperframesPrompt(
 		"- A recap list = 3-5 short items, not one. A chart = the real values plotted. An explanatory card = the actual comparison. If you cannot make a graphic that adds information beyond the spoken words, make NOTHING for that moment — silence beats a useless title.",
 	);
 	lines.push(
-		"- When overlay text needs contrast, place a solid color bar/box BEHIND the text only — never fill the whole frame.",
+		"- An overlay card (the exception) gets contrast from a solid bar/box BEHIND the text only. A full-screen composition fills the frame with its own background.",
 	);
 	lines.push(
 		"- Output a valid, lint-clean HyperFrames composition (index.html) with seekable animations.",

@@ -172,6 +172,19 @@ cancel verified at the service and through the browser UI (13/13 harness
 checks). Cancel stops between chunks; closing the dialog (Escape) lets the job
 finish in the background rather than killing it.
 
+2026-08-05 round 3 (UI): HyperFrames now defaults to a "Swiss Grid" white
+factory style (VIBE_STYLES[0], store default styleId "swiss"), and the author
+brief prefers FULL-SCREEN Swiss-grid white animated screens - transparent
+overlay cards are the exception (names/quotes) - with a new "Full-screen
+recap" showcase preset in the panel. Panel text trimmed (engine blurb, footer,
+profile empty-state). /get-started copy cut roughly in half and clarified
+(intro, tool explainers, provider cards, privacy). Gates: tsc clean, lint
+clean on the changed lines, 45 ai-generate tests pass incl. new full-screen +
+styles assertions, browser smoke of /get-started renders without errors. Note:
+`store.ts` / `hyperframes-panel.tsx` carry PRE-EXISTING lint debt under the
+newer custom rules (opencut/prefer-object-params etc.) that predates this
+round; left untouched.
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the

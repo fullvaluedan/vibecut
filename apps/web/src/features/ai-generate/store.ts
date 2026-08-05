@@ -280,7 +280,7 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 			backend: "local",
 			setBackend: (backend) => set({ backend }),
 
-			styleId: "ember",
+			styleId: "swiss",
 			setStyleId: (styleId) => set({ styleId, activeHfPresetId: null }),
 
 			disabledTemplateIds: [],

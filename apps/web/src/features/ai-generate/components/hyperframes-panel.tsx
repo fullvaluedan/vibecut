@@ -332,6 +332,14 @@ const SHOWCASE_PRESETS: {
 	direction: string;
 }[] = [
 	{
+		id: "full-screen-recap",
+		title: "Full-screen recap",
+		description: "Swiss-grid white screens for the key points.",
+		templateIds: ["kinetic-title"],
+		direction:
+			"Build FULL-SCREEN Swiss-grid white recap screens for the 3-6 KEY POINTS: each fills the frame with the point in a bold grid cell and the supporting details in adjacent cells, animated in as the speaker says them. Never floating cards. Use transparent overlays only for a speaker name or a verbatim quote.",
+	},
+	{
 		id: "key-points",
 		title: "Key points",
 		description: "A section break per key point, pills for the details.",
@@ -750,10 +758,9 @@ function CustomPresetsSection() {
 			</div>
 			{presets.length === 0 ? (
 				<p className="text-muted-foreground text-[10px] leading-snug">
-					Save the current templates, pinned picks, look, and direction as a
-					reusable profile, then edit its design (palette, fonts, motion,
-					density). The ACTIVE profile&apos;s design colors every generation;
-					picking a factory Look below deactivates it.
+					Save a profile to reuse the current templates, look, and direction,
+					then edit its design (palette, fonts, motion, density). The active
+					profile styles every generation.
 				</p>
 			) : (
 				<div className="flex flex-col gap-1">
@@ -895,10 +902,10 @@ function EngineSection() {
 			</div>
 			<p className="text-muted-foreground text-[10px] leading-snug">
 				{engine === "authored"
-					? "Default. Claude authors a custom composition from your checked assets, direction, and transcript, overlaid on your footage. Runs the HyperFrames skill; slower in-browser render."
+					? "Default: Claude authors custom graphics from your picks and transcript."
 					: engine === "native"
-						? "Fast: places editable motion-template elements instantly. Ignores your style and asset picks."
-						: "Renders the built-in templates with HyperFrames and burns them in at export. Ignores your style and asset picks."}
+						? "Fast: places editable motion-template elements instantly, ignores picks."
+						: "Renders built-in templates and burns them in at export, ignores picks."}
 			</p>
 		</div>
 	);
@@ -1237,12 +1244,7 @@ export function HyperframesPanel() {
 				</AdvancedSection>
 
 				<p className="text-muted-foreground pt-1 text-[0.65rem]">
-					Checked templates are the palette RUN HYPERFRAMES picks from today
-					(under Advanced).
-					<span className="text-foreground">Check</span> any style, block, or
-					component to add it to the RUN HYPERFRAMES prompt; the Authored engine
-					(default) authors them over your footage. Instant and Cinematic are
-					fast modes that ignore picks. Blocks can also be dropped with Add.
+					Checked items shape the RUN HYPERFRAMES prompt (under Advanced).
 					Claude usage on this device: ~{tokensUsedTotal.toLocaleString()}{" "}
 					tokens.
 				</p>

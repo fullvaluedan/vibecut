@@ -31,6 +31,7 @@ const FACTORY_PROFILE_FEEL: Record<
 	string,
 	{ motion: HfMotionStyle; density: HfDensity }
 > = {
+	swiss: { motion: "standard", density: "balanced" },
 	ember: { motion: "punchy", density: "balanced" },
 	electric: { motion: "standard", density: "balanced" },
 	acid: { motion: "punchy", density: "dense" },
@@ -40,6 +41,7 @@ const FACTORY_PROFILE_FEEL: Record<
 };
 
 export const VIBE_STYLES: VibeStyle[] = [
+	{ id: "swiss", name: "Swiss Grid", accent: "#E53935", fontFamily: "Arial", description: "Swiss / International Typographic Style - white grid, black ink, red accent, clean sans, animated grid reveals" },
 	{ id: "ember", name: "Ember", accent: "#FF6E20", fontFamily: "Arial", description: "Warm, punchy YouTube look — bold sans, orange accent" },
 	{ id: "electric", name: "Electric", accent: "#3B82F6", fontFamily: "Verdana", description: "Cool tech explainer — wide sans, electric blue" },
 	{ id: "acid", name: "Acid", accent: "#A3E635", fontFamily: "Impact", description: "Loud, high-energy — heavy display type, lime pop" },

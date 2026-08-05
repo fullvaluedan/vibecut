@@ -99,9 +99,9 @@ function IntroSection() {
 				How VibeCut works
 			</h1>
 			<p className="text-muted-foreground mx-auto max-w-xl text-sm md:text-base">
-				VibeCut cuts video with you, not instead of you. Import your
-				footage, let the AI tools do the first pass, then polish the
-				result and export. Everything below takes about two minutes.
+				VibeCut cuts video with you, not instead of you. Import footage,
+				let AI draft it, polish, export. About two minutes, keys stay on
+				your device.
 			</p>
 		</section>
 	);
@@ -166,19 +166,19 @@ const AI_TOOL_CONTENT: Record<
 		label: "AI Cut",
 		icon: ScissorIcon,
 		explainer:
-			"Point AI Cut at your imported clips and it drafts a full timeline for you. It listens to what is said, finds the strongest moments, and cuts out dead air and filler. You keep every choice: review the draft, undo any cut, or ask for changes in plain language.",
+			"AI Cut drafts a full timeline from your footage: it listens to what is said, finds the strongest moments, and cuts dead air and filler. Review everything before it lands.",
 	},
 	transcript: {
 		label: "Edit by transcript",
 		icon: Note01Icon,
 		explainer:
-			"Edit by transcript turns your footage into text. Delete a sentence in the transcript and the matching video is cut too, no scrubbing the timeline by hand. Great for interviews, podcasts, and talking-head videos where the words are the edit.",
+			"Turns your footage into text - delete a sentence and the matching video is cut too.",
 	},
 	captions: {
 		label: "Auto captions",
 		icon: ClosedCaptionIcon,
 		explainer:
-			"Auto captions transcribes your footage and drops in styled, word-by-word captions automatically. Turn them on, then tweak the look from the Captions panel if you want something different.",
+			"Drops styled, word-by-word captions onto your footage automatically.",
 	},
 };
 
@@ -286,22 +286,21 @@ function ConnectAiSection({
 			<div className="text-center">
 				<h2 className="text-lg font-medium">Connect your AI</h2>
 				<p className="text-muted-foreground mx-auto max-w-xl text-sm">
-					VibeCut uses two kinds of AI: one that plans edits (Anthropic),
-					and one that turns speech into text (Groq). Add your own keys
-					and everything below lights up.
+					Two AIs power the tools: Anthropic plans edits, Groq transcribes
+					speech. Add keys once in Settings.
 				</p>
 			</div>
 
 			<ProviderCard
 				title="Anthropic"
-				description="Powers AI Cut's Director and the upcoming Assistant. Plans your edits from what is said in your footage."
+				description="Powers AI Cut's Director and the Assistant."
 				status={anthropicStatus}
 				connectedCopy={{
 					"claude-code":
-						"Connected. Using your Claude subscription on this device (the Claude Code app), no key needed.",
+						"Connected. Using your Claude subscription on this device (Claude Code), no key needed.",
 					"device-key": "Connected. Using the Anthropic API key saved on this device.",
 				}}
-				missingCopy="Not connected yet. AI Cut needs an Anthropic key (or a Claude Code login) to plan cuts."
+				missingCopy="Not connected. AI Cut needs an Anthropic key or a Claude Code login."
 				getKeyUrl="https://console.anthropic.com"
 				getKeyLabel="console.anthropic.com"
 				hasProjects={hasProjects}
@@ -310,14 +309,14 @@ function ConnectAiSection({
 
 			<ProviderCard
 				title="Groq"
-				description="Transcribes your footage to text, fast, for AI Cut, Edit by transcript, and Auto captions. Optional but recommended: transcription in your browser always works without it, just slower."
+				description="Transcribes your footage to text for AI Cut, Edit by transcript, and Auto captions."
 				status={groqStatus}
 				connectedCopy={{
 					"device-key": "Connected. Using the Groq key saved on this device.",
 					"server-key":
 						"Connected. This VibeCut deployment already has a shared Groq key, cloud transcription just works, no key needed from you.",
 				}}
-				missingCopy="No Groq key yet. Transcription still works in your browser, just slower and less accurate. Adding a key speeds it up."
+				missingCopy="No Groq key yet - transcription still works in your browser, just slower."
 				getKeyUrl="https://console.groq.com"
 				getKeyLabel="console.groq.com"
 				hasProjects={hasProjects}
@@ -408,11 +407,8 @@ function PrivacyNote() {
 			<HugeiconsIcon icon={ShieldKeyIcon} className="text-primary size-6" />
 			<h2 className="text-sm font-medium">Bring your own keys, they stay on this device</h2>
 			<p className="text-muted-foreground max-w-lg text-sm">
-				Your Anthropic and Groq keys are saved in this browser's local
-				storage. They are never written into your project files, never
-				uploaded anywhere. If you set a key on VibeCut's own server
-				instead (a shared deployment key), the same rule applies to
-				everyone using it: your keys stay yours.
+				Your Anthropic and Groq keys stay in this browser&apos;s local storage -
+				never in project files, never uploaded anywhere.
 			</p>
 		</section>
 	);

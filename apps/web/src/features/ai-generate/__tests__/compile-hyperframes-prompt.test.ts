@@ -545,3 +545,30 @@ describe("compileHyperframesPrompt - design profile", () => {
 		expect(out).not.toContain("supporting colors");
 	});
 });
+
+describe("compileHyperframesPrompt - full-screen Swiss default", () => {
+	test("the default direction prefers full-screen Swiss-grid white screens", () => {
+		const out = compileHyperframesPrompt(baseInput());
+		expect(out).toContain("SWISS GRID WHITE");
+		expect(out).toContain("FULL-SCREEN RECAP / CHAPTER SCREEN");
+		expect(out).toContain("Full-screen is the PREFERRED form");
+	});
+
+	test("an explicit design profile still wins over the layout default", () => {
+		const out = compileHyperframesPrompt(
+			baseInput({
+				designProfile: {
+					name: "Verifier Loud",
+					spec: {
+						palette: { accent: "#FF0066", supporting: [] },
+						fonts: { display: "Anton", body: "Courier New" },
+						motion: "punchy",
+						density: "dense",
+					},
+				},
+			}),
+		);
+		expect(out).toContain('DESIGN PROFILE: "Verifier Loud"');
+		expect(out).toContain("accent #FF0066");
+	});
+});
