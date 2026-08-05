@@ -153,6 +153,15 @@ was exercised against a real 2.4s sample. The service runs with
 `services/audio-enhance/start.ps1` (CPU-only torch; models auto-download to
 `services/audio-enhance/clearvoice/checkpoints` on first use, gitignored).
 
+2026-08-05 follow-up: the transport is RAW WAV bytes (not multipart - Starlette
+caps multipart parts at 1 MB) with a 256 MB route cap (~2h13m of 16 kHz audio,
+`CLEARVOICE_MAX_AUDIO_BYTES` to override), chunked inference in the service
+(`CLEARVOICE_CHUNK_SECONDS`, default 60) so long files stay bounded in memory,
+and an undici long-job dispatcher on the route (Node's default 5-minute
+response-header timeout aborted longer jobs with 503). Measured throughput on
+this CPU: ~4x realtime (3 min of audio = 12 min of compute), so an hour of
+footage takes roughly 4 hours and the browser tab must stay open for the job.
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the

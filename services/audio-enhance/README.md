@@ -30,10 +30,23 @@ models the UI uses; first call is slow, later calls are warm).
 ## API
 
 - `GET /health` -> `{"status":"ok"}`
-- `POST /enhance` (multipart: `audio` as a WAV file, `task` as a string)
+- `POST /enhance?task=<task>` with the RAW WAV bytes as the request body
+  (`Content-Type: audio/wav`). Raw bytes are used instead of multipart because
+  Starlette's multipart parser caps each part at 1 MB, which would reject
+  anything longer than ~30 seconds of 16 kHz audio; the web route owns the size
+  limit instead (`CLEARVOICE_MAX_AUDIO_BYTES`, default 256 MB, enough for about
+  2 hours of footage at 16 kHz).
   - `denoise` -> one enhanced WAV (FRCRN_SE_16K)
   - `super_resolution` -> one upscaled WAV (MossFormer2_SR_48K)
   - `separate` -> a ZIP of per-speaker WAV stems (MossFormer2_SS_16K)
+
+## Long footage
+
+Input is processed in chunks (`CLEARVOICE_CHUNK_SECONDS`, default 60) so a
+multi-hour file never becomes one giant tensor. CPU inference is the real
+bottleneck: expect roughly 4x realtime on this machine, i.e. about 4 hours of
+processing per hour of footage. The job runs to completion server-side; a GPU
+(or a smaller region of interest) makes it dramatically faster.
 
 ## Notes
 

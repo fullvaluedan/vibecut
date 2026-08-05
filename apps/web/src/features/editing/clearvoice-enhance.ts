@@ -346,13 +346,17 @@ export async function enhanceAudioTarget({
 	const baseName = (element.name || "audio").replace(/\.[^.]+$/, "");
 	const assetName = `${baseName} - ${label}`;
 
-	const form = new FormData();
-	form.set("task", task);
-	form.set("audio", new File([requestWav], "clip.wav", { type: "audio/wav" }));
-	const res = await fetch("/api/audio-enhance", {
-		method: "POST",
-		body: form,
-	});
+	// Raw WAV body + query task: the Python service's multipart parser caps
+	// parts at 1 MB, which would reject any clip longer than ~30 seconds, so
+	// the proxy and service use a raw-body transport instead.
+	const res = await fetch(
+		`/api/audio-enhance?task=${encodeURIComponent(task)}`,
+		{
+			method: "POST",
+			headers: { "content-type": "audio/wav" },
+			body: requestWav,
+		},
+	);
 	if (!res.ok) {
 		const body = await res.json().catch(() => null);
 		throw new Error(
