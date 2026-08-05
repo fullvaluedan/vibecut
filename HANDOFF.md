@@ -185,6 +185,14 @@ styles assertions, browser smoke of /get-started renders without errors. Note:
 newer custom rules (opencut/prefer-object-params etc.) that predates this
 round; left untouched.
 
+Round 3 clunk pass: DELETED the auto-opening 3-step Welcome wizard
+(`components/editor/onboarding.tsx`, mounted in the editor page) - it stacked
+over deep links and duplicated /get-started. The properties empty view now
+reads "Nothing selected / Click a clip on the timeline to edit its properties.
+AI CUT and Enhance audio live in the toolbar." Browser-verified on a fresh
+profile: `?open=ai-settings` opens Settings with no wizard stacking, no page
+errors.
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the

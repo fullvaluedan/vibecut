@@ -12,7 +12,6 @@ import { Timeline } from "@/timeline/components";
 import { PreviewPanel } from "@/preview/components";
 import { EditorHeader } from "@/components/editor/editor-header";
 import { EditorProvider } from "@/components/providers/editor-provider";
-import { Onboarding } from "@/components/editor/onboarding";
 import { MigrationDialog } from "@/project/components/migration-dialog";
 import { usePanelStore } from "@/editor/panel-store";
 import {
@@ -79,7 +78,8 @@ function useDeepLinkOpen() {
 
 export default function Editor() {
 	const params = useParams();
-	const projectId = params.project_id as string;
+	const rawProjectId = params.project_id;
+	const projectId = typeof rawProjectId === "string" ? rawProjectId : "";
 	useDeepLinkOpen();
 
 	return (
@@ -92,7 +92,6 @@ export default function Editor() {
 					<div className="min-h-0 min-w-0 flex-1">
 						<EditorLayout />
 					</div>
-					<Onboarding />
 					<MigrationDialog />
 					<ChangelogNotification />
 					<BackgroundTranscriber />
@@ -343,7 +342,6 @@ function MaximizablePanel({
 	}, [isMaximized, setMaximized]);
 
 	return (
-		// eslint-disable-next-line jsx-a11y/no-static-element-interactions -- panel activation surface (Premiere's active-panel model); ` is the keyboard route.
 		<div
 			className={
 				(isMaximized

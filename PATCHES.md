@@ -1088,3 +1088,19 @@ source-span extraction, WAV encode, service POST, one-batch swap),
 `env/web.ts` (optional env) and `.env.example`. Tests (ours): 8 cases in
 `features/editing/__tests__/clearvoice-enhance.test.ts` (span math, slicing,
 WAV header, sample clamping).
+
+## UI polish 2026-08-05
+
+Clunk pass after the ClearVoice + Swiss-grid rounds: the forced 3-step Welcome
+wizard is gone (it auto-opened on the first editor visit, stacked over deep
+links like `?open=ai-settings`, and duplicated /get-started), and the empty
+properties panel now says what to do instead of "It's empty here".
+
+| File | Change | Date | Revert notes |
+| --- | --- | --- | --- |
+| `apps/web/src/app/editor/[project_id]/page.tsx` | Removed the `<Onboarding />` mount (auto-opening wizard); also fixed two pre-existing lint errors in the file (unsafe `as string` on the route param, unused eslint-disable comment) | 2026-08-05 | Drop the mount line; param fix is a no-op behaviorally |
+| `apps/web/src/components/editor/onboarding.tsx` | DELETED (upstream OpenCut-era welcome wizard: 3 steps, opencut.app/roadmap link, Discord CTA). Onboarding now lives on /get-started; the editor opens straight to work | 2026-08-05 | Restore from opencut-classic if ever wanted; the `hasSeenOnboarding` localStorage key is now unused |
+
+FrameCut-owned, no rows needed: `apps/web/src/components/editor/panels/properties/empty-view.tsx`
+(copy only: "Nothing selected / Click a clip on the timeline to edit its
+properties. AI CUT and Enhance audio live in the toolbar.").
