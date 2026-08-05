@@ -81,7 +81,7 @@ export const CLEARVOICE_ENHANCE_OPTIONS: Record<
 	balance: {
 		label: "Balance voices",
 		description:
-			"Separates the speakers, evens out quiet and loud levels, mixes back",
+			"Raises quiet passages to match the loud speaker, never ducks",
 	},
 };
 

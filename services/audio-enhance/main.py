@@ -8,6 +8,9 @@ Tasks (clearvoice task, default model):
   denoise           -> speech_enhancement,     FRCRN_SE_16K
   super_resolution  -> speech_super_resolution, MossFormer2_SR_48K
   separate          -> speech_separation,      MossFormer2_SS_16K (zip of stems)
+  balance           -> automatic gain control: raise quiet passages (a low
+                       speaker) up to the loud speaker's level, never duck,
+                       soft-limit. Pure level matching, no models required
 
 Models auto-download from HuggingFace on first use into ./clearvoice/checkpoints
 relative to the working directory, so start the service from this folder
@@ -97,38 +100,28 @@ def _as_mono_wavs(result: object) -> list[np.ndarray]:
     return [arr.reshape(-1)]
 
 
-def _gated_rms(samples: np.ndarray) -> float:
-    """RMS ignoring near-silence, so pauses don't drag the level down."""
-    window = int(16000 * 0.05)  # 50ms
-    gate = 10 ** (-45 / 20)
-    if samples.size < window:
-        return float(np.sqrt(np.mean(np.square(samples))) if samples.size else 0.0)
-    windows = samples[: (samples.size // window) * window].reshape(-1, window)
-    rms = np.sqrt(np.mean(np.square(windows), axis=1))
-    audible = rms[rms >= gate]
-    return float(np.sqrt(np.mean(np.square(audible)))) if audible.size else 0.0
-
-
-def _normalize_stem(
-    samples: np.ndarray, target: float, max_gain: float
+def _limit_peaks(
+    samples: np.ndarray, ceiling: float = 0.98, ratio: float = 4.0
 ) -> np.ndarray:
-    """Scale one stem's speech to `target` RMS, capped to `max_gain` so a very
-    quiet stem never becomes a noise bomb."""
-    current = _gated_rms(samples)
-    if current <= 0:
-        return samples
-    gain = min(target / current, max_gain)
-    return samples * gain
+    """Compress ONLY the region above `ceiling` at `ratio`:1 so the leveled
+    body of the mix keeps its loudness while rare summed peaks are tamed.
+    (Scaling the whole mix down by 1/peak undid the per-stem leveling.)"""
+    magnitude = np.abs(samples)
+    over = magnitude - ceiling
+    limited = np.where(
+        over > 0, ceiling + over / ratio, magnitude
+    )
+    return np.sign(samples) * limited
 
 
 def _process_balance_in_chunks(
-    cv_denoise: object,
-    cv_separate: object,
-    in_path: Path,
-    out_dir: Path,
+    in_path: Path, out_dir: Path
 ) -> list[np.ndarray]:
-    """Denoise, separate speakers, level each stem to a common dialog RMS,
-    and mix back down. One mono output."""
+    """Automatic gain control: the loudness envelope raises quiet passages
+    (a low speaker) UP TO the loud speaker's sustained level, never ducks the
+    loud ones, and a soft limiter tames rare peaks. Pure level matching - no
+    speaker separation (unreliable on imbalanced mixes) and no denoiser
+    (which can gate the quiet speaker before the boost). One mono output."""
     data, sr = sf.read(in_path, dtype="float32", always_2d=False)
     if data.ndim == 1:
         data = data.reshape(-1, 1)
@@ -139,37 +132,55 @@ def _process_balance_in_chunks(
         return []
 
     chunk_len = int(CHUNK_SECONDS * sr)
-    target = 10 ** (-16 / 20)  # -16 dBFS, the same dialog target the editor uses
-    max_gain = 10 ** (12 / 20)  # at most +12 dB per stem
-    mixed: list[np.ndarray] = []
+    max_gain = 10 ** (24 / 20)  # at most +24 dB for a very quiet passage
+    leveled: list[np.ndarray] = []
 
     for start in range(0, total, chunk_len):
         chunk = data[start : start + chunk_len, 0]
-        chunk_path = out_dir / f"chunk-{start}.wav"
-        sf.write(chunk_path, chunk, sr, subtype="PCM_16")
+        leveled.append(_agc_balance(chunk, sr, max_gain))
 
-        denoised = _as_mono_wavs(
-            cv_denoise(input_path=str(chunk_path), online_write=False)
-        )[0]
-        denoised_path = out_dir / f"chunk-{start}-denoised.wav"
-        sf.write(denoised_path, denoised, sr, subtype="PCM_16")
+    return [np.concatenate(leveled)] if leveled else []
 
-        stems = _as_mono_wavs(
-            cv_separate(input_path=str(denoised_path), online_write=False)
-        )
-        if not stems:
-            continue
-        leveled = [
-            _normalize_stem(np.asarray(stem, dtype=np.float32), target, max_gain)
-            for stem in stems
-        ]
-        mix = np.sum(leveled, axis=0)
-        peak = float(np.max(np.abs(mix))) if mix.size else 0.0
-        if peak > 1.0:
-            mix = mix * (1.0 / peak)
-        mixed.append(mix.astype(np.float32))
 
-    return [np.concatenate(mixed)] if mixed else []
+def _agc_balance(
+    samples: np.ndarray, sr: int, max_gain: float
+) -> np.ndarray:
+    """Upward-only AGC: measure the loud speaker's sustained level (the high
+    percentile of windowed RMS), then boost quieter passages UP to it - never
+    duck the loud ones. This closes the quiet-speaker gap without pumping the
+    whole track. Soft-limits the result."""
+    window = int(0.05 * sr)
+    hop = int(0.025 * sr)
+    if samples.size < window:
+        rms = float(np.sqrt(np.mean(np.square(samples)))) or 1e-9
+        gain = float(np.clip(rms / rms, 1.0, max_gain))
+        return _limit_peaks(samples * gain)
+
+    windows = np.lib.stride_tricks.sliding_window_view(samples, window)[::hop]
+    rms = np.sqrt(np.mean(np.square(windows), axis=1)) + 1e-9
+    reference = float(np.percentile(rms, 85))
+    if reference <= 0:
+        return samples
+    gain = np.clip(reference / rms, 1.0, max_gain)
+
+    # Fast attack, slow release so gain rises into quiet speech quickly but
+    # does not pump up and down between syllables.
+    smoothed = np.empty_like(gain)
+    previous = gain[0]
+    attack = 0.4
+    release = 0.06
+    for idx, current in enumerate(gain):
+        if current > previous:
+            previous = attack * current + (1 - attack) * previous
+        else:
+            previous = release * current + (1 - release) * previous
+        smoothed[idx] = previous
+
+    centers = np.arange(len(smoothed)) * hop + window // 2
+    gain_samples = np.interp(
+        np.arange(samples.size), centers, smoothed, left=smoothed[0], right=smoothed[-1]
+    )
+    return _limit_peaks(samples * gain_samples)
 
 
 class Job:
@@ -217,13 +228,7 @@ def _run_job(job: Job, in_path: Path) -> None:
         job.total_chunks = max(1, (total + chunk_len - 1) // chunk_len)
 
         if job.task == "balance":
-            cv_denoise = get_clearvoice("speech_enhancement", "FRCRN_SE_16K")
-            cv_separate = get_clearvoice(
-                "speech_separation", "MossFormer2_SS_16K"
-            )
-            stems = _process_balance_in_chunks(
-                cv_denoise, cv_separate, in_path, job.workdir
-            )
+            stems = _process_balance_in_chunks(in_path, job.workdir)
             job.done_chunks = job.total_chunks
             if job.cancel_requested.is_set():
                 job.status = "cancelled"

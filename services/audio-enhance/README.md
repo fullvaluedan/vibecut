@@ -43,8 +43,9 @@ of footage drops from ~4 hours of CPU compute to a few minutes on the GPU.
   - `denoise` -> one enhanced WAV (FRCRN_SE_16K)
   - `super_resolution` -> one upscaled WAV (MossFormer2_SR_48K)
   - `separate` -> a ZIP of per-speaker WAV stems (MossFormer2_SS_16K)
-  - `balance` -> one WAV with the speakers leveled: FRCRN denoise, MossFormer2
-    separation, per-stem loudness normalization to -16 dBFS, mixdown
+  - `balance` -> one WAV with the speakers leveled: upward-only AGC raises
+    quiet passages (a low speaker) up to the loud speaker's sustained level,
+    never ducks, soft-limits. No models required (fast, deterministic)
 
 ## Long footage
 

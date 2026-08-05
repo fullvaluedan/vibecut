@@ -198,9 +198,13 @@ modal is gone and progress lives INLINE in the Audio panel (shared
 `enhance-job-store`, progress bar + Cancel; the toolbar button shows the
 running label/percent). No success/cancel alerts - status is a quiet inline
 line that stays until the next run; failures still toast. New "Balance voices"
-task (service `balance`: FRCRN denoise -> MossFormer2 separation -> per-stem
-normalize to -16 dBFS -> mixdown; +12 dB max stem gain, peak-limited), verified
-end to end on the two-speaker sample (35s on GPU incl. SS model download).
+task (service `balance`) - after testing, the separation-based remix proved
+unreliable on imbalanced mixes (the separator normalizes stems, and FRCRN
+gates the quiet speaker), so it is now UPWARD-ONLY AGC: measure the loud
+speaker's sustained level (85th pct of 50ms windowed RMS), raise quieter
+passages up to it (max +24 dB), never duck, soft-limit. No models needed
+(fast, deterministic). Verified: controlled quiet/loud signal gap 20 dB -> 3.2
+dB; extreme synthetic (30 dB needed) 20.6 -> 10.9 dB with the cap binding.
 13/13 browser checks + 28 editing tests + tsc/lint clean.
 
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
