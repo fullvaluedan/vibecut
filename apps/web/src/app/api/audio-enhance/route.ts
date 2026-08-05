@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Agent, fetch as undiciFetch } from "undici";
+import {
+	CLEARVOICE_SERVICE_URL,
+	LONG_JOB_DISPATCHER,
+	MAX_AUDIO_BYTES,
+	MAX_AUDIO_MB,
+	undiciFetch,
+} from "./service";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -10,31 +16,11 @@ export const maxDuration = 600;
  * service URL is configurable so a hosted deployment can point at a sidecar;
  * loopback is the dev default.
  */
-const SERVICE_URL = process.env.CLEARVOICE_SERVICE_URL ?? "http://127.0.0.1:8760";
-// ClearVoice itself has no upload cap; this guard only protects the dev
-// machine's memory. 256 MB of 16 kHz mono WAV is roughly 2h13m of audio,
-// comfortably covering a 2-hour project. Override with CLEARVOICE_MAX_AUDIO_BYTES.
-const MAX_AUDIO_BYTES = (() => {
-	const raw = Number(process.env.CLEARVOICE_MAX_AUDIO_BYTES);
-	const fallback = 256 * 1024 * 1024;
-	if (!Number.isFinite(raw) || raw <= 0) return fallback;
-	return Math.min(Math.max(raw, 1024 * 1024), 1024 * 1024 * 1024);
-})();
 const TASKS = new Set(["denoise", "super_resolution", "separate"]);
-const MAX_AUDIO_MB = Math.round(MAX_AUDIO_BYTES / (1024 * 1024));
-
-// Long footage on CPU takes hours; undici's default 5-minute
-// response-header timeout would abort the fetch mid-job. Give the upstream a
-// long window and let the client's AbortSignal remain the only real cancel.
-const LONG_JOB_DISPATCHER = new Agent({
-	headersTimeout: 8 * 3600 * 1000,
-	bodyTimeout: 8 * 3600 * 1000,
-	connectTimeout: 10_000,
-});
 
 export async function GET() {
 	try {
-		const res = await fetch(`${SERVICE_URL}/health`, {
+		const res = await fetch(`${CLEARVOICE_SERVICE_URL}/health`, {
 			signal: AbortSignal.timeout(3000),
 		});
 		return NextResponse.json({ available: res.ok });
@@ -68,9 +54,11 @@ export async function POST(req: NextRequest) {
 		);
 	}
 
+	// Create the enhancement job on the service (the service runs it on a
+	// worker thread and reports per-chunk progress via /enhance/{jobId}).
 	try {
 		const res = await undiciFetch(
-			`${SERVICE_URL}/enhance?task=${task}`,
+			`${CLEARVOICE_SERVICE_URL}/enhance?task=${task}`,
 			{
 				method: "POST",
 				headers: { "content-type": "audio/wav" },
@@ -87,17 +75,10 @@ export async function POST(req: NextRequest) {
 						detail ? `: ${detail.slice(0, 300)}` : ""
 					}`,
 				},
-				{ status: 502 },
+				{ status: res.status === 409 ? 409 : 502 },
 			);
 		}
-		const buffer = await res.arrayBuffer();
-		return new NextResponse(new Uint8Array(buffer), {
-			headers: {
-				"content-type": res.headers.get("content-type") ?? "audio/wav",
-				"content-length": String(buffer.byteLength),
-				"x-framecut-enhance-task": task,
-			},
-		});
+		return NextResponse.json(await res.json());
 	} catch {
 		return NextResponse.json(
 			{

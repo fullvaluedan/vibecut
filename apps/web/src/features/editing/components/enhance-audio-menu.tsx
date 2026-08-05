@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { toast } from "sonner";
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -24,6 +23,7 @@ import {
 	resolveEnhanceTargetFromSelection,
 	type ClearvoiceEnhanceTask,
 } from "../clearvoice-enhance";
+import { EnhanceAudioDialog } from "./enhance-audio-dialog";
 
 /**
  * Toolbar button next to AI CUT: "Enhance audio". Disabled until exactly one
@@ -32,74 +32,76 @@ import {
  */
 export function EnhanceAudioMenu() {
 	const editor = useEditor();
-	const [busy, setBusy] = useState<ClearvoiceEnhanceTask | null>(null);
+	const [activeTask, setActiveTask] = useState<ClearvoiceEnhanceTask | null>(
+		null,
+	);
+	const [runNonce, setRunNonce] = useState(0);
 
 	const canEnhance =
 		!("error" in resolveEnhanceTargetFromSelection({ editor }));
 
-	const run = async (task: ClearvoiceEnhanceTask) => {
-		if (busy) return;
-		setBusy(task);
-		const toastId = toast.loading(
-			`${CLEARVOICE_ENHANCE_OPTIONS[task].label}...`,
-		);
-		try {
-			const { assetName } = await enhanceSelectedAudio({ editor, task });
-			toast.success("Enhanced audio ready", {
-				id: toastId,
-				description: `${assetName} is now the selected clip's audio. Ctrl+Z restores the original.`,
-			});
-		} catch (e) {
-			toast.error(`${CLEARVOICE_ENHANCE_OPTIONS[task].label} failed`, {
-				id: toastId,
-				description: e instanceof Error ? e.message : String(e),
-			});
-		} finally {
-			setBusy(null);
-		}
+	const openTask = (task: ClearvoiceEnhanceTask) => {
+		setActiveTask(task);
+		setRunNonce((n) => n + 1);
 	};
 
-	const disabled = busy !== null || !canEnhance;
+	const start = useCallback(
+		async (args: { signal: AbortSignal; onProgress: (progress: { doneChunks: number; totalChunks: number }) => void }) =>
+			enhanceSelectedAudio({
+				editor,
+				task: activeTask ?? "denoise",
+				onProgress: args.onProgress,
+				signal: args.signal,
+			}),
+		[editor, activeTask],
+	);
+	const close = useCallback(() => setActiveTask(null), []);
 
 	const button = (
 		<Button
 			variant="outline"
 			size="sm"
 			className="gap-1.5 rounded-sm font-semibold"
-			disabled={disabled}
+			disabled={!canEnhance}
 			aria-label="Enhance audio of the selected clip"
 		>
 			<HugeiconsIcon icon={AudioWave01Icon} size={14} />
-			{busy ? "Enhancing..." : "Enhance audio"}
+			Enhance audio
 		</Button>
 	);
 
 	return (
-		<DropdownMenu>
-			{canEnhance ? (
-				<DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
-			) : (
-				<Tooltip>
-					<TooltipTrigger asChild>{button}</TooltipTrigger>
-					<TooltipContent side="bottom">
-						Select an audio or video clip first to enhance its audio.
-					</TooltipContent>
-				</Tooltip>
-			)}
-			<DropdownMenuContent align="end">
-				{CLEARVOICE_ENHANCE_TASK_ORDER.map((task) => (
-					<DropdownMenuItem
-						key={task}
-						disabled={!!busy}
-						onClick={() => void run(task)}
-					>
-						{CLEARVOICE_ENHANCE_OPTIONS[task].label}
-						<span className="text-muted-foreground ml-2 text-xs">
-							{CLEARVOICE_ENHANCE_OPTIONS[task].description}
-						</span>
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
+		<>
+			<DropdownMenu>
+				{canEnhance ? (
+					<DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
+				) : (
+					<Tooltip>
+						<TooltipTrigger asChild>{button}</TooltipTrigger>
+						<TooltipContent side="bottom">
+							Select an audio or video clip first to enhance its audio.
+						</TooltipContent>
+					</Tooltip>
+				)}
+				<DropdownMenuContent align="end">
+					{CLEARVOICE_ENHANCE_TASK_ORDER.map((task) => (
+						<DropdownMenuItem key={task} onClick={() => openTask(task)}>
+							{CLEARVOICE_ENHANCE_OPTIONS[task].label}
+							<span className="text-muted-foreground ml-2 text-xs">
+								{CLEARVOICE_ENHANCE_OPTIONS[task].description}
+							</span>
+						</DropdownMenuItem>
+					))}
+				</DropdownMenuContent>
+			</DropdownMenu>
+			{activeTask ? (
+				<EnhanceAudioDialog
+					key={runNonce}
+					task={activeTask}
+					start={start}
+					onClose={close}
+				/>
+			) : null}
+		</>
 	);
 }

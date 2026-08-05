@@ -162,6 +162,16 @@ response-header timeout aborted longer jobs with 503). Measured throughput on
 this CPU: ~4x realtime (3 min of audio = 12 min of compute), so an hour of
 footage takes roughly 4 hours and the browser tab must stay open for the job.
 
+2026-08-05 round 2: the service now runs jobs on a worker THREAD with a job
+API (POST /enhance -> jobId; GET /enhance/{id} per-chunk progress; POST
+.../cancel; GET .../result), the web app polls it through /api/audio-enhance
+with a progress-bar dialog + Cancel button in both entry points, and the venv
+now uses CUDA torch (install.ps1 defaults to cu128; `-Cpu` for CPU-only) -
+the RTX 3080 does the same 60s clip in ~10s vs ~232s CPU. Measured: job API +
+cancel verified at the service and through the browser UI (13/13 harness
+checks). Cancel stops between chunks; closing the dialog (Escape) lets the job
+finish in the background rather than killing it.
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the

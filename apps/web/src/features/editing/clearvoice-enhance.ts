@@ -40,6 +40,21 @@ import {
 
 export type ClearvoiceEnhanceTask = "denoise" | "super_resolution";
 
+export interface EnhanceJobStatus {
+	jobId: string;
+	status: "pending" | "running" | "done" | "failed" | "cancelled";
+	doneChunks: number;
+	totalChunks: number;
+	error?: string;
+}
+
+export interface EnhanceProgress {
+	doneChunks: number;
+	totalChunks: number;
+}
+
+export type EnhanceProgressListener = (progress: EnhanceProgress) => void;
+
 /** Stable UI order for the task options. */
 export const CLEARVOICE_ENHANCE_TASK_ORDER: ClearvoiceEnhanceTask[] = [
 	"denoise",
@@ -163,6 +178,42 @@ function readErrorMessage(body: unknown): string | undefined {
 	if (!("error" in body)) return undefined;
 	const value: unknown = body.error;
 	return typeof value === "string" ? value : undefined;
+}
+
+function readJobId(body: unknown): string | undefined {
+	if (typeof body !== "object" || body === null) return undefined;
+	if (!("jobId" in body)) return undefined;
+	const value: unknown = body.jobId;
+	return typeof value === "string" ? value : undefined;
+}
+
+function parseJobStatus(body: unknown): EnhanceJobStatus | null {
+	if (typeof body !== "object" || body === null) return null;
+	if (!("jobId" in body) || !("status" in body)) return null;
+	const jobId: unknown = body.jobId;
+	const status: unknown = body.status;
+	if (
+		typeof jobId !== "string" ||
+		(status !== "pending" &&
+			status !== "running" &&
+			status !== "done" &&
+			status !== "failed" &&
+			status !== "cancelled")
+	) {
+		return null;
+	}
+	const doneChunks: unknown = "doneChunks" in body ? body.doneChunks : undefined;
+	const totalChunks: unknown = "totalChunks" in body
+		? body.totalChunks
+		: undefined;
+	const error: unknown = "error" in body ? body.error : undefined;
+	return {
+		jobId,
+		status,
+		doneChunks: typeof doneChunks === "number" ? doneChunks : 0,
+		totalChunks: typeof totalChunks === "number" ? totalChunks : 0,
+		...(typeof error === "string" ? { error } : {}),
+	};
 }
 
 function findLinkedAudioElement({
@@ -302,6 +353,87 @@ function buildSourceDuration({ spanSec }: { spanSec: number }) {
 	return roundMediaTime({ time: spanSec * TICKS_PER_SECOND });
 }
 
+/** POST the extracted wav and get the service's job id. */
+async function submitEnhanceJob({
+	task,
+	wav,
+}: {
+	task: ClearvoiceEnhanceTask;
+	wav: Blob;
+}): Promise<string> {
+	const res = await fetch(
+		`/api/audio-enhance?task=${encodeURIComponent(task)}`,
+		{
+			method: "POST",
+			headers: { "content-type": "audio/wav" },
+			body: wav,
+		},
+	);
+	if (!res.ok) {
+		const body = await res.json().catch(() => null);
+		throw new Error(
+			readErrorMessage(body) ?? `Audio enhancement failed (${res.status}).`,
+		);
+	}
+	const body = await res.json().catch(() => null);
+	const jobId = readJobId(body);
+	if (!jobId) throw new Error("The enhancer did not return a job id.");
+	return jobId;
+}
+
+/** Poll the job until done; throws with the reason on failure/cancel. */
+async function pollEnhanceJob({
+	jobId,
+	signal,
+	onProgress,
+}: {
+	jobId: string;
+	signal?: AbortSignal;
+	onProgress?: EnhanceProgressListener;
+}): Promise<void> {
+	for (;;) {
+		if (signal?.aborted) {
+			await fetch(`/api/audio-enhance/${jobId}/cancel`, {
+				method: "POST",
+			}).catch(() => {});
+			throw new Error("Cancelled");
+		}
+		const res = await fetch(`/api/audio-enhance/${jobId}`);
+		if (!res.ok) {
+			throw new Error(`Enhancement status failed (${res.status}).`);
+		}
+		const status = parseJobStatus(await res.json().catch(() => null));
+		if (!status) {
+			throw new Error("The enhancer returned an invalid status.");
+		}
+		if (status.status === "done") return;
+		if (status.status === "failed") {
+			throw new Error(status.error ?? "Enhancement failed.");
+		}
+		if (status.status === "cancelled") throw new Error("Cancelled");
+		onProgress?.({
+			doneChunks: status.doneChunks ?? 0,
+			totalChunks: status.totalChunks ?? 0,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+	}
+}
+
+async function fetchEnhanceResult(jobId: string): Promise<Blob> {
+	const res = await fetch(`/api/audio-enhance/${jobId}/result`);
+	if (!res.ok) {
+		const body = await res.json().catch(() => null);
+		throw new Error(
+			readErrorMessage(body) ?? `Could not fetch the enhanced audio (${res.status}).`,
+		);
+	}
+	const blob = await res.blob();
+	if (blob.size === 0) {
+		throw new Error("The enhancer returned an empty result.");
+	}
+	return blob;
+}
+
 /**
  * Run one enhancement: extract the clip's source span, POST it to the
  * ClearVoice service, import the result as a media asset, and swap the
@@ -311,10 +443,14 @@ export async function enhanceAudioTarget({
 	editor,
 	target,
 	task,
+	onProgress,
+	signal,
 }: {
 	editor: EditorCore;
 	target: ClearvoiceEnhanceTarget;
 	task: ClearvoiceEnhanceTask;
+	onProgress?: EnhanceProgressListener;
+	signal?: AbortSignal;
 }): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
 	const element = target.element;
 	assertEnhanceableRetime(element);
@@ -346,27 +482,9 @@ export async function enhanceAudioTarget({
 	const baseName = (element.name || "audio").replace(/\.[^.]+$/, "");
 	const assetName = `${baseName} - ${label}`;
 
-	// Raw WAV body + query task: the Python service's multipart parser caps
-	// parts at 1 MB, which would reject any clip longer than ~30 seconds, so
-	// the proxy and service use a raw-body transport instead.
-	const res = await fetch(
-		`/api/audio-enhance?task=${encodeURIComponent(task)}`,
-		{
-			method: "POST",
-			headers: { "content-type": "audio/wav" },
-			body: requestWav,
-		},
-	);
-	if (!res.ok) {
-		const body = await res.json().catch(() => null);
-		throw new Error(
-			readErrorMessage(body) ?? `Audio enhancement failed (${res.status}).`,
-		);
-	}
-	const enhanced = await res.blob();
-	if (enhanced.size === 0) {
-		throw new Error("The enhancer returned an empty result.");
-	}
+	const jobId = await submitEnhanceJob({ task, wav: requestWav });
+	await pollEnhanceJob({ jobId, signal, onProgress });
+	const enhanced = await fetchEnhanceResult(jobId);
 
 	const project = editor.project.getActive();
 	if (!project) throw new Error("No active project.");
@@ -454,26 +572,34 @@ export async function enhanceClipQuality({
 	trackId,
 	element,
 	task,
+	onProgress,
+	signal,
 }: {
 	editor: EditorCore;
 	trackId: string;
 	element: TimelineElement;
 	task: ClearvoiceEnhanceTask;
+	onProgress?: EnhanceProgressListener;
+	signal?: AbortSignal;
 }): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
 	const result = resolveEnhanceTargetForElement({ editor, trackId, element });
 	if ("error" in result) throw new Error(result.error);
-	return enhanceAudioTarget({ editor, target: result.target, task });
+	return enhanceAudioTarget({ editor, target: result.target, task, onProgress, signal });
 }
 
 /** Toolbar entry: enhance whatever audio-bearing clip is selected. */
 export async function enhanceSelectedAudio({
 	editor,
 	task,
+	onProgress,
+	signal,
 }: {
 	editor: EditorCore;
 	task: ClearvoiceEnhanceTask;
+	onProgress?: EnhanceProgressListener;
+	signal?: AbortSignal;
 }): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
 	const result = resolveEnhanceTargetFromSelection({ editor });
 	if ("error" in result) throw new Error(result.error);
-	return enhanceAudioTarget({ editor, target: result.target, task });
+	return enhanceAudioTarget({ editor, target: result.target, task, onProgress, signal });
 }

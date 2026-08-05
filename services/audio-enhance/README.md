@@ -27,6 +27,10 @@ download), installs `requirements.txt`, and runs the service on
 first use into `./clearvoice/checkpoints` (a few hundred MB total for the two
 models the UI uses; first call is slow, later calls are warm).
 
+The default install is CUDA torch (use `./install.ps1 -Cpu` for a CPU-only
+install): an NVIDIA GPU makes enhancement roughly 50-100x faster, so an hour
+of footage drops from ~4 hours of CPU compute to a few minutes on the GPU.
+
 ## API
 
 - `GET /health` -> `{"status":"ok"}`
@@ -42,11 +46,12 @@ models the UI uses; first call is slow, later calls are warm).
 
 ## Long footage
 
-Input is processed in chunks (`CLEARVOICE_CHUNK_SECONDS`, default 60) so a
+Input is processed in chunks (`CLEARVOICE_CHUNK_SECONDS`, default 30) so a
 multi-hour file never becomes one giant tensor. CPU inference is the real
-bottleneck: expect roughly 4x realtime on this machine, i.e. about 4 hours of
-processing per hour of footage. The job runs to completion server-side; a GPU
-(or a smaller region of interest) makes it dramatically faster.
+bottleneck on a CPU-only install (roughly 4x realtime, i.e. about 4 hours per
+hour of footage); with CUDA torch + an NVIDIA GPU the same job takes minutes.
+Jobs run on a worker thread and expose per-chunk progress + cancel through the
+job API, so the web UI can show a progress bar and a Cancel button.
 
 ## Notes
 
