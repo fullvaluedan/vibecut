@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
@@ -19,89 +19,83 @@ import { useEditor } from "@/editor/use-editor";
 import {
 	CLEARVOICE_ENHANCE_OPTIONS,
 	CLEARVOICE_ENHANCE_TASK_ORDER,
-	enhanceSelectedAudio,
 	resolveEnhanceTargetFromSelection,
+	startEnhanceSelectedAudio,
 	type ClearvoiceEnhanceTask,
 } from "../clearvoice-enhance";
-import { EnhanceAudioDialog } from "./enhance-audio-dialog";
+import { useEnhanceJobStore } from "../enhance-job-store";
 
 /**
- * Toolbar button next to AI CUT: "Enhance audio". Disabled until exactly one
- * audio-bearing clip is selected (a linked video + separated-audio pair counts
- * as one). Same shared flow as the Audio tab section.
+ * Toolbar button next to AI CUT: "Enhance audio". While a job runs (started
+ * here or from the Audio tab) the button shows the running state and progress
+ * lives inline in the Audio panel - no modal, no blocking.
  */
 export function EnhanceAudioMenu() {
 	const editor = useEditor();
-	const [activeTask, setActiveTask] = useState<ClearvoiceEnhanceTask | null>(
-		null,
-	);
-	const [runNonce, setRunNonce] = useState(0);
+	const jobActive = useEnhanceJobStore((s) => s.active);
+	const label = useEnhanceJobStore((s) => s.label);
+	const doneChunks = useEnhanceJobStore((s) => s.doneChunks);
+	const totalChunks = useEnhanceJobStore((s) => s.totalChunks);
 
 	const canEnhance =
 		!("error" in resolveEnhanceTargetFromSelection({ editor }));
 
-	const openTask = (task: ClearvoiceEnhanceTask) => {
-		setActiveTask(task);
-		setRunNonce((n) => n + 1);
+	const run = (task: ClearvoiceEnhanceTask) => {
+		void startEnhanceSelectedAudio({ editor, task }).catch((error: unknown) => {
+			toast.error(`${CLEARVOICE_ENHANCE_OPTIONS[task].label} failed`, {
+				description: error instanceof Error ? error.message : String(error),
+			});
+		});
 	};
 
-	const start = useCallback(
-		async (args: { signal: AbortSignal; onProgress: (progress: { doneChunks: number; totalChunks: number }) => void }) =>
-			enhanceSelectedAudio({
-				editor,
-				task: activeTask ?? "denoise",
-				onProgress: args.onProgress,
-				signal: args.signal,
-			}),
-		[editor, activeTask],
-	);
-	const close = useCallback(() => setActiveTask(null), []);
+	const percent =
+		totalChunks > 0
+			? Math.min(100, Math.round((doneChunks / totalChunks) * 100))
+			: 0;
 
 	const button = (
 		<Button
 			variant="outline"
 			size="sm"
 			className="gap-1.5 rounded-sm font-semibold"
-			disabled={!canEnhance}
+			disabled={jobActive || !canEnhance}
 			aria-label="Enhance audio of the selected clip"
 		>
 			<HugeiconsIcon icon={AudioWave01Icon} size={14} />
-			Enhance audio
+			{jobActive
+				? `${label}${percent > 0 ? ` ${percent}%` : ""}`
+				: "Enhance audio"}
 		</Button>
 	);
 
 	return (
-		<>
-			<DropdownMenu>
-				{canEnhance ? (
-					<DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
-				) : (
-					<Tooltip>
-						<TooltipTrigger asChild>{button}</TooltipTrigger>
-						<TooltipContent side="bottom">
-							Select an audio or video clip first to enhance its audio.
-						</TooltipContent>
-					</Tooltip>
-				)}
-				<DropdownMenuContent align="end">
-					{CLEARVOICE_ENHANCE_TASK_ORDER.map((task) => (
-						<DropdownMenuItem key={task} onClick={() => openTask(task)}>
-							{CLEARVOICE_ENHANCE_OPTIONS[task].label}
-							<span className="text-muted-foreground ml-2 text-xs">
-								{CLEARVOICE_ENHANCE_OPTIONS[task].description}
-							</span>
-						</DropdownMenuItem>
-					))}
-				</DropdownMenuContent>
-			</DropdownMenu>
-			{activeTask ? (
-				<EnhanceAudioDialog
-					key={runNonce}
-					task={activeTask}
-					start={start}
-					onClose={close}
-				/>
-			) : null}
-		</>
+		<DropdownMenu>
+			{canEnhance && !jobActive ? (
+				<DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
+			) : (
+				<Tooltip>
+					<TooltipTrigger asChild>{button}</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{jobActive
+							? "An enhancement is running - watch its progress in the Audio panel."
+							: "Select an audio or video clip first to enhance its audio."}
+					</TooltipContent>
+				</Tooltip>
+			)}
+			<DropdownMenuContent align="end">
+				{CLEARVOICE_ENHANCE_TASK_ORDER.map((task) => (
+					<DropdownMenuItem
+						key={task}
+						disabled={jobActive}
+						onClick={() => run(task)}
+					>
+						{CLEARVOICE_ENHANCE_OPTIONS[task].label}
+						<span className="text-muted-foreground ml-2 text-xs">
+							{CLEARVOICE_ENHANCE_OPTIONS[task].description}
+						</span>
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

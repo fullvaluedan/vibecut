@@ -37,8 +37,12 @@ import {
 	roundMediaTime,
 	type MediaTime,
 } from "@/wasm";
+import { useEnhanceJobStore } from "./enhance-job-store";
 
-export type ClearvoiceEnhanceTask = "denoise" | "super_resolution";
+export type ClearvoiceEnhanceTask =
+	| "denoise"
+	| "super_resolution"
+	| "balance";
 
 export interface EnhanceJobStatus {
 	jobId: string;
@@ -59,6 +63,7 @@ export type EnhanceProgressListener = (progress: EnhanceProgress) => void;
 export const CLEARVOICE_ENHANCE_TASK_ORDER: ClearvoiceEnhanceTask[] = [
 	"denoise",
 	"super_resolution",
+	"balance",
 ];
 
 export const CLEARVOICE_ENHANCE_OPTIONS: Record<
@@ -72,6 +77,11 @@ export const CLEARVOICE_ENHANCE_OPTIONS: Record<
 	super_resolution: {
 		label: "Improve clarity",
 		description: "ClearVoice MossFormer2 - upscales speech to 48kHz",
+	},
+	balance: {
+		label: "Balance voices",
+		description:
+			"Separates the speakers, evens out quiet and loud levels, mixes back",
 	},
 };
 
@@ -567,39 +577,81 @@ export async function enhanceAudioTarget({
 }
 
 /** Audio-tab entry: enhance the element shown in the inspector. */
-export async function enhanceClipQuality({
+export async function startEnhanceClipQuality({
 	editor,
 	trackId,
 	element,
 	task,
-	onProgress,
-	signal,
 }: {
 	editor: EditorCore;
 	trackId: string;
 	element: TimelineElement;
 	task: ClearvoiceEnhanceTask;
-	onProgress?: EnhanceProgressListener;
-	signal?: AbortSignal;
 }): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
 	const result = resolveEnhanceTargetForElement({ editor, trackId, element });
 	if ("error" in result) throw new Error(result.error);
-	return enhanceAudioTarget({ editor, target: result.target, task, onProgress, signal });
+	return startEnhanceJob({ editor, target: result.target, task });
 }
 
 /** Toolbar entry: enhance whatever audio-bearing clip is selected. */
-export async function enhanceSelectedAudio({
+export async function startEnhanceSelectedAudio({
 	editor,
 	task,
-	onProgress,
-	signal,
 }: {
 	editor: EditorCore;
 	task: ClearvoiceEnhanceTask;
-	onProgress?: EnhanceProgressListener;
-	signal?: AbortSignal;
 }): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
 	const result = resolveEnhanceTargetFromSelection({ editor });
 	if ("error" in result) throw new Error(result.error);
-	return enhanceAudioTarget({ editor, target: result.target, task, onProgress, signal });
+	return startEnhanceJob({ editor, target: result.target, task });
+}
+
+/**
+ * Run one enhancement behind the shared job store: the Audio panel shows an
+ * inline progress bar + Cancel while the job runs, and the user keeps editing.
+ * On success the clip's audio is swapped (one undo step) with NO completion
+ * toast; failures surface inline (and as a toast from the caller).
+ */
+export async function startEnhanceJob({
+	editor,
+	target,
+	task,
+}: {
+	editor: EditorCore;
+	target: ClearvoiceEnhanceTarget;
+	task: ClearvoiceEnhanceTask;
+}): Promise<{ assetName: string; mode: "replaced" | "inserted" }> {
+	const store = useEnhanceJobStore.getState();
+	if (store.active) {
+		throw new Error("Another enhancement is already running.");
+	}
+	const controller = store.begin(CLEARVOICE_ENHANCE_OPTIONS[task].label);
+	try {
+		const result = await enhanceAudioTarget({
+			editor,
+			target,
+			task,
+			signal: controller.signal,
+			onProgress: (progress) =>
+				useEnhanceJobStore
+					.getState()
+					.progress({
+						doneChunks: progress.doneChunks,
+						totalChunks: progress.totalChunks,
+					}),
+		});
+		useEnhanceJobStore.getState().finish({ outcome: "done" });
+		return result;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (message === "Cancelled") {
+			useEnhanceJobStore.getState().finish({ outcome: "cancelled" });
+		} else {
+			useEnhanceJobStore.getState().finish({
+				outcome: "failed",
+				message,
+			});
+		}
+		throw error;
+	}
 }

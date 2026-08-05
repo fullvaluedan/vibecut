@@ -16,7 +16,12 @@ export const maxDuration = 600;
  * service URL is configurable so a hosted deployment can point at a sidecar;
  * loopback is the dev default.
  */
-const TASKS = new Set(["denoise", "super_resolution", "separate"]);
+const TASKS = new Set([
+	"denoise",
+	"super_resolution",
+	"separate",
+	"balance",
+]);
 
 export async function GET() {
 	try {

@@ -193,6 +193,16 @@ AI CUT and Enhance audio live in the toolbar." Browser-verified on a fresh
 profile: `?open=ai-settings` opens Settings with no wizard stacking, no page
 errors.
 
+Round 4 (audio UX, from Dan's feedback): enhancement no longer blocks - the
+modal is gone and progress lives INLINE in the Audio panel (shared
+`enhance-job-store`, progress bar + Cancel; the toolbar button shows the
+running label/percent). No success/cancel alerts - status is a quiet inline
+line that stays until the next run; failures still toast. New "Balance voices"
+task (service `balance`: FRCRN denoise -> MossFormer2 separation -> per-stem
+normalize to -16 dBFS -> mixdown; +12 dB max stem gain, peak-limited), verified
+end to end on the two-speaker sample (35s on GPU incl. SS model download).
+13/13 browser checks + 28 editing tests + tsc/lint clean.
+
 ## 3. Round 19 G6 reopens: ALL RESOLVED 2026-08-03
 
 The four defects below were fixed in `a8d6a6df` and re-verified live; the

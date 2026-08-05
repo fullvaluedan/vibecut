@@ -49,6 +49,7 @@ TASKS: dict[str, tuple[str, str]] = {
     "denoise": ("speech_enhancement", "FRCRN_SE_16K"),
     "super_resolution": ("speech_super_resolution", "MossFormer2_SR_48K"),
     "separate": ("speech_separation", "MossFormer2_SS_16K"),
+    "balance": ("speech_enhancement", "FRCRN_SE_16K"),
 }
 
 MODEL_SAMPLE_RATE: dict[str, int] = {
@@ -96,6 +97,81 @@ def _as_mono_wavs(result: object) -> list[np.ndarray]:
     return [arr.reshape(-1)]
 
 
+def _gated_rms(samples: np.ndarray) -> float:
+    """RMS ignoring near-silence, so pauses don't drag the level down."""
+    window = int(16000 * 0.05)  # 50ms
+    gate = 10 ** (-45 / 20)
+    if samples.size < window:
+        return float(np.sqrt(np.mean(np.square(samples))) if samples.size else 0.0)
+    windows = samples[: (samples.size // window) * window].reshape(-1, window)
+    rms = np.sqrt(np.mean(np.square(windows), axis=1))
+    audible = rms[rms >= gate]
+    return float(np.sqrt(np.mean(np.square(audible)))) if audible.size else 0.0
+
+
+def _normalize_stem(
+    samples: np.ndarray, target: float, max_gain: float
+) -> np.ndarray:
+    """Scale one stem's speech to `target` RMS, capped to `max_gain` so a very
+    quiet stem never becomes a noise bomb."""
+    current = _gated_rms(samples)
+    if current <= 0:
+        return samples
+    gain = min(target / current, max_gain)
+    return samples * gain
+
+
+def _process_balance_in_chunks(
+    cv_denoise: object,
+    cv_separate: object,
+    in_path: Path,
+    out_dir: Path,
+) -> list[np.ndarray]:
+    """Denoise, separate speakers, level each stem to a common dialog RMS,
+    and mix back down. One mono output."""
+    data, sr = sf.read(in_path, dtype="float32", always_2d=False)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+    if data.shape[1] > 1:
+        data = data.mean(axis=1, keepdims=True)
+    total = data.shape[0]
+    if total == 0:
+        return []
+
+    chunk_len = int(CHUNK_SECONDS * sr)
+    target = 10 ** (-16 / 20)  # -16 dBFS, the same dialog target the editor uses
+    max_gain = 10 ** (12 / 20)  # at most +12 dB per stem
+    mixed: list[np.ndarray] = []
+
+    for start in range(0, total, chunk_len):
+        chunk = data[start : start + chunk_len, 0]
+        chunk_path = out_dir / f"chunk-{start}.wav"
+        sf.write(chunk_path, chunk, sr, subtype="PCM_16")
+
+        denoised = _as_mono_wavs(
+            cv_denoise(input_path=str(chunk_path), online_write=False)
+        )[0]
+        denoised_path = out_dir / f"chunk-{start}-denoised.wav"
+        sf.write(denoised_path, denoised, sr, subtype="PCM_16")
+
+        stems = _as_mono_wavs(
+            cv_separate(input_path=str(denoised_path), online_write=False)
+        )
+        if not stems:
+            continue
+        leveled = [
+            _normalize_stem(np.asarray(stem, dtype=np.float32), target, max_gain)
+            for stem in stems
+        ]
+        mix = np.sum(leveled, axis=0)
+        peak = float(np.max(np.abs(mix))) if mix.size else 0.0
+        if peak > 1.0:
+            mix = mix * (1.0 / peak)
+        mixed.append(mix.astype(np.float32))
+
+    return [np.concatenate(mixed)] if mixed else []
+
+
 class Job:
     def __init__(self, job_id: str, task: str, model: str, workdir: Path):
         self.id = job_id
@@ -127,7 +203,6 @@ def _run_job(job: Job, in_path: Path) -> None:
     try:
         job.status = "running"
         cv_task, _ = TASKS[job.task]
-        cv = get_clearvoice(cv_task, job.model)
 
         data, sr = sf.read(in_path, dtype="float32", always_2d=False)
         if data.ndim == 1:
@@ -140,6 +215,28 @@ def _run_job(job: Job, in_path: Path) -> None:
 
         chunk_len = int(CHUNK_SECONDS * sr)
         job.total_chunks = max(1, (total + chunk_len - 1) // chunk_len)
+
+        if job.task == "balance":
+            cv_denoise = get_clearvoice("speech_enhancement", "FRCRN_SE_16K")
+            cv_separate = get_clearvoice(
+                "speech_separation", "MossFormer2_SS_16K"
+            )
+            stems = _process_balance_in_chunks(
+                cv_denoise, cv_separate, in_path, job.workdir
+            )
+            job.done_chunks = job.total_chunks
+            if job.cancel_requested.is_set():
+                job.status = "cancelled"
+                return
+            if not stems:
+                raise ValueError("ClearVoice produced no output.")
+            wav_path = job.workdir / "out.wav"
+            sf.write(wav_path, stems[0], 16000, subtype="PCM_16")
+            job.result_paths.append(wav_path)
+            job.status = "done"
+            return
+
+        cv = get_clearvoice(cv_task, job.model)
         stems: list[list[np.ndarray]] = []
 
         for start in range(0, total, chunk_len):
