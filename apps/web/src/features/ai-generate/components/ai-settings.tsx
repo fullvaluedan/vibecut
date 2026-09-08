@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
 	Section,
 	SectionContent,
@@ -41,9 +41,34 @@ import { cn } from "@/utils/ui";
 
 const AUTH_MODE_LABELS: Record<AiAuthMode, string> = {
 	"claude-code": "Claude subscription (Claude Code)",
+	codex: "ChatGPT (Codex CLI)",
 	"api-key": "Anthropic API key",
 	custom: "Custom / local model",
 };
+
+/** Shape of GET /api/ai/codex-status (cached session-long like the Groq probe). */
+interface CodexStatus {
+	installed: boolean;
+	loggedIn: boolean;
+	detail: string;
+}
+
+let codexStatusProbe: Promise<CodexStatus> | null = null;
+
+/** Probe (and cache) whether the Codex CLI is installed and signed in. */
+function probeCodexStatus(): Promise<CodexStatus> {
+	if (!codexStatusProbe) {
+		codexStatusProbe = fetch("/api/ai/codex-status")
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) =>
+				data && typeof data === "object" && "installed" in data
+					? (data as CodexStatus)
+					: { installed: false, loggedIn: false, detail: "probe failed" },
+			)
+			.catch(() => ({ installed: false, loggedIn: false, detail: "probe failed" }));
+	}
+	return codexStatusProbe;
+}
 
 // 4 collapsible groups (menu IA audit): Settings -> AI used to be a dozen
 // stacked toggle sections with paragraph copy. "Connections and keys" is the
@@ -122,6 +147,8 @@ function AiConnectionSection() {
 	const setAuthMode = useAiSettingsStore((s) => s.setAuthMode);
 	const anthropicApiKey = useAiSettingsStore((s) => s.anthropicApiKey);
 	const setAnthropicApiKey = useAiSettingsStore((s) => s.setAnthropicApiKey);
+	const codexModel = useAiSettingsStore((s) => s.codexModel);
+	const setCodexModel = useAiSettingsStore((s) => s.setCodexModel);
 	const customBaseUrl = useAiSettingsStore((s) => s.customBaseUrl);
 	const setCustomBaseUrl = useAiSettingsStore((s) => s.setCustomBaseUrl);
 	const customModel = useAiSettingsStore((s) => s.customModel);
@@ -157,6 +184,9 @@ function AiConnectionSection() {
 						Uses the Claude Code app installed on this computer. Generations
 						run on your Claude subscription, no API key needed.
 					</p>
+				)}
+				{authMode === "codex" && (
+					<CodexConnectionPanel codexModel={codexModel} setCodexModel={setCodexModel} />
 				)}
 				{authMode === "api-key" && (
 					<>
@@ -452,6 +482,149 @@ function KeyInput({
 				{isVisible ? "Hide" : "Show"}
 			</Button>
 		</div>
+	);
+}
+
+/**
+ * ChatGPT (Codex CLI) connection panel. Status is probed from the server
+ * (which can see the local CLI); Connect launches `codex login` server-side
+ * and polls until the CLI reports signed in. No key ever enters the browser.
+ */
+function CodexConnectionPanel({
+	codexModel,
+	setCodexModel,
+}: {
+	codexModel: string;
+	setCodexModel: (model: string) => void;
+}) {
+	const [status, setStatus] = useState<CodexStatus | null>(null);
+	const [connecting, setConnecting] = useState(false);
+	const [connectError, setConnectError] = useState<string | null>(null);
+	const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+
+	const refresh = useCallback(() => {
+		probeCodexStatus().then(setStatus);
+	}, []);
+	useEffect(() => {
+		refresh();
+	}, [refresh]);
+
+	// While a connect is in flight, poll a READ-ONLY status check (never a
+	// bare POST — that action starts a new login each call).
+	useEffect(() => {
+		if (!connecting) return;
+		const interval = setInterval(() => {
+			fetch("/api/ai/codex-status", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ action: "status" }),
+			})
+				.then((res) => (res.ok ? res.json() : null))
+				.then((data: CodexStatus | null) => {
+					if (!data) return;
+					if (data.loggedIn) {
+						setConnecting(false);
+						codexStatusProbe = Promise.resolve(data);
+						setStatus(data);
+					}
+				})
+				.catch(() => {});
+		}, 2000);
+		return () => clearInterval(interval);
+	}, [connecting]);
+
+	const connect = async () => {
+		setConnectError(null);
+		setConnecting(true);
+		try {
+			const res = await fetch("/api/ai/codex-status", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ action: "login" }),
+			});
+			if (!res.ok) {
+				const data = (await res.json().catch(() => null)) as { error?: string } | null;
+				setConnectError(data?.error ?? "Could not start the ChatGPT login.");
+				setConnecting(false);
+			}
+			// Success: keep `connecting` true — the poll effect flips it off
+			// when codex login status reports signed in.
+		} catch {
+			setConnectError("Could not start the ChatGPT login.");
+			setConnecting(false);
+		}
+	};
+
+	return (
+		<>
+			<div className="flex flex-col gap-2">
+				{!status ? (
+					<p className="text-muted-foreground text-xs">Checking the Codex CLI...</p>
+				) : !status.installed ? (
+					<p className="text-muted-foreground text-xs">
+						The Codex CLI isn&apos;t installed on this computer yet. Install it
+						once with{" "}
+						<code className="bg-muted px-1 py-0.5 rounded">
+							npm i -g @openai/codex
+						</code>{" "}
+						(requires Node 22+), then come back here.
+					</p>
+				) : status.loggedIn ? (
+					<p className="text-muted-foreground text-xs">
+						Connected to your ChatGPT account on this device — no API key
+						needed. Nothing is stored in the browser; the login lives in the
+						Codex CLI.
+					</p>
+				) : (
+					<div className="flex items-center gap-2">
+						<Button size="sm" onClick={connect} disabled={connecting}>
+							{connecting ? "Waiting for sign-in..." : "Connect ChatGPT"}
+						</Button>
+						<Button variant="text" size="sm" onClick={refresh}>
+							Refresh
+						</Button>
+					</div>
+				)}
+				{connecting && (
+					<p className="text-muted-foreground text-xs">
+						Your browser opened the ChatGPT sign-in page. Approve it there and
+						this panel updates automatically.
+					</p>
+				)}
+				{connectError && (
+					<p className="text-destructive text-xs">{connectError}</p>
+				)}
+			</div>
+			<Collapsible open={isAdvancedOpen} onOpenChange={setIsAdvancedOpen}>
+				<CollapsibleTrigger asChild>
+					<button
+						type="button"
+						className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+					>
+						<HugeiconsIcon
+							icon={ArrowDownIcon}
+							className={cn(
+								"size-3.5 shrink-0 transition-transform duration-150",
+								isAdvancedOpen ? "rotate-0" : "-rotate-90",
+							)}
+						/>
+						Advanced: model override
+					</button>
+				</CollapsibleTrigger>
+				<CollapsibleContent className="flex flex-col gap-2 pt-2">
+					<div className="flex flex-col gap-1">
+						<p className="text-xs font-medium">Model (optional)</p>
+						<Input
+							placeholder="e.g. gpt-5.1-codex (blank = CLI default)"
+							value={codexModel}
+							onChange={(e) => setCodexModel(e.target.value)}
+							autoComplete="off"
+							spellCheck={false}
+						/>
+					</div>
+				</CollapsibleContent>
+			</Collapsible>
+		</>
 	);
 }
 

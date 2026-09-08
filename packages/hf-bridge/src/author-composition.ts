@@ -18,6 +18,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { generatedRoot, resolveClaude } from "./renderer";
 import { customChatUrl } from "./author";
+import { runCodexAgent } from "./codex";
 import type { ClaudeAuth } from "./types";
 
 const FORMAT_RULES = `You are authoring a HyperFrames video composition (HTML that renders to video). Output ONLY the raw contents of index.html — start with <!doctype html> and end with </html>. NO markdown code fences, NO explanation, NO preamble.
@@ -77,6 +78,17 @@ export async function authorComposition({
 			width,
 			height,
 			durationSec,
+			signal,
+		});
+	} else if (auth.mode === "codex") {
+		// Codex CLI (ChatGPT login): same agentic shape, different flags —
+		// `codex exec --sandbox workspace-write` in the comp dir, prompt via
+		// stdin, index.html is the contract. The CLI's own workspace sandbox
+		// confines writes to the comp dir.
+		await runCodexAgent({
+			prompt: buildSkillBrief({ width, height, durationSec, brief: prompt }),
+			cwd: compDir,
+			model: auth.model,
 			signal,
 		});
 	} else {

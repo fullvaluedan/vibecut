@@ -159,3 +159,9 @@ export {
 	resolveRegistryBase,
 } from "./registry-ref";
 export { runDoctor, type DoctorReport } from "./doctor";
+export {
+	codexLoginStatus,
+	resolveCodex,
+	runCodexPrompt,
+	runCodexAgent,
+} from "./codex";

@@ -22,12 +22,32 @@
 
 import type { AiAuthMode } from "@/features/ai-generate/store";
 
-export type ProviderId = "anthropic" | "groq";
+export type ProviderId = "anthropic" | "groq" | "openai";
 export type ProviderKeyState = "device-key" | "server-key" | "claude-code" | "missing";
 
 export interface ProviderStatus {
 	provider: ProviderId;
 	state: ProviderKeyState;
+}
+
+/**
+ * OpenAI (ChatGPT login via the Codex CLI). Two sub-states the caller must
+ * distinguish (the card shows different copy): the CLI can be installed but
+ * NOT signed in (actionable — click Connect), or missing entirely (install
+ * hint). `codexInstalled: false` maps to "missing" with install guidance;
+ * installed-but-signed-out ALSO maps to "missing" (the card's action is the
+ * Connect button in Settings → AI). There is no server-side probe for a
+ * deployment-wide OpenAI key, mirroring Anthropic's "never server-key" rule.
+ */
+export function deriveOpenAiStatus({
+	authMode,
+}: {
+	authMode: AiAuthMode;
+}): ProviderStatus {
+	if (authMode === "codex") {
+		return { provider: "openai", state: "claude-code" };
+	}
+	return { provider: "openai", state: "missing" };
 }
 
 /** Anthropic (LLM: powers AI Cut's Director today, the Assistant next). */

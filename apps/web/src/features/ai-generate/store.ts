@@ -9,7 +9,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { generateUUID } from "@/utils/id";
 
-export type AiAuthMode = "api-key" | "claude-code" | "custom";
+export type AiAuthMode = "api-key" | "claude-code" | "codex" | "custom";
 export type AiBackend = "local" | "heygen";
 
 /** How many saved HyperFrames presets ("Custom Template 1–5") we allow. */
@@ -35,6 +35,13 @@ interface AiSettingsStore {
 	setAuthMode: (mode: AiAuthMode) => void;
 	anthropicApiKey: string;
 	setAnthropicApiKey: (key: string) => void;
+	/**
+	 * Optional model override for the Codex CLI connection (authMode "codex").
+	 * Empty = use whatever the CLI's own config.toml has as its default.
+	 * Device-local like every other connection field.
+	 */
+	codexModel: string;
+	setCodexModel: (model: string) => void;
 	/**
 	 * Custom OpenAI-compatible endpoint (authMode "custom") — point VibeCut at a
 	 * local or self-hosted model. baseUrl should include any version prefix the
@@ -150,6 +157,9 @@ export const useAiSettingsStore = create<AiSettingsStore>()(
 
 			anthropicApiKey: "",
 			setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
+
+			codexModel: "",
+			setCodexModel: (codexModel) => set({ codexModel }),
 
 			customBaseUrl: "",
 			setCustomBaseUrl: (customBaseUrl) => set({ customBaseUrl }),
@@ -356,6 +366,7 @@ export function buildAiAuthHeaders(): Record<string, string> {
 	const {
 		authMode,
 		anthropicApiKey,
+		codexModel,
 		customBaseUrl,
 		customApiKey,
 		customModel,
@@ -365,6 +376,9 @@ export function buildAiAuthHeaders(): Record<string, string> {
 	};
 	if (authMode === "api-key" && anthropicApiKey) {
 		headers["x-framecut-anthropic-key"] = anthropicApiKey;
+	}
+	if (authMode === "codex" && codexModel.trim()) {
+		headers["x-framecut-codex-model"] = codexModel.trim();
 	}
 	if (authMode === "custom") {
 		if (customBaseUrl) headers["x-framecut-custom-base-url"] = customBaseUrl;

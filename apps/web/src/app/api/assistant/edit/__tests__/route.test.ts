@@ -6,9 +6,30 @@ import { NextRequest } from "next/server";
 // tests deterministic whichever file ran before). The upstream call is stubbed
 // by replacing global fetch: no live LLM call ever happens in the suite.
 let authImpl: () => unknown = () => ({ mode: "api-key", apiKey: "test-key" });
+let cliPlanImpl: (args: {
+	prompt: string;
+	auth: unknown;
+	schema: object;
+}) => Promise<{ raw: unknown; usage: null }> = ({ prompt }) =>
+	Promise.resolve({ raw: { text: "cli says hi", toolCalls: [] }, usage: null });
+let cliPlanCapture: { prompt: string; auth: unknown } | null = null;
 
 mock.module("@/features/ai-generate/resolve-ai-auth", () => ({
 	resolveAiAuth: () => authImpl(),
+}));
+
+// The CLI turn path is exercised through this app-internal seam so the
+// shared hf-bridge module (used by the Director suites in the same Bun
+// process) is never stubbed.
+mock.module("@/features/assistant/cli-llm", () => ({
+	cliPlanTurn: (args: {
+		prompt: string;
+		auth: unknown;
+		schema: object;
+	}) => {
+		cliPlanCapture = { prompt: args.prompt, auth: args.auth };
+		return cliPlanImpl(args);
+	},
 }));
 
 const { POST } = await import("../route");
@@ -48,6 +69,9 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 	captured = null;
 	authImpl = () => ({ mode: "api-key", apiKey: "test-key" });
+	cliPlanImpl = ({ prompt }) =>
+		Promise.resolve({ raw: { text: "cli says hi", toolCalls: [] }, usage: null });
+	cliPlanCapture = null;
 });
 
 const context = {
@@ -105,14 +129,51 @@ describe("/api/assistant/edit", () => {
 		expect(called).toBe(false);
 	});
 
-	test("400 when the connection is not an Anthropic key", async () => {
+	test("claude-code mode now WORKS via the schema-constrained CLI turn (was a 400 wall)", async () => {
 		authImpl = () => ({ mode: "claude-code" });
-		const previous = process.env.ANTHROPIC_API_KEY;
-		delete process.env.ANTHROPIC_API_KEY;
+		cliPlanImpl = () =>
+			Promise.resolve({
+				raw: {
+					text: "Cutting the dead air.",
+					toolCalls: [{ name: "cut_range", args: { startSec: 1, endSec: 2 } }],
+				},
+				usage: null,
+			});
+		const res = await POST(post({ context, messages: [{ role: "user", content: "tighten it" }] }));
+		expect(res.status).toBe(200);
+		const json = await res.json();
+		expect(json.text).toBe("Cutting the dead air.");
+		expect(json.toolCalls).toHaveLength(1);
+		expect(json.toolCalls[0].name).toBe("cut_range");
+		expect(json.model).toBe("cli-assistant");
+		expect(json.promptVersion).toBeDefined();
+		// The CLI prompt carries the conversation and the auth mode rides along.
+		expect(cliPlanCapture?.auth).toEqual({ mode: "claude-code" });
+		expect(String(cliPlanCapture?.prompt)).toContain("tighten it");
+	});
+
+	test("codex mode (ChatGPT login) takes the same CLI turn path", async () => {
+		authImpl = () => ({ mode: "codex", model: "gpt-5.1-codex" });
+		cliPlanImpl = () =>
+			Promise.resolve({ raw: { text: "Done.", toolCalls: [] }, usage: null });
+		const res = await POST(post({ context, messages: [{ role: "user", content: "hello" }] }));
+		expect(res.status).toBe(200);
+		const json = await res.json();
+		expect(json.text).toBe("Done.");
+		expect(json.toolCalls).toEqual([]);
+		expect(cliPlanCapture?.auth).toEqual({ mode: "codex", model: "gpt-5.1-codex" });
+	});
+
+	test("custom mode still declines with a plain-language 400", async () => {
+		authImpl = () => ({
+			mode: "custom",
+			baseUrl: "http://localhost:11434/v1",
+			model: "qwen",
+		});
 		const res = await POST(post({ context, messages: [{ role: "user", content: "hi" }] }));
 		expect(res.status).toBe(400);
-		expect((await res.json()).error).toContain("Anthropic API key");
-		if (previous !== undefined) process.env.ANTHROPIC_API_KEY = previous;
+		const json = await res.json();
+		expect(json.error).toContain("Settings");
 	});
 
 	test("400 on a missing or malformed context", async () => {

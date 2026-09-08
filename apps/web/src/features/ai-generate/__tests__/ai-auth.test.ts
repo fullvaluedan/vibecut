@@ -73,11 +73,42 @@ describe("buildAiAuthHeaders — client → server contract", () => {
 		expect(h["x-framecut-custom-base-url"]).toBe("http://localhost:1234/v1");
 		expect(h["x-framecut-custom-key"]).toBeUndefined();
 	});
+
+	test("codex: sends the model override only when set", () => {
+		useAiSettingsStore.setState({ authMode: "codex", codexModel: "" });
+		let h = buildAiAuthHeaders();
+		expect(h["x-framecut-auth-mode"]).toBe("codex");
+		expect(h["x-framecut-codex-model"]).toBeUndefined();
+
+		useAiSettingsStore.setState({
+			authMode: "codex",
+			codexModel: " gpt-5.1-codex ",
+		});
+		h = buildAiAuthHeaders();
+		expect(h["x-framecut-codex-model"]).toBe("gpt-5.1-codex");
+	});
 });
 
 describe("resolveAiAuth — server header → auth", () => {
-	test("no mode / unknown mode falls back to claude-code", () => {
-		expect(resolveAiAuth(req({}))).toEqual({ mode: "claude-code" });
+	test("codex mode resolves with optional model override", () => {
+		expect(resolveAiAuth(req({ "x-framecut-auth-mode": "codex" }))).toEqual({
+			mode: "codex",
+		});
+		expect(
+			resolveAiAuth(
+				req({
+					"x-framecut-auth-mode": "codex",
+					"x-framecut-codex-model": "gpt-5.1-codex",
+				}),
+			),
+		).toEqual({ mode: "codex", model: "gpt-5.1-codex" });
+	});
+
+	test("UNKNOWN mode now 401s (null) instead of silently degrading to claude-code", () => {
+		expect(resolveAiAuth(req({}))).toBeNull();
+		expect(
+			resolveAiAuth(req({ "x-framecut-auth-mode": "skynet-v9" })),
+		).toBeNull();
 		expect(resolveAiAuth(req({ "x-framecut-auth-mode": "claude-code" }))).toEqual({
 			mode: "claude-code",
 		});

@@ -47,6 +47,7 @@ import {
 import {
 	deriveAnthropicStatus,
 	deriveGroqStatus,
+	deriveOpenAiStatus,
 	type ProviderStatus,
 } from "./provider-status";
 import { cn } from "@/utils/ui";
@@ -273,6 +274,7 @@ function ConnectAiSection({
 	const router = useRouter();
 
 	const anthropicStatus = deriveAnthropicStatus({ authMode, anthropicApiKey });
+	const openAiStatus = deriveOpenAiStatus({ authMode });
 	const groqStatus = deriveGroqStatus({ groqApiKey, serverKeyDetected });
 
 	const openAiSettings = () => {
@@ -286,15 +288,16 @@ function ConnectAiSection({
 			<div className="text-center">
 				<h2 className="text-lg font-medium">Connect your AI</h2>
 				<p className="text-muted-foreground mx-auto max-w-xl text-sm">
-					VibeCut uses two kinds of AI: one that plans edits (Anthropic),
-					and one that turns speech into text (Groq). Add your own keys
-					and everything below lights up.
+					VibeCut uses two kinds of AI: one that plans edits (a Claude or
+					ChatGPT subscription, or an API key), and one that turns speech
+					into text (Groq). Connect what you already pay for and everything
+					below lights up.
 				</p>
 			</div>
 
 			<ProviderCard
 				title="Anthropic"
-				description="Powers AI Cut's Director and the upcoming Assistant. Plans your edits from what is said in your footage."
+				description="Powers AI Cut's Director and the Assistant. Plans your edits from what is said in your footage."
 				status={anthropicStatus}
 				connectedCopy={{
 					"claude-code":
@@ -304,6 +307,21 @@ function ConnectAiSection({
 				missingCopy="Not connected yet. AI Cut needs an Anthropic key (or a Claude Code login) to plan cuts."
 				getKeyUrl="https://console.anthropic.com"
 				getKeyLabel="console.anthropic.com"
+				hasProjects={hasProjects}
+				onOpenSettings={openAiSettings}
+			/>
+
+			<ProviderCard
+				title="OpenAI (ChatGPT)"
+				description="Also powers AI Cut's Director and the Assistant, using your ChatGPT subscription through the Codex CLI. An alternative to the Anthropic connection — either one lights the AI features up."
+				status={openAiStatus}
+				connectedCopy={{
+					"claude-code":
+						"Connected. Using your ChatGPT subscription on this device (the Codex CLI), no key needed.",
+				}}
+				missingCopy="Not connected yet. Install the Codex CLI, then click Connect ChatGPT in Settings → AI to sign in with your ChatGPT account."
+				getKeyUrl="https://developers.openai.com/codex/cli"
+				getKeyLabel="Codex CLI install guide"
 				hasProjects={hasProjects}
 				onOpenSettings={openAiSettings}
 			/>

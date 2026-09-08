@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { runCodexPrompt } from "./codex";
 import { isIP } from "node:net";
 import { describeTemplateCatalog, getTemplate } from "./templates/index";
 import { resolveClaude } from "./renderer";
@@ -340,6 +341,26 @@ async function planViaCustomSchema(
 	return { raw: extractJson(text), usage };
 }
 
+/**
+ * Codex CLI path (ChatGPT login): `codex exec` with the schema handed to
+ * `--output-schema`, so the CLI itself enforces conformance before we parse.
+ * Token usage is not surfaced by this mode yet (the CLI only reports it via
+ * the --json event stream, which we don't consume), so usage stays null — the
+ * settings-page lifetime counter simply doesn't grow from Codex runs.
+ */
+async function planViaCodex(
+	prompt: string,
+	auth: ClaudeAuth & { mode: "codex" },
+	schema: object,
+): Promise<{ raw: unknown; usage: TokenUsage | null }> {
+	const { final } = await runCodexPrompt({
+		prompt,
+		schema,
+		model: auth.model,
+	});
+	return { raw: extractJson(final), usage: null };
+}
+
 /** Route a schema-constrained JSON ask to the connected backend. */
 function planDispatch(
 	prompt: string,
@@ -351,6 +372,8 @@ function planDispatch(
 			return planViaApiKeySchema(prompt, auth.apiKey, schema);
 		case "custom":
 			return planViaCustomSchema(prompt, auth);
+		case "codex":
+			return planViaCodex(prompt, auth, schema);
 		default:
 			return planViaClaudeCode(prompt);
 	}
@@ -1056,7 +1079,12 @@ export async function planMultimodal({
 			};
 		}
 		default: {
-			// claude-code CLI can't take inline images: strip them, run text-only.
+			// CLI modes can't take inline images: strip them, run text-only.
+			// codex gets the schema via --output-schema, like planViaCodex.
+			if (auth.mode === "codex") {
+				const { raw, usage } = await planViaCodex(text, auth, schema);
+				return { raw, usage, degraded: true };
+			}
 			const { raw, usage } = await planViaClaudeCode(text);
 			return { raw, usage, degraded: true };
 		}

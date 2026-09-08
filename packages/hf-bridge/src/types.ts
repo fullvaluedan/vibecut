@@ -51,6 +51,11 @@ export interface TranscriptSegment {
 export type ClaudeAuth =
 	| { mode: "claude-code" }
 	| { mode: "api-key"; apiKey: string }
+	/** ChatGPT login: the Codex CLI signed in with the user's ChatGPT account
+	 * (`codex login`). Credentials live in the CLI's own auth store on this
+	 * device — nothing is stored browser-side. `model` overrides the CLI's
+	 * configured default model for the run. */
+	| { mode: "codex"; model?: string }
 	/**
 	 * A user-supplied OpenAI-compatible chat-completions endpoint (Ollama,
 	 * LM Studio, a self-hosted Nous-Hermes server, etc.). baseUrl should include

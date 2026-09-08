@@ -13,19 +13,30 @@
  * the old route untouched.
  *
  * PROVIDER. Auth resolves through the same `resolveAiAuth` header plumbing every
- * other AI route uses. Tool use needs the native tools API, which the claude-code
- * CLI path and the OpenAI-compatible custom path do not expose in the shape this
- * turn contract needs, so this route requires an Anthropic API key (device-local
- * header, or a server-side `ANTHROPIC_API_KEY` for a hosted deployment) and says
- * so plainly otherwise. Round 21's T21.2 provider abstraction is where the other
- * backends get wired in; doing it here would be guesswork ahead of that plan.
- *
+ * other AI route uses. `api-key` uses Anthropic's native tools API. The
+ * subscription CLI modes (claude-code, codex) get the SAME turn contract
+ * through one `planJson` call per turn: the conversation + tool definitions are
+ * rendered into a single prompt and the CLI's schema-constrained output
+ * (claude `--output-format json` discipline / codex `--output-schema`) returns
+ * `{text, toolCalls[]}`, which is normalized into the same
+ * `AssistantTurnResponse` the client already drives. The client executes tools
+ * and sends `toolResults` back, so the server stays stateless for every mode.
+ * `custom` (raw OpenAI-compatible endpoints) is still not offered — its
+ * tool-calling surface varies too much per server to fake reliably.
+
  * Non-streaming by design for v1 (the roadmap allows it). The response is one
  * `AssistantTurnResponse`; T17.2 validates its tool calls and executes them.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { resolveAiAuth } from "@/features/ai-generate/resolve-ai-auth";
+import { cliPlanTurn } from "@/features/assistant/cli-llm";
+import {
+	buildCliTurnPrompt,
+	CLI_TURN_MODEL_LABEL,
+	CLI_TURN_SCHEMA,
+	parseCliTurn,
+} from "@/features/assistant/cli-turn";
 import {
 	ASSISTANT_EDIT_MODEL,
 	ASSISTANT_EDIT_PROMPT_VERSION,
@@ -35,6 +46,7 @@ import { toAnthropicTools } from "@/features/assistant/tools";
 import type { AssistantContext } from "@/features/assistant/context";
 import type {
 	AssistantMessage,
+	AssistantToolName,
 	AssistantToolResult,
 	AssistantTurnResponse,
 	ToolCall,
@@ -214,6 +226,57 @@ export async function POST(req: NextRequest) {
 			{ status: 401 },
 		);
 	}
+
+	// Subscription CLI modes share one path: the whole turn rendered into a
+	// schema-constrained JSON ask via planJson's dispatch (claude -p / codex
+	// exec). Same response shape as the API-key path; client unchanged.
+	if (auth.mode === "claude-code" || auth.mode === "codex") {
+		const body = await req.json().catch(() => null);
+		const context = body?.context as AssistantContext | undefined;
+		if (!context || typeof context !== "object" || !Array.isArray(context.tracks)) {
+			return NextResponse.json(
+				{ error: "Missing or malformed timeline context" },
+				{ status: 400 },
+			);
+		}
+		const messages = parseMessages(body?.messages);
+		if (!messages || messages.length === 0) {
+			return NextResponse.json({ error: "Missing or empty messages" }, { status: 400 });
+		}
+		const toolResults = parseToolResults(body?.toolResults);
+		try {
+			const { raw } = await cliPlanTurn({
+				prompt: buildCliTurnPrompt({
+					systemPrompt: buildAssistantEditSystemPrompt({ context }),
+					messages,
+					toolResults,
+				}),
+				auth,
+				schema: CLI_TURN_SCHEMA,
+			});
+			return NextResponse.json(parseCliTurn({ raw, model: CLI_TURN_MODEL_LABEL }));
+		} catch (e) {
+			return NextResponse.json(
+				{
+					error: `Assistant edit failed: ${e instanceof Error ? e.message : String(e)}`,
+				},
+				{ status: 500 },
+			);
+		}
+	}
+
+	// The custom (OpenAI-compatible) mode has no reliable tool surface to fake;
+	// say so plainly instead of failing mid-turn with a cryptic upstream error.
+	if (auth.mode === "custom") {
+		return NextResponse.json(
+			{
+				error:
+					"Prompt-to-edit needs a subscription login (Claude or ChatGPT) or an Anthropic API key — custom/local endpoints don't support the editing tools yet. Check Settings → AI.",
+			},
+			{ status: 400 },
+		);
+	}
+
 	const apiKey =
 		auth.mode === "api-key" ? auth.apiKey : process.env.ANTHROPIC_API_KEY || "";
 	if (!apiKey) {

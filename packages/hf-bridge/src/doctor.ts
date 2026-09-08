@@ -2,12 +2,15 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { findHyperframesPackageDir, resolveClaude } from "./renderer";
+import { codexLoginStatus } from "./codex";
 
 export interface DoctorReport {
 	node: { ok: boolean; detail: string };
 	hyperframes: { ok: boolean; detail: string };
 	ffmpeg: { ok: boolean; detail: string };
 	claudeCli: { ok: boolean; detail: string };
+	/** Codex CLI (ChatGPT login) — ok only when installed AND signed in. */
+	codexCli: { ok: boolean; detail: string };
 }
 
 function probe(command: string, args: string[], useShell = true): Promise<{ ok: boolean; detail: string }> {
@@ -48,10 +51,19 @@ export async function runDoctor(): Promise<DoctorReport> {
 	}
 
 	const claude = resolveClaude();
-	const [ffmpeg, claudeCli] = await Promise.all([
+	const [ffmpeg, claudeCli, codex] = await Promise.all([
 		probe("ffmpeg", ["-version"]),
 		probe(claude.command, ["--version"], claude.useShell),
+		codexLoginStatus(),
 	]);
+	const codexCli = {
+		ok: codex.installed && codex.loggedIn,
+		detail: !codex.installed
+			? "codex CLI not installed (ChatGPT login unavailable)"
+			: codex.loggedIn
+				? `codex CLI signed in: ${codex.detail}`
+				: `codex CLI installed but not signed in (run \`codex login\`): ${codex.detail}`,
+	};
 
-	return { node, hyperframes, ffmpeg, claudeCli };
+	return { node, hyperframes, ffmpeg, claudeCli, codexCli };
 }
